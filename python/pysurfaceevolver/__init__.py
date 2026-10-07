@@ -11,7 +11,7 @@
 """
 
 import contextlib
-from typing import Iterator
+from typing import Generator
 
 from ._build import Body, make_datafile
 from ._evolver import (
@@ -46,7 +46,7 @@ def threads() -> int:
 
 
 @contextlib.contextmanager
-def threads_limit(n: int) -> Iterator[None]:
+def threads_limit(n: int) -> Generator[None, None, None]:
     """Use ``n`` threads inside the ``with`` block, then restore the previous
     setting (including "the default")::
 
