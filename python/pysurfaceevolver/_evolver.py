@@ -11,7 +11,7 @@ import threading
 import warnings
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Generator, List, Optional, Union
 
 import numpy as np
 
@@ -36,7 +36,7 @@ __all__ = [
 
 
 @contextlib.contextmanager
-def _threads_for_call(threads: Optional[int]) -> Iterator[None]:
+def _threads_for_call(threads: Optional[int]) -> Generator[None, None, None]:
     """Use `threads` threads for one call (None: leave the setting alone)."""
     if threads is None:
         yield
