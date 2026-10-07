@@ -67,6 +67,13 @@ int fl_sel_next(fl_sel *s, element_id *id);
 #define FL_FOR_SELECTED(sel,type,id,bits,site) \
   for ( fl_sel_begin(&(sel),(type),(bits),(site)) ; fl_sel_next(&(sel),&(id)) ; )
 
+/* Positions (gauss_pt) and, if need_side, tangents (sides) at the Gauss
+   points of a Lagrange facet from its control points x, as the mat_mult()
+   calls of q_facet_setup_lagrange(). Returns 0, doing nothing, when the
+   case isn't covered. */
+int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
+                            REAL **x, REAL **gauss_pt, REAL ***sides, int need_side);
+
 /* Bumped when facet NONCONTENT attributes change or bodies are deleted
    (the loops cache facet bodies; set_facet_body() bumps top_timestamp). */
 extern long fl_body_stamp;

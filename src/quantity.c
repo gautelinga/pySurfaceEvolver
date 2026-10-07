@@ -11,6 +11,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 int compound_quant_list_head = -1;
 
@@ -4019,6 +4020,9 @@ void q_facet_setup_lagrange(
       f_info->x[i] = f_info->xx[i];
     }
   get_facet_verts(f_info->id,f_info->x,f_info->wraps);  
+  if ( fl_lagrange_facet_setup(gl,dim,ctrl,f_info->x,f_info->gauss_pt,
+         f_info->sides,needs & NEED_SIDE) )  /* fastloops.c */
+    return;
   if ( needs & NEED_SIDE ) 
   { /* tangent vectors at gauss points */
     int m;

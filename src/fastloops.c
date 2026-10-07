@@ -1044,3 +1044,90 @@ int fl_calc_leftside(REAL **rleftside, struct linsys *S, int fixcount, int *degf
   *degfree += deg;
   return 1;
 }
+
+/**************************************************************************
+ * Lagrange facet setup
+ *
+ * q_facet_setup_lagrange() maps a facet's control points to positions and
+ * tangents at the Gauss points: gauss_pt = gpoly x and, per Gauss point g,
+ * sides[g] = gpolypart[g] x, through the generic mat_mult() on REAL**
+ * matrices. Here the basis matrices are packed once, column-major over all
+ * output rows (Gauss points, then each Gauss point's tangents), so each
+ * coordinate is one contiguous, vectorizable loop per control point. Sums
+ * run over control points in the same order as mat_mult().
+ */
+
+static double *lg_packed = NULL;    /* [ctrl][rows] */
+static long lg_packed_size = 0;
+static REAL **lg_gpoly = NULL;      /* what the packing was made from */
+static int lg_ctrl = -1, lg_gnumpts = -1, lg_dim = -1;
+
+#define LG_MAXROWS 1024
+#define LG_MAXCTRL 64
+
+/* out_k[r] = sum_l col_l[r] x_k[l], k = 0..2, summed over l in order; an AVX2
+   version is picked at run time where available (no FMA: same rounding) */
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+__attribute__((target_clones("avx2","default")))
+#endif
+static void lg_kernel(const double *packed, int stride, int rows, int ctrl,
+                      double X[3][LG_MAXCTRL], double out[3][LG_MAXROWS])
+{ int l, r;
+  double *o0 = out[0], *o1 = out[1], *o2 = out[2];
+  for ( r = 0 ; r < rows ; r++ ) o0[r] = o1[r] = o2[r] = 0.0;
+  for ( l = 0 ; l < ctrl ; l++ )
+  { const double *col = packed + (long)l*stride;
+    double x0 = X[0][l], x1 = X[1][l], x2 = X[2][l];
+    for ( r = 0 ; r < rows ; r++ )
+    { double c = col[r];
+      o0[r] += c*x0;
+      o1[r] += c*x1;
+      o2[r] += c*x2;
+    }
+  }
+}
+
+int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
+                            REAL **x, REAL **gauss_pt, REAL ***sides, int need_side)
+{ int rows, l, g, d, k;
+  double X[3][LG_MAXCTRL];
+  double out[3][LG_MAXROWS];
+
+  if ( fl_disabled() || SDIM != 3 ) return 0;
+  rows = gl->gnumpts*(1 + dim);
+  if ( rows > LG_MAXROWS || ctrl > LG_MAXCTRL || ctrl != gl->lagpts ) return 0;
+
+  if ( lg_gpoly != gl->gpoly || lg_ctrl != ctrl || lg_gnumpts != gl->gnumpts
+       || lg_dim != dim )
+  { if ( !ensure_size((void**)&lg_packed,&lg_packed_size,(long)ctrl*rows,
+                      sizeof(double)) )
+      return 0;
+    for ( l = 0 ; l < ctrl ; l++ )
+    { double *col = lg_packed + (long)l*rows;
+      for ( g = 0 ; g < gl->gnumpts ; g++ )
+      { col[g] = gl->gpoly[g][l];
+        for ( d = 0 ; d < dim ; d++ )
+          col[gl->gnumpts + g*dim + d] = gl->gpolypart[g][d][l];
+      }
+    }
+    lg_gpoly = gl->gpoly;
+    lg_ctrl = ctrl;
+    lg_gnumpts = gl->gnumpts;
+    lg_dim = dim;
+  }
+  if ( !need_side ) rows = gl->gnumpts;
+
+  for ( l = 0 ; l < ctrl ; l++ )
+    for ( k = 0 ; k < 3 ; k++ )
+      X[k][l] = x[l][k];
+  lg_kernel(lg_packed,lg_gnumpts*(1 + dim),rows,ctrl,X,out);
+  for ( g = 0 ; g < gl->gnumpts ; g++ )
+    for ( k = 0 ; k < 3 ; k++ )
+      gauss_pt[g][k] = out[k][g];
+  if ( need_side )
+    for ( g = 0 ; g < gl->gnumpts ; g++ )
+      for ( d = 0 ; d < dim ; d++ )
+        for ( k = 0 ; k < 3 ; k++ )
+          sides[g][d][k] = out[k][gl->gnumpts + g*dim + d];
+  return 1;
+}
