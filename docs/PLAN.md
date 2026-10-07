@@ -300,6 +300,13 @@ Decided 2026-10-08: all items, in the order 9, 8, 2, 1, 4, 5, 3, 7, 6 (docs last
 pausing after each. The Python API may break (pre-1.0, no deprecation shims).
 
 1. Live view that only moves points (no PolyData rebuild) when topology is unchanged.
+   **Done**: the actor was already kept; now an update with unchanged facets
+   skips the PolyData rebuild and VTK comparison too: it compares the cached
+   `ev.mesh()` connectivity arrays and samples points from a cached
+   tessellation (`_Tessellation`: per lattice point, the vertex rows with
+   nonzero weight). Off-screen update: 393k linear 0.235 -> 0.059 s (rest is
+   `ev.mesh()`), Lagrange 3 at 24k 0.223 -> 0.031 s. One-off `tessellate()`
+   unchanged (393k Lagrange 3: 1.5 s, 0.9 GB peak).
 2. Size warnings for curved tessellation and export (Lagrange-3 at 1.6M facets,
    6x6 tessellation = 57M triangles).
    **Done** (user chose warn only, module setting): `pse.tessellation_limit`

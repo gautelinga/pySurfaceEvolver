@@ -6,9 +6,12 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
 
+from ._mesh import _as_3d
+
 if TYPE_CHECKING:
     import pyvista
     from ._evolver import Evolver
+    from ._mesh import Mesh, _Tessellation
 
 __all__ = ["LiveView", "surface_dataset"]
 
@@ -43,6 +46,13 @@ def surface_dataset(ev: "Evolver", scalars: Scalars = None, element: Optional[st
     model). Vertex values are interpolated over curved elements.
     """
     mesh = ev.mesh()
+    point_values, cell_values, name = _scalar_values(ev, mesh, scalars, element)
+    return mesh.to_pyvista(n, point_values=point_values, cell_values=cell_values), name
+
+
+def _scalar_values(ev: "Evolver", mesh: "Mesh", scalars: Scalars, element: Optional[str]
+                   ) -> "tuple[dict, dict, Optional[str]]":
+    """surface_dataset()'s scalars: point values, cell values, name."""
     cell_element = "facet" if mesh.faces is not None else "edge"
     allowed = ("vertex", "vertices", cell_element, cell_element + "s")
     if element is not None and element not in allowed:
@@ -64,7 +74,7 @@ def surface_dataset(ev: "Evolver", scalars: Scalars = None, element: Optional[st
             cell_values[name] = values
         else:
             raise ValueError(f"scalars can be per vertex or per {cell_element}, not {element!r}")
-    return mesh.to_pyvista(n, point_values=point_values, cell_values=cell_values), name
+    return point_values, cell_values, name
 
 
 def _same_cells(a: "pyvista.PolyData", b: "pyvista.PolyData") -> bool:
@@ -78,9 +88,10 @@ class LiveView:
     """A PyVista window (or notebook widget) that follows the surface.
 
     Call :meth:`update` to redraw, for example after every few iterations
-    with ``ev.iterate(100, callback=view.update, every=5)``. The surface is
-    rebuilt on each update, so refinement and other topology changes show
-    up too. The camera is kept.
+    with ``ev.iterate(100, callback=view.update, every=5)``. While the
+    facets are unchanged, an update only moves the points (and refreshes
+    the scalars); after refinement or other topology changes the surface
+    is rebuilt. The camera is kept.
 
     Parameters
     ----------
@@ -109,6 +120,9 @@ class LiveView:
         self.notebook = _in_notebook() and not off_screen
         self.plotter = plotter or pv.Plotter(off_screen=off_screen, notebook=self.notebook)
         self.dataset: Optional["pyvista.PolyData"] = None
+        self._mesh: Optional["Mesh"] = None            # what the dataset shows
+        self._tess: Optional["_Tessellation"] = None   # its tessellation (facets)
+        self._n = 1
         self.updates = 0
         self.fast_updates = 0   # updates that only moved points
         self._draw(reset_camera=True)
@@ -117,6 +131,23 @@ class LiveView:
             self.show()
 
     def _draw(self, reset_camera: bool = False) -> None:
+        mesh = self.ev.mesh()
+        if not reset_camera and self._move_points(mesh):
+            self.fast_updates += 1
+            return
+        if mesh.faces is not None and mesh.facet_nodes is not None:
+            # facets: keep the tessellation for later updates
+            point_values, cell_values, name = _scalar_values(self.ev, mesh, self.scalars,
+                                                             self.element)
+            self._n = mesh._default_n(self.n)
+            self._tess = mesh._tessellation(self._n)
+            self._mesh = mesh
+            self.dataset = mesh._facets_to_pyvista(self._tess, self._n, point_values,
+                                                   cell_values)
+            self.plotter.add_mesh(self.dataset, name="evolver-surface", scalars=name,
+                                  reset_camera=reset_camera, **self.mesh_kwargs)
+            return
+        self._mesh = self._tess = None
         dataset, name = surface_dataset(self.ev, self.scalars, self.element, self.n)
         if self.dataset is not None and not reset_camera and _same_cells(self.dataset, dataset):
             # same connectivity: move the points and refresh values in place,
@@ -126,16 +157,40 @@ class LiveView:
                 self.dataset.point_data[key] = dataset.point_data[key]
             for key in dataset.cell_data:
                 self.dataset.cell_data[key] = dataset.cell_data[key]
-            if name is not None:
-                values = dataset.point_data.get(name, dataset.cell_data.get(name))
-                if values is not None and len(values):
-                    self.plotter.update_scalar_bar_range([float(np.min(values)),
-                                                          float(np.max(values))])
+            self._update_range(name, dataset)
             self.fast_updates += 1
             return
         self.dataset = dataset
         self.plotter.add_mesh(dataset, name="evolver-surface", scalars=name,
                               reset_camera=reset_camera, **self.mesh_kwargs)
+
+    def _move_points(self, mesh: "Mesh") -> bool:
+        """Update the dataset in place if the facets are unchanged."""
+        if self.dataset is None or self._mesh is None or self._tess is None:
+            return False
+        if not mesh._same_facets(self._mesh):
+            return False
+        point_values, cell_values, name = _scalar_values(self.ev, mesh, self.scalars,
+                                                         self.element)
+        tess = self._tess
+        self.dataset.points = _as_3d(tess.sample(mesh.vertices))
+        for key, vals in point_values.items():
+            self.dataset.point_data[key] = tess.sample(np.asarray(vals, float))
+        if cell_values:
+            facet_of = np.arange(len(tess.triangles)) // (self._n * self._n)
+            for key, vals in cell_values.items():
+                self.dataset.cell_data[key] = np.asarray(vals)[facet_of]
+        self._update_range(name, self.dataset)
+        self._mesh = mesh
+        return True
+
+    def _update_range(self, name: Optional[str], dataset: "pyvista.PolyData") -> None:
+        if name is None:
+            return
+        values = dataset.point_data.get(name, dataset.cell_data.get(name))
+        if values is not None and len(values):
+            self.plotter.update_scalar_bar_range([float(np.min(values)),
+                                                  float(np.max(values))])
 
     def show(self) -> Any:
         """Open the window (or display the notebook widget) without blocking."""

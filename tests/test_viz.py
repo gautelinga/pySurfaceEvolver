@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 
+from pysurfaceevolver._viz import surface_dataset
+
 pv = pytest.importorskip("pyvista")
 
 
@@ -86,6 +88,19 @@ def test_live_view_moves_points_in_place(cube, can_render):
     cube.refine()
     view.update()                       # topology changed: full rebuild
     assert view.fast_updates == 4 and view.dataset is not dataset
+    view.close()
+
+
+def test_live_view_fast_update_matches_rebuild(cube, can_render):
+    cube.command("lagrange 3")
+    view = cube.live_view("x + y", element="vertex", off_screen=True)
+    cube.iterate(2, callback=view.update)
+    assert view.fast_updates == 2
+    fresh, _ = surface_dataset(cube, "x + y", element="vertex")
+    np.testing.assert_allclose(view.dataset.points, fresh.points, atol=1e-13)
+    np.testing.assert_allclose(view.dataset.point_data["x + y"], fresh.point_data["x + y"],
+                               atol=1e-13)
+    np.testing.assert_array_equal(view.dataset.faces, fresh.faces)
     view.close()
 
 

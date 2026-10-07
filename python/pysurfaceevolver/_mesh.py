@@ -35,7 +35,7 @@ def _check_tessellation_size(facets: int, n: int, sdim: int) -> None:
         f"tessellating {facets:,} facets with n={n} gives {triangles:,} triangles "
         f"(about {gb:.1f} GB while building, more for plotting or export); pass a "
         f"smaller n, or raise pse.tessellation_limit (now {limit:,}; None: no check)",
-        LargeTessellationWarning, stacklevel=3)
+        LargeTessellationWarning, stacklevel=4)
 
 
 
@@ -273,6 +273,52 @@ class BodySurface:
         return poly
 
 
+class _Tessellation:
+    """Mesh.tessellate()'s structure for one connectivity and ``n``: every
+    sampled point as a weighted sum of a few vertex rows, grouped by the
+    point's place in the facet lattice."""
+
+    def __init__(self, weights: np.ndarray, nodes: np.ndarray, triangles: np.ndarray,
+                 ids: Optional[np.ndarray], total: int):
+        """weights: (P, nodes) basis values at the P lattice points; nodes:
+        (k, nodes) vertex rows of each facet; triangles: (k*n*n, 3) into the
+        sampled points; ids: merged point of each (facet, lattice point), or
+        None (unmerged); total: number of sampled points."""
+        self.triangles = triangles
+        self.total = total
+        k, per_facet = len(nodes), len(weights)
+        if ids is None:
+            first = np.arange(total)
+        else:   # one (facet, lattice point) for each merged point
+            first = np.empty(total, dtype=np.int64)
+            first[ids] = np.arange(len(ids))
+        lattice_of = first % per_facet
+        by_lattice = np.argsort(lattice_of, kind="stable")
+        bounds = np.searchsorted(lattice_of[by_lattice], np.arange(per_facet + 1))
+        # per lattice point: output points, their vertex rows, the weights
+        self.groups = []
+        for p in range(per_facet):
+            dest = by_lattice[bounds[p]:bounds[p + 1]]
+            if not len(dest):
+                continue
+            cols = np.flatnonzero(np.abs(weights[p]) > 1e-15)   # one on a node
+            rows = nodes[first[dest] // per_facet][:, cols]
+            self.groups.append((dest, rows, weights[p, cols]))
+
+    def sample(self, values: np.ndarray) -> np.ndarray:
+        """Per-vertex-row ``values`` (coordinates, or data) at the points."""
+        values = np.asarray(values, dtype=float)
+        out = np.empty((self.total,) + values.shape[1:])
+        for dest, rows, w in self.groups:
+            acc = values[rows[:, 0]]
+            if len(w) > 1 or w[0] != 1.0:
+                acc *= w[0]
+                for j in range(1, len(w)):
+                    acc += w[j] * values[rows[:, j]]
+            out[dest] = acc
+        return out
+
+
 @dataclass
 class Mesh:
     """A snapshot of the surface geometry.
@@ -339,45 +385,35 @@ class Mesh:
         In torus models, facets that cross the periodic boundary aren't
         unwrapped.
         """
-        faces, nodes, index = self._facet_data()
         n = self._default_n(n)
-        _check_tessellation_size(len(nodes), n, self.vertices.shape[1])
-        lattice = _lattice(n, 2)
-        weights = _basis(index, self.order, self.bezier, lattice / n)   # (P, nodes)
-        points = np.einsum("pn,knd->kpd", weights, self.vertices[nodes])  # (k, P, sdim)
-        k, per_facet = points.shape[0], points.shape[1]
-        sampled = None
+        t = self._tessellation(n, merge)
+        points = t.sample(self.vertices)
         if values is not None:
             vals = np.asarray(values, dtype=float)
             if vals.shape[0] != len(self.vertices):
                 raise ValueError("values needs one entry per vertex row")
-            v = vals[nodes] if vals.ndim == 1 else vals[nodes]           # (k, nodes[, c])
-            sampled = np.einsum("pn,kn...->kp...", weights, v)
+            return points, t.triangles, t.sample(vals)
+        return points, t.triangles
 
+    def _tessellation(self, n: int, merge: bool = True) -> "_Tessellation":
+        """The structure of :meth:`tessellate`, which depends only on the
+        connectivity: reusable for new coordinates or values."""
+        faces, nodes, index = self._facet_data()
+        _check_tessellation_size(len(nodes), n, self.vertices.shape[1])
+        lattice = _lattice(n, 2)
+        weights = _basis(index, self.order, self.bezier, lattice / n)   # (P, nodes)
+        k, per_facet = len(nodes), len(lattice)
         tris = _lattice_triangles(n)
         tris = np.broadcast_to(tris, (k,) + tris.shape).copy()
         flip = _reversed_facets(faces, nodes, index, self.order)
         tris[flip] = tris[flip][:, :, ::-1]
         tris += (np.arange(k) * per_facet)[:, None, None]
-        points = points.reshape(-1, points.shape[-1])
         tris = tris.reshape(-1, 3)
-        if sampled is not None:
-            sampled = sampled.reshape((-1,) + sampled.shape[2:])
-
+        ids, total = None, k * per_facet
         if merge:
             ids, total = self._lattice_point_ids(nodes, index, n, lattice)
-            merged = np.empty((total, points.shape[1]))
-            merged[ids] = points
-            points = merged
-            if sampled is not None:
-                merged_values = np.empty((total,) + sampled.shape[1:])
-                merged_values[ids] = sampled
-                sampled = merged_values
             tris = ids[tris]
-
-        if values is not None:
-            return points, tris, sampled
-        return points, tris
+        return _Tessellation(weights, nodes, tris, ids, total)
 
     def _lattice_point_ids(self, nodes, index, n, lattice) -> "tuple[np.ndarray, int]":
         """Merged point number of every (facet, lattice point), flattened.
@@ -639,22 +675,9 @@ class Mesh:
         point_values = point_values or {}
         cell_values = cell_values or {}
         if self.faces is not None and self.facet_nodes is not None:
-            assert self.face_bodies is not None and self.face_ids is not None
             n_ = self._default_n(n)
-            names = list(point_values)
-            stacked = (np.column_stack([np.asarray(point_values[k], float) for k in names])
-                       if names else None)
-            if stacked is not None:
-                points, tris, sampled = self.tessellate(n_, values=stacked)
-            else:
-                points, tris = self.tessellate(n_)
-            faces = np.hstack([np.full((len(tris), 1), 3), tris]).ravel()
-            poly = pv.PolyData(_as_3d(points), faces=faces)
-            facet_of = np.arange(len(tris)) // (n_ * n_)
-            poly.cell_data["facet_id"] = self.face_ids[facet_of]
-            poly.cell_data["front_body"] = self.face_bodies[facet_of, 0]
-            poly.cell_data["back_body"] = self.face_bodies[facet_of, 1]
-            element_of = facet_of
+            return self._facets_to_pyvista(self._tessellation(n_), n_, point_values,
+                                           cell_values)
         else:
             n_ = self._default_n(n)
             names = list(point_values)
@@ -674,6 +697,39 @@ class Mesh:
         for name, vals in cell_values.items():
             poly.cell_data[name] = np.asarray(vals)[element_of]
         return poly
+
+    def _facets_to_pyvista(self, tess: "_Tessellation", n: int,
+                           point_values: Dict[str, np.ndarray],
+                           cell_values: Dict[str, np.ndarray]) -> "pyvista.PolyData":
+        """to_pyvista() for facets, from this mesh's tessellation ``tess``."""
+        import pyvista as pv
+        assert self.face_bodies is not None and self.face_ids is not None
+        tris = tess.triangles
+        faces = np.hstack([np.full((len(tris), 1), 3), tris]).ravel()
+        poly = pv.PolyData(_as_3d(tess.sample(self.vertices)), faces=faces)
+        facet_of = np.arange(len(tris)) // (n * n)
+        poly.cell_data["facet_id"] = self.face_ids[facet_of]
+        poly.cell_data["front_body"] = self.face_bodies[facet_of, 0]
+        poly.cell_data["back_body"] = self.face_bodies[facet_of, 1]
+        for name, vals in point_values.items():
+            poly.point_data[name] = tess.sample(np.asarray(vals, float))
+        for name, vals in cell_values.items():
+            poly.cell_data[name] = np.asarray(vals)[facet_of]
+        return poly
+
+    def _same_facets(self, other: "Mesh") -> bool:
+        """Whether ``other`` has the same facets, nodes and bodies (so the
+        same tessellation)."""
+        if other is self:
+            return True
+        if (self.order, self.bezier, len(self.vertices)) != (other.order, other.bezier,
+                                                             len(other.vertices)):
+            return False
+        return all(a is not None and b is not None and np.array_equal(a, b)
+                   for a, b in ((self.faces, other.faces),
+                                (self.facet_nodes, other.facet_nodes),
+                                (self.face_ids, other.face_ids),
+                                (self.face_bodies, other.face_bodies)))
 
 
 def _cap_loops(points, tris, fids, loops):
