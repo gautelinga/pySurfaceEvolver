@@ -6,7 +6,8 @@ A Python frontend to Ken Brakke's [Surface Evolver](http://www.susqu.edu/brakke/
 
 ```bash
 pip install .            # core
-pip install ".[all]"     # + PyVista (visualization) and meshio (mesh files)
+pip install ".[all]"     # + PyVista (visualization, also in Jupyter) and meshio (mesh files)
+pip install ".[jupyter]" # PyVista with its notebook backend only
 ```
 
 ## Scripting

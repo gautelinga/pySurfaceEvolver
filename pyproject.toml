@@ -12,9 +12,11 @@ dependencies = ["numpy"]
 
 [project.optional-dependencies]
 viz = ["pyvista>=0.40"]
+# PyVista's notebook backend, for live views in Jupyter
+jupyter = ["pyvista[jupyter]>=0.40"]
 # h5py: meshio needs it for XDMF
 io = ["meshio>=5.3", "h5py"]
-all = ["pyvista>=0.40", "meshio>=5.3", "h5py"]
+all = ["pyvista[jupyter]>=0.40", "meshio>=5.3", "h5py"]
 test = ["pytest>=7", "pyvista>=0.40", "meshio>=5.3", "h5py"]
 
 [tool.scikit-build]

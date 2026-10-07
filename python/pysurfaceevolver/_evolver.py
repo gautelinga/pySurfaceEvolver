@@ -923,7 +923,7 @@ class Evolver:
             return None
 
     def _html(self) -> str:
-        name = self.datafile or "no datafile"
+        name = os.path.basename(self.datafile) or "no datafile"
         if not _core.surface_valid():
             return _html.fields("Evolver", [("datafile", name), ("surface", "none (not valid)")])
         model = self.model
