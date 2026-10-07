@@ -4,6 +4,19 @@ project(pysurfaceevolver LANGUAGES C CXX)
 find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(nanobind CONFIG REQUIRED)
 
+# Link-time optimization: Evolver's tiny element accessors (inline.h) are
+# compiled out of line in skeleton.c; LTO inlines them across files.
+# Measured: ~20% fewer instructions per iteration, identical results.
+option(PYSE_LTO "Build with link-time optimization" ON)
+if(PYSE_LTO)
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT PYSE_IPO_SUPPORTED OUTPUT PYSE_IPO_MESSAGE LANGUAGES C CXX)
+  if(NOT PYSE_IPO_SUPPORTED)
+    message(STATUS "LTO not supported, building without it: ${PYSE_IPO_MESSAGE}")
+    set(PYSE_LTO OFF)
+  endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Surface Evolver itself, built headless (nulgraph) as a static library.
 # The source list mirrors OBJ in src/Makefile.
@@ -31,6 +44,7 @@ target_include_directories(evolver_core PRIVATE bindings)  # pyse_hooks.h
 target_compile_definitions(evolver_core PUBLIC LINUX PYSE)
 set(EVOLVER_C_PROPERTIES
   POSITION_INDEPENDENT_CODE ON
+  INTERPROCEDURAL_OPTIMIZATION ${PYSE_LTO}
   C_VISIBILITY_PRESET hidden
   # The code uses K&R-style definitions, which C23 (GCC 15's default) removed.
   C_STANDARD 99
@@ -62,8 +76,15 @@ endif()
 
 # ---------------------------------------------------------------------------
 # Python extension.
-nanobind_add_module(_core NB_STATIC bindings/module.cpp)
+# PYSE_NOSTRIP keeps symbols in the module, for profiling (callgrind, perf).
+option(PYSE_NOSTRIP "Keep symbols in the extension module" OFF)
+if(PYSE_NOSTRIP)
+  nanobind_add_module(_core NB_STATIC NOSTRIP bindings/module.cpp)
+else()
+  nanobind_add_module(_core NB_STATIC bindings/module.cpp)
+endif()
 target_link_libraries(_core PRIVATE pyse_glue evolver_core)
+set_target_properties(_core PROPERTIES INTERPROCEDURAL_OPTIMIZATION ${PYSE_LTO})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(_core PRIVATE -Wall -Wextra)
 endif()
