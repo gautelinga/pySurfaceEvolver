@@ -44,6 +44,11 @@ skip = "*-musllinux_*"
 test-requires = ["pytest", "meshio"]
 test-command = "pytest {project}/tests -q"
 
+[tool.cibuildwheel.linux]
+# MUMPS (Hessian factoring) is Fortran and needs LAPACK/BLAS: the manylinux
+# image has gfortran; OpenBLAS is bundled into the wheel by auditwheel.
+before-all = "dnf install -y openblas-devel"
+
 [[tool.mypy.overrides]]
 # these ship without type information
 module = ["meshio", "meshio.*", "cloudpickle"]
