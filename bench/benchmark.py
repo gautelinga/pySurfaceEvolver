@@ -5,9 +5,12 @@ usage: python bench/benchmark.py [--levels 6 8] [--lagrange-levels 4 5]
                                  [--orders 2 4 6] [--threads 1 4]
                                  [--repeat 3] [--json out.json]
 
-The test surface is the sample cube relaxed a little and refined ``level``
-times (each refinement quadruples the facets: level 4 is 6k facets, 5 is
-24k, 6 is 98k, 8 is 1.6M).
+The test surface is the sample cube refined ``level`` times with ``g 10``
+after each refinement, then relaxed with Newton steps (each refinement
+quadruples the facets: level 4 is 6k facets, 5 is 24k, 6 is 98k, 8 is 1.6M).
+Refining in steps keeps the surface near equilibrium, so the Newton steps
+converge; refining several times at once and then taking Newton steps can
+diverge.
 
 Linear section (``--levels``): one iteration (``g 1``) and one Newton step
 (``hessian``) on the relaxed surface, timed once; bulk operations, each the
@@ -58,11 +61,17 @@ def progress(out: dict, name: str) -> None:
 
 
 def relaxed_cube(level: int) -> Evolver:
-    """The cube refined `level` times and relaxed to near equilibrium."""
+    """The cube refined `level` times, relaxed after each refinement, then
+    converged with Newton steps."""
     ev = Evolver("cube.fe")
-    ev.command("g 5")
-    ev.refine(level)
-    ev.command("g 20; hessian; hessian")
+    ev.command("g 10")
+    for _ in range(level):
+        ev.command("r; g 10")
+    for _ in range(4):
+        before = ev.total_energy
+        ev.command("hessian")
+        if abs(ev.total_energy - before) <= 1e-12 * abs(ev.total_energy):
+            break
     return ev
 
 
@@ -124,15 +133,18 @@ def run_lagrange(level: int, orders: list) -> dict:
             out[name] = once(lambda: ev.command(command))
             progress(out, name)
         out[f"L{n} energy"] = ev.total_energy
+        out[f"L{n} index"] = ev.command("eigenprobe 0").strip()
     return out
 
 
 def table(title: str, results: list) -> None:
     names = [k for k in results[0]
-             if k not in ("level", "facets", "vertices", "threads") and "energy" not in k]
+             if k not in ("level", "facets", "vertices", "threads")
+             and "energy" not in k and "index" not in k]
     for r in results[1:]:
         names += [k for k in r if k not in names and k not in
-                  ("level", "facets", "vertices", "threads") and "energy" not in k]
+                  ("level", "facets", "vertices", "threads")
+                  and "energy" not in k and "index" not in k]
     print(f"\n{title:32}" + "".join(f"{r['facets']:>11,}f {r['threads']:>2}t" for r in results))
     for name in names:
         print(f"{name:32}" + "".join(
