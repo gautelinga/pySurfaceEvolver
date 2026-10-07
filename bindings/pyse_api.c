@@ -773,12 +773,6 @@ static void edges_body(void *arg)
   vertex_map_release(&m);
 }
 
-int pyse_get_edges(int64_t *verts, int64_t *ids, long n)
-{ struct edges_args a;
-  a.verts = verts; a.ids = ids; a.n = n;
-  return surface_call(edges_body,&a);
-}
-
 static int64_t body_number(body_id b_id)
 { return valid_id(b_id) ? ordinal(b_id) + 1 : 0; }
 
@@ -817,12 +811,6 @@ static void facets_body(void *arg)
   }
   expect_rows(row,a->n);
   vertex_map_release(&m);
-}
-
-int pyse_get_facets(int64_t *verts, int64_t *ids, int64_t *bodies, long n)
-{ struct facets_args a;
-  a.verts = verts; a.ids = ids; a.bodies = bodies; a.n = n;
-  return surface_call(facets_body,&a);
 }
 
 struct bodies_args
@@ -963,12 +951,6 @@ static void nodes_body(void *arg)
   vertex_map_release(&m);
 }
 
-int pyse_get_element_nodes(int type, int64_t *nodes, long n, int nodes_per)
-{ struct nodes_args a;
-  a.type = type; a.nodes = nodes; a.n = n; a.nodes_per = nodes_per;
-  return surface_call(nodes_body,&a);
-}
-
 static void mesh_body(void *arg)
 { struct pyse_mesh_arrays *m = (struct pyse_mesh_arrays *)arg;
   struct vertex_map map;
@@ -981,9 +963,9 @@ static void mesh_body(void *arg)
   vertices_body(&va);
   ea.verts = m->edges; ea.ids = m->edge_ids; ea.n = m->ne;
   edges_body(&ea);
-  if ( m->faces )
+  if ( m->facets )
   { struct facets_args fa;
-    fa.verts = m->faces; fa.ids = m->face_ids; fa.bodies = m->face_bodies;
+    fa.verts = m->facets; fa.ids = m->facet_ids; fa.bodies = m->facet_bodies;
     fa.n = m->nf;
     facets_body(&fa);
   }

@@ -118,7 +118,7 @@ def test_load_recovers_from_invalid_surface(load):
     ev.load("mound.fe")
     assert ev.valid
     ev.command("g 2")
-    assert ev.mesh().faces.shape == (ev.counts["facets"], 3)
+    assert ev.mesh().facets.shape == (ev.counts["facets"], 3)
 
 
 def test_missing_file_keeps_surface_valid(load):

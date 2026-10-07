@@ -312,31 +312,6 @@ NB_MODULE(_core, m) {
     return r;
   }, CALLBACK_NAMES, "data: (coords (n, sdim), ids (n,), fixed (n,) uint8)");
 
-  m.def("edges", [](CALLBACK_ARGS) {
-    CALL_SCOPE;
-    long n = pyse_count(PYSE_EDGE);
-    std::vector<int64_t> verts(size_t(n) * 2), ids(n);
-    CallResult r = run_guarded([&] { return pyse_get_edges(verts.data(), ids.data(), n); });
-    if (r.status == PYSE_OK)
-      r.data = nb::make_tuple(to_numpy(std::move(verts), {size_t(n), 2}),
-                              to_numpy(std::move(ids), {size_t(n)}));
-    return r;
-  }, CALLBACK_NAMES, "data: (vertex rows (m, 2), ids (m,))");
-
-  m.def("facets", [](CALLBACK_ARGS) {
-    CALL_SCOPE;
-    long n = pyse_count(PYSE_FACET);
-    std::vector<int64_t> verts(size_t(n) * 3), ids(n), bodies(size_t(n) * 2);
-    CallResult r = run_guarded([&] {
-      return pyse_get_facets(verts.data(), ids.data(), bodies.data(), n);
-    });
-    if (r.status == PYSE_OK)
-      r.data = nb::make_tuple(to_numpy(std::move(verts), {size_t(n), 3}),
-                              to_numpy(std::move(ids), {size_t(n)}),
-                              to_numpy(std::move(bodies), {size_t(n), 2}));
-    return r;
-  }, CALLBACK_NAMES, "data: (vertex rows (k, 3), ids (k,), bodies (k, 2))");
-
   m.def("bodies", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(PYSE_BODY);
@@ -373,7 +348,7 @@ NB_MODULE(_core, m) {
     a.edges = edges.data(); a.edge_ids = eids.data(); a.ne = ne;
     if (soapfilm) {
       faces.resize(size_t(nf) * 3); fids.resize(nf); fbodies.resize(size_t(nf) * 2);
-      a.faces = faces.data(); a.face_ids = fids.data(); a.face_bodies = fbodies.data();
+      a.facets = faces.data(); a.facet_ids = fids.data(); a.facet_bodies = fbodies.data();
       a.nf = nf;
     }
     if (edge_per > 0) {
@@ -408,29 +383,6 @@ NB_MODULE(_core, m) {
         pyse_element_order(), bool(pyse_bezier()));
     return r;
   }, CALLBACK_NAMES, "data: everything Mesh needs, in one call (see _evolver.py)");
-
-  m.def("element_nodes", [](int type, CALLBACK_ARGS) {
-    CALL_SCOPE;
-    int per = pyse_element_node_count(type);
-    if (per < 0) return CallResult{};  // no node layout: data is None
-    int dim = (type == PYSE_EDGE) ? 1 : 2;
-    long n = pyse_count(type);
-    std::vector<int64_t> nodes(size_t(n) * per);
-    std::vector<int32_t> layout(size_t(per) * (dim + 1));
-    pyse_node_layout(type, layout.data(), per);
-    int order = pyse_element_order();
-    bool bezier = pyse_bezier();
-    CallResult r = run_guarded([&] {
-      return pyse_get_element_nodes(type, nodes.data(), n, per);
-    });
-    if (r.status == PYSE_OK)
-      r.data = nb::make_tuple(to_numpy(std::move(nodes), {size_t(n), size_t(per)}),
-                              to_numpy(std::move(layout), {size_t(per), size_t(dim + 1)}),
-                              order, bezier);
-    return r;
-  }, "type"_a, CALLBACK_NAMES,
-     "data: (vertex rows (n, nodes), barycentric index (nodes, dim+1), order, "
-     "bezier), or None if the model has no node layout for this element type");
 
   m.def("parameters", [](CALLBACK_ARGS) {
     CALL_SCOPE;

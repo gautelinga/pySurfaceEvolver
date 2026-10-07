@@ -40,7 +40,7 @@ def test_node_layout(sphere, model, order, nodes):
     assert m.facet_nodes.max() < len(m.vertices)
     corners = [int(np.flatnonzero(m.facet_node_index[:, i] == order)[0]) for i in range(3)]
     for f in range(k):
-        assert set(m.facet_nodes[f, corners]) == set(m.faces[f])
+        assert set(m.facet_nodes[f, corners]) == set(m.facets[f])
     edge_ends = [0, order]
     assert (m.edge_nodes[:, edge_ends] == m.edges).all()
 
@@ -51,7 +51,7 @@ def test_nodes_lie_on_the_surface(sphere):
     sphere.command("lagrange 3; g 2")
     m = sphere.mesh()
     points, _ = m.tessellate(3, merge=False)
-    per = len(points) // len(m.faces)
+    per = len(points) // len(m.facets)
     first = points[:per]
     expected = m.vertices[m.facet_nodes[0]]
     for p in expected:
@@ -68,7 +68,7 @@ def test_tessellation_converges_to_evolver_area(sphere, model):
     assert all(b < a / 3 for a, b in zip(errors, errors[1:]))
     assert errors[-1] < 1e-3 * area
     # and do much better than the corner triangles alone
-    assert errors[-1] < abs(triangle_area(m.vertices, m.faces) - area) / 50
+    assert errors[-1] < abs(triangle_area(m.vertices, m.facets) - area) / 50
 
 
 def test_quadratic_and_lagrange_2_agree(sphere):
@@ -87,11 +87,11 @@ def test_tessellation_keeps_face_orientation(sphere):
     a, b, c = (points[triangles[:, i]] for i in range(3))
     signed = np.einsum("ij,ij->i", a, np.cross(b, c)) / 6
     # body 1 in front of a face: positive orientation for its volume
-    face_sign = np.where(m.face_bodies[:, 0] == 1, 1.0, -1.0)
+    face_sign = np.where(m.facet_bodies[:, 0] == 1, 1.0, -1.0)
     volume = (np.repeat(face_sign, n * n) * signed).sum()
     assert abs(volume) == pytest.approx(sphere.eval("body[1].volume"), rel=1e-3)
     # every small triangle has the same orientation as its face
-    a, b, c = (m.vertices[m.faces[:, i]] for i in range(3))
+    a, b, c = (m.vertices[m.facets[:, i]] for i in range(3))
     face_normal = np.cross(b - a, c - a)
     a, b, c = (points[triangles[:, i]] for i in range(3))
     tri_normal = np.cross(b - a, c - a)
@@ -102,7 +102,7 @@ def test_tessellation_keeps_face_orientation(sphere):
 def test_linear_tessellation_is_the_faces(cube):
     m = cube.mesh()
     points, triangles = m.tessellate()
-    assert triangles.shape == m.faces.shape
+    assert triangles.shape == m.facets.shape
     assert triangle_area(points, triangles) == pytest.approx(cube.eval("total_area"), rel=1e-14)
 
 
@@ -121,7 +121,7 @@ def test_string_model_edges(load):
     ev = load("slidestr.fe")
     ev.command("quadratic; g 2")
     m = ev.mesh()
-    assert m.faces is None and m.facet_nodes is None
+    assert m.facets is None and m.facet_nodes is None
     points, segments = m.tessellate_edges(256)
     length = np.linalg.norm(points[segments[:, 1]] - points[segments[:, 0]], axis=1)
     length = length.reshape(len(m.edges), -1).sum(axis=1)

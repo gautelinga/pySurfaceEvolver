@@ -31,7 +31,7 @@ def test_merged_tessellation_is_watertight(lagrange_sphere):
     m = lagrange_sphere.mesh()
     points, triangles = m.tessellate(6)
     assert is_watertight(triangles)
-    k = len(m.faces)
+    k = len(m.facets)
     # Euler: a sphere has V - E + F = 2
     assert len(points) - 3 * len(triangles) // 2 + len(triangles) == 2
     unmerged, _ = m.tessellate(6, merge=False)
@@ -106,8 +106,8 @@ def test_cell_data(cube, tmp_path):
     cube.write(path)
     back = meshio.read(path)
     m = cube.mesh()
-    np.testing.assert_array_equal(back.cell_data["facet_id"][0], m.face_ids)
-    np.testing.assert_array_equal(back.cell_data["front_body"][0], m.face_bodies[:, 0])
+    np.testing.assert_array_equal(back.cell_data["facet_id"][0], m.facet_ids)
+    np.testing.assert_array_equal(back.cell_data["front_body"][0], m.facet_bodies[:, 0])
 
 
 @pytest.mark.parametrize("model, gmsh_type, vtk_type", [
@@ -246,14 +246,14 @@ def test_two_bodies_share_a_film(load):
     ev = load("twointor.fe")   # torus model: two bodies
     ev.command("g 5")
     m = ev.mesh()
-    front, back = m.face_bodies[:, 0], m.face_bodies[:, 1]
+    front, back = m.facet_bodies[:, 0], m.facet_bodies[:, 1]
     shared = (front > 0) & (back > 0) & (front != back)
     assert shared.any()
     surfaces = m.body_surfaces("tessellate", 1)
     assert set(surfaces) == {1, 2}
     # each shared film appears once in each body, with opposite orientations
     for s in surfaces.values():
-        assert len(set(s.facet_ids.tolist()) & set(m.face_ids[shared].tolist())) == shared.sum()
+        assert len(set(s.facet_ids.tolist()) & set(m.facet_ids[shared].tolist())) == shared.sum()
 
 
 def test_is_watertight():

@@ -36,10 +36,10 @@ def test_datafile_loads_and_iterates(load, datafile):
     assert m.edges.shape == (counts["edges"], 2)
     assert (m.edges < len(m.vertices)).all()
     if ev.representation == "soapfilm":
-        assert m.faces.shape == (counts["facets"], 3)
-        assert m.faces.max() < len(m.vertices)
+        assert m.facets.shape == (counts["facets"], 3)
+        assert m.facets.max() < len(m.vertices)
     else:
-        assert m.faces is None
+        assert m.facets is None
 
     b = ev.bodies()
     assert len(b.ids) == counts["bodies"]

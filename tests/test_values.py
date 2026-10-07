@@ -64,7 +64,7 @@ def test_edge_and_facet_values_align_with_mesh(cube):
     cube.command("r; g 2")
     m = cube.mesh()
     np.testing.assert_array_equal(cube.values("edge", "id"), m.edge_ids)
-    np.testing.assert_array_equal(cube.values("facet", "id"), m.face_ids)
+    np.testing.assert_array_equal(cube.values("facet", "id"), m.facet_ids)
     lengths = np.linalg.norm(m.vertices[m.edges[:, 1]] - m.vertices[m.edges[:, 0]], axis=1)
     np.testing.assert_allclose(cube.values("edge", "length"), lengths, rtol=1e-12)
     assert cube.values("facet", "area").sum() == pytest.approx(cube.total_area, rel=1e-12)

@@ -325,23 +325,23 @@ class _Tessellation:
 class Mesh:
     """A snapshot of the surface geometry.
 
-    ``edges`` and ``faces`` hold row indices into ``vertices``. The ``*_ids``
+    ``edges`` and ``facets`` hold row indices into ``vertices``. The ``*_ids``
     arrays hold Evolver's own 1-based element numbers, as used in commands
     such as ``vertex[5].x``.
 
     In quadratic and Lagrange models, ``vertices`` also holds the extra nodes,
-    ``faces`` and ``edges`` use the corner vertices only, and ``facet_nodes``
+    ``facets`` and ``edges`` use the corner vertices only, and ``facet_nodes``
     and ``edge_nodes`` list every node of each element. Use
     :meth:`tessellate` for flat triangles that follow the curved facets.
     """
 
     vertices: np.ndarray       # (n, sdim) float64
     edges: np.ndarray          # (m, 2) int64
-    faces: Optional[np.ndarray]  # (k, 3) int64; None outside the soapfilm model
+    facets: Optional[np.ndarray]  # (k, 3) int64; None outside the soapfilm model
     vertex_ids: np.ndarray     # (n,)
     edge_ids: np.ndarray       # (m,)
-    face_ids: Optional[np.ndarray]     # (k,)
-    face_bodies: Optional[np.ndarray]  # (k, 2) front/back body id, 0 = none
+    facet_ids: Optional[np.ndarray]     # (k,)
+    facet_bodies: Optional[np.ndarray]  # (k, 2) front/back body id, 0 = none
     fixed: np.ndarray          # (n,) bool, vertex has the FIXED attribute
     order: int = 1             # polynomial order of the elements
     bezier: bool = False       # nodes are Bezier control points, not on the surface
@@ -354,14 +354,14 @@ class Mesh:
         order = "linear" if self.order == 1 else f"order {self.order}"
         if self.bezier:
             order += " (Bezier)"
-        corners = len(np.unique(self.faces)) if self.faces is not None else None
+        corners = len(np.unique(self.facets)) if self.facets is not None else None
         rows = [("elements", " · ".join(
                     [f"{_html.number(len(self.vertices))} vertex rows"]
                     + ([f"{_html.number(corners)} corners"]
                        if corners is not None and self.order > 1 else [])
                     + [f"{_html.number(len(self.edges))} edges"]
-                    + ([f"{_html.number(len(self.faces))} facets"]
-                       if self.faces is not None else []))),
+                    + ([f"{_html.number(len(self.facets))} facets"]
+                       if self.facets is not None else []))),
                 ("order", order),
                 ("fixed vertices", _html.number(int(self.fixed.sum())))]
         if len(self.vertices):
@@ -380,7 +380,7 @@ class Mesh:
         return n
 
     def _facet_data(self):
-        faces, nodes, index = self.faces, self.facet_nodes, self.facet_node_index
+        faces, nodes, index = self.facets, self.facet_nodes, self.facet_node_index
         if faces is None or nodes is None or index is None:
             raise ValueError("this needs facets (soapfilm representation)")
         return faces, nodes, index
@@ -392,7 +392,7 @@ class Mesh:
         Points are sampled on the curved (quadratic or Lagrange) facets, so the
         triangles follow the actual surface. ``n`` defaults to 1 for linear
         elements and 2*order otherwise. Triangle ``t`` belongs to facet
-        ``t // n**2``, and is oriented like that facet's ``faces`` row.
+        ``t // n**2``, and is oriented like that facet's ``facets`` row.
         More than ``pse.tessellation_limit`` triangles (default 10 million)
         gives a :class:`LargeTessellationWarning`.
 
@@ -535,7 +535,7 @@ class Mesh:
         Returns ``(cell_type, cells)`` with meshio cell type names
         (``"triangle"``, ``"triangle6"``, ``"triangle10"``, ...) and cells
         indexing ``vertices``. With ``reorient``, cells follow the facet
-        orientation of ``faces``.
+        orientation of ``facets``.
         """
         faces, nodes, index = self._facet_data()
         p = self.order
@@ -573,7 +573,7 @@ class Mesh:
         planar loops (``curved="tessellate"`` only). Check ``watertight``.
         """
         faces, nodes, index = self._facet_data()
-        bodies = self.face_bodies
+        bodies = self.facet_bodies
         assert bodies is not None
         ids = sorted({int(b) for b in bodies.ravel() if b > 0})
         out: Dict[int, BodySurface] = {}
@@ -597,7 +597,7 @@ class Mesh:
                 body_tris = tris[sel].copy()
                 flip = back[facet_of][sel] & ~front[facet_of][sel]
                 body_tris[flip] = body_tris[flip][:, ::-1]
-                fids = self.face_ids[facet_of[sel]] if self.face_ids is not None else facet_of[sel]
+                fids = self.facet_ids[facet_of[sel]] if self.facet_ids is not None else facet_of[sel]
                 used, body_tris = _compact(body_tris, len(points))
                 body_points = points[used]
                 loops = _boundary_loops(body_tris)
@@ -615,7 +615,7 @@ class Mesh:
                 body_cells[flip] = body_cells[flip][:, rev]
                 used, body_cells = _compact(body_cells, len(self.vertices))
                 corners = body_cells[:, :3]
-                fids = self.face_ids[sel] if self.face_ids is not None else np.flatnonzero(sel)
+                fids = self.facet_ids[sel] if self.facet_ids is not None else np.flatnonzero(sel)
                 out[b] = BodySurface(b, self.vertices[used], body_cells, cell_type,
                                      np.asarray(fids), is_watertight(corners),
                                      len(_boundary_loops(corners)), self.order, self.bezier)
@@ -642,8 +642,8 @@ class Mesh:
         or ``"linear"``) picks native cell names for the target format.
         """
         import meshio
-        if self.faces is not None and self.facet_nodes is not None:
-            assert self.face_bodies is not None and self.face_ids is not None
+        if self.facets is not None and self.facet_nodes is not None:
+            assert self.facet_bodies is not None and self.facet_ids is not None
             if curved == "tessellate":
                 n_ = self._default_n(n)
                 points, tris = self.tessellate(n_)
@@ -658,8 +658,8 @@ class Mesh:
                 facet_of = np.arange(len(native))
             else:
                 raise ValueError("curved must be 'tessellate' or 'native'")
-            ids = self.face_ids[facet_of]
-            front, back = self.face_bodies[facet_of, 0], self.face_bodies[facet_of, 1]
+            ids = self.facet_ids[facet_of]
+            front, back = self.facet_bodies[facet_of, 0], self.facet_bodies[facet_of, 1]
             cell_data = {"facet_id": [ids], "front_body": [front], "back_body": [back],
                          "gmsh:physical": [front], "gmsh:geometrical": [ids]}
         else:
@@ -696,7 +696,7 @@ class Mesh:
         import pyvista as pv
         point_values = point_values or {}
         cell_values = cell_values or {}
-        if self.faces is not None and self.facet_nodes is not None:
+        if self.facets is not None and self.facet_nodes is not None:
             n_ = self._default_n(n)
             return self._facets_to_pyvista(self._tessellation(n_), n_, point_values,
                                            cell_values)
@@ -725,14 +725,14 @@ class Mesh:
                            cell_values: Dict[str, np.ndarray]) -> "pyvista.PolyData":
         """to_pyvista() for facets, from this mesh's tessellation ``tess``."""
         import pyvista as pv
-        assert self.face_bodies is not None and self.face_ids is not None
+        assert self.facet_bodies is not None and self.facet_ids is not None
         tris = tess.triangles
         faces = np.hstack([np.full((len(tris), 1), 3), tris]).ravel()
         poly = pv.PolyData(_as_3d(tess.sample(self.vertices)), faces=faces)
         facet_of = np.arange(len(tris)) // (n * n)
-        poly.cell_data["facet_id"] = self.face_ids[facet_of]
-        poly.cell_data["front_body"] = self.face_bodies[facet_of, 0]
-        poly.cell_data["back_body"] = self.face_bodies[facet_of, 1]
+        poly.cell_data["facet_id"] = self.facet_ids[facet_of]
+        poly.cell_data["front_body"] = self.facet_bodies[facet_of, 0]
+        poly.cell_data["back_body"] = self.facet_bodies[facet_of, 1]
         for name, vals in point_values.items():
             poly.point_data[name] = tess.sample(np.asarray(vals, float))
         for name, vals in cell_values.items():
@@ -748,10 +748,10 @@ class Mesh:
                                                              len(other.vertices)):
             return False
         return all(a is not None and b is not None and np.array_equal(a, b)
-                   for a, b in ((self.faces, other.faces),
+                   for a, b in ((self.facets, other.facets),
                                 (self.facet_nodes, other.facet_nodes),
-                                (self.face_ids, other.face_ids),
-                                (self.face_bodies, other.face_bodies)))
+                                (self.facet_ids, other.facet_ids),
+                                (self.facet_bodies, other.facet_bodies)))
 
 
 def _cap_loops(points, tris, fids, loops):

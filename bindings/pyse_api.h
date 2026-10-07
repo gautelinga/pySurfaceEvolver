@@ -76,31 +76,28 @@ int pyse_set_values(int type, const char *attribute, const double *values,
 
 int pyse_get_vertices(double *xyz, int64_t *ids, unsigned char *fixed, long n,
                       int sdim);
-int pyse_get_edges(int64_t *verts, int64_t *ids, long n);
-int pyse_get_facets(int64_t *verts, int64_t *ids, int64_t *bodies, long n);
 int pyse_get_bodies(int64_t *ids, double *volume, double *target,
                     double *pressure, unsigned char *fixed, long n);
 
 /* High-order elements.  pyse_element_node_count(type) is the number of
    nodes per edge or facet: 2/3 linear, 3/6 quadratic, order+1 and
-   (order+1)(order+2)/2 Lagrange.  pyse_get_element_nodes() fills an
-   (n, nodes) array of vertex rows; pyse_node_layout() fills a
+   (order+1)(order+2)/2 Lagrange; pyse_get_mesh() returns the nodes of each
+   element as vertex rows.  pyse_node_layout() fills a
    (nodes, dim+1) array with each node's barycentric multi-index, whose
    entries sum to pyse_element_order(). */
-/* Everything pyse_get_vertices/_edges/_facets/_element_nodes return, in one
+/* Vertices (as pyse_get_vertices), edges, facets and element nodes in one
    call with one vertex lookup table.  Pointers for parts that don't exist
    (facets outside the soapfilm model, node layouts) must be NULL. */
 struct pyse_mesh_arrays {
   double *xyz; int64_t *vertex_ids; unsigned char *fixed; long nv; int sdim;
   int64_t *edges; int64_t *edge_ids; long ne;
-  int64_t *faces; int64_t *face_ids; int64_t *face_bodies; long nf;
+  int64_t *facets; int64_t *facet_ids; int64_t *facet_bodies; long nf;
   int64_t *edge_nodes; int edge_nodes_per;
   int64_t *facet_nodes; int facet_nodes_per;
 };
 int pyse_get_mesh(struct pyse_mesh_arrays *m);
 
 int pyse_element_node_count(int type);
-int pyse_get_element_nodes(int type, int64_t *nodes, long n, int nodes_per);
 int pyse_node_layout(int type, int *index, int nodes_per);
 int pyse_element_order(void);   /* 1 linear, 2 quadratic, Lagrange order */
 int pyse_bezier(void);          /* Lagrange nodes are Bezier control points */

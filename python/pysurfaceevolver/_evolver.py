@@ -358,7 +358,7 @@ class Evolver:
         ``ev.values("vertex", "x^2 + y^2")`` or ``ev.values("facet", "area")``.
 
         The result is aligned with the rows of :meth:`mesh` (``vertices``,
-        ``edges``, ``faces``) and :meth:`bodies`.
+        ``edges``, ``facets``) and :meth:`bodies`.
         """
         element_type = _element_type(element)
         try:

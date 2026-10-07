@@ -53,7 +53,7 @@ def surface_dataset(ev: "Evolver", scalars: Scalars = None, element: Optional[st
 def _scalar_values(ev: "Evolver", mesh: "Mesh", scalars: Scalars, element: Optional[str]
                    ) -> "tuple[dict, dict, Optional[str]]":
     """surface_dataset()'s scalars: point values, cell values, name."""
-    cell_element = "facet" if mesh.faces is not None else "edge"
+    cell_element = "facet" if mesh.facets is not None else "edge"
     allowed = ("vertex", "vertices", cell_element, cell_element + "s")
     if element is not None and element not in allowed:
         raise ValueError(f"scalars can be per vertex or per {cell_element}, not {element!r}")
@@ -135,7 +135,7 @@ class LiveView:
         if not reset_camera and self._move_points(mesh):
             self.fast_updates += 1
             return
-        if mesh.faces is not None and mesh.facet_nodes is not None:
+        if mesh.facets is not None and mesh.facet_nodes is not None:
             # facets: keep the tessellation for later updates
             point_values, cell_values, name = _scalar_values(self.ev, mesh, self.scalars,
                                                              self.element)

@@ -5,7 +5,7 @@
 >>> ev.iterate(5); ev.refine(); ev.iterate(5)
 >>> ev.eval("body[1].volume")
 >>> ev.values("vertex", "x^2 + y^2")   # one value per vertex
->>> mesh = ev.mesh()                   # NumPy arrays: mesh.vertices, mesh.faces, ...
+>>> mesh = ev.mesh()                   # NumPy arrays: mesh.vertices, mesh.facets, ...
 >>> ev.write("surface.vtu")            # any meshio format
 >>> ev.plot("area")                    # PyVista
 """

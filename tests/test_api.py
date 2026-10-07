@@ -238,13 +238,13 @@ def test_reentrant_call_is_rejected(load, monkeypatch):
 def test_mesh_shapes(cube):
     cube.command("r")
     m = cube.mesh()
-    n, k = len(m.vertices), len(m.faces)
+    n, k = len(m.vertices), len(m.facets)
     assert m.vertices.shape == (n, 3) and m.vertices.dtype == np.float64
     assert m.edges.shape == (cube.counts["edges"], 2)
-    assert m.faces.shape == (cube.counts["facets"], 3)
+    assert m.facets.shape == (cube.counts["facets"], 3)
     assert m.vertex_ids.shape == (n,)
-    assert m.face_ids.shape == (k,)
-    assert m.face_bodies.shape == (k, 2)
+    assert m.facet_ids.shape == (k,)
+    assert m.facet_bodies.shape == (k, 2)
     assert m.fixed.dtype == bool
 
 
@@ -253,20 +253,20 @@ def test_mesh_indices_are_consistent(cube):
     m = cube.mesh()
     n = len(m.vertices)
     assert m.edges.min() >= 0 and m.edges.max() < n
-    assert m.faces.min() >= 0 and m.faces.max() < n
+    assert m.facets.min() >= 0 and m.facets.max() < n
     # every triangle has three distinct corners
-    assert all(len(set(f)) == 3 for f in m.faces.tolist())
+    assert all(len(set(f)) == 3 for f in m.facets.tolist())
     # Evolver ids are 1-based and unique
     assert len(set(m.vertex_ids.tolist())) == n
     assert m.vertex_ids.min() >= 1
     # every face of the cube bounds body 1 on exactly one side
-    assert set(map(tuple, m.face_bodies.tolist())) <= {(1, 0), (0, 1)}
+    assert set(map(tuple, m.facet_bodies.tolist())) <= {(1, 0), (0, 1)}
 
 
 def test_mesh_area_matches_evolver(cube):
     cube.command("r; g 3")
     m = cube.mesh()
-    a, b, c = (m.vertices[m.faces[:, i]] for i in range(3))
+    a, b, c = (m.vertices[m.facets[:, i]] for i in range(3))
     area = 0.5 * np.linalg.norm(np.cross(b - a, c - a), axis=1).sum()
     assert area == pytest.approx(cube.eval("total_area"), rel=1e-12)
 
@@ -274,10 +274,10 @@ def test_mesh_area_matches_evolver(cube):
 def test_mesh_volume_matches_evolver(cube):
     cube.command("r; g 3")
     m = cube.mesh()
-    a, b, c = (m.vertices[m.faces[:, i]] for i in range(3))
+    a, b, c = (m.vertices[m.facets[:, i]] for i in range(3))
     signed = np.einsum("ij,ij->i", a, np.cross(b, c)) / 6
     # faces with body 1 on the back side are oriented the other way
-    sign = np.where(m.face_bodies[:, 0] == 1, 1.0, -1.0)
+    sign = np.where(m.facet_bodies[:, 0] == 1, 1.0, -1.0)
     assert abs((sign * signed).sum()) == pytest.approx(cube.eval("body[1].volume"), rel=1e-12)
 
 
@@ -303,34 +303,43 @@ def test_mesh_string_model_has_no_faces(load):
     ev = load("knotty.fe")
     assert ev.representation == "string"
     m = ev.mesh()
-    assert m.faces is None and m.face_ids is None and m.face_bodies is None
+    assert m.facets is None and m.facet_ids is None and m.facet_bodies is None
     assert m.edges.shape == (ev.counts["edges"], 2)
+
+
+def element_vertices(ev, element, k):
+    """Corner vertex ids of every edge or facet, as Evolver lists them."""
+    fields = ", ".join(f"ee.vertex[{i + 1}].id" for i in range(k))
+    out = ev.command(f'foreach {element} ee do printf "{"%d " * k}\\n", {fields}')
+    return np.array([[int(x) for x in line.split()] for line in out.splitlines()
+                     if line.strip()], dtype=np.int64).reshape(-1, k)
 
 
 @pytest.mark.parametrize("datafile, command", [
     ("cube.fe", "r"), ("cube.fe", "r; lagrange 3"), ("cube.fe", "quadratic"),
     ("knotty.fe", "g 1"), ("100grain.fe", "g 1"), ("simplex3.fe", "g 1"),
 ])
-def test_one_call_mesh_matches_parts(load, datafile, command):
+def test_mesh_matches_evolver_attributes(load, datafile, command):
     from pysurfaceevolver import _core
     ev = load(datafile)
     ev.command(command)
     m = ev.mesh()
-    kw = dict(out=None, input=None, sigint=False)
-    xyz, vids, fixed = _core.vertices(**kw).data
-    edges, eids = _core.edges(**kw).data
+    xyz, vids, fixed = _core.vertices(out=None, input=None, sigint=False).data
     np.testing.assert_array_equal(m.vertices, xyz)
     np.testing.assert_array_equal(m.vertex_ids, vids)
-    np.testing.assert_array_equal(m.edges, edges)
-    np.testing.assert_array_equal(m.edge_ids, eids)
+    np.testing.assert_array_equal(m.edge_ids, ev.values("edge", "id"))
+    # Lagrange elements list all their nodes, the others their corners
+    lagrange = ev.model == "lagrange"
+    edges = m.edge_nodes if lagrange else m.edges
+    np.testing.assert_array_equal(m.vertex_ids[edges],
+                                  element_vertices(ev, "edge", edges.shape[1]))
     if ev.representation == "soapfilm":
-        faces, fids, fbodies = _core.facets(**kw).data
-        np.testing.assert_array_equal(m.faces, faces)
-        np.testing.assert_array_equal(m.face_bodies, fbodies)
-        nodes = _core.element_nodes(_core.FACET, **kw).data
-        np.testing.assert_array_equal(m.facet_nodes, nodes[0])
+        np.testing.assert_array_equal(m.facet_ids, ev.values("facet", "id"))
+        facets = m.facet_nodes if lagrange else m.facets
+        np.testing.assert_array_equal(m.vertex_ids[facets],
+                                      element_vertices(ev, "facet", facets.shape[1]))
     else:
-        assert m.faces is None
+        assert m.facets is None
 
 
 def test_mesh_is_cached_until_the_surface_changes(cube):

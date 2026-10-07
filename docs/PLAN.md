@@ -314,6 +314,12 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    count and an estimate of the memory (393k Lagrange 3, n=6: 14M triangles,
    estimated 1.2 GB, measured peak 0.94 GB, 1.4 s).
 3. Generic wrappers in `bindings/module.cpp`; a more uniform `Mesh`.
+   **Done** (user chose A+B): removed the unused `_core.edges/facets/element_nodes`
+   bindings and their C wrappers (`mesh()` returns all of it); after that little
+   repetition was left, so no generic helper. `Mesh.faces/face_ids/face_bodies`
+   renamed to `facets/facet_ids/facet_bodies` (breaking). Inputs keep `faces=`
+   (polygons, like the datafile's `faces` section). Not done: per-element groups,
+   `Bodies.target_volume` -> `target`.
 4. Notebook: `_repr_html_`; the user checks the live view in Jupyter.
    `_repr_html_` **done** (user's choice: summary table, no image): `Evolver`
    (datafile, model, counts, energy/area, threads/solver, bodies), `Mesh`,
