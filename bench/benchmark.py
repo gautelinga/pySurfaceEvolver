@@ -9,9 +9,9 @@ The test surface is the sample cube relaxed a little and refined ``level``
 times (each refinement quadruples the facets: level 4 is 6k facets, 5 is
 24k, 6 is 98k, 8 is 1.6M).
 
-Linear section (``--levels``): bulk operations, one iteration (``g 1``) and
-one Newton step (``hessian``) on the relaxed surface; each timing is the best
-of ``--repeat`` runs.
+Linear section (``--levels``): one iteration (``g 1``) and one Newton step
+(``hessian``) on the relaxed surface, timed once; bulk operations, each the
+best of ``--repeat`` runs.
 
 Lagrange section (``--lagrange-levels``): as recommended in the Evolver
 manual (sections 5.3 and 16.11), the triangulation is settled in the linear
@@ -52,18 +52,26 @@ def once(f):
     return time.perf_counter() - t
 
 
+def progress(out: dict, name: str) -> None:
+    print(f"  [{out['facets']:,} facets, {pse.threads()} threads] {name}: "
+          f"{out[name] * 1e3:.1f} ms", flush=True)
+
+
 def relaxed_cube(level: int) -> Evolver:
     """The cube refined `level` times and relaxed to near equilibrium."""
     ev = Evolver("cube.fe")
     ev.command("g 5")
     ev.refine(level)
-    ev.command("g 20; hessian; hessian; hessian")
+    ev.command("g 20; hessian; hessian")
     return ev
 
 
 def run_linear(level: int, repeat: int) -> dict:
+    t = time.perf_counter()
     ev = relaxed_cube(level)
     facets = ev.counts["facets"]
+    print(f"  [{facets:,} facets, {pse.threads()} threads] relaxed in "
+          f"{time.perf_counter() - t:.1f} s", flush=True)
     out = {"level": level, "facets": facets, "vertices": ev.counts["vertices"]}
 
     def fresh_mesh():
@@ -73,9 +81,10 @@ def run_linear(level: int, repeat: int) -> dict:
     mesh = fresh_mesh()
     z = ev.values("vertex", "z")
     tmp = tempfile.mkdtemp()
+    for name in ("g 1", "hessian"):      # expensive: once
+        out[name] = once(lambda: ev.command(name))
+        progress(out, name)
     ops = {
-        "g 1": lambda: ev.command("g 1"),
-        "hessian": lambda: ev.command("hessian"),
         "mesh()": fresh_mesh,
         "vertices (read)": lambda: ev.vertices,
         "values(vertex, x)": lambda: ev.values("vertex", "x"),
@@ -93,6 +102,7 @@ def run_linear(level: int, repeat: int) -> dict:
         pass
     for name, f in ops.items():
         out[name] = best(f, repeat)
+        progress(out, name)
     # curved elements: Lagrange order 3 tessellated 6 x 6 per facet (36 triangles
     # per facet, so only on the smaller surfaces)
     if facets > 200_000:
@@ -108,10 +118,11 @@ def run_lagrange(level: int, orders: list) -> dict:
     ev = relaxed_cube(level)
     out = {"level": level, "facets": ev.counts["facets"], "vertices": ev.counts["vertices"]}
     for n in orders:
-        out[f"lagrange {n}"] = once(lambda: ev.command(f"lagrange {n}"))
-        out[f"L{n} g 5"] = once(lambda: ev.command("g 5"))
-        for i in (1, 2, 3):
-            out[f"L{n} hessian {i}"] = once(lambda: ev.command("hessian"))
+        steps = [(f"lagrange {n}", f"lagrange {n}"), (f"L{n} g 5", "g 5")]
+        steps += [(f"L{n} hessian {i}", "hessian") for i in (1, 2, 3)]
+        for name, command in steps:
+            out[name] = once(lambda: ev.command(command))
+            progress(out, name)
         out[f"L{n} energy"] = ev.total_energy
     return out
 
