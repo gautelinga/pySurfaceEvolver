@@ -8,8 +8,11 @@ import pytest
 # (datafile, commands, total_energy, total_area)
 #
 # Reference values come from the standalone Surface Evolver 2.70a binary
-# (stock Makefile, gcc -O3, x86-64), which the Python build matched bit for
-# bit. The tolerance allows for other compilers and CPUs.
+# (stock Makefile, gcc -O3, x86-64). The parallel facet loops sum in a
+# different order, and runs that stop short of equilibrium amplify the
+# round-off differences (to ~2e-9 for cube.fe below); the tolerance allows
+# for that and for other compilers and CPUs. Agreement at equilibrium is
+# tested in test_fastloops.py.
 REGRESSION = [
     ("cube.fe", "g 10", 5.1124931277273991, 5.1124931277273991),
     ("cube.fe", "g 5; r; g 10; hessian", 4.9044731220583371, 4.9044731220583371),
@@ -29,8 +32,8 @@ REGRESSION = [
 def test_regression(load, datafile, commands, energy, area):
     ev = load(datafile)
     ev.command(commands)
-    assert ev.eval("total_energy") == pytest.approx(energy, rel=1e-9)
-    assert ev.eval("total_area") == pytest.approx(area, rel=1e-9)
+    assert ev.eval("total_energy") == pytest.approx(energy, rel=1e-8)
+    assert ev.eval("total_area") == pytest.approx(area, rel=1e-8)
 
 
 def test_runs_are_reproducible(load):

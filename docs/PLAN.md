@@ -42,7 +42,16 @@ Done (see `git log`):
   bit-identical); `pse.set_threads`; cache-backed `mesh()`. One iteration at 1.6M
   facets: 11.1 s -> 2.3 s; 98k: 0.50 -> 0.17 s.
 
-Version 0.5.0. 228 tests; mypy clean; manylinux wheel builds and passes.
+- **Phase C2 step 1**: per-thread accumulation (compensated sums for volumes and
+  energies, per-thread force arrays, merged in thread order). Single evaluations
+  agree with the original loops to ~2e-15; equilibria to <1e-9 with the same
+  Hessian index; reproducible per thread count. In-loop time at 1.6M facets,
+  8 threads (whole run): energy 0.64 -> 0.50 s, force 0.49 -> 0.27 s, volume
+  unchanged (~1.8 s, memory-bound, ~11 calls per iteration). A vertex-gather
+  force variant (CSR, bit-identical) was measured and was slower (0.32 s).
+  **Iteration wall time unchanged** (~1.8 s at 8 threads): see lesson 9.
+
+Version 0.5.0. 230 tests; mypy clean; manylinux wheel builds and passes.
 
 ## Lessons
 
@@ -69,6 +78,17 @@ Version 0.5.0. 228 tests; mypy clean; manylinux wheel builds and passes.
    Hessian assembly ~30%. A Newton step costs 5 linear iterations at 98k facets,
    11 at 393k.
 
+9. Profile of a 1.6M-facet iteration at 8 threads (after C2 step 1): the main
+   thread spends ~78% of the wall time in serial Evolver code. `film_grad_l` and
+   the `get_edge_side` walks it makes via `get_fe_side` are ~40% of wall time;
+   `local_calc_content`, `get_bv_new_vgrad`, `volume_restore`, `calc_leftside`
+   ~17%. The three parallel loops are ~22%. So C2 step 5 is where linear
+   iterations gain now; parallel loops alone have hit Amdahl's limit.
+10. `perf` works via `/usr/lib/linux-tools-6.8.0-146/perf` (the 6.17 kernel's
+    tools package ships no perf). Use `-D -1 --control fifo:...` and have the
+    script write `enable`/`disable` to profile just the iterations; per-thread
+    breakdown with `--sort pid` and `--tid`.
+
 ## Phase C2 (next)
 
 Correctness bar for every step: each step agrees with Evolver's original loops to
@@ -77,7 +97,7 @@ equilibria (energy, volumes, pressures, Hessian index) agree to ~1e-9 across 1, 
 and 8 threads; `PYSE_CHECK_FACET_CACHE=1` test suite, sanitizer sweep and full
 tests pass.
 
-1. **Per-thread accumulation in the linear loops** (small). Per-thread partial sums
+1. **Done.** Per-thread accumulation in the linear loops (small). Per-thread partial sums
    (volumes, energies, forces), merged in a fixed order, replacing the serial
    ordered pass. Turn the bit-identity tests (`tests/test_fastloops.py`) into the
    tolerance and physics tests above.

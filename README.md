@@ -109,9 +109,11 @@ two bodies appear in both. `.msh` means Gmsh format 2.2.
 
 For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature
 energies), the facet volume, energy and force loops use a cached facet topology
-and run in two passes: per-facet values in parallel (OpenMP), then the sums in
-facet order, so results are bit-identical to Evolver's original loops. One
-iteration on a 1.6M-facet surface went from 11 s to 2.3 s.
+and run in parallel (OpenMP): each thread sums its share of the facets, and the
+partial sums are merged in thread order. Results agree with Evolver's original
+loops to round-off (about 1e-15 per evaluation; runs that stop short of
+equilibrium can drift further apart, equilibria agree) and are reproducible for a
+given thread count. One iteration on a 1.6M-facet surface went from 11 s to 2.3 s.
 
 `pse.set_threads(n)` / `pse.threads()` control the threads (also `OMP_NUM_THREADS`,
 or `PYSE_THREADS`, which `pse.map` sets for its workers). `PYSE_NO_FAST_LOOPS=1`

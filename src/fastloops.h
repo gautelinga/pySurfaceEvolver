@@ -15,19 +15,20 @@ facet_id *fl_facet_list(long *n);
 int fl_check(void);
 
 /* Classic facet volumes for linear soapfilm surfaces, computed in parallel
-   and accumulated in facet order (bit-identical to the serial loop).
+   with per-thread sums merged in thread order (agrees with the serial loop
+   to round-off).
    Returns 0, doing nothing, when the case isn't covered. */
 int fl_facet_volumes(void);
 
 /* Facet surface energies (area, density, gravity) for linear soapfilm
    surfaces, as facet_energy_l(f_id,ALL_ENERGIES) for every facet: areas
-   are stored, and the area and energy sums accumulated in facet order.
+   are stored, and the area and energy sums accumulated per thread.
    Returns 0, doing nothing, when the case isn't covered. */
 int fl_facet_energies(void);
 
 /* Facet tension and gravity forces for linear soapfilm surfaces, as
    facet_force_l() for every facet: areas stored, forces added to the
-   vertices in facet order. Returns 0, doing nothing, when not covered. */
+   vertices via per-thread arrays. Returns 0, doing nothing, when not covered. */
 int fl_facet_forces(void);
 
 /* Number of threads for the parallel loops (1 without OpenMP). */
