@@ -134,8 +134,23 @@ def _as_3d(points: np.ndarray) -> np.ndarray:
     return np.hstack([points, np.zeros((len(points), 3 - points.shape[1]))])
 
 
-def _directed_edges(triangles: np.ndarray) -> np.ndarray:
-    return np.concatenate([triangles[:, [0, 1]], triangles[:, [1, 2]], triangles[:, [2, 0]]])
+def _directed_edge_keys(triangles: np.ndarray):
+    """Directed edges of triangles as integer keys u*N + v, the reverse keys,
+    and the endpoints."""
+    t = np.asarray(triangles, dtype=np.int64)
+    u = t.ravel()
+    v = t[:, [1, 2, 0]].ravel()
+    N = int(t.max()) + 1 if t.size else 1
+    return u * N + v, v * N + u, u, v
+
+
+def _has_reverse(keys: np.ndarray, rev: np.ndarray) -> "tuple[np.ndarray, bool]":
+    """For each edge, whether its reverse exists; and whether keys are unique."""
+    order = np.sort(keys)
+    unique = not (order[1:] == order[:-1]).any()
+    pos = np.searchsorted(order, rev)
+    pos[pos == len(order)] = 0
+    return order[pos] == rev, unique
 
 
 def _boundary_loops(triangles: np.ndarray) -> List[List[int]]:
@@ -143,43 +158,53 @@ def _boundary_loops(triangles: np.ndarray) -> List[List[int]]:
 
     Each loop runs along the boundary edges in the triangles' own direction.
     """
-    edges = _directed_edges(triangles)
-    present = {tuple(e) for e in edges.tolist()}
-    boundary = [tuple(e) for e in edges.tolist() if (e[1], e[0]) not in present]
+    if len(triangles) == 0:
+        return []
+    keys, rev, u, v = _directed_edge_keys(triangles)
+    found, _ = _has_reverse(keys, rev)
+    boundary = list(zip(u[~found].tolist(), v[~found].tolist()))
     following: Dict[int, List[int]] = {}
-    for u, v in boundary:
-        following.setdefault(u, []).append(v)
+    for a, b in boundary:
+        following.setdefault(a, []).append(b)
     loops = []
     used = set()
     for start_edge in boundary:
         if start_edge in used:
             continue
         loop = [start_edge[0]]
-        u, v = start_edge
+        a, b = start_edge
         while True:
-            used.add((u, v))
-            if v == loop[0]:
+            used.add((a, b))
+            if b == loop[0]:
                 break
-            loop.append(v)
-            nxt = [w for w in following.get(v, []) if (v, w) not in used]
+            loop.append(b)
+            nxt = [w for w in following.get(b, []) if (b, w) not in used]
             if not nxt:
                 break  # not a simple loop; leave it open
-            u, v = v, nxt[0]
+            a, b = b, nxt[0]
         loops.append(loop)
     return loops
+
+
+def _compact(cells: np.ndarray, n_points: int) -> "tuple[np.ndarray, np.ndarray]":
+    """Renumber the points used by cells as 0..m-1 (in point order).
+
+    Returns (used point indices, renumbered cells); O(n), no sorting.
+    """
+    used = np.zeros(n_points, dtype=bool)
+    used[cells.ravel()] = True
+    new = np.cumsum(used) - 1
+    return np.flatnonzero(used), new[cells]
 
 
 def is_watertight(triangles: np.ndarray) -> bool:
     """True if every edge is shared by exactly two triangles, with opposite
     directions (a closed, consistently oriented surface)."""
-    edges = _directed_edges(np.asarray(triangles))
-    if len(edges) == 0:
+    if len(triangles) == 0:
         return False
-    unique, counts = np.unique(edges, axis=0, return_counts=True)
-    if (counts != 1).any():
-        return False
-    present = {tuple(e) for e in unique.tolist()}
-    return all((v, u) in present for u, v in present)
+    keys, rev, _, _ = _directed_edge_keys(triangles)
+    found, unique = _has_reverse(keys, rev)
+    return unique and bool(found.all())
 
 
 # ---------------------------------------------------------------------------
@@ -314,51 +339,59 @@ class Mesh:
             sampled = sampled.reshape((-1,) + sampled.shape[2:])
 
         if merge:
-            keys = self._lattice_keys(nodes, index, n, lattice)
-            _, first, inverse = np.unique(keys, axis=0, return_index=True,
-                                          return_inverse=True)
-            inverse = inverse.ravel()
-            # renumber in order of first appearance, to keep a stable layout
-            order_ = np.argsort(first)
-            rank = np.empty_like(order_)
-            rank[order_] = np.arange(len(order_))
-            points = points[first[order_]]
+            ids, total = self._lattice_point_ids(nodes, index, n, lattice)
+            merged = np.empty((total, points.shape[1]))
+            merged[ids] = points
+            points = merged
             if sampled is not None:
-                sampled = sampled[first[order_]]
-            tris = rank[inverse][tris]
+                merged_values = np.empty((total,) + sampled.shape[1:])
+                merged_values[ids] = sampled
+                sampled = merged_values
+            tris = ids[tris]
 
         if values is not None:
             return points, tris, sampled
         return points, tris
 
-    def _lattice_keys(self, nodes, index, n, lattice) -> np.ndarray:
-        """A key per (facet, lattice point) identifying shared points exactly:
-        corners by vertex row, edge points by edge and position, interior
-        points by facet."""
-        k = len(nodes)
+    def _lattice_point_ids(self, nodes, index, n, lattice) -> "tuple[np.ndarray, int]":
+        """Merged point number of every (facet, lattice point), flattened.
+
+        Numbered from the topology: facet corners by vertex, points inside
+        edges by edge and position, points inside facets by facet. Points a
+        facet shares with its neighbours get the same number.
+        """
+        k, nv = len(nodes), len(self.vertices)
         corners = np.stack([nodes[:, int(np.flatnonzero(index[:, i] == self.order)[0])]
                             for i in range(3)], axis=1)                  # (k, 3)
-        P = len(lattice)
-        keys = np.zeros((k, P, 4), dtype=np.int64)
+        used = np.zeros(nv, dtype=bool)
+        used[corners.ravel()] = True
+        corner_id = np.cumsum(used) - 1
+        n_corner = int(used.sum())
+        sides = [(0, 1), (1, 2), (2, 0)]
+        lo = np.stack([np.minimum(corners[:, i], corners[:, j]) for i, j in sides], axis=1)
+        hi = np.stack([np.maximum(corners[:, i], corners[:, j]) for i, j in sides], axis=1)
+        _, edge_of_side = np.unique((lo * nv + hi).ravel(), return_inverse=True)
+        edge_of_side = edge_of_side.reshape(k, 3)
+        n_edge = int(edge_of_side.max()) + 1 if k else 0
+        interior_base = n_corner + n_edge * (n - 1)
+        per_interior = (n - 1) * (n - 2) // 2
         f = np.arange(k)
-        for p, (a0, a1, a2) in enumerate(lattice):
-            a = (a0, a1, a2)
+        ids = np.empty((k, len(lattice)), dtype=np.int64)
+        q = 0
+        for p, a in enumerate(lattice.tolist()):
             nonzero = [i for i in range(3) if a[i] > 0]
-            if len(nonzero) == 1:                     # a corner
-                keys[:, p, 0] = 0
-                keys[:, p, 1] = corners[:, nonzero[0]]
-            elif len(nonzero) == 2:                   # on an edge
+            if len(nonzero) == 1:
+                ids[:, p] = corner_id[corners[:, nonzero[0]]]
+            elif len(nonzero) == 2:
                 i, j = nonzero
-                ri, rj = corners[:, i], corners[:, j]
-                lo, hi = np.minimum(ri, rj), np.maximum(ri, rj)
-                # distance from the lower-numbered end, in lattice steps
-                t = np.where(ri < rj, a[j], a[i])
-                keys[:, p, 0] = 1
-                keys[:, p, 1], keys[:, p, 2], keys[:, p, 3] = lo, hi, t
-            else:                                     # interior
-                keys[:, p, 0] = 2
-                keys[:, p, 1], keys[:, p, 2], keys[:, p, 3] = f, a1, a2
-        return keys.reshape(-1, 4)
+                side = sides.index((i, j)) if (i, j) in sides else sides.index((j, i))
+                # steps from the lower-numbered end of the edge
+                t = np.where(corners[:, i] < corners[:, j], a[j], a[i])
+                ids[:, p] = n_corner + edge_of_side[:, side] * (n - 1) + t - 1
+            else:
+                ids[:, p] = interior_base + f * per_interior + q
+                q += 1
+        return ids.ravel(), interior_base + k * per_interior
 
     def tessellate_edges(self, n: Optional[int] = None, *, merge: bool = True,
                          values: Optional[np.ndarray] = None):
@@ -386,24 +419,26 @@ class Mesh:
         seg = (seg[None, :, :] + (np.arange(m) * (n + 1))[:, None, None]).reshape(-1, 2)
         points = points.reshape(-1, points.shape[-1])
         if merge:
-            tail, head = nodes[:, 0], nodes[:, -1]
-            keys = np.zeros((m, n + 1, 4), dtype=np.int64)
-            for t in range(n + 1):
-                if t == 0 or t == n:
-                    keys[:, t, 1] = tail if t == 0 else head
-                else:
-                    keys[:, t, 0] = 1
-                    keys[:, t, 1], keys[:, t, 2] = np.arange(m), t
-            _, first, inverse = np.unique(keys.reshape(-1, 4), axis=0,
-                                          return_index=True, return_inverse=True)
-            inverse = inverse.ravel()
-            order_ = np.argsort(first)
-            rank = np.empty_like(order_)
-            rank[order_] = np.arange(len(order_))
-            points = points[first[order_]]
+            # endpoints by vertex, interior points by edge
+            ends = np.stack([nodes[:, 0], nodes[:, -1]], axis=1)
+            used = np.zeros(len(self.vertices), dtype=bool)
+            used[ends.ravel()] = True
+            end_id = np.cumsum(used) - 1
+            n_end = int(used.sum())
+            ids = np.empty((m, n + 1), dtype=np.int64)
+            ids[:, 0], ids[:, n] = end_id[ends[:, 0]], end_id[ends[:, 1]]
+            for t in range(1, n):
+                ids[:, t] = n_end + np.arange(m) * (n - 1) + t - 1
+            ids = ids.ravel()
+            total = n_end + m * (n - 1)
+            merged = np.empty((total, points.shape[1]))
+            merged[ids] = points
+            points = merged
             if sampled is not None:
-                sampled = sampled[first[order_]]
-            seg = rank[inverse][seg]
+                merged_values = np.empty((total,) + sampled.shape[1:])
+                merged_values[ids] = sampled
+                sampled = merged_values
+            seg = ids[seg]
         if values is not None:
             return points, seg, sampled
         return points, seg
@@ -479,9 +514,8 @@ class Mesh:
                 flip = back[facet_of][sel] & ~front[facet_of][sel]
                 body_tris[flip] = body_tris[flip][:, ::-1]
                 fids = self.face_ids[facet_of[sel]] if self.face_ids is not None else facet_of[sel]
-                used, local = np.unique(body_tris, return_inverse=True)
+                used, body_tris = _compact(body_tris, len(points))
                 body_points = points[used]
-                body_tris = local.reshape(-1, 3)
                 loops = _boundary_loops(body_tris)
                 open_loops = len(loops)
                 if cap and loops:
@@ -495,8 +529,7 @@ class Mesh:
                 body_cells = cells[sel].copy()
                 flip = back[sel] & ~front[sel]
                 body_cells[flip] = body_cells[flip][:, rev]
-                used, local = np.unique(body_cells, return_inverse=True)
-                body_cells = local.reshape(body_cells.shape)
+                used, body_cells = _compact(body_cells, len(self.vertices))
                 corners = body_cells[:, :3]
                 fids = self.face_ids[sel] if self.face_ids is not None else np.flatnonzero(sel)
                 out[b] = BodySurface(b, self.vertices[used], body_cells, cell_type,
@@ -535,9 +568,9 @@ class Mesh:
             elif curved == "native":
                 _, native = self.native_cells()
                 cell_type = native_cell_name("triangle", self.order, self.bezier, flavor)
-                used, local = np.unique(native, return_inverse=True)
+                used, local = _compact(native, len(self.vertices))
                 points = self.vertices[used]
-                cells = [(cell_type, local.reshape(native.shape))]
+                cells = [(cell_type, local)]
                 facet_of = np.arange(len(native))
             else:
                 raise ValueError("curved must be 'tessellate' or 'native'")
@@ -554,9 +587,9 @@ class Mesh:
             elif curved == "native":
                 _, native = self.native_edge_cells()
                 cell_type = native_cell_name("line", self.order, self.bezier, flavor)
-                used, local = np.unique(native, return_inverse=True)
+                used, local = _compact(native, len(self.vertices))
                 points = self.vertices[used]
-                cells = [(cell_type, local.reshape(native.shape))]
+                cells = [(cell_type, local)]
                 edge_of = np.arange(len(native))
             else:
                 raise ValueError("curved must be 'tessellate' or 'native'")

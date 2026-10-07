@@ -56,6 +56,29 @@ def test_interpolated_values_hit_the_nodes(lagrange_sphere):
 
 # --- whole-surface files ---------------------------------------------------------------
 
+@pytest.mark.parametrize("model", ["linear", "quadratic", "lagrange 2", "lagrange 4"])
+def test_merged_tessellation_is_the_unmerged_one(cube, model):
+    cube.command("g 5; r; g 5; " + model)
+    m = cube.mesh()
+    for n in (1, 3, 5):
+        points, tris = m.tessellate(n)
+        raw_points, raw_tris = m.tessellate(n, merge=False)
+        np.testing.assert_allclose(points[tris], raw_points[raw_tris], atol=1e-13)
+        assert len(np.unique(tris)) == len(points)        # no unused points
+        assert is_watertight(tris)
+
+
+def test_merged_edge_tessellation(load):
+    ev = load("knotty.fe")
+    ev.command("quadratic")
+    m = ev.mesh()
+    points, segs = m.tessellate_edges(4)
+    raw_points, raw_segs = m.tessellate_edges(4, merge=False)
+    np.testing.assert_allclose(points[segs], raw_points[raw_segs], atol=1e-13)
+    # a closed knot: every point is shared by exactly two segments
+    assert (np.bincount(segs.ravel()) == 2).all()
+
+
 @pytest.mark.parametrize("ext", ["stl", "obj", "ply", "vtu", "vtk", "msh", "xdmf"])
 def test_write_tessellated(lagrange_sphere, tmp_path, ext):
     if ext == "xdmf":
