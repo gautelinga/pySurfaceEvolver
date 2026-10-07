@@ -76,6 +76,19 @@ def test_live_view_follows_the_run(cube, tmp_path, can_render):
     view.close()
 
 
+def test_live_view_moves_points_in_place(cube, can_render):
+    view = cube.live_view("area", off_screen=True)
+    dataset = view.dataset
+    cube.iterate(4, callback=view.update)
+    assert view.fast_updates == 4 and view.dataset is dataset
+    np.testing.assert_allclose(view.dataset.points, cube.mesh().vertices)
+    np.testing.assert_allclose(view.dataset.cell_data["area"], cube.values("facet", "area"))
+    cube.refine()
+    view.update()                       # topology changed: full rebuild
+    assert view.fast_updates == 4 and view.dataset is not dataset
+    view.close()
+
+
 def test_live_view_context_manager(cube, can_render):
     with cube.live_view(off_screen=True) as view:
         view.update()

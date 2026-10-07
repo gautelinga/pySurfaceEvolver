@@ -67,6 +67,13 @@ def surface_dataset(ev: "Evolver", scalars: Scalars = None, element: Optional[st
     return mesh.to_pyvista(n, point_values=point_values, cell_values=cell_values), name
 
 
+def _same_cells(a: "pyvista.PolyData", b: "pyvista.PolyData") -> bool:
+    """Whether two PolyData have identical connectivity."""
+    if a.n_points != b.n_points or a.n_cells != b.n_cells:
+        return False
+    return bool(np.array_equal(a.faces, b.faces) and np.array_equal(a.lines, b.lines))
+
+
 class LiveView:
     """A PyVista window (or notebook widget) that follows the surface.
 
@@ -103,6 +110,7 @@ class LiveView:
         self.plotter = plotter or pv.Plotter(off_screen=off_screen, notebook=self.notebook)
         self.dataset: Optional["pyvista.PolyData"] = None
         self.updates = 0
+        self.fast_updates = 0   # updates that only moved points
         self._draw(reset_camera=True)
         self._shown = False
         if not off_screen:
@@ -110,6 +118,21 @@ class LiveView:
 
     def _draw(self, reset_camera: bool = False) -> None:
         dataset, name = surface_dataset(self.ev, self.scalars, self.element, self.n)
+        if self.dataset is not None and not reset_camera and _same_cells(self.dataset, dataset):
+            # same connectivity: move the points and refresh values in place,
+            # without rebuilding the actor
+            self.dataset.points = dataset.points
+            for key in dataset.point_data:
+                self.dataset.point_data[key] = dataset.point_data[key]
+            for key in dataset.cell_data:
+                self.dataset.cell_data[key] = dataset.cell_data[key]
+            if name is not None:
+                values = dataset.point_data.get(name, dataset.cell_data.get(name))
+                if values is not None and len(values):
+                    self.plotter.update_scalar_bar_range([float(np.min(values)),
+                                                          float(np.max(values))])
+            self.fast_updates += 1
+            return
         self.dataset = dataset
         self.plotter.add_mesh(dataset, name="evolver-surface", scalars=name,
                               reset_camera=reset_camera, **self.mesh_kwargs)
