@@ -156,8 +156,9 @@ made while another thread's call runs raises `EvolverBusyError` (a `RuntimeError
 or with `pse.busy_timeout = seconds` (`float("inf")`: no limit) waits for it first.
 A call from inside a running call, such as from a callback, always raises.
 
-Limitations: some global Evolver settings, such as display modes,
-carry over from one datafile to the next. Builds and CI cover Linux only. Torus
+Limitations: loading a datafile resets Evolver's settings (tested: results of every
+sample are the same whatever was loaded before), but the view matrix in dumps can
+still depend on earlier datafiles. Builds and CI cover Linux only. Torus
 models aren't unwrapped for plotting or export.
 
 ## Development

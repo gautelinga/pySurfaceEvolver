@@ -88,6 +88,13 @@ def test_busy_timeout_runs_out(load, monkeypatch):
     thread.join(timeout=30)
 
 
+def test_torus_display_mode_does_not_carry_over(load):
+    ev = load("100grain.fe")             # sets "clipped"
+    assert "clipped" in ev.save().text
+    ev.load("cube.fe")
+    assert "clipped" not in ev.save().text
+
+
 # --- invalid surfaces ---------------------------------------------------------------
 
 def test_failed_load_invalidates_surface(load):

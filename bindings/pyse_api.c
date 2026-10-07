@@ -431,6 +431,13 @@ static void load_body(void *arg)
     kb_error(PYSE_ERR_NO_DATAFILE,errmsg,RECOVERABLE);
   }
   fclose(fd);
+  /* The torus display mode, which Evolver keeps from one datafile to the
+     next for its own graphics (pySE has none); it would show up as
+     "clipped" in later dumps, and so in save()/restore(). */
+  web.torus_clip_flag = 0;
+  web.torus_body_flag = 0;
+  torus_display_mode = TORUS_DEFAULT_MODE;
+  former_torus_display_mode = TORUS_DEFAULT_MODE;
   load_datafile((char*)arg);
 }
 

@@ -336,6 +336,12 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    export for FEM).
 7. Optional stop-gap for global settings that leak between datafiles (the
    "clipped" display mode from the torus sample; the real fix is phase E).
+   **Done**, measured first: every sample loaded after every other (25x25, plain
+   and after a batch of toggles such as conj_grad, runge_kutta, gravity off,
+   autorecalc off) gives the fresh-process energy, so `reset_web()` covers the
+   physics. Only dumps differed: "clipped on" after 100grain.fe (torus display
+   mode is sticky by design; now reset in pySE's load), and the view matrix of
+   100grain/metric/slidestr after some samples (display only; left alone).
 8. `pse.map` fails fast with a clear error when workers die before taking a job
    (e.g. a script read from stdin under the `spawn` start method), instead of
    failing every job.
