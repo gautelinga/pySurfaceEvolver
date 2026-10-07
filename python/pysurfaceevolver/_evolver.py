@@ -25,6 +25,7 @@ __all__ = [
     "Evolver",
     "IterationResult",
     "Parameters",
+    "Snapshot",
     "EvolverError",
     "EvolverExit",
     "EvolverFatalError",
@@ -150,14 +151,21 @@ def _hide_capture_wrapper(error: EvolverError) -> EvolverError:
     return type(error)(cleaned, error.errnum, error.output)
 
 
-# Surface Evolver keeps all of its state in C globals, so there is one engine
-# per process. Every Evolver object shares it; only the newest one may use it.
-_generation = 0
-_generation_lock = threading.Lock()
+@dataclass(frozen=True)
+class Snapshot:
+    """A saved surface from :meth:`Evolver.save`, as exact datafile text."""
+
+    text: str
+    datafile: str
+
+    def write(self, path: Union[str, os.PathLike]) -> None:
+        """Write the snapshot as a ``.fe`` datafile."""
+        with open(path, "w") as f:
+            f.write(self.text)
 
 
 class Evolver:
-    """The Surface Evolver engine for this process.
+    """A handle to the Surface Evolver engine of this process.
 
     Parameters
     ----------
@@ -173,10 +181,12 @@ class Evolver:
 
     Notes
     -----
-    There is one Surface Evolver engine per process. Creating a new
-    ``Evolver`` makes older ``Evolver`` objects stop working, and the surface
-    stays as it was until a datafile is loaded. To run several surfaces at
-    once, use separate processes, for example with ``multiprocessing``.
+    Surface Evolver keeps its state in C globals, so there is one engine per
+    process, and every ``Evolver`` object is a handle to it: they all see the
+    same surface, and loading through one changes it for all. ``echo`` and
+    ``input`` belong to each handle. Use :meth:`save` and :meth:`restore` to
+    keep a surface around, and separate processes to work on several at
+    once.
 
     Calls are serialized: a call made while another thread is running one
     raises ``RuntimeError`` instead of waiting.
@@ -193,10 +203,6 @@ class Evolver:
         echo: bool = False,
         input: Optional[Callable[[str], Optional[str]]] = None,
     ):
-        global _generation
-        with _generation_lock:
-            _generation += 1
-            self._generation = _generation
         self.echo = echo
         self.input = input
         self._call(_core.initialize)
@@ -206,20 +212,12 @@ class Evolver:
     # ------------------------------------------------------------------
     # Running Evolver
 
-    def _check_current(self) -> None:
-        if self._generation != _generation:
-            raise RuntimeError(
-                "This Evolver was replaced by a newer Evolver instance; "
-                "there is only one Surface Evolver engine per process."
-            )
-
     def _call(self, fn, *args):
         """Run a guarded _core call; return (output, result) or raise.
 
         The output buffers are local to the call and the callbacks travel
         with it, so concurrent calls from other threads can't mix them up.
         """
-        self._check_current()
         out: list = []
         err: list = []
         echo = self.echo
@@ -401,8 +399,35 @@ class Evolver:
         self.command("recalc")
 
     def dump(self, path: Union[str, os.PathLike]) -> None:
-        """Save the current surface as a datafile (Evolver's ``dump``)."""
+        """Save the current surface as a datafile (Evolver's ``dump``).
+
+        Numbers are written with 17 significant digits, so loading the file
+        gives back the same coordinates exactly.
+        """
         self.command(f'dump "{os.fspath(path)}"')
+
+    def save(self) -> Snapshot:
+        """Take a snapshot of the surface, to :meth:`restore` later.
+
+        The snapshot is an exact dump: coordinates and energies come back
+        bit for bit. Settings that dump doesn't record (most display
+        options) are not part of it.
+        """
+        name = self.datafile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "snapshot.fe")
+            self.dump(path)
+            with open(path) as f:
+                return Snapshot(f.read(), name)
+
+    def restore(self, snapshot: Snapshot) -> None:
+        """Replace the surface with a snapshot from :meth:`save`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "snapshot.fe")
+            with open(path, "w") as f:
+                f.write(snapshot.text)
+            self.load(path)
+        _core.set_datafile(snapshot.datafile)
 
     # ------------------------------------------------------------------
     # Writing element data
@@ -619,60 +644,50 @@ class Evolver:
     @property
     def datafile(self) -> str:
         """Name of the loaded datafile, or ``""`` if none."""
-        self._check_current()
         return _core.datafile()
 
     @property
     def valid(self) -> bool:
         """Whether there is a usable surface (see :class:`InvalidSurfaceError`)."""
-        self._check_current()
         return _core.surface_valid()
 
     @property
     def sdim(self) -> int:
         """Dimension of the ambient space."""
-        self._check_current()
         return _core.sdim()
 
     @property
     def representation(self) -> str:
         """``"string"``, ``"soapfilm"`` or ``"simplex"``."""
-        self._check_current()
         return _REPRESENTATIONS.get(_core.representation(), "unknown")
 
     @property
     def model(self) -> str:
         """``"linear"``, ``"quadratic"`` or ``"lagrange"``."""
-        self._check_current()
         return _MODELS.get(_core.modeltype(), "unknown")
 
     @property
     def lagrange_order(self) -> int:
-        self._check_current()
         return _core.lagrange_order()
 
     @property
     def torus(self) -> bool:
         """Whether the domain is periodic (torus model)."""
-        self._check_current()
         return _core.torus()
 
     @property
     def total_energy(self) -> float:
         """Total energy as of the last iteration or recalculation."""
-        self._check_current()
         return _core.total_energy()
 
     @property
     def total_area(self) -> float:
         """Total area as of the last iteration or recalculation."""
-        self._check_current()
         return _core.total_area()
 
     @property
     def counts(self) -> dict:
         """Number of vertices, edges, facets and bodies."""
-        self._check_current()
         return {
             "vertices": _core.count(_core.VERTEX),
             "edges": _core.count(_core.EDGE),
@@ -739,7 +754,6 @@ class Evolver:
         ``ev.parameters["angle"] = 60`` assigns, and Evolver recalculates
         whatever depends on it.
         """
-        self._check_current()
         return Parameters(self)
 
     def quantities(self) -> Dict[str, Quantity]:
@@ -754,8 +768,6 @@ class Evolver:
         return out
 
     def __repr__(self) -> str:
-        if self._generation != _generation:
-            return "<Evolver (replaced)>"
         name = self.datafile or "no datafile"
         if not _core.surface_valid():
             return f"<Evolver {name!r}: no valid surface>"

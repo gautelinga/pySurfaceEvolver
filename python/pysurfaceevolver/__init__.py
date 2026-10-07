@@ -20,6 +20,7 @@ from ._evolver import (
     InvalidSurfaceError,
     IterationResult,
     Parameters,
+    Snapshot,
 )
 from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
 from ._viz import LiveView
@@ -39,6 +40,7 @@ __all__ = [
     "Mesh",
     "Parameters",
     "Quantity",
+    "Snapshot",
     "is_watertight",
     "make_datafile",
 ]

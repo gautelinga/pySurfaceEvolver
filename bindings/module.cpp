@@ -352,4 +352,8 @@ NB_MODULE(_core, m) {
   m.def("total_energy", []() { Lock lock; return pyse_total_energy(); });
   m.def("total_area", []() { Lock lock; return pyse_total_area(); });
   m.def("datafile", []() { Lock lock; return std::string(pyse_datafilename()); });
+  m.def("set_datafile", [](const std::string &name) {
+    Lock lock;
+    pyse_set_datafilename(name.c_str());
+  }, "name"_a);
 }

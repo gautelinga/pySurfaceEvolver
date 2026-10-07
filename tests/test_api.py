@@ -360,15 +360,56 @@ def test_set_vertices_wrong_ndim_raises(cube):
 
 # --- instances and process-level behavior -------------------------------------------
 
-def test_new_instance_replaces_old(load):
-    old = load("cube.fe")
-    new = load("mound.fe")
-    with pytest.raises(RuntimeError, match="replaced"):
-        old.eval("total_area")
-    with pytest.raises(RuntimeError):
-        old.mesh()
-    assert "replaced" in repr(old)
-    assert new.datafile.endswith("mound.fe")
+def test_handles_share_the_engine(load):
+    first = load("cube.fe")
+    second = load("mound.fe")
+    # both handles keep working, and see the surface loaded last
+    assert first.datafile.endswith("mound.fe")
+    assert first.counts == second.counts
+    first.iterate(2)
+    assert second.eval("total_energy") == first.total_energy
+
+
+def test_handles_keep_their_own_options(load, capsys):
+    quiet = load("cube.fe")
+    loud = Evolver(echo=True)
+    capsys.readouterr()
+    quiet.command("g 1")
+    assert capsys.readouterr().out == ""
+    loud.command("g 1")
+    assert "area:" in capsys.readouterr().out
+
+
+def test_save_and_restore_are_exact(load):
+    ev = load("cube.fe")
+    ev.command("g 5; r; g 5")
+    snapshot = ev.save()
+    vertices, energy = ev.vertices, ev.eval("total_energy")
+    ev.refine()
+    ev.iterate(5)
+    ev.load("mound.fe")
+    ev.restore(snapshot)
+    assert ev.datafile.endswith("cube.fe")
+    np.testing.assert_array_equal(ev.vertices, vertices)
+    assert ev.eval("total_energy") == energy
+    # and it carries on exactly like the original would have
+    ev.iterate(3)
+    reference = load("cube.fe")
+    reference.command("g 5; r; g 5; g 3")
+    np.testing.assert_array_equal(ev.vertices, reference.vertices)
+
+
+def test_snapshot_keeps_lagrange_model_and_parameters(load, tmp_path):
+    ev = load("mound.fe")
+    ev.parameters["angle"] = 60
+    ev.command("g 5; lagrange 2; g 2")
+    snapshot = ev.save()
+    snapshot.write(tmp_path / "saved.fe")
+    ev.load("cube.fe")
+    ev.restore(snapshot)
+    assert ev.model == "lagrange" and ev.lagrange_order == 2
+    assert ev.parameters["angle"] == 60
+    assert Evolver(str(tmp_path / "saved.fe")).model == "lagrange"
 
 
 def test_sigint_interrupts_long_run(run_python):

@@ -20,10 +20,10 @@ def fe_dir(monkeypatch):
 
 @pytest.fixture
 def load(fe_dir):
-    """Return a function that loads a sample datafile into a new Evolver.
+    """Return a function that loads a sample datafile.
 
-    The Evolver engine is shared by the whole process; every new Evolver
-    replaces the previous one and loads a fresh surface.
+    The Evolver engine is shared by the whole process; every Evolver is a
+    handle to it, and loading replaces the surface.
     """
     def _load(name, **kwargs):
         return Evolver(name, **kwargs)

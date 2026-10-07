@@ -963,3 +963,8 @@ int pyse_torus(void) { return web.torus_flag; }
 double pyse_total_energy(void) { return (double)web.total_energy; }
 double pyse_total_area(void) { return (double)web.total_area; }
 const char *pyse_datafilename(void) { return datafilename; }
+
+void pyse_set_datafilename(const char *name)
+{ strncpy(datafilename,name,PATHSIZE-1);
+  datafilename[PATHSIZE-1] = 0;
+}

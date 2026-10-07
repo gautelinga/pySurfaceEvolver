@@ -114,6 +114,9 @@ int pyse_torus(void);
 double pyse_total_energy(void);
 double pyse_total_area(void);
 const char *pyse_datafilename(void);
+/* Set the name reported as the current datafile (e.g. after restoring a
+   snapshot from a temporary file). */
+void pyse_set_datafilename(const char *name);
 
 #ifdef __cplusplus
 }
