@@ -45,8 +45,9 @@ int fl_move_vertices(REAL scale, int dim);
 int fl_save_coords(REAL (*coord)[MAXCOORD]);     /* NULL: to __oldx */
 int fl_restore_coords(REAL (*coord)[MAXCOORD]);  /* NULL: from __oldx */
 int fl_volume_restore(REAL stepsize, REAL *vol_restore, int fixcount);
-/* DV^T DV added to dense rleftside, degrees of freedom to *degfree */
-int fl_calc_leftside(REAL **rleftside, int fixcount, int *degfree);
+/* DV^T DV added to the sparse system S, or if S is NULL to the dense
+   rleftside; degrees of freedom added to *degfree */
+int fl_calc_leftside(REAL **rleftside, struct linsys *S, int fixcount, int *degfree);
 
 /* Serial loops over the vertices or edges whose attributes have any of
    `bits` (all of them for bits 0), in FOR_ALL order, found by a parallel

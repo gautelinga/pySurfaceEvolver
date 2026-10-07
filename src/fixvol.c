@@ -712,8 +712,8 @@ void local_calc_leftside()
   int bi,bj;
   
   /* generate  DV^T DV */
-  if ( !approx_curve_flag && (sparse_constraints_flag
-          || !fl_calc_leftside(rleftside,fixcount,&degfree)) )  /* fastloops.c */
+  if ( !approx_curve_flag && !fl_calc_leftside(rleftside,  /* fastloops.c */
+          sparse_constraints_flag ? &LS : NULL,fixcount,&degfree) )
   { FOR_ALL_VERTICES(v_id)
     {
       volgrad *vgptri,*vgptrj;

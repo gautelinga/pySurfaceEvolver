@@ -992,7 +992,7 @@ int fl_volume_restore(REAL stepsize, REAL *vol_restore, int fixcount)
 static double *ls_buf = NULL;
 static long ls_buf_size = 0;
 
-int fl_calc_leftside(REAL **rleftside, int fixcount, int *degfree)
+int fl_calc_leftside(REAL **rleftside, struct linsys *S, int fixcount, int *degfree)
 { vertex_id *list;
   long n, k, m = (long)fixcount*fixcount;
   int threads, t, deg = 0;
@@ -1029,9 +1029,18 @@ int fl_calc_leftside(REAL **rleftside, int fixcount, int *degfree)
       }
     }
   }
-  for ( t = 0 ; t < threads ; t++ )
+  for ( t = 1 ; t < threads ; t++ )
     for ( k = 0 ; k < m ; k++ )
-      rleftside[k/fixcount][k%fixcount] += ls_buf[t*m + k];
+      ls_buf[k] += ls_buf[t*m + k];
+  if ( S )   /* sparse: upper triangle */
+  { int i, j;
+    for ( i = 0 ; i < fixcount ; i++ )
+      for ( j = i ; j < fixcount ; j++ )
+        sp_hash_search(S,i,j,ls_buf[i*fixcount + j]);
+  }
+  else
+    for ( k = 0 ; k < m ; k++ )
+      rleftside[k/fixcount][k%fixcount] += ls_buf[k];
   *degfree += deg;
   return 1;
 }
