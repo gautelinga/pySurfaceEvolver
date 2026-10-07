@@ -1104,6 +1104,41 @@ static int fl_calc_leftside_impl(REAL **rleftside, struct linsys *S, int fixcoun
   return 1;
 }
 
+/* hessian_init()'s vertex normals, see fastloops.h. The normals only read
+   the surface; an error (kb_error) leaves the vertex to the caller, which
+   redoes it serially so Evolver reports it as usual. */
+static int *fl_vertex_normals_impl(REAL ***v_normal, vertex_id **listp, long *np)
+{ vertex_id *list;
+  int *dims;
+  long n, k;
+  if ( web.representation == SIMPLEX || hessian_special_normal_flag
+       || (web.symmetry_flag && !web.torus_flag) )
+    return NULL;
+  if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return NULL;
+  if ( !(dims = (int*)malloc(n*sizeof(int))) ) return NULL;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    jmp_buf trap;
+    dims[k] = -1;
+    if ( get_vattr(v_id) & (FIXED|BOUNDARY|NO_HESSIAN_NORMAL_ATTR) ) continue;
+    if ( get_v_constraint_map(v_id)[0] ) continue;
+    if ( setjmp(trap) == 0 )
+    { int kk;
+      fl_trap = &trap;   /* kb_error() comes back here */
+      kk = new_calc_vertex_normal(v_id,v_normal[k]);
+      dims[k] = project_vertex_normals(v_id,v_normal[k],kk);
+      fl_trap = NULL;
+    }
+    else dims[k] = -1;
+  }
+  *listp = list;
+  *np = n;
+  return dims;
+}
+
 /**************************************************************************
  * Lagrange facet setup
  *
@@ -1228,6 +1263,9 @@ int fl_film_grad(void)
 
 int fl_zero_forces(void)
 { int r; fl_enter(); r = fl_zero_forces_impl(); fl_leave(); return r; }
+
+int *fl_vertex_normals(REAL ***v_normal, vertex_id **list, long *n)
+{ int *r; fl_enter(); r = fl_vertex_normals_impl(v_normal,list,n); fl_leave(); return r; }
 
 int fl_move_vertices(REAL scale, int dim)
 { int r; fl_enter(); r = fl_move_vertices_impl(scale,dim); fl_leave(); return r; }

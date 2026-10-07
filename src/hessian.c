@@ -18,6 +18,7 @@ int hess_debug;  /* debugging flag */
 
 #include "include.h"
 #include "f2c.h"
+#include "fastloops.h"
           
 int hmode; /* mode of motion */
 struct hess_verlist *vhead = NULL;  /* main vertex list */
@@ -1690,6 +1691,9 @@ void hessian_init(
   int total_proj,vproj_count,total_conhess,vproj_alloc,conhess_alloc;
   int vproj_spot,vcount;
   REAL ***v_normal = NULL;
+  int *pre_dims = NULL;     /* normals done by fl_vertex_normals() */
+  vertex_id *pre_list = NULL;
+  long pre_n = 0;
 
   memset(S,0,sizeof(struct linsys));
 
@@ -1723,8 +1727,11 @@ void hessian_init(
 
   vhead = (struct hess_verlist*)temp_calloc(vhead_count,
         sizeof(struct hess_verlist));
-  if ( hmode == NORMAL_MOTION ) v_normal = dmatrix3(vhead_count,SDIM,SDIM);
+  if ( hmode == NORMAL_MOTION )
+  { v_normal = dmatrix3(vhead_count,SDIM,SDIM);
       /* v_normal will use vhead_attr as index */
+    pre_dims = fl_vertex_normals(v_normal,&pre_list,&pre_n);
+  }
 
   /* populate vertex list and count degrees of freedom */
   total_proj = 0;    /* count columns needed */
@@ -1757,8 +1764,13 @@ void hessian_init(
       if ( (hmode == NORMAL_MOTION) && !( attr & NO_HESSIAN_NORMAL_ATTR) ) 
       { REAL **norm;
         norm = get_vertex_v_normal(v_id);
-        kk = new_calc_vertex_normal(v_id,norm);
-        kk = project_vertex_normals(v_id,norm,kk);
+        if ( pre_dims && vcount <= pre_n && equal_id(pre_list[vcount-1],v_id)
+               && pre_dims[vcount-1] >= 0 )
+          kk = pre_dims[vcount-1];  /* already in norm */
+        else
+        { kk = new_calc_vertex_normal(v_id,norm);
+          kk = project_vertex_normals(v_id,norm,kk);
+        }
         if ( kk < SDIM )
         { v->freedom = kk;
           total_proj += kk;
@@ -1787,6 +1799,7 @@ void hessian_init(
       }
     }
   } /* end FOR_ALL_VERTICES first time through */
+  if ( pre_dims ) free(pre_dims);
 
 
   vproj_base = (REAL**)mycalloc(vproj_count*SDIM,sizeof(REAL*));

@@ -269,10 +269,14 @@ Phase C2 is complete (see the table in Status). After it, at the user's request:
      (8 threads, best of 3-4 consecutive steps, two interleaved rounds, load ~7,
      against 66420bd): 393k 1.22 -> 1.16 s; 1.6M 6.45 -> 5.93 s; Lagrange 6 at 24k
      6.78 -> 6.49 s. About 4-8%, at the noise level; energies agree.
-  2. Parallelize the remaining serial Newton-step setup: **not started**.
-     Candidates from the last profile (1.6M linear, noisy): `hessian_init`,
-     per-vertex normal projections (`new_calc_vertex_normal`, `get_edge_valence`,
-     `get_facet_normal`), roughly 5-10% of a step. Profile cleanly first.
+  2. Parallelize the remaining serial Newton-step setup: **done**. The per-vertex
+     normals of `hessian_init` (`new_calc_vertex_normal`) run in parallel
+     (`fl_vertex_normals`, fastloops.c) for vertices without constraints or
+     boundaries; the rest stays serial. Newton step, 8 threads, against 8701b7c:
+     393k 1.18 -> 0.88 s; 1.6M 5.9 -> 4.9 s; Lagrange 6 at 24k unchanged (~6.3 s,
+     factorization-bound). Tests, stock sanitizers and an OpenMP sanitizer run
+     on refined samples (cube, mound, catbody, column, sphere, twointor,
+     phelanc) pass.
 - Further options discussed, not chosen: hash-free direct CSR assembly (5-10%),
   reusing a factorization over several Newton steps (algorithmic; user decision),
   phase E compact data layouts.
