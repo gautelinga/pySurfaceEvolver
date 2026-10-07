@@ -304,8 +304,8 @@ int sdrvmd_(
      /* Parameter adjustments */
      --rsp;
      --isp;
-     --z;
-     --b;
+     if ( z ) --z;  /* NULL when there is no right-hand side; */
+     if ( b ) --b;  /* offsetting a null pointer is undefined */
      --a;
      --ja;
      --ia;
