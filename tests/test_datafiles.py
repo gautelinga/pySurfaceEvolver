@@ -5,11 +5,8 @@ import pytest
 
 from conftest import FE_DIR
 
-KNOWN_BAD = {
-    # The datafile reads "octa.wlf", but the file on disk is OCTA.WLF. It only
-    # loads on case-insensitive file systems. The stock program fails too.
-    "crystal.fe": "references octa.wlf; file is named OCTA.WLF",
-}
+# Sample datafiles expected to fail, with the reason (none at the moment).
+KNOWN_BAD: dict = {}
 
 DATAFILES = [
     pytest.param(
