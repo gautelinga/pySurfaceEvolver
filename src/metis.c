@@ -56,6 +56,36 @@ void metis_partition_plain(
 #include "ytab.h"
 #include "metis.h"
 
+/* pySE: METIS 5 port. The code below was written for METIS 4: keep its
+   graph struct and calling conventions, mapped onto METIS 5 calls with
+   default options and 0-based numbering (all callers use those). */
+typedef idx_t idxtype;
+typedef struct { idx_t nvtxs; idx_t *xadj, *adjncy, *vwgt, *adjwgt; } GraphType;
+typedef char metis_idx_is_int[sizeof(idx_t) == sizeof(int) ? 1 : -1];
+
+static void metis4_PartGraphKway(idx_t *nvtxs, idx_t *xadj, idx_t *adjncy,
+  idx_t *vwgt, idx_t *adjwgt, int *wgtflag, int *numflag, int *nparts,
+  int *options, int *edgecut, idx_t *part)
+{ idx_t ncon = 1, np = *nparts, cut = 0;
+  (void)options;
+  if ( *numflag != 0 )
+    kb_error(6346,"Internal error: METIS called with 1-based numbering.\n",RECOVERABLE);
+  if ( METIS_PartGraphKway(nvtxs,&ncon,xadj,adjncy,(*wgtflag & 2) ? vwgt : NULL,
+         NULL,(*wgtflag & 1) ? adjwgt : NULL,&np,NULL,NULL,NULL,&cut,part)
+       != METIS_OK )
+    kb_error(6347,"METIS partitioning failed.\n",RECOVERABLE);
+  *edgecut = (int)cut;
+}
+
+static void metis4_NodeND(idx_t *nvtxs, idx_t *xadj, idx_t *adjncy,
+  int *numflag, int *options, idx_t *perm, idx_t *iperm)
+{ (void)options;
+  if ( *numflag != 0 )
+    kb_error(6348,"Internal error: METIS called with 1-based numbering.\n",RECOVERABLE);
+  if ( METIS_NodeND(nvtxs,xadj,adjncy,NULL,NULL,perm,iperm) != METIS_OK )
+    kb_error(6349,"METIS ordering failed.\n",RECOVERABLE);
+}
+
 /************************************************************************
 *
 * function: metis_partition_plain()
@@ -123,7 +153,7 @@ void metis_partition_plain(
   numbering = 0;
   graph.nvtxs = web.skel[VERTEX].count;
   partition = (int*)temp_calloc(graph.nvtxs,sizeof(int));
-  METIS_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, NULL, NULL, 
+  metis4_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, NULL, NULL, 
         &weightflag,&numbering, &nparts, options, &edgecut, partition);
 
   /* label things */
@@ -226,7 +256,7 @@ void metis_partition_dual(
      numbering = 0;
      graph.nvtxs = web.skel[EDGE].count;
      partition = (int*)temp_calloc(graph.nvtxs,sizeof(int));
-     METIS_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, NULL, NULL, 
+     metis4_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, NULL, NULL, 
           &weightflag,&numbering, &nparts, options, &edgecut, partition);
      /* label things */
      FOR_ALL_EDGES(e_id)
@@ -283,7 +313,7 @@ void metis_partition_dual(
      numbering = 0;
      graph.nvtxs = web.skel[FACET].count;
      partition = (int*)temp_calloc(graph.nvtxs,sizeof(int));
-     METIS_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, NULL, NULL, 
+     metis4_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, NULL, NULL, 
           &weightflag,&numbering, &nparts, options, &edgecut, partition);
      /* label things */
      FOR_ALL_FACETS(f_id)
@@ -433,7 +463,7 @@ void metis_partition_body(
   graph.nvtxs = bcount;
   weightflag = 3; /* both weights */
   partition = (int*)temp_calloc(graph.nvtxs,sizeof(int));
-  METIS_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, graph.vwgt, 
+  metis4_PartGraphKway(&graph.nvtxs, graph.xadj, graph.adjncy, graph.vwgt, 
          graph.adjwgt, 
           &weightflag,&numbering, &nparts, options, &edgecut, partition);
 
@@ -504,7 +534,7 @@ void metis_vertex_order(int mmdswitch /* size of subgraph to stop at */)
   options[5] = 0;   /* no compression */
   options[6] = 0;   /* don't order dense columns last */
   options[7] = 1;   /* number of separators to find each step */
-  METIS_NodeND(&graph.nvtxs, graph.xadj, graph.adjncy,&numbering,options,perm,iperm);
+  metis4_NodeND(&graph.nvtxs, graph.xadj, graph.adjncy,&numbering,options,perm,iperm);
   puts("No tree available in METIS-4\n");
 #else
   /* metis 2 with my modifications */
@@ -592,7 +622,7 @@ void metis_order(struct linsys *S /* system to order */)
   if ( !S->IP )
      S->IP = (int*)temp_calloc(graph.nvtxs,sizeof(int));
 
-  METIS_NodeND(&graph.nvtxs, graph.xadj, graph.adjncy,&numbering,options,
+  metis4_NodeND(&graph.nvtxs, graph.xadj, graph.adjncy,&numbering,options,
         S->P,S->IP);
 
   /* adjust zero based indexing */
