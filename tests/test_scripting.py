@@ -130,6 +130,23 @@ def test_set_constraint(load):
     assert not ev.values("vertex", "on_constraint 1").astype(bool)[target].any()
 
 
+def test_bulk_writes_recalculate_once_and_keep_autorecalc(load):
+    ev = load("mound.fe")
+    ev.set_values("facet", "tension", 2.0)
+    # energies are up to date after the batch
+    assert ev.total_energy == pytest.approx(2 * ev.eval("total_area"), rel=1e-12)
+    assert ev.eval("autorecalc") == 1
+    ev.command("autorecalc off")
+    ev.set_values("facet", "tension", 1.0)
+    assert ev.eval("autorecalc") == 0       # the user's setting is kept
+
+
+def test_failed_bulk_write_restores_autorecalc(cube):
+    with pytest.raises(EvolverError):
+        cube.set_values("vertex", "no_such_attribute", 1.0)
+    assert cube.eval("autorecalc") == 1
+
+
 def test_where_wrong_length(cube):
     with pytest.raises(ValueError, match="one entry per vertex"):
         cube.fix("vertex", where=np.ones(3, dtype=bool))

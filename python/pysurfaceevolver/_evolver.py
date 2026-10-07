@@ -465,14 +465,32 @@ class Evolver:
         return _ELEMENT_NAMES[element_type], ids, mask
 
     def _run_statements(self, statements: Iterable[str]) -> None:
+        """Run many statements in batches, recalculating once at the end.
+
+        With autorecalc on, Evolver would recalculate after every batch;
+        that dominated the time of bulk writes (8x on 49k vertices).
+        """
+        batches: List[str] = []
         batch: List[str] = []
         for statement in statements:
             batch.append(statement)
             if len(batch) == _STATEMENTS_PER_COMMAND:
-                self.command("; ".join(batch))
+                batches.append("; ".join(batch))
                 batch = []
         if batch:
-            self.command("; ".join(batch))
+            batches.append("; ".join(batch))
+        if not batches:
+            return
+        autorecalc = self.eval("autorecalc") != 0
+        if autorecalc:
+            self.command("autorecalc off")
+        try:
+            for text in batches:
+                self.command(text)
+        finally:
+            if autorecalc:
+                self.command("autorecalc on")
+                self.command("recalc")
 
     def set_values(self, element: str, attribute: str, values, *, where=None) -> None:
         """Set a numeric attribute on every element of a type.
