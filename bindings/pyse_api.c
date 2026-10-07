@@ -13,6 +13,7 @@
 #include "include.h"
 #include "pyse_hooks.h"
 #include "pyse_api.h"
+#include "fastloops.h"
 
 #include <signal.h>
 
@@ -370,6 +371,7 @@ static void init_body(void *arg)
   }
   scoeff_init();
   vcoeff_init();
+  if ( getenv("PYSE_THREADS") ) fl_set_threads(atoi(getenv("PYSE_THREADS")));
   push_commandfd(stdin,"stdin");
   subshell_depth = 0;
 
@@ -1088,6 +1090,9 @@ void pyse_set_input_callback(pyse_input_fn fn, void *userdata)
 { in_cb = fn; in_ud = userdata; }
 
 void pyse_set_handle_sigint(int flag) { handle_sigint = flag; }
+
+void pyse_set_threads(int n) { fl_set_threads(n); }
+int pyse_threads(void) { return fl_threads(); }
 
 int pyse_last_errnum(void) { return err_num; }
 const char *pyse_last_errmsg(void) { return err_msg; }

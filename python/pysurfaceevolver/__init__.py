@@ -27,6 +27,19 @@ from ._viz import LiveView
 from . import examples
 from ._parallel import JobError, WorkerCrashed, map  # noqa: A004 (pse.map)
 
+
+def set_threads(n: int) -> None:
+    """Threads for Evolver's parallel facet loops; n <= 0 restores the
+    default (all cores, or OMP_NUM_THREADS / PYSE_THREADS)."""
+    from . import _core
+    _core.set_threads(int(n))
+
+
+def threads() -> int:
+    """Threads the parallel facet loops use (1 if built without OpenMP)."""
+    from . import _core
+    return _core.threads()
+
 examples._add_to_evolverpath()
 
 __all__ = [
@@ -50,5 +63,7 @@ __all__ = [
     "is_watertight",
     "examples",
     "make_datafile",
+    "set_threads",
+    "threads",
 ]
 __version__ = "0.4.0"

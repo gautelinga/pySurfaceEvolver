@@ -115,6 +115,11 @@ int pyse_get_quantities(char (*names)[PYSE_NAME_SIZE], double *value,
                         int *kind /* 0 energy, 1 fixed, 2 info, 3 conserved */,
                         long n);
 
+/* Threads for the parallel facet loops (1 without OpenMP).  n <= 0 means
+   the OpenMP default.  PYSE_THREADS sets the initial value. */
+void pyse_set_threads(int n);
+int pyse_threads(void);
+
 /* ---- Information about the last guarded call. ---------------------------- */
 int pyse_last_errnum(void);
 const char *pyse_last_errmsg(void);

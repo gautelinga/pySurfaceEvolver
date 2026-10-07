@@ -42,3 +42,13 @@ def test_fast_loops_are_bit_identical():
         fast = run({"OMP_NUM_THREADS": threads, "PYSE_CHECK_FACET_CACHE": "1"})
         for name in SAMPLES:
             assert fast[name] == original[name], (name, threads)
+
+
+def test_thread_setting():
+    import pysurfaceevolver as pse
+    default = pse.threads()
+    assert default >= 1
+    pse.set_threads(2)
+    assert pse.threads() == 2
+    pse.set_threads(0)
+    assert pse.threads() == default
