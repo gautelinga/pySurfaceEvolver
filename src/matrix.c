@@ -1978,7 +1978,14 @@ int gram_schmidt (
 
 **************************************************************************/
 #define SP_PRIME 99991
-#define sp_hash(row,col)  ((abs((row)*97+(col)*SP_PRIME)) & 0x7FFFFFFF)
+/* abs(row*97+col*SP_PRIME) & 0x7FFFFFFF with the int arithmetic wrapping,
+   in unsigned arithmetic: the int version overflows (undefined behavior)
+   once col exceeds 21474. Same values as the wrapped int version. */
+static int sp_hash(int row, int col)
+{ unsigned int h = (unsigned int)row*97u + (unsigned int)col*(unsigned int)SP_PRIME;
+  if ( h & 0x80000000u ) h = 0u - h;
+  return (int)(h & 0x7FFFFFFFu);
+}
 
 /********************************************************************
 * 
