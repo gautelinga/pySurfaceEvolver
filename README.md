@@ -151,8 +151,12 @@ datafile loads), warnings are issued as `EvolverWarning`, and Ctrl-C stops a lon
 at the next iteration; pressing it again aborts the operation (`KeyboardInterrupt`).
 Pass `echo=True` to see output live, and `input=` to answer interactive prompts.
 
-Limitations: calls from several threads are serialized (a call made while another is
-running raises `RuntimeError`). Some global Evolver settings, such as display modes,
+There is one engine per process, so calls from several threads are serialized: a call
+made while another thread's call runs raises `EvolverBusyError` (a `RuntimeError`),
+or with `pse.busy_timeout = seconds` (`float("inf")`: no limit) waits for it first.
+A call from inside a running call, such as from a callback, always raises.
+
+Limitations: some global Evolver settings, such as display modes,
 carry over from one datafile to the next. Builds and CI cover Linux only. Torus
 models aren't unwrapped for plotting or export.
 

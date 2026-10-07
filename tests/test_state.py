@@ -3,12 +3,14 @@
 import importlib.metadata
 import importlib.resources
 import threading
+import time
 
 import pytest
 
 import pysurfaceevolver
 from pysurfaceevolver import (
     Evolver,
+    EvolverBusyError,
     EvolverError,
     InvalidSurfaceError,
 )
@@ -38,9 +40,9 @@ def test_rejected_call_from_other_thread_leaves_running_call_alone(load):
     thread = threading.Thread(target=worker)
     thread.start()
     assert worker_waiting.wait(timeout=30)
-    with pytest.raises(RuntimeError, match="busy"):
+    with pytest.raises(EvolverBusyError, match="another thread"):
         ev.eval("total_area")
-    with pytest.raises(RuntimeError, match="busy"):
+    with pytest.raises(EvolverBusyError, match="busy"):
         ev.mesh()
     main_done.set()
     thread.join(timeout=30)
@@ -48,6 +50,42 @@ def test_rejected_call_from_other_thread_leaves_running_call_alone(load):
     # the worker kept all of its output: 3 + 2 iteration lines
     assert result["output"].count("scale:") == 5
     assert ev.eval("body[1].volume") == pytest.approx(1.0, rel=1e-6)
+
+
+def _hold_engine(load):
+    """A worker thread holding the engine at a prompt until release.set()."""
+    holding, release = threading.Event(), threading.Event()
+
+    def answer(prompt):
+        holding.set()
+        release.wait(timeout=30)
+        return "0"
+
+    ev = load("cube.fe", input=answer)
+    thread = threading.Thread(target=ev.command, args=("g 1; hessian_menu",))
+    thread.start()
+    assert holding.wait(timeout=30)
+    return ev, thread, release
+
+
+def test_busy_timeout_waits_for_other_thread(load, monkeypatch):
+    ev, thread, release = _hold_engine(load)
+    monkeypatch.setattr(pysurfaceevolver, "busy_timeout", float("inf"))
+    threading.Timer(0.3, release.set).start()
+    start = time.perf_counter()
+    assert ev.eval("body[1].volume") == pytest.approx(1.0, rel=1e-3)   # waited for the worker
+    assert time.perf_counter() - start >= 0.25
+    thread.join(timeout=30)
+
+
+def test_busy_timeout_runs_out(load, monkeypatch):
+    ev, thread, release = _hold_engine(load)
+    monkeypatch.setattr(pysurfaceevolver, "busy_timeout", 0.2)
+    with pytest.raises(EvolverBusyError, match="waited 0.2 s"):
+        ev.counts
+    assert isinstance(EvolverBusyError(), RuntimeError)
+    release.set()
+    thread.join(timeout=30)
 
 
 # --- invalid surfaces ---------------------------------------------------------------

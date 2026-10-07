@@ -27,6 +27,7 @@ __all__ = [
     "IterationResult",
     "Parameters",
     "Snapshot",
+    "EvolverBusyError",
     "EvolverError",
     "EvolverExit",
     "EvolverFatalError",
@@ -79,6 +80,13 @@ class InvalidSurfaceError(EvolverError):
     """There is no valid surface: the last datafile failed to load, or an
     unrecoverable error happened. Only :meth:`Evolver.load` works until a
     datafile loads successfully."""
+
+
+EvolverBusyError = _core.EvolverBusyError
+EvolverBusyError.__module__ = "pysurfaceevolver"
+EvolverBusyError.__doc__ = """Evolver is running another call: from another thread (and
+``pse.busy_timeout`` is None, or ran out), or the running call itself (a
+re-entrant call from a callback). A subclass of RuntimeError."""
 
 
 class EvolverWarning(UserWarning):
@@ -276,7 +284,7 @@ class Evolver:
         if status == _core.EXIT:
             raise EvolverExit(result.exit_code, output)
         if status == _core.BUSY:
-            raise RuntimeError("Surface Evolver is busy (calls are not re-entrant)")
+            raise EvolverBusyError("Surface Evolver is busy (calls are not re-entrant)")
         if status == _core.INVALID:
             raise InvalidSurfaceError(result.message.strip(), result.errnum, output)
         # Evolver's own error printout has the most context (input line, etc.)

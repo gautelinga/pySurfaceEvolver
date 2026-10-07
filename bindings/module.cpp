@@ -17,7 +17,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <mutex>
+#include <thread>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -31,17 +35,73 @@ using namespace nb::literals;
 
 namespace {
 
-// Evolver is one global state machine: serialize every access.  try_lock
-// makes a re-entrant call from a callback fail instead of deadlocking.
-std::mutex evolver_mutex;
+// Evolver is one global state machine: serialize every access.  A call
+// from another thread waits up to pysurfaceevolver.busy_timeout seconds
+// (None: not at all); a re-entrant call from a callback fails at once
+// instead of deadlocking.
+std::timed_mutex evolver_mutex;
+std::atomic<std::thread::id> evolver_owner{};
 
+struct BusyError : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+// pysurfaceevolver.busy_timeout in seconds; 0 when unset or None.  Called
+// with the GIL held, only when the lock is taken.
+double busy_timeout() {
+  try {
+    nb::object t = nb::getattr(nb::module_::import_("pysurfaceevolver"),
+                               "busy_timeout", nb::none());
+    return t.is_none() ? 0.0 : nb::cast<double>(t);
+  } catch (nb::python_error &) {
+    return 0.0;
+  } catch (nb::cast_error &) {
+    return 0.0;
+  }
+}
+
+// Constructed with the GIL held.
 struct Lock {
-  std::unique_lock<std::mutex> lock{evolver_mutex, std::try_to_lock};
   Lock() {
-    if (!lock.owns_lock())
-      throw std::runtime_error(
-          "Surface Evolver is busy: calls are neither re-entrant nor "
-          "thread-safe");
+    if (!evolver_mutex.try_lock()) wait();
+    evolver_owner = std::this_thread::get_id();
+  }
+  ~Lock() {
+    evolver_owner = std::thread::id();
+    evolver_mutex.unlock();
+  }
+  Lock(const Lock &) = delete;
+  Lock &operator=(const Lock &) = delete;
+
+ private:
+  static void wait() {
+    if (evolver_owner.load() == std::this_thread::get_id())
+      throw BusyError(
+          "Surface Evolver is busy: a call from inside a running call (such "
+          "as a callback) can't run");
+    double timeout = busy_timeout();
+    if (!(timeout > 0))
+      throw BusyError(
+          "Surface Evolver is busy with a call from another thread (set "
+          "pse.busy_timeout to wait for it)");
+    auto start = std::chrono::steady_clock::now();
+    for (;;) {
+      bool locked;
+      {
+        nb::gil_scoped_release release;
+        locked = evolver_mutex.try_lock_for(std::chrono::milliseconds(100));
+      }
+      if (locked) return;
+      if (PyErr_CheckSignals() != 0) throw nb::python_error();  // Ctrl-C
+      std::chrono::duration<double> waited = std::chrono::steady_clock::now() - start;
+      if (waited.count() >= timeout) {
+        char msg[200];
+        std::snprintf(msg, sizeof msg,
+                      "Surface Evolver is busy with a call from another thread "
+                      "(waited %g s, pse.busy_timeout)", timeout);
+        throw BusyError(msg);
+      }
+    }
   }
 };
 
@@ -138,6 +198,8 @@ nb::object to_numpy(std::vector<T> &&data, std::initializer_list<size_t> shape) 
 
 NB_MODULE(_core, m) {
   m.doc() = "Low-level bindings to Surface Evolver (use pysurfaceevolver.Evolver)";
+
+  nb::exception<BusyError>(m, "EvolverBusyError", PyExc_RuntimeError);
 
   m.attr("OK") = int(PYSE_OK);
   m.attr("ERROR") = int(PYSE_ERROR);

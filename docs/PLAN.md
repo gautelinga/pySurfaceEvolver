@@ -321,6 +321,11 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    (`[jupyter]` extra). The check notebook was minimal: the item 6 tutorial should
    show a realistic case (larger surface, Lagrange stage, scalars, export).
 5. Optional wait-with-timeout instead of the immediate "busy" error.
+   **Done** (user's choices): `pse.busy_timeout` (default None: fail at once;
+   seconds; inf). The C++ lock (`std::timed_mutex`) reads it only when the lock
+   is taken, waits with the GIL released and checks Ctrl-C every 100 ms; a
+   re-entrant call (same thread) always fails. New `EvolverBusyError`
+   (RuntimeError subclass, defined in the bindings).
 6. Docs: API reference and a tutorial notebook (load/build -> relax -> plot ->
    export for FEM).
 7. Optional stop-gap for global settings that leak between datafiles (the

@@ -3,6 +3,8 @@ import math
 import numpy as np
 import pytest
 
+import pysurfaceevolver as pse
+
 from pysurfaceevolver import (
     Evolver,
     EvolverError,
@@ -213,7 +215,8 @@ def test_input_callback_answers_prompts(load):
     assert all(p.startswith("Choice") for p in prompts)
 
 
-def test_reentrant_call_is_rejected(load):
+def test_reentrant_call_is_rejected(load, monkeypatch):
+    monkeypatch.setattr(pse, "busy_timeout", float("inf"))   # no waiting on itself
     errors = []
 
     def answer(prompt):

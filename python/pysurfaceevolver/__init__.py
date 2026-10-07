@@ -16,6 +16,7 @@ from typing import Generator, Optional
 from ._build import Body, make_datafile
 from ._evolver import (
     Evolver,
+    EvolverBusyError,
     EvolverError,
     EvolverExit,
     EvolverFatalError,
@@ -33,6 +34,10 @@ from ._parallel import JobError, WorkerCrashed, WorkerStartError, map  # noqa: A
 #: Tessellations (plots, live views, export of curved surfaces) with more
 #: triangles than this give a LargeTessellationWarning; None: no check.
 tessellation_limit: Optional[int] = 10_000_000
+
+#: Seconds a call waits while Evolver runs a call from another thread, then
+#: EvolverBusyError; None: fail at once; float("inf"): wait as long as needed.
+busy_timeout: Optional[float] = None
 
 
 def set_threads(n: int) -> None:
@@ -99,6 +104,7 @@ __all__ = [
     "Body",
     "BodySurface",
     "Evolver",
+    "EvolverBusyError",
     "EvolverError",
     "EvolverExit",
     "EvolverFatalError",
