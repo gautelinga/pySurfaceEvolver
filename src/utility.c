@@ -3319,14 +3319,16 @@ FILE *path_open(
     found = path + strlen(path) - 1;
     user  = name + strlen(name) - 1;
     while ( user >= name )
-    { while ( (*user != PATHCHAR) && (*user != '\\') && (user >= name) )
+    { /* check the bounds before reading: the old order read name[-1] */
+      while ( (user >= name) && (*user != PATHCHAR) && (*user != '\\') )
          user--;
-      while ( (*found != PATHCHAR) && (*found != '\\') && (found >= path) )
+      while ( (found >= path) && (*found != PATHCHAR) && (*found != '\\') )
          found--;
       if ( user >= name ) user--; else break;
       if ( found >= path ) found--; else break;
     } 
-    strncpy(datafilename,found+1,PATHSIZE);
+    strncpy(datafilename,found+1,PATHSIZE-1);
+    datafilename[PATHSIZE-1] = 0;
   }
 
   if ( fd )
