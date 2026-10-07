@@ -765,20 +765,28 @@ struct facets_args { int64_t *verts; int64_t *ids; int64_t *bodies; long n; };
 static void facets_body(void *arg)
 { struct facets_args *a = (struct facets_args *)arg;
   struct vertex_map m;
+  vertex_id *corners;
   facet_id f_id;
   long row = 0;
   if ( web.representation != SOAPFILM )
     kb_error(PYSE_ERR_BAD_ARGUMENT,
       "Facet triangles exist only in the soapfilm representation.\n",RECOVERABLE);
   vertex_map_get(&m);
+  corners = fl_facet_corners();  /* same corners as walking the edges */
   FOR_ALL_FACETS(f_id)
-  { facetedge_id fe = get_facet_fe(f_id);
-    int i;
+  { int i;
     if ( row >= a->n ) inconsistent("too many facets");
-    for ( i = 0 ; i < 3 ; i++ )
-    { if ( !valid_id(fe) ) inconsistent("facet with a missing edge");
-      a->verts[3*row+i] = vertex_row(&m,get_fe_tailv(fe));
-      fe = get_next_edge(fe);
+    if ( corners )
+    { vertex_id *c = corners + 3*ordinal(f_id);
+      for ( i = 0 ; i < 3 ; i++ ) a->verts[3*row+i] = vertex_row(&m,c[i]);
+    }
+    else
+    { facetedge_id fe = get_facet_fe(f_id);
+      for ( i = 0 ; i < 3 ; i++ )
+      { if ( !valid_id(fe) ) inconsistent("facet with a missing edge");
+        a->verts[3*row+i] = vertex_row(&m,get_fe_tailv(fe));
+        fe = get_next_edge(fe);
+      }
     }
     a->ids[row] = ordinal(f_id) + 1;
     a->bodies[2*row]   = body_number(get_facet_body(f_id));
