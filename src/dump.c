@@ -88,7 +88,7 @@ void print_data_value(
 #elif defined(LONGDOUBLE)
               "%2.*Lg",DPREC,*(REAL *)src);
 #else
-              "%2.15g",*(REAL *)src);
+              "%2.17g",*(REAL *)src);
 #endif
           break; 
        case INTEGER_TYPE:
@@ -400,7 +400,7 @@ void top_dump(FILE *fd  /* destination file */)
 #elif defined(LONGDOUBLE)
   sprintf(msg,"// Total energy: %2.*Lg\n",DPREC,web.total_energy);
 #else
-  sprintf(msg,"// Total energy: %2.15g\n",web.total_energy);
+  sprintf(msg,"// Total energy: %2.17g\n",web.total_energy);
 #endif 
   outstring(msg);
   /* dynamic libraries */
@@ -428,9 +428,9 @@ void top_dump(FILE *fd  /* destination file */)
 
   if ( web.motion_flag )  /* do scale before parameters, since scale is
                              parameter attribute */
-     { sprintf(msg,"SCALE: %2.15g     FIXED\n\n",(DOUBLE)web.scale); outstring(msg); }
+     { sprintf(msg,"SCALE: %2.17g     FIXED\n\n",(DOUBLE)web.scale); outstring(msg); }
   else if ( web.scale != 0.1 )
-     { sprintf(msg,"SCALE: %2.15g\n\n",(DOUBLE)web.scale); outstring(msg); }
+     { sprintf(msg,"SCALE: %2.17g\n\n",(DOUBLE)web.scale); outstring(msg); }
 
   list_top_procedures(LIST_PROTO); /* protos here, in case of on_assign_call */
 
@@ -468,7 +468,7 @@ void top_dump(FILE *fd  /* destination file */)
          sprintf(msg,"= %2.*Lg ",DPREC,g->value.real); 
          outstring(msg); 
 #else
-         sprintf(msg,"= %2.15g ",g->value.real); outstring(msg); 
+         sprintf(msg,"= %2.17g ",g->value.real); outstring(msg); 
 #endif 
          if ( g->attr.varstuff.delta != OPTPARAM_DELTA 
            && g->attr.varstuff.delta != 0.0 )
@@ -480,7 +480,7 @@ void top_dump(FILE *fd  /* destination file */)
             sprintf(msg,"pdelta = %2.*Lg ",DPREC,g->attr.varstuff.delta); 
             outstring(msg); 
 #else
-            sprintf(msg,"pdelta = %2.15g ",g->attr.varstuff.delta); 
+            sprintf(msg,"pdelta = %2.17g ",g->attr.varstuff.delta); 
             outstring(msg); 
 #endif 
          }
@@ -492,7 +492,7 @@ void top_dump(FILE *fd  /* destination file */)
 #elif defined(LONGDOUBLE)
             sprintf(msg,"pscale = %2.*Lg ",DPREC,g->attr.varstuff.pscale); 
 #else
-            sprintf(msg,"pscale = %2.15g ",g->attr.varstuff.pscale); 
+            sprintf(msg,"pscale = %2.17g ",g->attr.varstuff.pscale); 
 #endif 
             outstring(msg); 
          }
@@ -544,7 +544,7 @@ void top_dump(FILE *fd  /* destination file */)
 #elif defined(LONGDOUBLE)
            sprintf(msg," %*.*Lf ",DWIDTH,DPREC,web.torus_period[i][j]);
 #else
-           sprintf(msg," %18.15f ",web.torus_period[i][j]);
+           sprintf(msg," %18.17g ",web.torus_period[i][j]);
 #endif 
            outstring(msg);
          }
@@ -572,7 +572,7 @@ void top_dump(FILE *fd  /* destination file */)
 #elif defined(LONGDOUBLE)
            sprintf(msg," %*.*Lf ",DWIDTH,DPREC,web.torus_display_period[i][j]);
 #else
-           sprintf(msg," %18.15f ",web.torus_display_period[i][j]);
+           sprintf(msg," %18.17g ",web.torus_display_period[i][j]);
 #endif 
            outstring(msg);
          }
@@ -588,7 +588,7 @@ void top_dump(FILE *fd  /* destination file */)
 #elif defined(LONGDOUBLE)
            sprintf(msg," %*.*Lf ",DWIDTH,DPREC,web.display_origin[i]);
 #else
-           sprintf(msg," %18.15f ",web.display_origin[i]);
+           sprintf(msg," %18.17g ",web.display_origin[i]);
 #endif 
            outstring(msg);
            outstring("\n");
@@ -627,7 +627,7 @@ void top_dump(FILE *fd  /* destination file */)
       }
       for ( i = 0 ; i <= SDIM ;i++ )
       { for ( j = 0 ; j <= SDIM ; j++ )
-        { sprintf(msg,"%18.15g  ",(DOUBLE)view_transforms[k][i][j]); 
+        { sprintf(msg,"%18.17g  ",(DOUBLE)view_transforms[k][i][j]); 
           outstring(msg); 
         }
         outstring("\n"); 
@@ -636,14 +636,14 @@ void top_dump(FILE *fd  /* destination file */)
     }
   }
   if ( web.meritfactor != 0.0 )
-  { sprintf(msg,"MERIT_FACTOR: %2.15g\n\n",(DOUBLE)web.meritfactor); outstring(msg); }
+  { sprintf(msg,"MERIT_FACTOR: %2.17g\n\n",(DOUBLE)web.meritfactor); outstring(msg); }
   if ( web.gravflag )
 #ifdef FLOAT128
   { sprintf(msg,"GRAVITY_CONSTANT: %2.*Qg\n\n",DPREC,web.grav_const); outstring(msg); }
 #elif defined(LONGDOUBLE)
   { sprintf(msg,"GRAVITY_CONSTANT: %2.*Lg\n\n",DPREC,web.grav_const); outstring(msg); }
 #else
-  { sprintf(msg,"GRAVITY_CONSTANT: %2.15g\n\n",web.grav_const); outstring(msg); }
+  { sprintf(msg,"GRAVITY_CONSTANT: %2.17g\n\n",web.grav_const); outstring(msg); }
 #endif 
   if ( web.diffusion_const != 0.0 )
 #ifdef FLOAT128
@@ -651,12 +651,12 @@ void top_dump(FILE *fd  /* destination file */)
 #elif defined(LONGDOUBLE)
   { sprintf(msg,"DIFFUSION: %2.*Lg\n\n",DPREC,web.diffusion_const); outstring(msg); }
 #else
-  { sprintf(msg,"DIFFUSION: %2.15g\n\n",web.diffusion_const); outstring(msg); }
+  { sprintf(msg,"DIFFUSION: %2.17g\n\n",web.diffusion_const); outstring(msg); }
 #endif 
   if ( autochop_flag )
-  { sprintf(msg,"AUTOCHOP %2.15g\n\n",(DOUBLE)autochop_length); outstring(msg); }
+  { sprintf(msg,"AUTOCHOP %2.17g\n\n",(DOUBLE)autochop_length); outstring(msg); }
   if ( web.homothety )
-  { sprintf(msg,"HOMOTHETY %2.15g\n\n",(DOUBLE)homothety_target); outstring(msg); }
+  { sprintf(msg,"HOMOTHETY %2.17g\n\n",(DOUBLE)homothety_target); outstring(msg); }
   if ( match_id_flag ) outstring("KEEP_ORIGINALS\n\n");
   if ( autopop_flag )
      outstring("AUTOPOP\n\n");
@@ -675,36 +675,36 @@ void top_dump(FILE *fd  /* destination file */)
   if ( runge_kutta_flag )
      outstring("RUNGE_KUTTA\n\n"); 
   if ( square_curvature_flag )
-     { sprintf(msg,"SQUARE_CURVATURE: %2.15g\n\n",
+     { sprintf(msg,"SQUARE_CURVATURE: %2.17g\n\n",
             (DOUBLE)globals(square_curvature_param)->value.real); outstring(msg); }
   if ( sqgauss_flag )
-     { sprintf(msg,"SQUARE_GAUSSIAN_CURVATURE: %2.15g\n\n",
+     { sprintf(msg,"SQUARE_GAUSSIAN_CURVATURE: %2.17g\n\n",
             (DOUBLE)globals(sqgauss_param)->value.real); outstring(msg); }
   if ( mean_curv_int_flag )
-     { sprintf(msg,"MEAN_CURVATURE_INTEGRAL: %2.15g\n\n",
+     { sprintf(msg,"MEAN_CURVATURE_INTEGRAL: %2.17g\n\n",
             (DOUBLE)globals(square_curvature_param)->value.real); outstring(msg); }
   if ( web.wulff_flag )
      { sprintf(msg,"WULFF:      \"%s\"\n\n",web.wulff_name); outstring(msg); }
   if ( phase_flag )
      { sprintf(msg,"PHASEFILE \"%s\"\n\n",phase_file_name); outstring(msg); }
   if ( web.spring_constant != 1.0 )
-     { sprintf(msg,"GAP_CONSTANT: %2.15g\n\n",(DOUBLE)web.spring_constant); outstring(msg); }
+     { sprintf(msg,"GAP_CONSTANT: %2.17g\n\n",(DOUBLE)web.spring_constant); outstring(msg); }
   if ( web.area_norm_flag )
      { sprintf(msg,"AREA_NORMALIZATION \n\n"); outstring(msg); }
   if ( web.jiggle_flag )
      { sprintf(msg,"JIGGLE\n\n"); outstring(msg); }
   if ( web.temperature != 0.05 )
-     { sprintf(msg,"TEMPERATURE: %2.15g\n\n",(DOUBLE)web.temperature); outstring(msg); }
+     { sprintf(msg,"TEMPERATURE: %2.17g\n\n",(DOUBLE)web.temperature); outstring(msg); }
   if ( web.pressure != 0.0 )
-     { sprintf(msg,"PRESSURE: %2.15g\n\n",(DOUBLE)web.pressure); outstring(msg); }
+     { sprintf(msg,"PRESSURE: %2.17g\n\n",(DOUBLE)web.pressure); outstring(msg); }
   if ( web.maxscale != 1.0 )
-     { sprintf(msg,"SCALE_LIMIT: %2.15g\n\n",(DOUBLE)web.maxscale); outstring(msg); }
+     { sprintf(msg,"SCALE_LIMIT: %2.17g\n\n",(DOUBLE)web.maxscale); outstring(msg); }
   if ( web.gauss1D_order != 3 )
      { sprintf(msg,"INTEGRAL_ORDER_1D: %d\n\n",web.gauss1D_order); outstring(msg); }
   if ( (web.dimension > 1) && (web.gauss2D_order != 6) )
      { sprintf(msg,"INTEGRAL_ORDER_2D: %d\n\n",web.gauss2D_order); outstring(msg); }
   if ( web.maxcon )
-     { sprintf(msg,"CONSTRAINT_TOLERANCE: %2.15g\n\n",(DOUBLE)web.tolerance); outstring(msg); }
+     { sprintf(msg,"CONSTRAINT_TOLERANCE: %2.17g\n\n",(DOUBLE)web.tolerance); outstring(msg); }
   if ( web.symmetric_content )
      { sprintf(msg,"SYMMETRIC_CONTENT\n\n"); outstring(msg); }
 
@@ -712,7 +712,7 @@ void top_dump(FILE *fd  /* destination file */)
   if ( loc_ordinal(web.zoom_v) >= 0 ) 
      { sprintf(msg,"ZOOM_VERTEX  %s\n\n",ELNAME(web.zoom_v)); outstring(msg); }
   if ( web.zoom_radius < 9000.0 )
-     { sprintf(msg,"ZOOM_RADIUS  %2.15g\n\n",(DOUBLE)web.zoom_radius); outstring(msg); }
+     { sprintf(msg,"ZOOM_RADIUS  %2.17g\n\n",(DOUBLE)web.zoom_radius); outstring(msg); }
 */
 
   if ( klein_metric_flag ) { sprintf(msg,"KLEIN_METRIC\n\n"); outstring(msg); }
@@ -764,7 +764,7 @@ void top_dump(FILE *fd  /* destination file */)
   outstring("VIEW_MATRIX \n");
   for ( i = 0 ; i <= SDIM ;i++ )
   { for ( j = 0 ; j <= SDIM ; j++ )
-    { sprintf(msg,"%18.15f  ", (DOUBLE)view[i][j]); 
+    { sprintf(msg,"%18.17g  ", (DOUBLE)view[i][j]); 
       outstring(msg); 
     }
     outstring("\n"); 
@@ -943,7 +943,7 @@ void dump_method_specs(int meth)
 #elif defined(LONGDOUBLE)
         sprintf(msg," modulus %3.*Lg ",DPREC,mi->modulus);
 #else
-        sprintf(msg," modulus %3.15g ",mi->modulus);
+        sprintf(msg," modulus %3.17g ",mi->modulus);
 #endif 
         outstring(msg);
      }
@@ -954,7 +954,7 @@ void dump_method_specs(int meth)
 #elif defined(LONGDOUBLE)
      sprintf(msg," parameter_1 %3.*Lg ",DPREC,mi->parameter_1);
 #else
-     sprintf(msg," parameter_1 %3.15g ",mi->parameter_1);
+     sprintf(msg," parameter_1 %3.17g ",mi->parameter_1);
 #endif 
      outstring(msg);
   }
@@ -1026,7 +1026,7 @@ void vertex_dump(
 #elif defined(LONGDOUBLE)
     { sprintf(msg,"  %*.*Lg",DWIDTH,DPREC,param[i]); outstring(msg); }
 #else
-    { sprintf(msg,"  %17.15g",param[i]); outstring(msg); }
+    { sprintf(msg,"  %17.17g",param[i]); outstring(msg); }
 #endif 
     sprintf(msg,"  boundary %s ",bdry->name); 
     outstring(msg); 
@@ -1037,7 +1037,7 @@ void vertex_dump(
 #elif defined(LONGDOUBLE)
     { sprintf(msg," %*.*Lg",DWIDTH,DPREC,x[i]); outstring(msg); }
 #else
-    { sprintf(msg," %17.15g",x[i]); outstring(msg); }
+    { sprintf(msg," %17.17g",x[i]); outstring(msg); }
 #endif 
     sprintf(msg,") */"); outstring(msg); 
   } /* end BOUNDARY parameters */
@@ -1050,7 +1050,7 @@ void vertex_dump(
 #elif defined(LONGDOUBLE)
       { sprintf(msg," %*.*Lg",DWIDTH,DPREC,x[i]); outstring(msg); }
 #else
-      { sprintf(msg," %17.15g",x[i]); outstring(msg); }
+      { sprintf(msg," %17.17g",x[i]); outstring(msg); }
 #endif 
   }
   if ( attr & CONSTRAINT )
@@ -1199,7 +1199,7 @@ void edge_dump(
 #elif defined(LONGDOUBLE)
     { sprintf(msg,"  density %1.*Lg ",DPREC,get_edge_density(e_id)); outstring(msg); }
 #else
-    { sprintf(msg,"  density %1.15g ",get_edge_density(e_id)); outstring(msg); }
+    { sprintf(msg,"  density %1.17g ",get_edge_density(e_id)); outstring(msg); }
 #endif 
   if ( attr & BOUNDARY )
      { struct boundary *bdry = get_edge_boundary(e_id);
@@ -1353,7 +1353,7 @@ void facet_dump(
 #elif defined(LONGDOUBLE)
     { sprintf(msg,"  density %1.*Lg ",DPREC,get_facet_density(f_id)); outstring(msg); }
 #else
-    { sprintf(msg,"  density %1.15g ",get_facet_density(f_id)); outstring(msg); }
+    { sprintf(msg,"  density %1.17g ",get_facet_density(f_id)); outstring(msg); }
 #endif 
     if ( attr & FIXED )  outstring(" fixed " ); 
     if ( attr & NO_REFINE ) outstring(" no_refine ");
@@ -1469,7 +1469,7 @@ void body_dump(
                      DPREC,get_body_fixvol(b_id), DPREC,
                      bvol,DPREC,get_body_pressure(b_id));
 #else
-        "  volume %1.15g  /*actual: %1.15g*/ lagrange_multiplier %1.15g ",
+        "  volume %1.17g  /*actual: %1.17g*/ lagrange_multiplier %1.17g ",
                     get_body_fixvol(b_id), 
                     bvol,get_body_pressure(b_id));
 #endif 
@@ -1487,7 +1487,7 @@ void body_dump(
 #elif defined(LONGDOUBLE)
       { sprintf(msg, "  volconst %1.*Lg ",DPREC,get_body_volconst(b_id)); 
 #else
-      { sprintf(msg, "  volconst %1.15g ",get_body_volconst(b_id)); 
+      { sprintf(msg, "  volconst %1.17g ",get_body_volconst(b_id)); 
 #endif 
         outstring(msg); }
 
@@ -1497,7 +1497,7 @@ void body_dump(
 #elif defined(LONGDOUBLE)
     { sprintf(msg, "  actual_volume %1.*Lg ",DPREC,bvol); 
 #else
-    { sprintf(msg, "  actual_volume %1.15g ",bvol); 
+    { sprintf(msg, "  actual_volume %1.17g ",bvol); 
 #endif 
       outstring(msg); }
 
@@ -1507,7 +1507,7 @@ void body_dump(
 #elif defined(LONGDOUBLE)
       { sprintf(msg,"  pressure %1.*Lg",DPREC, get_body_pressure(b_id)); outstring(msg); }
 #else
-      { sprintf(msg,"  pressure %1.15g", get_body_pressure(b_id)); outstring(msg); }
+      { sprintf(msg,"  pressure %1.17g", get_body_pressure(b_id)); outstring(msg); }
 #endif 
     den = get_body_density(b_id);
     if ( den != 0.0 )
@@ -1516,7 +1516,7 @@ void body_dump(
 #elif defined(LONGDOUBLE)
          { sprintf(msg,"  density %1.*Lg ",DPREC,den); outstring(msg); }
 #else
-         { sprintf(msg,"  density %1.15g ",den); outstring(msg); }
+         { sprintf(msg,"  density %1.17g ",den); outstring(msg); }
 #endif 
     if ( phase_flag && (web.representation == SOAPFILM) )
          { sprintf(msg," PHASE %d ",get_b_phase(b_id)); outstring(msg); }
@@ -2037,7 +2037,7 @@ void bottom_dump(FILE *fd)
 #elif defined(LONGDOUBLE)
          sprintf(msg,":= %2.*Lg; ",DPREC,g->value.real); 
 #else
-         sprintf(msg,":= %2.15g; ",g->value.real); 
+         sprintf(msg,":= %2.17g; ",g->value.real); 
 #endif 
          outstring(msg); 
          if ( g->attr.varstuff.delta != OPTPARAM_DELTA 
@@ -2048,7 +2048,7 @@ void bottom_dump(FILE *fd)
 #elif defined(LONGDOUBLE)
             sprintf(msg,"%s.pdelta = %2.*Lg; ",g->name,DPREC,g->attr.varstuff.delta); 
 #else
-            sprintf(msg,"%s.pdelta = %2.15g; ",g->name,g->attr.varstuff.delta); 
+            sprintf(msg,"%s.pdelta = %2.17g; ",g->name,g->attr.varstuff.delta); 
 #endif 
             outstring(msg); 
          }
@@ -2060,7 +2060,7 @@ void bottom_dump(FILE *fd)
 #elif defined(LONGDOUBLE)
             sprintf(msg,"%s.pscale = %2.*Lg ",g->name,DPREC,g->attr.varstuff.pscale); 
 #else
-            sprintf(msg,"%s.pscale = %2.15g ",g->name,g->attr.varstuff.pscale); 
+            sprintf(msg,"%s.pscale = %2.17g ",g->name,g->attr.varstuff.pscale); 
 #endif 
             outstring(msg); 
          }
@@ -2112,7 +2112,7 @@ void bottom_dump(FILE *fd)
     case TORUS_CONNECTED_MODE: outstring("connected\n"); break;
   }
   if ( window_aspect_ratio != 0.0 )
-  { sprintf(msg,"window_aspect_ratio := %18.15f\n",
+  { sprintf(msg,"window_aspect_ratio := %18.17g\n",
        (DOUBLE)window_aspect_ratio); 
     outstring(msg);
   }
@@ -2122,7 +2122,7 @@ void bottom_dump(FILE *fd)
   if ( view_transforms_unique_point_flag )
   { toggle_save("view_transforms_use_unique_point");
     for ( i = 0 ; i < SDIM ; i++ )
-    { sprintf(msg,"  view_transforms_unique_point[%d] := %18.15f\n",i+1,
+    { sprintf(msg,"  view_transforms_unique_point[%d] := %18.17g\n",i+1,
         (DOUBLE)view_transforms_unique_point[i]);
       outstring(msg);
     }
@@ -2223,7 +2223,7 @@ void bottom_dump(FILE *fd)
 #elif defined(LONGDOUBLE)
      sprintf(msg,"linear_metric_mix := %2.*Lg\n",DPREC,linear_metric_mix);
 #else
-     sprintf(msg,"linear_metric_mix := %2.15g\n",(DOUBLE)linear_metric_mix);
+     sprintf(msg,"linear_metric_mix := %2.17g\n",(DOUBLE)linear_metric_mix);
 #endif 
      outstring(msg);
   }
@@ -2236,11 +2236,11 @@ void bottom_dump(FILE *fd)
   if ( !transforms_flag && (transform_count>1)) toggle_save_off("transforms");
   outstring("\n\n");
   if ( web.target_tolerance != DEFAULT_TARGET_TOLERANCE )
-  { sprintf(msg,"target_tolerance := %2.15g\n",(DOUBLE)web.target_tolerance);
+  { sprintf(msg,"target_tolerance := %2.17g\n",(DOUBLE)web.target_tolerance);
     outstring(msg);
   }
   if ( brightness != DEFAULT_BRIGHTNESS )
-  { sprintf(msg,"brightness := %2.15g\n",(DOUBLE)brightness);
+  { sprintf(msg,"brightness := %2.17g\n",(DOUBLE)brightness);
     outstring(msg);
   }
 
@@ -2351,7 +2351,7 @@ void dump_force()
           sprintf(msg,"%3s    %17.*Lf %17.*Lf  |x| = %17.*Lf ",
              ELNAME(v_id),DPREC,x[0],DPREC,x[1],DPREC,sqrt(SDIM_dot(x,x))); 
 #else
-          sprintf(msg,"%3s    %17.15f %17.15f  |x| = %17.15f ",
+          sprintf(msg,"%3s    %17.17g %17.17g  |x| = %17.17g ",
              ELNAME(v_id),x[0],x[1],sqrt(SDIM_dot(x,x))); 
 #endif 
              outstring(msg); 
@@ -2364,7 +2364,7 @@ void dump_force()
           sprintf(msg,"%3s  %17.*Lf %17.*Lf %17.*Lf  |x| = %17.*Lf ",
              ELNAME(v_id),DPREC,x[0],DPREC,x[1],DPREC,x[2],DPREC,sqrt(SDIM_dot(x,x))); 
 #else
-          sprintf(msg,"%3s  %17.15f %17.15f %17.15f  |x| = %17.15f ",
+          sprintf(msg,"%3s  %17.17g %17.17g %17.17g  |x| = %17.17g ",
              ELNAME(v_id),x[0],x[1],x[2],sqrt(SDIM_dot(x,x))); 
 #endif 
              outstring(msg); 
@@ -2398,7 +2398,7 @@ void dump_force()
           sprintf(msg,"f:    %17.*Lf %17.*Lf |f| = %g\n\n",
              DPREC,f[0],DPREC,f[1],(DOUBLE)mag); outstring(msg); 
 #else
-          sprintf(msg,"f:    %17.15f %17.15f |f| = %g\n\n",
+          sprintf(msg,"f:    %17.17g %17.17g |f| = %g\n\n",
              f[0],f[1],(DOUBLE)mag); outstring(msg); 
 #endif 
           break;
@@ -2410,7 +2410,7 @@ void dump_force()
           sprintf(msg,"f:    %17.*Lf %17.*Lf %17.*Lf  |f| = %g\n\n",
              DPREC,f[0],DPREC,f[1],DPREC,f[2],(DOUBLE)mag); outstring(msg); 
 #else
-          sprintf(msg,"f:    %17.15f %17.15f %17.15f  |f| = %g\n\n",
+          sprintf(msg,"f:    %17.17g %17.17g %17.17g  |f| = %g\n\n",
              f[0],f[1],f[2],(DOUBLE)mag); outstring(msg); 
 #endif 
       break;
@@ -2490,7 +2490,7 @@ void list_quantity(int k  /* quantity number */)
         sprintf(msg,"QUANTITY %s CONSERVED  lagrange_multiplier %2.*Lg",
                   q->name,DPREC,q->pressure); 
 #else
-        sprintf(msg,"QUANTITY %s CONSERVED  lagrange_multiplier %2.15g",
+        sprintf(msg,"QUANTITY %s CONSERVED  lagrange_multiplier %2.17g",
                   q->name,q->pressure); 
 #endif 
         outstring(msg); 
@@ -2503,7 +2503,7 @@ void list_quantity(int k  /* quantity number */)
         sprintf(msg,"QUANTITY %s FIXED = %2.*Lg  lagrange_multiplier %2.*Lg",
                 q->name,DPREC,q->target,DPREC,q->pressure); 
 #else
-        sprintf(msg,"QUANTITY %s FIXED = %2.15g  lagrange_multiplier %2.15g",
+        sprintf(msg,"QUANTITY %s FIXED = %2.17g  lagrange_multiplier %2.17g",
                   q->name,q->target,q->pressure); 
 #endif 
         outstring(msg); 
@@ -2518,7 +2518,7 @@ void list_quantity(int k  /* quantity number */)
 #elif defined(LONGDOUBLE)
    { sprintf(msg," tolerance %2.*Lg ",DPREC,q->tolerance); outstring(msg); }
 #else
-   { sprintf(msg," tolerance %2.15g ",q->tolerance); outstring(msg); }
+   { sprintf(msg," tolerance %2.17g ",q->tolerance); outstring(msg); }
 #endif 
    if ( q->modulus != 1.0 ) 
 #ifdef FLOAT128
@@ -2526,7 +2526,7 @@ void list_quantity(int k  /* quantity number */)
 #elif defined(LONGDOUBLE)
    { sprintf(msg," modulus %2.*Lg ",DPREC,q->modulus); outstring(msg); }
 #else
-   { sprintf(msg," modulus %2.15g ",q->modulus); outstring(msg); }
+   { sprintf(msg," modulus %2.17g ",q->modulus); outstring(msg); }
 #endif 
    if ( q->volconst != 0.0 ) 
 #ifdef FLOAT128
@@ -2534,7 +2534,7 @@ void list_quantity(int k  /* quantity number */)
 #elif defined(LONGDOUBLE)
    { sprintf(msg," volconst %2.*Lg ",DPREC,q->volconst); outstring(msg); }
 #else
-   { sprintf(msg," volconst %2.15g ",q->volconst); outstring(msg); }
+   { sprintf(msg," volconst %2.17g ",q->volconst); outstring(msg); }
 #endif 
    if ( q->flags & Q_COMPOUND )
    { outstring(" function ");
