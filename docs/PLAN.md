@@ -252,6 +252,34 @@ the remaining linear hot spots (was step 5).
 
 Pause after step 3 (solver decision) and at the end of C2.
 
+## Current state and next steps (2026-10-07, before a session restart)
+
+Phase C2 is complete (see the table in Status). After it, at the user's request:
+
+- Done: thread control from Python (`pse.threads_limit(n)`, `threads=` on
+  `relax()`/`hessian()`; commit 4af2a9d). Wheels build a pinned OpenBLAS 0.3.34
+  (OpenMP build, DYNAMIC_ARCH; `tools/build_openblas.sh`) and ship
+  `THIRD_PARTY_LICENSES.txt` (66420bd). Decisions: wheels for Linux x86-64 only;
+  pySE's own license decided later (notices shipped now).
+- Lesson: a USE_THREAD=0 OpenBLAS without USE_LOCKING=1 gives wrong Newton steps
+  (MUMPS calls BLAS from several threads). The OpenMP build is both safe and 4-13%
+  faster than serial+locking.
+- Speed-up items the user asked for ("do 1 and 2"):
+  1. Reuse MUMPS's analysis across Newton steps: **done, committed (8701b7c), all
+     tests pass, speed-up NOT measured yet**. Measure next: `newton_t.py`-style
+     timing of the 2nd+ Newton step at 393k/1.6M facets and Lagrange 6 at 24k,
+     against the final benchmark (1.6M Newton step 6.45 s at 8 threads; 393k 1.21 s;
+     Lagrange 6 24k 6.57 s). Expected 5-15% at 1.6M.
+  2. Parallelize the remaining serial Newton-step setup: **not started**.
+     Candidates from the last profile (1.6M linear, noisy): `hessian_init`,
+     per-vertex normal projections (`new_calc_vertex_normal`, `get_edge_valence`,
+     `get_facet_normal`), roughly 5-10% of a step. Profile cleanly first.
+- Further options discussed, not chosen: hash-free direct CSR assembly (5-10%),
+  reusing a factorization over several Newton steps (algorithmic; user decision),
+  phase E compact data layouts.
+- Scratch tools (session scratchpad, lost on restart): newton_t.py, prof_newton2.py,
+  solvers.c harness, matrix dumps (`PYSE_DUMP_HESSIAN=path` recreates them).
+
 ## Phase D: polish and usability
 
 1. Live view that only moves points (no PolyData rebuild) when topology is unchanged.
