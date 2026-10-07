@@ -343,6 +343,7 @@ NB_MODULE(_core, m) {
   // ---- unguarded state: plain field reads -----------------------------------
   m.def("is_initialized", []() { Lock lock; return bool(pyse_is_initialized()); });
   m.def("surface_valid", []() { Lock lock; return bool(pyse_surface_valid()); });
+  m.def("surface_version", []() { Lock lock; return pyse_surface_version(); });
   m.def("count", [](int type) { Lock lock; return pyse_count(type); }, "type"_a);
   m.def("sdim", []() { Lock lock; return pyse_sdim(); });
   m.def("representation", []() { Lock lock; return pyse_representation(); });

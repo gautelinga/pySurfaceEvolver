@@ -151,6 +151,17 @@ def _hide_capture_wrapper(error: EvolverError) -> EvolverError:
     return type(error)(cleaned, error.errnum, error.output)
 
 
+# mesh() result for the engine's current surface version (see _core.surface_version)
+_mesh_cache: "tuple[int, Mesh] | None" = None
+_mesh_cache_lock = threading.Lock()
+
+
+def _read_only(*arrays: Optional[np.ndarray]) -> None:
+    for a in arrays:
+        if a is not None:
+            a.flags.writeable = False
+
+
 @dataclass(frozen=True)
 class Snapshot:
     """A saved surface from :meth:`Evolver.save`, as exact datafile text."""
@@ -719,7 +730,22 @@ class Evolver:
         Faces exist only in the soapfilm representation. For quadratic and
         Lagrange models the high-order node layout is included too; see
         :meth:`Mesh.tessellate`.
+
+        The result is cached until the surface changes (any command, load or
+        coordinate write), so its arrays are read-only; copy them to modify.
         """
+        global _mesh_cache
+        version = _core.surface_version()
+        with _mesh_cache_lock:
+            if _mesh_cache is not None and _mesh_cache[0] == version:
+                return _mesh_cache[1]
+        mesh = self._build_mesh()
+        with _mesh_cache_lock:
+            if _core.surface_version() == version:   # nothing changed meanwhile
+                _mesh_cache = (version, mesh)
+        return mesh
+
+    def _build_mesh(self) -> Mesh:
         _, r = self._call(_core.vertices)
         xyz, vids, fixed = r.data
         _, r = self._call(_core.edges)
@@ -738,7 +764,10 @@ class Evolver:
             _, r = self._call(_core.element_nodes, _core.FACET)
             if r.data is not None:
                 facet_nodes, facet_index, order, bezier = r.data
-        return Mesh(xyz, edges, faces, vids, eids, fids, fbodies, fixed.astype(bool),
+        fixed = fixed.astype(bool)
+        _read_only(xyz, edges, faces, vids, eids, fids, fbodies, fixed,
+                   edge_nodes, edge_index, facet_nodes, facet_index)
+        return Mesh(xyz, edges, faces, vids, eids, fids, fbodies, fixed,
                     order, bezier, edge_nodes, edge_index, facet_nodes, facet_index)
 
     def bodies(self) -> Bodies:

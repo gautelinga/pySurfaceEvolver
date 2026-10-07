@@ -105,6 +105,11 @@ const char *pyse_warning(int i);
    Evolver code, so they cannot raise Evolver errors. ------------------------ */
 int pyse_is_initialized(void);
 int pyse_surface_valid(void);
+/* Goes up whenever a call may have changed the surface (commands, loads,
+   coordinate writes), so callers can cache snapshots.  Expression
+   evaluation (pyse_eval, pyse_values) and the snapshot getters don't
+   change it. */
+long pyse_surface_version(void);
 long pyse_count(int type);
 int pyse_sdim(void);
 int pyse_representation(void);  /* 1 string, 2 soapfilm, 3 simplex */

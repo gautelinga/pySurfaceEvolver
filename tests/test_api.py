@@ -304,6 +304,35 @@ def test_mesh_string_model_has_no_faces(load):
     assert m.edges.shape == (ev.counts["edges"], 2)
 
 
+def test_mesh_is_cached_until_the_surface_changes(cube):
+    first = cube.mesh()
+    assert cube.mesh() is first
+    cube.eval("total_area")                 # evaluating doesn't change it
+    cube.values("vertex", "x")
+    cube.bodies()
+    assert cube.mesh() is first
+    cube.iterate(1)
+    second = cube.mesh()
+    assert second is not first
+    assert not np.array_equal(second.vertices, first.vertices)
+    cube.vertices = second.vertices * 2     # coordinate writes count too
+    assert cube.mesh() is not second
+
+
+def test_failed_command_invalidates_the_cache(cube):
+    first = cube.mesh()
+    with pytest.raises(EvolverError):
+        cube.command("g 1; nonsense_command_xyz")
+    assert cube.mesh() is not first
+
+
+def test_cached_mesh_is_read_only(cube):
+    m = cube.mesh()
+    with pytest.raises(ValueError):
+        m.vertices[0, 0] = 5.0
+    m.vertices.copy()[0, 0] = 5.0           # copies are fine
+
+
 def test_mesh_returns_copies(cube):
     v = cube.vertices
     v[:] = 0.0

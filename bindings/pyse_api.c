@@ -28,6 +28,8 @@ static int exit_code = 0;
 static int surface_valid = 1;
 /* Globals below this index were declared by the datafile itself. */
 static int datafile_global_limit = 0;
+/* See pyse_surface_version(). */
+static long surface_version = 0;
 
 static pyse_output_fn out_cb = NULL;
 static void *out_ud = NULL;
@@ -379,6 +381,7 @@ int pyse_initialize(void)
     return PYSE_OK;
   }
   in_cb = NULL;  /* the startup prompt must get EOF */
+  surface_version++;
   status = protected_call(init_body,NULL);
   in_cb = saved_cb;
   if ( status == PYSE_OK ) initialized = 1;
@@ -404,6 +407,7 @@ int pyse_load(const char *path)
   if ( strlen(path) >= sizeof(name) )
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,"Datafile path is too long.");
   strcpy(name,path);
+  surface_version++;
   return protected_call(load_body,name);
 }
 
@@ -444,8 +448,9 @@ static int run_text(const char *text, int history)
 }
 
 int pyse_command(const char *text)
-{
-  return run_text(text,1);
+{ int status = run_text(text,1);
+  surface_version++;  /* after, too: a failed command may have changed things */
+  return status;
 }
 
 /* Run a command whose printf output tagged with CAPTURE_TAG is collected
@@ -546,6 +551,7 @@ int pyse_set_vertex_coords(const double *xyz, long n, int sdim)
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,text);
   }
   a.xyz = xyz; a.n = n; a.sdim = sdim;
+  surface_version++;
   return surface_call(set_coords_body,&a);
 }
 
@@ -949,6 +955,7 @@ const char *pyse_warning(int i)
 
 int pyse_is_initialized(void) { return initialized; }
 int pyse_surface_valid(void) { return initialized && surface_valid; }
+long pyse_surface_version(void) { return surface_version; }
 
 long pyse_count(int type)
 { if ( type < 0 || type > PYSE_BODY ) return -1;
