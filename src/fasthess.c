@@ -38,7 +38,7 @@ struct hop
 
 struct hbuf { struct hop *ops; long n, size; int failed; };
 
-/* the buffer the current thread records into, while run_facets() runs */
+/* the buffer the current thread records into, while run_elements() runs */
 static __thread struct hbuf *recording = NULL;
 
 static void put(struct hbuf *b, struct hop *op)
@@ -107,307 +107,97 @@ static void mixed_entry(struct hbuf *b, vertex_id v_id1, vertex_id v_id2, REAL *
         put_entry(b,v2->rownum+k,v1->rownum+j,oo[j][k]);
 }
 
-/* methods whose setup and Hessian are thread-safe */
-static int method_ok(struct method_instance *mi)
-{ struct gen_quant_method *gm = basic_gen_methods + mi->gen_method;
-  if ( mi->flags & Q_COMPOUND ) return 0;
-  /* for the Lagrange model (checked by the caller) these go to
-     lagrange_facet_tension_hess() and lagrange_facet_volume_hess() */
-  return gm->hessian == q_facet_tension_hessian
-      || gm->hessian == q_facet_volume_hess
-      || gm->hessian == lagrange_facet_volume_hess;
+
+/* ---- which methods may run in parallel ---- */
+
+/* Expression node types that only read (constants, globals, parameters,
+   coordinates, arithmetic, math, comparisons, conditionals, built-in user
+   functions): the evaluator then touches only its per-thread stack. */
+static int node_ok(int type)
+{ switch ( type )
+  { case SETUP_FRAME_NODE: case FINISHED_NODE:
+    case PUSHCONST_NODE: case REPLACECONST_NODE: case PUSHDELTA_NODE:
+    case PUSH_PARAM_SCALE_NODE: case PUSH_PARAM_FIXED_NODE:
+    case PUSHGLOBAL_NODE: case PUSH_PERM_GLOBAL_NODE:
+    case PUSHPI_NODE: case PUSHE_NODE: case PUSHG_NODE: case PUSHPARAM_NODE:
+    case USERFUNC_NODE:
+    case GT_NODE: case LT_NODE: case LE_NODE: case GE_NODE: case NE_NODE:
+    case EQ_NODE: case AND_NODE: case CONJUNCTION_END_NODE: case OR_NODE:
+    case NOT_NODE:
+    case PLUS_NODE: case MINUS_NODE: case TIMES_NODE: case DIVIDE_NODE:
+    case REALMOD_NODE: case IMOD_NODE: case IDIV_NODE: case INTPOW_NODE:
+    case POW_NODE: case MAXIMUM_NODE: case MINIMUM_NODE: case ATAN2_NODE:
+    case SQR_NODE: case SQRT_NODE: case CEIL_NODE: case FLOOR_NODE: case ABS_NODE:
+    case SIN_NODE: case COS_NODE: case TAN_NODE: case EXP_NODE: case SINH_NODE:
+    case COSH_NODE: case TANH_NODE: case ASINH_NODE: case ACOSH_NODE:
+    case ATANH_NODE: case LOG_NODE: case ASIN_NODE: case ACOS_NODE:
+    case ATAN_NODE: case ELLIPTICK_NODE: case ELLIPTICE_NODE:
+    case INCOMPLETE_ELLIPTICF_NODE: case INCOMPLETE_ELLIPTICE_NODE:
+    case CHS_NODE: case INV_NODE:
+    case COORD_NODE: case INDEXED_COORD_NODE: case PARAM_NODE:
+    case ID_NODE: case GET_ID_NODE: case GET_OID_NODE: case ORIGINAL_NODE:
+    case GET_ORIGINAL_NODE:
+    case IFTEST_NODE: case COND_TEST_NODE: case IF_NODE: case COND_EXPR_NODE:
+      return 1;
+  }
+  return 0;
 }
 
-/* One facet: what calc_quant_hess() does for it (hess_mode 1), recorded. */
-static void facet_ops(struct linsys *S, struct qinfo *q_info, facet_id f_id,
-                      int global_needs, int meth_offset, int mode, struct hbuf *b)
-{ struct element *e_ptr = elptr(f_id);
-  int setup_flag = 0, needs = global_needs, flag, inum, k, i, ii, j, jj, m, n;
-  struct method_instance *mi;
-  struct gen_quant *q;
-  struct hess_verlist *va, *vb;
-  REAL g[MAXCOORD], *ggg;
-  struct hop op;
-
-  q_info->id = f_id;
-  for ( k = 0 ; k < e_ptr->method_count ; k++ )
-  { int mm = ((int*)((char*)e_ptr+meth_offset))[k];
-    mi = METH_INSTANCE(abs(mm));
-    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) )
-      needs |= basic_gen_methods[mi->gen_method].flags;
-  }
-  inum = global_meth_inst_count[FACET];
-  for ( flag = 0 ; flag < 2 ; flag++, inum = e_ptr->method_count )
-    for ( k = 0 ; k < inum ; k++ )
-    { int sign = 1;
-      REAL value, coeff = 0.0;
-      struct gen_quant_method *gm;
-      if ( flag )
-      { int mm = ((int*)((char*)e_ptr+meth_offset))[k];
-        q_info->method = abs(mm);
-        if ( mm < 0 ) sign = -1;
-      }
-      else q_info->method = global_meth_inst[FACET][k];
-      mi = METH_INSTANCE(q_info->method);
-      if ( !(mi->flags & Q_DOTHIS) || (mi->type != FACET) ) continue;
-      if ( !setup_flag ) { (*q_setup[FACET])(S,q_info,needs); setup_flag = 1; }
-      for ( j = 0 ; j < MMAXQUANTS ; j++ )
-      { if ( mi->quants[j] < 0 ) continue;
-        q = GEN_QUANT(mi->quants[j]);
-        if ( q->flags & (Q_FIXED|Q_CONSERVED) )
-          coeff += -q->pressure*sign*q->modulus*mi->modulus;
-        else
-          coeff += sign*q->modulus*mi->modulus;
-      }
-      gm = basic_gen_methods + mi->gen_method;
-      zerohess(q_info);
-      value = (*gm->hessian)(q_info);
-      if ( mi->flags & ELEMENT_MODULUS_FLAG )
-      { REAL emdls = *(REAL*)get_extra(q_info->id,mi->elmodulus);
-        value *= emdls;
-        for ( i = 0 ; i < q_info->vcount ; i++ )
-          for ( j = 0 ; j < SDIM ; j++ )
-            q_info->grad[i][j] *= emdls;
-        for ( i = 0 ; i < q_info->vcount ; i++ )
-          for ( ii = 0 ; ii < q_info->vcount ; ii++ )
-            for ( j = 0 ; j < SDIM ; j++ )
-              for ( jj = 0 ; jj < SDIM ; jj++ )
-                q_info->hess[i][ii][j][jj] *= emdls;
-      }
-      op.kind = OP_VALUE; op.r = q_info->method;
-      op.x[0] = sign*value; op.x[1] = fabs(value);
-      put(b,&op);
-
-      for ( i = 0 ; i < q_info->vcount ; i++ )
-      { op.kind = OP_GRAD; op.v = q_info->v[i];
-        for ( j = 0 ; j < SDIM ; j++ )
-          op.x[j] = coeff*q_info->grad[i][j];
-        put(b,&op);
-      }
-
-      if ( !(mode & (Q_FIXED|Q_ENERGY|Q_CONSERVED)) ) continue;
-      for ( i = 0 ; i < q_info->vcount ; i++ )
-      { va = get_vertex_vhead(q_info->v[i]);
-        if ( va->freedom == 0 ) continue;
-        for ( j = i ; j < q_info->vcount ; j++ )
-        { vb = get_vertex_vhead(q_info->v[j]);
-          if ( vb->freedom == 0 ) continue;
-          for ( n = 0 ; n < SDIM ; n++ )
-            for ( m = 0 ; m < SDIM ; m++ )
-              q_info->hess[i][j][m][n] *= coeff;
-          mixed_entry(b,q_info->v[i],q_info->v[j],q_info->hess[i][j]);
-          if ( (i != j) && (q_info->v[i] == q_info->v[j]) )
-          { MAT2D(transpose,MAXCOORD,MAXCOORD);
-            for ( n = 0 ; n < SDIM ; n++ )
-              for ( m = 0 ; m < SDIM ; m++ )
-                transpose[m][n] = q_info->hess[i][j][n][m];
-            mixed_entry(b,q_info->v[i],q_info->v[j],transpose);
-          }
-        }
-        /* fixed quantity gradients for left side */
-        for ( j = 0 ; j < MMAXQUANTS ; j++ )
-        { if ( mi->quants[j] < 0 ) continue;
-          q = GEN_QUANT(mi->quants[j]);
-          if ( q->flags & (Q_FIXED|Q_CONSERVED) )
-          { int currentrow = S->quanrowstart + mi->quants[j];
-            REAL ccoeff = sign*q->modulus*mi->modulus;
-            if ( va->proj )
-            { vec_mat_mul(q_info->grad[i],va->proj,g,SDIM,va->freedom);
-              ggg = g;
-            }
-            else ggg = q_info->grad[i];
-            for ( m = 0 ; m < va->freedom ; m++ )
-              put_entry(b,va->rownum+m,currentrow,ccoeff*ggg[m]);
-          }
-        }
-      }
-    }
-}
-
-#define FH_MAXTHREADS 256
-
-/* One facet's work: record its additions in b. me is the thread number. */
-typedef void (*facet_fn)(struct linsys *S, facet_id f_id, vertex_id *c, int me,
-                         struct hbuf *b, void *ctx);
-
-/* Run fn on all facets in chunks: in parallel within a chunk, then make the
-   recorded additions serially in facet order. Returns 0 (nothing done) if
-   it can't start. */
-static int run_facets(struct linsys *S, REAL *rhs, facet_fn fn, void *ctx, int threads)
-{ static struct hbuf buf[FH_MAXTHREADS];
-  facet_id *list;
-  vertex_id *corners;
-  long n, start, chunk, k;
-  long *fstart;   /* per chunk facet: start, end in its thread's buffer */
-  int *fthread;
-  int t, ok = 1;
-
-  corners = fl_facet_corners();
-  list = fl_facet_list(&n);
-  if ( !corners || !list || n == 0 ) return 0;
-  chunk = 64*threads;
-  fstart = (long*)malloc(2*chunk*sizeof(long));
-  fthread = (int*)malloc(chunk*sizeof(int));
-  if ( !fstart || !fthread ) { free(fstart); free(fthread); return 0; }
-
-  for ( start = 0 ; start < n && ok ; start += chunk )
-  { long end = start + chunk < n ? start + chunk : n;
-    for ( t = 0 ; t < threads ; t++ ) { buf[t].n = 0; buf[t].failed = 0; }
-
-    fl_enter();
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic,4) num_threads(threads)
-#endif
-    for ( k = start ; k < end ; k++ )
-    { int me = 0;
-#ifdef _OPENMP
-      me = omp_get_thread_num();
-#endif
-      fthread[k-start] = me;
-      fstart[2*(k-start)] = buf[me].n;
-      recording = &buf[me];
-      (*fn)(S,list[k],corners + 3*ordinal(list[k]),me,&buf[me],ctx);
-      recording = NULL;
-      fstart[2*(k-start)+1] = buf[me].n;
-    }
-    fl_leave();   /* may abort (Ctrl-C): nothing of this chunk added yet */
-    for ( t = 0 ; t < threads ; t++ )
-      if ( buf[t].failed ) ok = 0;
-    if ( !ok ) break;   /* out of memory: give up (nothing added this chunk) */
-
-    /* the additions, serially in facet order */
-    for ( k = start ; k < end ; k++ )
-    { struct hbuf *b = buf + fthread[k-start];
-      long e;
-      for ( e = fstart[2*(k-start)] ; e < fstart[2*(k-start)+1] ; e++ )
-      { struct hop *op = b->ops + e;
-        switch ( op->kind )
-        { case OP_ENTRY: sp_hash_search(S,op->r,op->c,op->x[0]); break;
-          case OP_GRAD: fill_grad(S,get_vertex_vhead(op->v),op->x,rhs); break;
-          case OP_VALUE:
-          { struct method_instance *mi = METH_INSTANCE(op->r);
-            mi->newvalue += op->x[0];
-            mi->abstotal += op->x[1];
-            break;
-          }
-          case OP_QVALUE:   /* as calc_quants() */
-          { struct method_instance *mi = METH_INSTANCE(op->r);
-            binary_tree_add(mi->value_addends,op->x[0]);
-            mi->abstotal += fabs(op->x[0]);
-            break;
-          }
-          case OP_FORCE:    /* as calc_quant_grads() */
-            vector_add_smul(get_force(op->v),op->x,op->s,SDIM);
-            break;
-          case OP_AREA:     /* methods' total area, see fl_total_area_add() */
-            binary_tree_add(web.total_area_addends,op->x[0]);
-            break;
-          case OP_VGRAD:
-          { volgrad *vgptr = get_bv_new_vgrad(op->r,op->v);
-            vgptr->bb_id = op->b;
-            vgptr->qnum = op->c;
-            vector_add_smul(vgptr->grad,op->x,op->s,SDIM);
-            break;
-          }
-        }
-      }
-    }
-  }
-  free(fstart);
-  free(fthread);
-  if ( !ok )
-    kb_error(6350,"Out of memory in parallel Hessian assembly.\n",RECOVERABLE);
+static int expr_ok(struct expnode *e)
+{ struct treenode *node;
+  if ( !e || !e->start || !e->root ) return 1;
+  if ( e->locals && e->locals->totalsize > 0 ) return 0;
+  for ( node = e->start + 1 ; node <= e->root ; node++ )
+    if ( !node_ok(node->type) ) return 0;
   return 1;
 }
 
-static int hess_threads(void)
-{ int threads = fl_threads();
-  if ( threads > FH_MAXTHREADS ) threads = FH_MAXTHREADS;
-  return threads < 1 ? 1 : threads;
-}
+/* Methods checked to be thread-safe for the linear and Lagrange models:
+   their setup, value, gradient and Hessian write only their qinfo (the area
+   methods' total area goes through fl_total_area_add()). Integral methods
+   also need read-only integrands. */
+static const struct
+{ REAL (*value)(QINFO), (*grad)(QINFO), (*hess)(QINFO);
+  int integrand;
+} safe_methods[] = {
+  { q_facet_tension_value, q_facet_tension_gradient, q_facet_tension_hessian, 0 },
+  { q_facet_volume, q_facet_volume_grad, q_facet_volume_hess, 0 },
+  { NULL, NULL, lagrange_facet_volume_hess, 0 },
+  { facet_scalar_integral, facet_scalar_integral_grad, facet_scalar_integral_hess, 1 },
+  { facet_vector_integral, facet_vector_integral_grad, facet_vector_integral_hess, 1 },
+  { facet_2form_integral, facet_2form_integral_grad, facet_2form_integral_hess, 1 },
+  { facet_general_value, facet_general_grad, facet_general_hess, 1 },
+  { edge_scalar_integral, edge_scalar_integral_grad, edge_scalar_integral_hess, 1 },
+  { edge_vector_integral, edge_vector_integral_grad, edge_vector_integral_hess, 1 },
+  { edge_general_value, edge_general_grad, edge_general_hess, 1 },
+  { vertex_scalar_integral, vertex_scalar_integral_grad, vertex_scalar_integral_hess, 1 },
+};
 
-/* ---- named quantities on facets (calc_quant_hess) ---- */
+enum { PASS_VALUE, PASS_GRAD, PASS_HESS };
 
-struct quant_ctx { struct qinfo *qi; int global_needs, meth_offset, mode; };
-
-static void quant_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
-                        struct hbuf *b, void *ctx)
-{ struct quant_ctx *q = (struct quant_ctx *)ctx;
-  (void)c;
-  facet_ops(S,q->qi + me,f_id,q->global_needs,q->meth_offset,q->mode,b);
-}
-
-int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
-                         int global_needs)
-{ static struct qinfo qi[FH_MAXTHREADS];
-  struct quant_ctx ctx;
-  facet_id *list;
-  long n;
-  int threads, t, mk, done;
-
-  if ( fl_disabled() || !hess_mode || threadflag || nprocs > 1
-       || web.modeltype != LAGRANGE || SDIM != 3 || web.dimension != 2
-       || compound_quant_list_head >= 0 || (sym_flags & NEED_FORM_UNWRAPPING)
-       || dirichlet_flag || sobolev_flag || web.torus_flag )
-    return 0;
-  for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
-  { struct method_instance *mi = METH_INSTANCE(mk);
-    if ( mi->flags & Q_DELETED ) continue;
-    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) && !method_ok(mi) )
-      return 0;
-  }
-  list = fl_facet_list(&n);
-  if ( !list || n == 0 ) return 0;
-
-  threads = hess_threads();
-  /* per-thread work space (Evolver's allocator is not thread-safe) */
-  for ( t = 0 ; t < threads ; t++ )
-  { q_info_init(&qi[t],METHOD_HESSIAN);
-    qi[t].hess = dmatrix4(MAXVCOUNT,MAXVCOUNT,SDIM,SDIM);
-  }
-  /* first facet serially: lazy one-time setup (e.g. packed basis matrices) */
-  qi[0].id = list[0];
-  (*q_setup[FACET])(S,&qi[0],global_needs|NEED_SIDE);
-
-  ctx.qi = qi;
-  ctx.global_needs = global_needs;
-  ctx.meth_offset = get_meth_offset(FACET);
-  ctx.mode = mode;
-  done = run_facets(S,rhs,quant_facet,&ctx,threads);
-  if ( done ) comp_quant_stamp += (int)n;
-
-  for ( t = 0 ; t < threads ; t++ )
-  { free_matrix4(qi[t].hess);
-    qi[t].hess = NULL;
-    q_info_free(&qi[t]);
-  }
-  return done;
-}
-
-/* The area methods add each facet's area to the total area: recorded
-   while run_facets() runs (the addition is made in facet order), added
-   right away otherwise. */
-void fl_total_area_add(REAL area)
-{ if ( recording )
-  { struct hop op;
-    op.kind = OP_AREA; op.x[0] = area;
-    put(recording,&op);
-  }
-  else binary_tree_add(web.total_area_addends,area);
-}
-
-/* ---- named-quantity values and gradients on facets ---- */
-
-/* methods whose setup, value and gradient are thread-safe (for the linear
-   and Lagrange models: they reach only allocation-free kernels) */
-static int method_ok_values(struct method_instance *mi)
+static int method_safe(struct method_instance *mi, int pass)
 { struct gen_quant_method *gm = basic_gen_methods + mi->gen_method;
+  int k, e;
   if ( mi->flags & Q_COMPOUND ) return 0;
-  return (gm->value == q_facet_tension_value && gm->gradient == q_facet_tension_gradient)
-      || (gm->value == q_facet_volume && gm->gradient == q_facet_volume_grad);
+  /* vertex_scalar_integral's value adjusts neighbouring facet areas */
+  if ( gm->value == vertex_scalar_integral && pass == PASS_VALUE
+       && (mi->flags & DEFAULT_INSTANCE) ) return 0;
+  for ( k = 0 ; k < (int)(sizeof(safe_methods)/sizeof(safe_methods[0])) ; k++ )
+  { REAL (*f)(QINFO) = pass == PASS_VALUE ? safe_methods[k].value
+                     : pass == PASS_GRAD ? safe_methods[k].grad : safe_methods[k].hess;
+    REAL (*g)(QINFO) = pass == PASS_VALUE ? gm->value
+                     : pass == PASS_GRAD ? gm->gradient : gm->hessian;
+    if ( !f || f != g ) continue;
+    if ( safe_methods[k].integrand )
+      for ( e = 0 ; e < MAXMEXPR ; e++ )
+        if ( !expr_ok(mi->expr[e]) ) return 0;
+    return 1;
+  }
+  return 0;
 }
 
-static int quant_values_ok(void)
+/* whether this pass over elements of `type` may run in parallel */
+static int quant_ok(int type, int pass)
 { int mk;
   if ( fl_disabled() || threadflag || nprocs > 1
        || (web.modeltype != LAGRANGE && web.modeltype != LINEAR)
@@ -415,54 +205,154 @@ static int quant_values_ok(void)
        || compound_quant_list_head >= 0 || (sym_flags & NEED_FORM_UNWRAPPING)
        || web.symmetry_flag || dirichlet_flag || sobolev_flag || web.torus_flag )
     return 0;
+  if ( type != VERTEX && type != EDGE && type != FACET ) return 0;
   for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
   { struct method_instance *mi = METH_INSTANCE(mk);
     if ( mi->flags & Q_DELETED ) continue;
-    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) && !method_ok_values(mi) )
+    if ( (mi->flags & Q_DOTHIS) && (mi->type == type) && !method_safe(mi,pass) )
       return 0;
   }
   return 1;
 }
 
-/* the methods of a facet in calc_quants() order: global ones, then the
-   facet's own (mm < 0: opposite sign); calls fn for each to do */
-#define FOR_FACET_METHODS(e_ptr,meth_offset,flag,k,inum,mm,sign) \
-  for ( flag = 0, inum = global_meth_inst_count[FACET] ; flag < 2 ; \
+/* the methods of an element in calc_quants() order: global ones, then the
+   element's own (mm < 0: opposite sign) */
+#define FOR_ELEMENT_METHODS(type,e_ptr,meth_offset,flag,k,inum,mm,sign) \
+  for ( flag = 0, inum = global_meth_inst_count[type] ; flag < 2 ; \
         flag++, inum = (e_ptr)->method_count ) \
     for ( k = 0 ; k < inum ; k++ ) \
       if ( (mm = flag ? ((int*)((char*)(e_ptr)+(meth_offset)))[k] \
-                      : global_meth_inst[FACET][k]), \
+                      : global_meth_inst[type][k]), \
            (sign = (flag && mm < 0) ? -1 : 1), 0 ) ; else
 
-static int facet_needs(struct element *e_ptr, int global_needs, int meth_offset)
+static int element_needs(int type, struct element *e_ptr, int global_needs, int meth_offset)
 { int k, needs = global_needs;
   for ( k = 0 ; k < e_ptr->method_count ; k++ )
   { struct method_instance *mi =
         METH_INSTANCE(abs(((int*)((char*)e_ptr+meth_offset))[k]));
-    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) )
+    if ( (mi->flags & Q_DOTHIS) && (mi->type == type) )
       needs |= basic_gen_methods[mi->gen_method].flags;
   }
   return needs;
 }
 
-/* calc_quants()'s element loop body */
-static void quant_value_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
-                              struct hbuf *b, void *ctx)
+/* ---- the element loop bodies, recorded ---- */
+
+struct quant_ctx { struct qinfo *qi; int type, global_needs, meth_offset, mode; };
+
+/* calc_quant_hess()'s element loop body (hess_mode 1) */
+static void quant_hess_element(struct linsys *S, element_id id, vertex_id *c, int me,
+                               struct hbuf *b, void *ctx)
 { struct quant_ctx *q = (struct quant_ctx *)ctx;
   struct qinfo *q_info = q->qi + me;
-  struct element *e_ptr = elptr(f_id);
+  int type = q->type;
+  struct element *e_ptr = elptr(id);
+  int setup_flag = 0, needs, flag, inum, k, i, ii, j, jj, m, n, mm, sign;
+  struct gen_quant *gq;
+  struct hess_verlist *va, *vb;
+  REAL g[MAXCOORD], *ggg;
+  struct hop op;
+  (void)c;
+
+  q_info->id = id;
+  needs = element_needs(type,e_ptr,q->global_needs,q->meth_offset);
+  FOR_ELEMENT_METHODS(type,e_ptr,q->meth_offset,flag,k,inum,mm,sign)
+  { struct method_instance *mi = METH_INSTANCE(abs(mm));
+    REAL value, coeff = 0.0;
+    q_info->method = abs(mm);
+    if ( !(mi->flags & Q_DOTHIS) || (mi->type != type) ) continue;
+    if ( !setup_flag ) { (*q_setup[type])(S,q_info,needs); setup_flag = 1; }
+    for ( j = 0 ; j < MMAXQUANTS ; j++ )
+    { if ( mi->quants[j] < 0 ) continue;
+      gq = GEN_QUANT(mi->quants[j]);
+      if ( gq->flags & (Q_FIXED|Q_CONSERVED) )
+        coeff += -gq->pressure*sign*gq->modulus*mi->modulus;
+      else
+        coeff += sign*gq->modulus*mi->modulus;
+    }
+    zerohess(q_info);
+    value = (*basic_gen_methods[mi->gen_method].hessian)(q_info);
+    if ( mi->flags & ELEMENT_MODULUS_FLAG )
+    { REAL emdls = *(REAL*)get_extra(q_info->id,mi->elmodulus);
+      value *= emdls;
+      for ( i = 0 ; i < q_info->vcount ; i++ )
+        for ( j = 0 ; j < SDIM ; j++ )
+          q_info->grad[i][j] *= emdls;
+      for ( i = 0 ; i < q_info->vcount ; i++ )
+        for ( ii = 0 ; ii < q_info->vcount ; ii++ )
+          for ( j = 0 ; j < SDIM ; j++ )
+            for ( jj = 0 ; jj < SDIM ; jj++ )
+              q_info->hess[i][ii][j][jj] *= emdls;
+    }
+    op.kind = OP_VALUE; op.r = abs(mm);
+    op.x[0] = sign*value; op.x[1] = fabs(value);
+    put(b,&op);
+
+    for ( i = 0 ; i < q_info->vcount ; i++ )
+    { op.kind = OP_GRAD; op.v = q_info->v[i];
+      for ( j = 0 ; j < SDIM ; j++ )
+        op.x[j] = coeff*q_info->grad[i][j];
+      put(b,&op);
+    }
+
+    if ( !(q->mode & (Q_FIXED|Q_ENERGY|Q_CONSERVED)) ) continue;
+    for ( i = 0 ; i < q_info->vcount ; i++ )
+    { va = get_vertex_vhead(q_info->v[i]);
+      if ( va->freedom == 0 ) continue;
+      for ( j = i ; j < q_info->vcount ; j++ )
+      { vb = get_vertex_vhead(q_info->v[j]);
+        if ( vb->freedom == 0 ) continue;
+        for ( n = 0 ; n < SDIM ; n++ )
+          for ( m = 0 ; m < SDIM ; m++ )
+            q_info->hess[i][j][m][n] *= coeff;
+        mixed_entry(b,q_info->v[i],q_info->v[j],q_info->hess[i][j]);
+        if ( (i != j) && (q_info->v[i] == q_info->v[j]) )
+        { MAT2D(transpose,MAXCOORD,MAXCOORD);
+          for ( n = 0 ; n < SDIM ; n++ )
+            for ( m = 0 ; m < SDIM ; m++ )
+              transpose[m][n] = q_info->hess[i][j][n][m];
+          mixed_entry(b,q_info->v[i],q_info->v[j],transpose);
+        }
+      }
+      /* fixed quantity gradients for left side */
+      for ( j = 0 ; j < MMAXQUANTS ; j++ )
+      { if ( mi->quants[j] < 0 ) continue;
+        gq = GEN_QUANT(mi->quants[j]);
+        if ( gq->flags & (Q_FIXED|Q_CONSERVED) )
+        { int currentrow = S->quanrowstart + mi->quants[j];
+          REAL ccoeff = sign*gq->modulus*mi->modulus;
+          if ( va->proj )
+          { vec_mat_mul(q_info->grad[i],va->proj,g,SDIM,va->freedom);
+            ggg = g;
+          }
+          else ggg = q_info->grad[i];
+          for ( m = 0 ; m < va->freedom ; m++ )
+            put_entry(b,va->rownum+m,currentrow,ccoeff*ggg[m]);
+        }
+      }
+    }
+  }
+}
+
+/* calc_quants()'s element loop body */
+static void quant_value_element(struct linsys *S, element_id id, vertex_id *c, int me,
+                                struct hbuf *b, void *ctx)
+{ struct quant_ctx *q = (struct quant_ctx *)ctx;
+  struct qinfo *q_info = q->qi + me;
+  int type = q->type;
+  struct element *e_ptr = elptr(id);
   int needs, setup_flag = 0, flag, k, inum, mm, sign;
   struct hop op;
   (void)S; (void)c;
 
-  q_info->id = f_id;
-  needs = facet_needs(e_ptr,q->global_needs,q->meth_offset);
-  FOR_FACET_METHODS(e_ptr,q->meth_offset,flag,k,inum,mm,sign)
+  q_info->id = id;
+  needs = element_needs(type,e_ptr,q->global_needs,q->meth_offset);
+  FOR_ELEMENT_METHODS(type,e_ptr,q->meth_offset,flag,k,inum,mm,sign)
   { struct method_instance *mi = METH_INSTANCE(abs(mm));
     REAL value;
     q_info->method = abs(mm);
-    if ( !(mi->flags & Q_DOTHIS) || (mi->type != FACET) ) continue;
-    if ( !setup_flag ) { (*q_setup[FACET])(NULL,q_info,needs); setup_flag = 1; }
+    if ( !(mi->flags & Q_DOTHIS) || (mi->type != type) ) continue;
+    if ( !setup_flag ) { (*q_setup[type])(NULL,q_info,needs); setup_flag = 1; }
     value = (*basic_gen_methods[mi->gen_method].value)(q_info);
     if ( mi->flags & ELEMENT_MODULUS_FLAG )
       value *= *(REAL*)get_extra(q_info->id,mi->elmodulus);
@@ -474,23 +364,24 @@ static void quant_value_facet(struct linsys *S, facet_id f_id, vertex_id *c, int
 
 /* calc_quant_grads()'s element loop body (no compound quantities, no
    symmetry: no unwrapping) */
-static void quant_grad_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
-                             struct hbuf *b, void *ctx)
+static void quant_grad_element(struct linsys *S, element_id id, vertex_id *c, int me,
+                               struct hbuf *b, void *ctx)
 { struct quant_ctx *q = (struct quant_ctx *)ctx;
   struct qinfo *q_info = q->qi + me;
-  struct element *e_ptr = elptr(f_id);
+  int type = q->type;
+  struct element *e_ptr = elptr(id);
   int needs, setup_flag = 0, flag, k, inum, mm, sign, i, j;
   struct hop op;
   (void)S; (void)c;
 
-  q_info->id = f_id;
-  needs = facet_needs(e_ptr,q->global_needs,q->meth_offset);
-  FOR_FACET_METHODS(e_ptr,q->meth_offset,flag,k,inum,mm,sign)
+  q_info->id = id;
+  needs = element_needs(type,e_ptr,q->global_needs,q->meth_offset);
+  FOR_ELEMENT_METHODS(type,e_ptr,q->meth_offset,flag,k,inum,mm,sign)
   { struct method_instance *mi = METH_INSTANCE(abs(mm));
     REAL value;
     q_info->method = abs(mm);
-    if ( !(mi->flags & Q_DOTHIS) || (mi->type != FACET) ) continue;
-    if ( !setup_flag ) { (*q_setup[FACET])(NULL,q_info,needs); setup_flag = 1; }
+    if ( !(mi->flags & Q_DOTHIS) || (mi->type != type) ) continue;
+    if ( !setup_flag ) { (*q_setup[type])(NULL,q_info,needs); setup_flag = 1; }
     for ( i = 0 ; i < q_info->vcount ; i++ )
       for ( j = 0 ; j < SDIM ; j++ )
         q_info->grad[i][j] = 0.0;
@@ -526,36 +417,211 @@ static void quant_grad_facet(struct linsys *S, facet_id f_id, vertex_id *c, int 
   }
 }
 
-static int quant_facets(facet_fn fn, int qmode, int mode, int global_needs)
+#define FH_MAXTHREADS 256
+
+/* One element's work: record its additions in b. c: the facet's corners
+   (facets only). me: the thread number. */
+typedef void (*element_fn)(struct linsys *S, element_id id, vertex_id *c, int me,
+                           struct hbuf *b, void *ctx);
+
+/* Run fn on all elements of `type` in chunks: in parallel within a chunk,
+   then make the recorded additions serially in element order. An element
+   whose work raises an error or warning (kb_error()) is redone serially
+   then, so Evolver reports it as usual. Returns 0 (nothing done) if it
+   can't start. */
+static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
+                        void *ctx, int threads)
+{ static struct hbuf buf[FH_MAXTHREADS];
+  static struct hbuf serial;   /* elements redone serially */
+  element_id *list;
+  vertex_id *corners = NULL;
+  long n, start, chunk, k;
+  long *fstart;   /* per chunk element: start, end in its thread's buffer */
+  int *fthread;
+  unsigned char *ftrapped;     /* per chunk element: hit an error */
+  int t, ok = 1;
+
+  if ( type == FACET )
+  { corners = fl_facet_corners();
+    list = fl_facet_list(&n);
+    if ( !corners ) return 0;
+  }
+  else list = fl_element_list(type,&n);
+  if ( !list || n == 0 ) return 0;
+  chunk = 64*threads;
+  fstart = (long*)malloc(2*chunk*sizeof(long));
+  fthread = (int*)malloc(chunk*sizeof(int));
+  ftrapped = (unsigned char*)malloc(chunk);
+  if ( !fstart || !fthread || !ftrapped )
+  { free(fstart); free(fthread); free(ftrapped); return 0; }
+  fl_prepare_threads(threads);
+
+#define CORNERS(id) (corners ? corners + 3*ordinal(id) : NULL)
+  for ( start = 0 ; start < n && ok ; start += chunk )
+  { long end = start + chunk < n ? start + chunk : n;
+    for ( t = 0 ; t < threads ; t++ ) { buf[t].n = 0; buf[t].failed = 0; }
+
+    fl_enter();
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic,4) num_threads(threads)
+#endif
+    for ( k = start ; k < end ; k++ )
+    { int me = 0;
+      jmp_buf trap;
+#ifdef _OPENMP
+      me = omp_get_thread_num();
+#endif
+      fthread[k-start] = me;
+      fstart[2*(k-start)] = buf[me].n;
+      ftrapped[k-start] = 0;
+      recording = &buf[me];
+      if ( setjmp(trap) == 0 )
+      { fl_trap = &trap;   /* kb_error() comes back here */
+        (*fn)(S,list[k],CORNERS(list[k]),me,&buf[me],ctx);
+        fl_trap = NULL;
+      }
+      else   /* error or warning: drop this element's records, redo it below */
+      { buf[me].n = fstart[2*(k-start)];
+        ftrapped[k-start] = 1;
+      }
+      recording = NULL;
+      fstart[2*(k-start)+1] = buf[me].n;
+    }
+    fl_leave();   /* may abort (Ctrl-C): nothing of this chunk added yet */
+    for ( t = 0 ; t < threads ; t++ )
+      if ( buf[t].failed ) ok = 0;
+    if ( !ok ) break;   /* out of memory: give up (nothing added this chunk) */
+
+    /* the additions, serially in element order */
+    for ( k = start ; k < end ; k++ )
+    { struct hbuf *b = buf + fthread[k-start];
+      long e, e0 = fstart[2*(k-start)], e1 = fstart[2*(k-start)+1];
+      if ( ftrapped[k-start] )
+      { /* redo serially: Evolver reports the error or warning as usual */
+        serial.n = 0;
+        serial.failed = 0;
+        recording = &serial;
+        (*fn)(S,list[k],CORNERS(list[k]),0,&serial,ctx);
+        recording = NULL;
+        if ( serial.failed ) { ok = 0; break; }
+        b = &serial;
+        e0 = 0;
+        e1 = serial.n;
+      }
+      for ( e = e0 ; e < e1 ; e++ )
+      { struct hop *op = b->ops + e;
+        switch ( op->kind )
+        { case OP_ENTRY: sp_hash_search(S,op->r,op->c,op->x[0]); break;
+          case OP_GRAD: fill_grad(S,get_vertex_vhead(op->v),op->x,rhs); break;
+          case OP_VALUE:    /* as calc_quant_grads(), calc_quant_hess() */
+          { struct method_instance *mi = METH_INSTANCE(op->r);
+            mi->newvalue += op->x[0];
+            mi->abstotal += op->x[1];
+            break;
+          }
+          case OP_QVALUE:   /* as calc_quants() */
+          { struct method_instance *mi = METH_INSTANCE(op->r);
+            binary_tree_add(mi->value_addends,op->x[0]);
+            mi->abstotal += fabs(op->x[0]);
+            break;
+          }
+          case OP_FORCE:    /* as calc_quant_grads() */
+            vector_add_smul(get_force(op->v),op->x,op->s,SDIM);
+            break;
+          case OP_AREA:     /* methods' total area, see fl_total_area_add() */
+            binary_tree_add(web.total_area_addends,op->x[0]);
+            break;
+          case OP_VGRAD:
+          { volgrad *vgptr = get_bv_new_vgrad(op->r,op->v);
+            vgptr->bb_id = op->b;
+            vgptr->qnum = op->c;
+            vector_add_smul(vgptr->grad,op->x,op->s,SDIM);
+            break;
+          }
+        }
+      }
+    }
+  }
+#undef CORNERS
+  free(fstart);
+  free(fthread);
+  free(ftrapped);
+  if ( !ok )
+    kb_error(6350,"Out of memory in a parallel element loop.\n",RECOVERABLE);
+  return 1;
+}
+
+static int hess_threads(void)
+{ int threads = fl_threads();
+  if ( threads > FH_MAXTHREADS ) threads = FH_MAXTHREADS;
+  return threads < 1 ? 1 : threads;
+}
+
+void fh_reset(void) { recording = NULL; }
+
+/* The area methods add each facet's area to the total area: recorded
+   while run_elements() runs (the addition is made in element order),
+   added right away otherwise. */
+void fl_total_area_add(REAL area)
+{ if ( recording )
+  { struct hop op;
+    op.kind = OP_AREA; op.x[0] = area;
+    put(recording,&op);
+  }
+  else binary_tree_add(web.total_area_addends,area);
+}
+
+/* ---- entry points from calc_quants(), calc_quant_grads(), calc_quant_hess() ---- */
+
+static int quant_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
+                          int qmode, int mode, int global_needs)
 { static struct qinfo qi[FH_MAXTHREADS];
   struct quant_ctx ctx;
-  facet_id *list;
+  element_id *list;
   long n;
   int threads, t, done;
 
-  if ( !quant_values_ok() ) return 0;
-  list = fl_facet_list(&n);
+  if ( type == FACET ) list = fl_facet_list(&n);
+  else list = fl_element_list(type,&n);
   if ( !list || n == 0 ) return 0;
   threads = hess_threads();
-  for ( t = 0 ; t < threads ; t++ ) q_info_init(&qi[t],qmode);
-  qi[0].id = list[0];   /* lazy one-time setup, serially */
-  (*q_setup[FACET])(NULL,&qi[0],global_needs|NEED_SIDE);
+  /* per-thread work space (Evolver's allocator is not thread-safe) */
+  for ( t = 0 ; t < threads ; t++ )
+  { q_info_init(&qi[t],qmode);
+    if ( qmode == METHOD_HESSIAN )
+      qi[t].hess = dmatrix4(MAXVCOUNT,MAXVCOUNT,SDIM,SDIM);
+  }
+  /* first element serially: lazy one-time setup (e.g. packed basis matrices) */
+  qi[0].id = list[0];
+  (*q_setup[type])(S,&qi[0],global_needs|NEED_SIDE);
   ctx.qi = qi;
+  ctx.type = type;
   ctx.global_needs = global_needs;
-  ctx.meth_offset = get_meth_offset(FACET);
+  ctx.meth_offset = get_meth_offset(type);
   ctx.mode = mode;
-  done = run_facets(NULL,NULL,fn,&ctx,threads);
+  done = run_elements(S,rhs,type,fn,&ctx,threads);
   if ( done ) comp_quant_stamp += (int)n;
-  for ( t = 0 ; t < threads ; t++ ) q_info_free(&qi[t]);
+  for ( t = 0 ; t < threads ; t++ )
+  { if ( qi[t].hess ) { free_matrix4(qi[t].hess); qi[t].hess = NULL; }
+    q_info_free(&qi[t]);
+  }
   return done;
 }
 
-int fl_quant_values_facets(int mode, int global_needs)
-{ return quant_facets(quant_value_facet,METHOD_VALUE,mode,global_needs);
+int fl_quant_values(int type, int mode, int global_needs)
+{ if ( !quant_ok(type,PASS_VALUE) ) return 0;
+  return quant_elements(NULL,NULL,type,quant_value_element,METHOD_VALUE,mode,global_needs);
 }
 
-int fl_quant_grads_facets(int mode, int global_needs)
-{ return quant_facets(quant_grad_facet,METHOD_GRADIENT,mode,global_needs);
+int fl_quant_grads(int type, int mode, int global_needs)
+{ if ( !quant_ok(type,PASS_GRAD) ) return 0;
+  return quant_elements(NULL,NULL,type,quant_grad_element,METHOD_GRADIENT,mode,global_needs);
+}
+
+int fl_quant_hess(struct linsys *S, int type, int hess_mode, int mode, REAL *rhs,
+                  int global_needs)
+{ if ( !hess_mode || !quant_ok(type,PASS_HESS) ) return 0;
+  return quant_elements(S,rhs,type,quant_hess_element,METHOD_HESSIAN,mode,global_needs);
 }
 
 /* ---- linear model: area and body volume Hessians (hessian3.c) ---- */
@@ -630,7 +696,7 @@ static void area_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
 
 int fl_area_hessian(struct linsys *S, REAL *rhs)
 { if ( !linear_ok() ) return 0;
-  return run_facets(S,rhs,area_facet,NULL,hess_threads());
+  return run_elements(S,rhs,FACET,area_facet,NULL,hess_threads());
 }
 
 /* body_hessian()'s first facet loop: volume constraint gradients */
@@ -703,7 +769,7 @@ static void body_linear_facet(struct linsys *S, facet_id f_id, vertex_id *c, int
 
 int fl_body_hessian_linear(struct linsys *S, REAL *rhs, REAL *Z)
 { if ( !linear_ok() ) return 0;
-  return run_facets(S,rhs,body_linear_facet,Z,hess_threads());
+  return run_elements(S,rhs,FACET,body_linear_facet,Z,hess_threads());
 }
 
 /* body_hessian()'s second facet loop: volume constraint Hessians */
@@ -765,7 +831,7 @@ static void body_quadratic_facet(struct linsys *S, facet_id f_id, vertex_id *c, 
 
 int fl_body_hessian_quadratic(struct linsys *S, REAL *Z)
 { if ( !linear_ok() ) return 0;
-  return run_facets(S,NULL,body_quadratic_facet,Z,hess_threads());
+  return run_elements(S,NULL,FACET,body_quadratic_facet,Z,hess_threads());
 }
 
 /**************************************************************************

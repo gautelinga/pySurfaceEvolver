@@ -874,6 +874,12 @@ static element_id *type_list(int type, long *n)
   return *list;
 }
 
+/* traversal-order list of the vertices or edges (cached), or NULL */
+element_id *fl_element_list(int type, long *n)
+{ if ( type != VERTEX && type != EDGE ) return NULL;
+  return type_list(type,n);
+}
+
 /* the vertex list, when the parallel vertex loops apply */
 static vertex_id *vertex_list(long *n)
 { if ( fl_disabled() || threadflag ) return NULL;
@@ -1238,3 +1244,70 @@ int fl_calc_leftside(REAL **rleftside, struct linsys *S, int fixcount, int *degf
 
 void fl_sel_begin(fl_sel *s, int type, ATTR bits, int site)
 { fl_enter(); fl_sel_begin_impl(s,type,bits,site); fl_leave(); }
+
+/**************************************************************************
+ * Per-thread Evolver state and error traps for parallel loops
+ */
+
+#define FL_MAXTHREADS 256
+static struct thread_data *fl_tdata[FL_MAXTHREADS];   /* [0] unused */
+
+struct thread_data *fl_thread_data(void)
+{
+#ifdef _OPENMP
+  int t = omp_get_thread_num();   /* 0 outside parallel regions */
+  if ( t > 0 && t < FL_MAXTHREADS && fl_tdata[t] ) return fl_tdata[t];
+#endif
+  return &default_thread_data;
+}
+
+/* Serially, before a parallel region with `threads` threads: give each
+   worker thread its own eval stack (eval_all() and eval_second() push
+   function arguments before eval() can grow it). */
+void fl_prepare_threads(int threads)
+{ int t;
+  for ( t = 1 ; t < threads && t < FL_MAXTHREADS ; t++ )
+  { struct thread_data *td = fl_tdata[t];
+    if ( !td )
+    { td = (struct thread_data *)calloc(1,sizeof(struct thread_data));
+      if ( !td ) return;
+      td->eval_stack_size = 1000;
+      td->eval_stack = (REAL *)malloc(td->eval_stack_size*sizeof(REAL));
+      if ( !td->eval_stack ) { free(td); return; }
+      td->worker_id = t;
+      fl_tdata[t] = td;
+    }
+    td->stack_top = td->eval_stack;
+    td->frame_spot = 0;
+    td->eval_stack[td->eval_stack_size-1] = STACKMAGIC;
+  }
+}
+
+int fl_in_parallel(void)
+{
+#ifdef _OPENMP
+  return omp_in_parallel();
+#else
+  return 0;
+#endif
+}
+
+__thread jmp_buf *fl_trap = NULL;
+
+void fh_reset(void);   /* fasthess.c */
+
+/* After an error (Evolver's recovery): no loop is running any more */
+void fl_reset_state(void)
+{ fl_trap = NULL;
+  fl_critical = 0;
+  fl_abort_pending = 0;
+  fh_reset();
+}
+
+void fl_trap_error(void)
+{ if ( fl_trap )
+  { jmp_buf *trap = fl_trap;
+    fl_trap = NULL;
+    longjmp(*trap,1);
+  }
+}

@@ -9,6 +9,8 @@
 /* Three corner vertices per facet ordinal (tail order), or NULL when the
    cache doesn't apply (it is only built for soapfilm surfaces). */
 vertex_id *fl_facet_corners(void);
+/* Vertices or edges in FOR_ALL order (cached); *n gets their number. */
+element_id *fl_element_list(int type, long *n);
 /* Facets in FOR_ALL_FACETS order; *n gets their number. */
 facet_id *fl_facet_list(long *n);
 /* Critical sections for interrupts: parallel regions and MUMPS run inside
@@ -21,20 +23,33 @@ extern void (*fl_abort_hook)(void);
 void fl_enter(void);
 void fl_leave(void);
 
+/* Per-thread Evolver state in parallel loops: GET_THREAD_DATA gives each
+   OpenMP thread its own struct thread_data (eval stack, q_info); worker
+   threads' are set up by fl_prepare_threads() before a parallel region. */
+struct thread_data *fl_thread_data(void);
+void fl_prepare_threads(int threads);
+int fl_in_parallel(void);
+/* Errors in parallel loops: kb_error() calls fl_trap_error() first, which
+   jumps back to the loop if its thread set a trap (fl_trap_set()), so the
+   loop can redo that element serially; otherwise it returns. */
+void fl_trap_error(void);
+void fl_reset_state(void);   /* in Evolver's error recovery */
+#include <setjmp.h>
+extern __thread jmp_buf *fl_trap;
+
 /* Nonzero when PYSE_NO_FAST_LOOPS is set: use Evolver's original loops. */
 int fl_disabled(void);
-/* Parallel facet part of calc_quant_hess() (fasthess.c); returns 0, doing
-   nothing, when the case isn't covered. */
-int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
-                         int global_needs);
+/* The element loops of calc_quants(), calc_quant_grads(), calc_quant_hess()
+   in parallel for elements of `type` (fasthess.c); each returns 0, doing
+   nothing, when not covered (methods not known to be thread-safe, etc.). */
+int fl_quant_values(int type, int mode, int global_needs);
+int fl_quant_grads(int type, int mode, int global_needs);
+int fl_quant_hess(struct linsys *S, int type, int hess_mode, int mode, REAL *rhs,
+                  int global_needs);
 /* web.total_area_addends += area, thread-safe in the parallel facet loops
    (fasthess.c) */
 void fl_total_area_add(REAL area);
 
-/* The facet loops of calc_quants() and calc_quant_grads() in parallel
-   (fasthess.c); each returns 0, doing nothing, when not covered. */
-int fl_quant_values_facets(int mode, int global_needs);
-int fl_quant_grads_facets(int mode, int global_needs);
 
 /* Linear-model area and body volume Hessians (hessian3.c) in parallel
    (fasthess.c); each returns 0, doing nothing, when not covered. */

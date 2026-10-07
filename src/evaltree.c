@@ -139,7 +139,7 @@ REAL eval (
   PROF_EVAL_START(ex_profiling);
   PROF_COUNT_INCR(ex_profiling);
 
-  if ( !breakflag ) iterate_flag = 2; /* for interrupt handler */
+  if ( !breakflag && !fl_in_parallel() ) iterate_flag = 2; /* for interrupt handler */
 
   if ( ex_current.start[1].type != SETUP_FRAME_NODE )
   { sprintf(errmsg,"Internal error in eval(): no frame setup\n");
@@ -6405,7 +6405,7 @@ the_exit:
     else if ( update_display_flag ) update_display();
   }
   PROF_EVAL_END(ex_original);
-  iterate_flag = old_flag; 
+  if ( !fl_in_parallel() ) iterate_flag = old_flag; 
   if ( stacktop == (REAL*)this_frame + FRAME_SPACE + localcount  ) 
   { /* Have return value on stack */
     REAL retval = *(stacktop--);

@@ -2333,7 +2333,9 @@ extern struct thread_data *default_thread_data_ptr;
 #define UNLOCK_WEB
 #define LOCK_ELEMENT(id)
 #define UNLOCK_ELEMENT(id)
-#define GET_THREAD_DATA (&default_thread_data)
+/* pySE: per OpenMP thread in parallel loops (fastloops.c), else default */
+struct thread_data *fl_thread_data(void);
+#define GET_THREAD_DATA (fl_thread_data())
 #define GET_THREAD_ID 0
 #endif
 

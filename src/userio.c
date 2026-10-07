@@ -16,6 +16,7 @@
 #undef DOUBLE
 #endif
 #include "include.h"
+#include "fastloops.h"
 #ifdef PYSE
 #include "pyse_hooks.h"
 #endif
@@ -800,6 +801,7 @@ void kb_error(
   int i;
 
   if ( emsg == NULL ) emsg = "";  /* just in case */
+  fl_trap_error();  /* in a parallel loop: back to it (fastloops.c) */
   if ( emsg == errmsg ) { fullmsg = msg; size = msgmax; }
   else { fullmsg = errmsg; size = sizeof(errmsg); }
 
@@ -1124,6 +1126,7 @@ bailout:
     saved.coord = NULL; saved.bod = NULL; saved.quant = NULL; saved.meth = NULL;
     vhead = NULL; pressures = NULL; conrhs = NULL;
   }
+  fl_reset_state();  /* parallel loop state (fastloops.c) */
   if ( list && (list != permlist) )
     { myfree((char*)list); list = NULL; } /* plug memory leak */
   quiet_flag = 0;
