@@ -11,6 +11,16 @@
 vertex_id *fl_facet_corners(void);
 /* Facets in FOR_ALL_FACETS order; *n gets their number. */
 facet_id *fl_facet_list(long *n);
+/* Critical sections for interrupts: parallel regions and MUMPS run inside
+   fl_enter()/fl_leave(); an abort requested meanwhile (fl_abort_pending)
+   is made by fl_abort_hook at fl_leave(). */
+#include <signal.h>
+extern volatile sig_atomic_t fl_critical;
+extern volatile sig_atomic_t fl_abort_pending;
+extern void (*fl_abort_hook)(void);
+void fl_enter(void);
+void fl_leave(void);
+
 /* Nonzero when PYSE_NO_FAST_LOOPS is set: use Evolver's original loops. */
 int fl_disabled(void);
 /* Parallel facet part of calc_quant_hess() (fasthess.c); returns 0, doing

@@ -16,6 +16,7 @@
 #include "fastloops.h"
 
 #include <signal.h>
+#include <pthread.h>
 
 int pyse_library_mode = 0;
 
@@ -195,11 +196,27 @@ int pyse_read_stdin(const char *prompt, char *buf, int max)
    command loops at the next safe point, outside this handler.  Second
    Ctrl-C: abort right away, the way Evolver's own handler does.  Nothing
    here calls back into Python. */
+static pthread_t engine_thread;   /* the thread running Evolver */
+
+static void pyse_abort(void)
+{ kb_error(1357,"",RECOVERABLE_QUIET);  /* longjmps to protected_call() */
+}
+
 static void pyse_sigint(int sig)
 { (void)sig;
+  /* any thread may get the signal (OpenMP, BLAS workers): only the
+     engine's own thread may longjmp */
+  if ( !pthread_equal(pthread_self(),engine_thread) )
+  { pthread_kill(engine_thread,SIGINT);
+    return;
+  }
   sigint_count++;
   if ( sigint_count == 1 )
   { breakflag = BREAKFULL;
+    return;
+  }
+  if ( fl_critical > 0 )   /* in a parallel region or MUMPS: abort later */
+  { fl_abort_pending = 1;
     return;
   }
   in_signal = 1;
@@ -265,6 +282,10 @@ static int protected_call(body_fn body, void *arg)
   reset_call_state();
   subshell_depth = 0;
 
+  engine_thread = pthread_self();
+  fl_critical = 0;
+  fl_abort_pending = 0;
+  fl_abort_hook = pyse_abort;
   if ( handle_sigint )
   { memset(&new_action,0,sizeof(new_action));
     new_action.sa_handler = pyse_sigint;

@@ -296,7 +296,7 @@ static long vol_sums_size = 0;
 static double *vol_abs = NULL;     /* per thread, per body ordinal */
 static long vol_abs_size = 0;
 
-int fl_facet_volumes(void)
+static int fl_facet_volumes_impl(void)
 { long n, nb;
   facet_id *list;
   vertex_id *corners;
@@ -377,7 +377,7 @@ static long energy_sums_size = 0;
 /* SDIM_dot for SDIM 3, summed in the same order as dot() */
 #define DOT3(a,b) (((a)[0]*(b)[0] + (a)[1]*(b)[1]) + (a)[2]*(b)[2])
 
-int fl_facet_energies(void)
+static int fl_facet_energies_impl(void)
 { long n;
   facet_id *list;
   vertex_id *corners;
@@ -519,7 +519,7 @@ static long force_sums_size = 0;
 static unsigned char *wee_buf = NULL;
 static long wee_buf_size = 0;
 
-int fl_facet_forces(void)
+static int fl_facet_forces_impl(void)
 { long n, nv, k;
   facet_id *list;
   vertex_id *corners;
@@ -660,7 +660,7 @@ static long vg_pool_size = 0;
 /* most bodies at one vertex for the parallel version */
 #define VG_MAXBODIES 64
 
-int fl_film_grad(void)
+static int fl_film_grad_impl(void)
 { long n, nv, k, total;
   facet_id *list;
   vertex_id *corners;
@@ -886,7 +886,7 @@ static long sel_buf_size[FL_SELECT_SITES];
 static unsigned char *sel_mark = NULL;
 static long sel_mark_size = 0;
 
-void fl_sel_begin(fl_sel *s, int type, ATTR bits, int site)
+static void fl_sel_begin_impl(fl_sel *s, int type, ATTR bits, int site)
 { element_id *list;
   long n, k, hits = 0;
   s->type = type;
@@ -932,7 +932,7 @@ int fl_sel_next(fl_sel *s, element_id *id)
   return 1;
 }
 
-int fl_zero_forces(void)
+static int fl_zero_forces_impl(void)
 { vertex_id *list;
   long n, k;
   if ( !(list = vertex_list(&n)) ) return 0;
@@ -948,7 +948,7 @@ int fl_zero_forces(void)
   return 1;
 }
 
-int fl_move_vertices(REAL scale, int dim)
+static int fl_move_vertices_impl(REAL scale, int dim)
 { vertex_id *list;
   long n, k;
   if ( !(list = vertex_list(&n)) ) return 0;
@@ -977,7 +977,7 @@ int fl_move_vertices(REAL scale, int dim)
   return 1;
 }
 
-int fl_save_coords(REAL (*coord)[MAXCOORD])
+static int fl_save_coords_impl(REAL (*coord)[MAXCOORD])
 { vertex_id *list;
   long n, k;
   if ( !(list = vertex_list(&n)) ) return 0;
@@ -995,7 +995,7 @@ int fl_save_coords(REAL (*coord)[MAXCOORD])
   return 1;
 }
 
-int fl_restore_coords(REAL (*coord)[MAXCOORD])
+static int fl_restore_coords_impl(REAL (*coord)[MAXCOORD])
 { vertex_id *list;
   long n, k;
   if ( !(list = vertex_list(&n)) ) return 0;
@@ -1011,7 +1011,7 @@ int fl_restore_coords(REAL (*coord)[MAXCOORD])
   return 1;
 }
 
-int fl_volume_restore(REAL stepsize, REAL *vol_restore, int fixcount)
+static int fl_volume_restore_impl(REAL stepsize, REAL *vol_restore, int fixcount)
 { vertex_id *list;
   long n, k;
   if ( approx_curve_flag ) return 0;
@@ -1043,7 +1043,7 @@ int fl_volume_restore(REAL stepsize, REAL *vol_restore, int fixcount)
 static double *ls_buf = NULL;
 static long ls_buf_size = 0;
 
-int fl_calc_leftside(REAL **rleftside, struct linsys *S, int fixcount, int *degfree)
+static int fl_calc_leftside_impl(REAL **rleftside, struct linsys *S, int fixcount, int *degfree)
 { vertex_id *list;
   long n, k, m = (long)fixcount*fixcount;
   int threads, t, deg = 0;
@@ -1182,3 +1182,59 @@ int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
           sides[g][d][k] = out[k][gl->gnumpts + g*dim + d];
   return 1;
 }
+
+/**************************************************************************
+ * Interrupts
+ *
+ * pySE aborts a command on a second Ctrl-C by longjmp-ing out of the
+ * signal handler. That must not happen inside a parallel region or MUMPS:
+ * the functions with parallel regions run inside fl_enter()/fl_leave(), and
+ * an abort that arrives there is held until fl_leave().
+ */
+
+volatile sig_atomic_t fl_critical = 0;
+volatile sig_atomic_t fl_abort_pending = 0;
+void (*fl_abort_hook)(void) = NULL;
+
+void fl_enter(void) { fl_critical++; }
+
+void fl_leave(void)
+{ if ( fl_critical > 0 ) fl_critical--;
+  if ( fl_critical == 0 && fl_abort_pending )
+  { fl_abort_pending = 0;
+    if ( fl_abort_hook ) (*fl_abort_hook)();
+  }
+}
+
+int fl_facet_volumes(void)
+{ int r; fl_enter(); r = fl_facet_volumes_impl(); fl_leave(); return r; }
+
+int fl_facet_energies(void)
+{ int r; fl_enter(); r = fl_facet_energies_impl(); fl_leave(); return r; }
+
+int fl_facet_forces(void)
+{ int r; fl_enter(); r = fl_facet_forces_impl(); fl_leave(); return r; }
+
+int fl_film_grad(void)
+{ int r; fl_enter(); r = fl_film_grad_impl(); fl_leave(); return r; }
+
+int fl_zero_forces(void)
+{ int r; fl_enter(); r = fl_zero_forces_impl(); fl_leave(); return r; }
+
+int fl_move_vertices(REAL scale, int dim)
+{ int r; fl_enter(); r = fl_move_vertices_impl(scale,dim); fl_leave(); return r; }
+
+int fl_save_coords(REAL (*coord)[MAXCOORD])
+{ int r; fl_enter(); r = fl_save_coords_impl(coord); fl_leave(); return r; }
+
+int fl_restore_coords(REAL (*coord)[MAXCOORD])
+{ int r; fl_enter(); r = fl_restore_coords_impl(coord); fl_leave(); return r; }
+
+int fl_volume_restore(REAL stepsize, REAL *vol_restore, int fixcount)
+{ int r; fl_enter(); r = fl_volume_restore_impl(stepsize,vol_restore,fixcount); fl_leave(); return r; }
+
+int fl_calc_leftside(REAL **rleftside, struct linsys *S, int fixcount, int *degfree)
+{ int r; fl_enter(); r = fl_calc_leftside_impl(rleftside,S,fixcount,degfree); fl_leave(); return r; }
+
+void fl_sel_begin(fl_sel *s, int type, ATTR bits, int site)
+{ fl_enter(); fl_sel_begin_impl(s,type,bits,site); fl_leave(); }

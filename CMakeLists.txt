@@ -141,7 +141,8 @@ endif()
 # would not resolve the hooks Evolver calls.
 add_library(pyse_glue OBJECT bindings/pyse_api.c)
 target_include_directories(pyse_glue PUBLIC bindings)
-target_link_libraries(pyse_glue PUBLIC evolver_core)
+find_package(Threads REQUIRED)   # the SIGINT handler forwards between threads
+target_link_libraries(pyse_glue PUBLIC evolver_core Threads::Threads)
 set_target_properties(pyse_glue PROPERTIES ${EVOLVER_C_PROPERTIES})
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(pyse_glue PRIVATE -Wall -Wextra)

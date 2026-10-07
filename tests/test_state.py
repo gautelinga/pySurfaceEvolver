@@ -122,7 +122,7 @@ def test_two_ctrl_c_abort_an_operation_that_ignores_the_first(run_python):
 
         def setup():
             ev = Evolver("cube.fe")
-            ev.command("r; r; r; r; r; r; g 1")
+            ev.command("r; r; r; r; r; r; r; g 1")
             return ev
 
         ev = setup()

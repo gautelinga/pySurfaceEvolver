@@ -89,7 +89,7 @@ void mumps_factor(struct linsys *S, int mtype)
     m->id.par = 1;
     m->id.sym = 2;        /* general symmetric (indefinite) */
     m->id.job = -1;
-    dmumps_c(&m->id);
+    fl_enter(); dmumps_c(&m->id); fl_leave();
     if ( m->id.INFOG(1) < 0 )
     { sprintf(errmsg,"MUMPS initialization failed: INFOG(1) = %d.\n",(int)m->id.INFOG(1));
       free(m);
@@ -131,7 +131,7 @@ void mumps_factor(struct linsys *S, int mtype)
   job = same ? 2 : 4;     /* factor only, or analyse and factor */
   for ( tries = 0 ; ; tries++ )
   { m->id.job = job;
-    dmumps_c(&m->id);
+    fl_enter(); dmumps_c(&m->id); fl_leave();
     if ( m->id.INFOG(1) == -9 && tries < 5 )   /* workspace too small */
     { m->id.ICNTL(14) = m->id.ICNTL(14) > 0 ? 2*m->id.ICNTL(14) : 40;
       continue;
@@ -159,7 +159,7 @@ void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype)
   m->id.ICNTL(20) = 0;    /* dense right side */
   m->id.ICNTL(21) = 0;    /* centralized solution, in rhs */
   m->id.job = 3;
-  dmumps_c(&m->id);
+  fl_enter(); dmumps_c(&m->id); fl_leave();
   mumps_check(m,"solve");
 }
 
@@ -173,7 +173,7 @@ void mumps_free_system(struct linsys *S)
 { struct mumps_sys *m = (struct mumps_sys *)S->mumps;
   if ( !m ) return;
   m->id.job = -2;
-  dmumps_c(&m->id);
+  fl_enter(); dmumps_c(&m->id); fl_leave();
   free(m->irn); free(m->jcn); free(m->a);
   free(m);
   S->mumps = NULL;

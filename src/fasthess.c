@@ -247,6 +247,7 @@ static int run_facets(struct linsys *S, REAL *rhs, facet_fn fn, void *ctx, int t
   { long end = start + chunk < n ? start + chunk : n;
     for ( t = 0 ; t < threads ; t++ ) { buf[t].n = 0; buf[t].failed = 0; }
 
+    fl_enter();
 #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic,4) num_threads(threads)
 #endif
@@ -260,6 +261,7 @@ static int run_facets(struct linsys *S, REAL *rhs, facet_fn fn, void *ctx, int t
       (*fn)(S,list[k],corners + 3*ordinal(list[k]),me,&buf[me],ctx);
       fstart[2*(k-start)+1] = buf[me].n;
     }
+    fl_leave();   /* may abort (Ctrl-C): nothing of this chunk added yet */
     for ( t = 0 ; t < threads ; t++ )
       if ( buf[t].failed ) ok = 0;
     if ( !ok ) break;   /* out of memory: give up (nothing added this chunk) */
