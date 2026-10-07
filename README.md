@@ -29,7 +29,8 @@ ev.values("vertex", "x^2 + y^2")     # one value per vertex, aligned with ev.mes
 ev.values("facet", "area")
 
 ev.define_attribute("vertex", "temperature")
-ev.set_values("vertex", "temperature", temps)      # write per-element data
+ev.set_values("vertex", "temperature", temps)      # write per-element data (fast in C
+                                                   # for coordinates and attributes)
 ev.fix("vertex", where=ev.values("vertex", "z") > 0.9)
 ev.set_constraint("vertex", 1, where=mask)
 ev.parameters["angle"] = 60          # parameters declared in the datafile
@@ -43,6 +44,25 @@ it, so all handles see the same surface. Use `save()`/`restore()` to keep surfac
 around, and separate processes to work on several at once. `ev.mesh()` is cached
 until the surface changes, so its arrays are read-only. The sample datafiles and
 command scripts are in `pysurfaceevolver.examples`.
+
+## Parameter sweeps
+
+```python
+import pysurfaceevolver as pse
+
+def run(volume):
+    ev = pse.Evolver("cube.fe")
+    ev.set_values("body", "target", volume)
+    ev.relax(tol=1e-10)
+    return ev.eval("total_area")
+
+areas = pse.map(run, [0.5, 1, 2, 4], processes=4)   # one engine per worker process
+```
+
+Each worker process runs jobs one after another. A job that raises, or even crashes
+its worker, comes back as a `JobError` (`errors="raise"` or `"return"`) without
+affecting the other jobs. With `cloudpickle` installed, functions defined in a
+notebook work too.
 
 ## Building surfaces in Python
 
@@ -66,7 +86,8 @@ ev.load_mesh_file("part.stl", volume="current")  # any meshio format
 ev.plot("area")                                  # color by any expression
 ev.plot("x^2 + y^2", element="vertex")
 view = ev.live_view("area")                      # window / notebook widget
-ev.iterate(200, callback=view.update, every=10)  # redraws while it runs
+ev.iterate(200, callback=view.update, every=10)  # redraws while it runs (moves the
+                                                 # points in place until topology changes)
 poly = ev.mesh().to_pyvista()                    # or work with the data
 ```
 
@@ -101,6 +122,7 @@ models aren't unwrapped for plotting or export.
 ```bash
 pip install ".[test]"
 pytest
+python bench/benchmark.py --levels 6 8   # timings at 98k and 1.6M facets
 ```
 
 CI (`.github/workflows/`) runs the tests and mypy on several Python versions, runs

@@ -25,6 +25,7 @@ from ._evolver import (
 from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
 from ._viz import LiveView
 from . import examples
+from ._parallel import JobError, WorkerCrashed, map  # noqa: A004 (pse.map)
 
 examples._add_to_evolverpath()
 
@@ -39,11 +40,13 @@ __all__ = [
     "EvolverWarning",
     "InvalidSurfaceError",
     "IterationResult",
+    "JobError",
     "LiveView",
     "Mesh",
     "Parameters",
     "Quantity",
     "Snapshot",
+    "WorkerCrashed",
     "is_watertight",
     "examples",
     "make_datafile",

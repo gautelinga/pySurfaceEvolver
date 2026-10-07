@@ -43,6 +43,6 @@ test-requires = ["pytest", "meshio"]
 test-command = "pytest {project}/tests -q"
 
 [[tool.mypy.overrides]]
-# meshio ships without type information
-module = ["meshio", "meshio.*"]
+# these ship without type information
+module = ["meshio", "meshio.*", "cloudpickle"]
 ignore_missing_imports = true
