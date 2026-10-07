@@ -779,6 +779,14 @@ void print_eval_stack_trace()
 *  May be system dependent for message display.
 */
 
+/* Append src to the message in dest (of the given total size), leaving
+   room for the newline kb_error() adds and the terminating null. */
+static void kb_append(char *dest, const char *src, int size)
+{ size_t used = strlen(dest);
+  if ( (int)used >= size - 2 ) return;
+  strncat(dest,src,size - used - 2);
+}
+
 void kb_error(
   int errnum, /* error identifier */
   char *emsg, /* might be msg or errmsg */
@@ -814,7 +822,7 @@ void kb_error(
   {
      case UNRECOVERABLE:
         sprintf(fullmsg+strlen(fullmsg),"\nFATAL ERROR %d: ",errnum);
-        strncat(fullmsg,emsg,size);
+        kb_append(fullmsg,emsg,size);
         if ( datafile_flag )
           dump_buff(fullmsg+strlen(fullmsg),size-strlen(fullmsg));
         erroutstring(fullmsg);
@@ -824,7 +832,7 @@ void kb_error(
      case RECOVERABLE_ABORT:
      case RECOVERABLE:
         sprintf(fullmsg+strlen(fullmsg),"\nERROR %d: ",errnum);
-        strncat(fullmsg,emsg,size);
+        kb_append(fullmsg,emsg,size);
         /* pop stack of command files */
         if ( read_depth > 0 ) cmdfile_stack[read_depth-1].line = line_no;
         while ( commandfd && (commandfd  != stdin) )
@@ -883,7 +891,7 @@ void kb_error(
           cmdfile_stack[read_depth-1].filename,line_no); 
         }
         sprintf(fullmsg+strlen(fullmsg),"WARNING %d: ",errnum);
-        strncat(fullmsg,emsg,size);
+        kb_append(fullmsg,emsg,size);
         strcat(fullmsg,"\n");
         erroutstring(fullmsg);
         print_eval_stack_trace();
@@ -901,7 +909,7 @@ void kb_error(
          cmdfile_stack[read_depth-1].filename,line_no); 
        }
         sprintf(fullmsg+strlen(fullmsg),"SYNTAX ERROR %d: ",errnum);
-        strncat(fullmsg,emsg,size);
+        kb_append(fullmsg,emsg,size);
         dump_buff(fullmsg+strlen(fullmsg),size-strlen(fullmsg));
         erroutstring(fullmsg);
         print_eval_stack_trace();
@@ -923,7 +931,7 @@ void kb_error(
         { sprintf(fullmsg,"\n%s Line %d:\n",
           cmdfile_stack[read_depth-1].filename,line_no); 
         }
-        strncat(fullmsg,emsg,size); 
+        kb_append(fullmsg,emsg,size); 
         /*
         dump_buff(fullmsg+strlen(fullmsg),size-strlen(fullmsg));
         */
@@ -941,7 +949,7 @@ void kb_error(
               sprintf(c,"called from file %s at line %d\n",
                   cmdfile_stack[read_depth-1].filename,
                   cmdfile_stack[read_depth-1].line);
-              strncat(fullmsg,c,size-strlen(fullmsg));
+              kb_append(fullmsg,c,size);
             }
             pop_commandfd();
           }
@@ -963,7 +971,7 @@ void kb_error(
           cmdfile_stack[read_depth-1].filename,line_no); 
         }
         sprintf(fullmsg+strlen(fullmsg),"ERROR %d: ",errnum);
-        strncat(fullmsg,emsg,size);
+        kb_append(fullmsg,emsg,size);
         dump_buff(fullmsg+strlen(fullmsg),size-strlen(fullmsg));
         parse_error_flag = 1;
         rewind_globals(old_global_count);
@@ -977,7 +985,7 @@ void kb_error(
              sprintf(stuff,"file %s at line %d\n",
                   cmdfile_stack[read_depth-1].filename,
                   cmdfile_stack[read_depth-1].line);
-                 strncat(fullmsg,stuff,size); 
+                 kb_append(fullmsg,stuff,size); 
 */
              pop_commandfd();
           }
@@ -1011,7 +1019,7 @@ void kb_error(
           cmdfile_stack[read_depth-1].filename,line_no); 
         }
         sprintf(fullmsg+strlen(fullmsg),"SYNTAX ERROR %d: ",errnum);
-        strncat(fullmsg,emsg,size);
+        kb_append(fullmsg,emsg,size);
         dump_buff(fullmsg+strlen(fullmsg),size-strlen(fullmsg));
         strcat(fullmsg,"\n");
         erroutstring(fullmsg);
@@ -1035,7 +1043,7 @@ void kb_error(
           cmdfile_stack[read_depth-1].filename,line_no); 
         }
         sprintf(fullmsg+strlen(fullmsg),"DATAFILE ERROR %d: ",errnum);
-        strncat(fullmsg,emsg,size); 
+        kb_append(fullmsg,emsg,size); 
         dump_buff(fullmsg+strlen(fullmsg),size-strlen(fullmsg));
         strcat(fullmsg,"\n");
         erroutstring(fullmsg);
