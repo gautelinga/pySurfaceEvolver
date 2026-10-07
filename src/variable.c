@@ -12,6 +12,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -412,6 +413,13 @@ void (*sp_solve_func)(struct linsys *,REAL *,REAL *,int) = ysmp_solve;
 /* solve multiple given rhs */
 void (*sp_solve_multi_func)(struct linsys*,REAL**,REAL**,int,int) = ysmp_solve_multi;
 /* matrix inner product with hessian inverse as metric */
+void (*sp_CHinvC_func)(struct linsys *) = sp_CHinvC;
+#elif defined(PYSE_MUMPS)
+/* pySE: MUMPS (mumpsfactor.c) by default when built with it */
+int ysmp_flag=MUMPS_FACTORING;
+void (*sp_factor_func)(struct linsys *,int) = mumps_factor;
+void (*sp_solve_func)(struct linsys *,REAL *,REAL *,int) = mumps_solve;
+void (*sp_solve_multi_func)(struct linsys*,REAL**,REAL**,int,int) = mumps_solve_multi;
 void (*sp_CHinvC_func)(struct linsys *) = sp_CHinvC;
 #else
 /* use mindeg since doing sparse_constraints */

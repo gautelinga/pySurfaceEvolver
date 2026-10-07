@@ -1647,6 +1647,7 @@ struct linsys { int flags;  /* status bits, see below */
                 REAL **low_rank_vectors; /* the vectors V themselves, rowwise */
                 REAL **low_rank_form; /* F */
                 REAL **low_rank_inverse_form; /* (I + F V A^-1 V)^-1 */
+                void *mumps;  /* pySE: MUMPS instance (mumpsfactor.c) */
 #ifdef MKL
                 /* Internal solver memory pointer pt, */
                 void *pt[64];
@@ -1749,6 +1750,7 @@ extern int ysmp_flag;  /* set if doing Yale Sparse Matrix version */
 #define YSMP_FACTORING 1
 #define METIS_FACTORING 2
 #define MKL_FACTORING  3
+#define MUMPS_FACTORING 4  /* pySE: mumpsfactor.c */
 
 // MKL matrix types, real types only
 #define MKL_STRUCT_SYM  1

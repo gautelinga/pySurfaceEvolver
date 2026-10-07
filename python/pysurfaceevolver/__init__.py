@@ -40,6 +40,33 @@ def threads() -> int:
     from . import _core
     return _core.threads()
 
+def _start_engine() -> None:
+    """Start the engine if it isn't running (it applies PYSE_SOLVER then)."""
+    from . import _core
+    if not _core.is_initialized():
+        Evolver()
+
+
+def set_solver(name: str) -> None:
+    """Sparse factoring for Newton steps (``hessian``): ``"mumps"`` (the
+    default when pySE is built with MUMPS) or ``"evolver"`` (Evolver's own
+    minimal-degree factoring). Also set by the ``PYSE_SOLVER`` environment
+    variable at start-up."""
+    from . import _core
+    _start_engine()
+    if not _core.set_solver(str(name)):
+        if name == "mumps":
+            raise ValueError("this build of pySurfaceEvolver has no MUMPS")
+        raise ValueError(f"unknown solver {name!r}; use 'mumps' or 'evolver'")
+
+
+def solver() -> str:
+    """The sparse factoring used for Newton steps (see :func:`set_solver`)."""
+    from . import _core
+    _start_engine()
+    return _core.solver()
+
+
 examples._add_to_evolverpath()
 
 __all__ = [
@@ -63,7 +90,9 @@ __all__ = [
     "is_watertight",
     "examples",
     "make_datafile",
+    "set_solver",
     "set_threads",
+    "solver",
     "threads",
 ]
 __version__ = "0.5.0"

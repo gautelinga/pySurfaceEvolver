@@ -21,6 +21,8 @@ test = ["pytest>=7", "pyvista>=0.40", "meshio>=5.3", "h5py"]
 minimum-version = "build-system.requires"
 build-dir = "build/{wheel_tag}"
 cmake.build-type = "Release"
+# only our files: not the MUMPS subproject's libraries, headers, CMake files
+install.components = ["python"]
 wheel.packages = ["python/pysurfaceevolver"]
 # The manual and HTML docs aren't needed to build or test.
 sdist.exclude = [".venv", "build", "dist", "wheelhouse", "doc", "manual270.pdf"]

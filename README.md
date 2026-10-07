@@ -120,6 +120,16 @@ or `PYSE_THREADS`, which `pse.map` sets for its workers). `PYSE_NO_FAST_LOOPS=1`
 switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
 facet corner against Evolver's own topology (CI runs with it).
 
+Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.org/)
+(sequential, LDL^T with pivoting, inertia for the Hessian index) when pySE is built
+with it: wheels are; a source build downloads and builds MUMPS if a Fortran compiler
+and LAPACK/BLAS are found (use an optimized BLAS such as OpenBLAS: the reference BLAS
+makes MUMPS several times slower), and otherwise uses Evolver's own factoring. A
+Newton step on a 1.6M-facet surface takes 9 s instead of 25 s. `pse.set_solver("evolver")`
+(or `PYSE_SOLVER=evolver`) switches back to Evolver's minimal-degree factoring;
+`pse.solver()` tells which is in use. For the Lagrange model, the Hessian is also
+assembled in parallel.
+
 ## Errors and interrupts
 
 Errors raise `EvolverError` (with `InvalidSurfaceError` after a failed load, until a

@@ -372,6 +372,7 @@ static void init_body(void *arg)
   scoeff_init();
   vcoeff_init();
   if ( getenv("PYSE_THREADS") ) fl_set_threads(atoi(getenv("PYSE_THREADS")));
+  if ( getenv("PYSE_SOLVER") ) pyse_set_solver(getenv("PYSE_SOLVER"));
   push_commandfd(stdin,"stdin");
   subshell_depth = 0;
 
@@ -1101,6 +1102,33 @@ void pyse_set_handle_sigint(int flag) { handle_sigint = flag; }
 
 void pyse_set_threads(int n) { fl_set_threads(n); }
 int pyse_threads(void) { return fl_threads(); }
+
+int pyse_set_solver(const char *name)
+{ int newh, quiet = quiet_flag;
+  if ( strcmp(name,"mumps") == 0 )
+  { if ( !fl_have_mumps() ) return 0;
+    newh = MUMPS_FACTORING;
+  }
+  else if ( strcmp(name,"evolver") == 0 ) newh = MINDEG_FACTORING;
+  else return 0;
+  if ( newh != ysmp_flag )
+  { quiet_flag = 1;   /* change_hessian_functions() reports the switch */
+    change_hessian_functions(ysmp_flag,newh);
+    quiet_flag = quiet;
+  }
+  return 1;
+}
+
+const char *pyse_solver(void)
+{ switch ( ysmp_flag )
+  { case MUMPS_FACTORING: return "mumps";
+    case MINDEG_FACTORING: return "evolver";
+    case YSMP_FACTORING: return "ysmp";
+    case METIS_FACTORING: return "metis";
+    case MKL_FACTORING: return "mkl";
+  }
+  return "unknown";
+}
 
 int pyse_last_errnum(void) { return err_num; }
 const char *pyse_last_errmsg(void) { return err_msg; }

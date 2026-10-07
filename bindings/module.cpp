@@ -419,6 +419,11 @@ NB_MODULE(_core, m) {
   m.def("surface_version", []() { Lock lock; return pyse_surface_version(); });
   m.def("set_threads", [](int n) { Lock lock; pyse_set_threads(n); }, "n"_a);
   m.def("threads", []() { Lock lock; return pyse_threads(); });
+  m.def("set_solver", [](const std::string &name) {
+    Lock lock;
+    return pyse_set_solver(name.c_str()) != 0;
+  }, "name"_a);
+  m.def("solver", []() { Lock lock; return std::string(pyse_solver()); });
   m.def("count", [](int type) { Lock lock; return pyse_count(type); }, "type"_a);
   m.def("sdim", []() { Lock lock; return pyse_sdim(); });
   m.def("representation", []() { Lock lock; return pyse_representation(); });

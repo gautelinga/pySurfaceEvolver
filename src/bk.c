@@ -170,6 +170,7 @@ void free_system(struct linsys *S)
 
   if ( ysmp_flag == MKL_FACTORING )
     mkl_free(S);
+  if ( S->mumps ) mumps_free_system(S);  /* pySE: mumpsfactor.c */
 
   memset((char*)S,0,sizeof(struct linsys));
 } /* end free_system() */

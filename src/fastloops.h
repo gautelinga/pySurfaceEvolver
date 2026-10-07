@@ -17,6 +17,13 @@ int fl_disabled(void);
    nothing, when the case isn't covered. */
 int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
                          int global_needs);
+/* MUMPS factoring (mumpsfactor.c), the MUMPS_FACTORING mode */
+void mumps_factor(struct linsys *S, int mtype);
+void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype);
+void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype);
+void mumps_free_system(struct linsys *S);
+int fl_have_mumps(void);   /* nonzero if this build has MUMPS */
+
 /* PYSE_DUMP_HESSIAN debugging hooks around the factoring (fasthess.c) */
 void fl_hessian_before_factor(struct linsys *S);
 void fl_hessian_after_factor(struct linsys *S);

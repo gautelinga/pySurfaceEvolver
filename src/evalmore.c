@@ -12,6 +12,7 @@
 */
 
 #include "include.h" 
+#include "fastloops.h"
 #include "lex.h"
 #include "ytab.h"
 #ifdef MSC
@@ -6043,6 +6044,19 @@ tree stuff not working
          }
      }
      break;
+     case MUMPS_FACTORING:  /* pySE: mumpsfactor.c */
+      {
+         sp_mul_func = bk_mul;
+         sp_AIJ_setup_func= bk_AIJ_setup;
+         sp_constraint_setup_func = bk_constraint_setup;
+         sp_hess_project_setup_func= BK_hess_project_setup;
+         sp_factor_func = mumps_factor;
+         sp_CHinvC_func = sp_CHinvC;
+         sp_solve_func = mumps_solve;
+         sp_solve_multi_func = mumps_solve_multi;
+         sp_ordering_func = NULL;
+      }
+      break;
      case MKL_FACTORING:
       { 
          sp_mul_func = bk_mul;

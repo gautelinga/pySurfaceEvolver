@@ -1,0 +1,185 @@
+/*
+ * mumpsfactor.c -- factoring Newton-step Hessians with MUMPS.
+ *
+ * Not part of the original Surface Evolver.
+ *
+ * The same interface as Evolver's other factoring codes (xmd_factor(),
+ * ysmp_factor(), mkl_factor()): factor the symmetric, possibly indefinite
+ * system S (upper triangle, rows IA, columns JA, values A), report its
+ * inertia in S->neg, S->zero, S->pos, and solve with the factors.
+ *
+ * MUMPS (sequential build, LDL^T with pivoting, null pivot detection) keeps
+ * one instance per linear system, in S->mumps. The analysis (ordering and
+ * symbolic factorization) is reused while the sparsity pattern is the same.
+ * Null pivots, as Evolver's ZEROPIVOT, are pivots below hessian_epsilon
+ * relative to the matrix norm; MUMPS fixes them so their solution
+ * components are zero.
+ */
+
+#include "include.h"
+#include "fastloops.h"
+
+#ifdef PYSE_MUMPS
+
+#include "dmumps_c.h"
+
+#define ICNTL(I) icntl[(I)-1]
+#define CNTL(I) cntl[(I)-1]
+#define INFOG(I) infog[(I)-1]
+#define USE_COMM_WORLD (-987654)
+
+struct mumps_sys
+{ DMUMPS_STRUC_C id;
+  int n;
+  int64_t nnz;
+  MUMPS_INT *irn, *jcn;    /* pattern of the current analysis, 1-based */
+  double *a;               /* values given to MUMPS (lambda subtracted) */
+  int analysed;
+};
+
+static void mumps_check(struct mumps_sys *m, const char *what)
+{ if ( m->id.INFOG(1) < 0 )
+  { sprintf(errmsg,"MUMPS %s failed: INFOG(1) = %d, INFOG(2) = %d.\n",
+            what,(int)m->id.INFOG(1),(int)m->id.INFOG(2));
+    kb_error(6360,errmsg,RECOVERABLE);
+  }
+}
+
+static void mumps_controls(struct mumps_sys *m)
+{ m->id.ICNTL(1) = -1;    /* no error messages */
+  m->id.ICNTL(2) = -1;    /* no diagnostics */
+  m->id.ICNTL(3) = -1;    /* no global information */
+  m->id.ICNTL(4) = 0;
+  m->id.ICNTL(7) = 0;     /* AMD ordering: fastest analysis, good fill here */
+  m->id.ICNTL(13) = 1;    /* no ScaLAPACK root: exact inertia */
+  m->id.ICNTL(16) = fl_threads();   /* OpenMP threads */
+  m->id.ICNTL(24) = 1;    /* null pivot detection */
+  m->id.CNTL(3) = hessian_epsilon > 0.0 ? hessian_epsilon : 1e-8;  /* relative */
+}
+
+void mumps_factor(struct linsys *S, int mtype)
+{ struct mumps_sys *m = (struct mumps_sys *)S->mumps;
+  int64_t nnz, k;
+  int i, same, job, tries;
+  (void)mtype;
+
+  S->neg = S->zero = S->pos = 0;
+  if ( S->N == 0 ) return;
+
+  if ( !m )
+  { m = (struct mumps_sys *)calloc(1,sizeof(struct mumps_sys));
+    if ( !m ) kb_error(6361,"Out of memory for MUMPS.\n",RECOVERABLE);
+    m->id.comm_fortran = USE_COMM_WORLD;
+    m->id.par = 1;
+    m->id.sym = 2;        /* general symmetric (indefinite) */
+    m->id.job = -1;
+    dmumps_c(&m->id);
+    if ( m->id.INFOG(1) < 0 )
+    { sprintf(errmsg,"MUMPS initialization failed: INFOG(1) = %d.\n",(int)m->id.INFOG(1));
+      free(m);
+      kb_error(6360,errmsg,RECOVERABLE);
+    }
+    S->mumps = m;
+  }
+
+  /* pattern; same as the last analysis? */
+  nnz = S->IA[S->N] - A_OFF;
+  same = m->analysed && m->n == S->N && m->nnz == nnz;
+  if ( !same )
+  { free(m->irn); free(m->jcn); free(m->a);
+    m->irn = (MUMPS_INT *)malloc(nnz*sizeof(MUMPS_INT));
+    m->jcn = (MUMPS_INT *)malloc(nnz*sizeof(MUMPS_INT));
+    m->a = (double *)malloc(nnz*sizeof(double));
+    if ( !m->irn || !m->jcn || !m->a )
+      kb_error(6362,"Out of memory for MUMPS.\n",RECOVERABLE);
+    m->analysed = 0;
+  }
+  for ( i = 0 ; i < S->N ; i++ )
+    for ( k = S->IA[i]-A_OFF ; k < S->IA[i+1]-A_OFF ; k++ )
+    { MUMPS_INT r = i + 1, c = S->JA[k] - A_OFF + 1;
+      if ( same && (m->irn[k] != r || m->jcn[k] != c) ) same = 0;
+      m->irn[k] = r;
+      m->jcn[k] = c;
+      m->a[k] = S->A[k];
+      if ( (c == r) && (i < S->A_rows) ) m->a[k] -= S->lambda;
+    }
+  m->n = S->N;
+  m->nnz = nnz;
+
+  m->id.n = S->N;
+  m->id.nnz = nnz;
+  m->id.irn = m->irn;
+  m->id.jcn = m->jcn;
+  m->id.a = m->a;
+  mumps_controls(m);
+  job = same ? 2 : 4;     /* factor only, or analyse and factor */
+  for ( tries = 0 ; ; tries++ )
+  { m->id.job = job;
+    dmumps_c(&m->id);
+    if ( m->id.INFOG(1) == -9 && tries < 5 )   /* workspace too small */
+    { m->id.ICNTL(14) = m->id.ICNTL(14) > 0 ? 2*m->id.ICNTL(14) : 40;
+      continue;
+    }
+    break;
+  }
+  m->analysed = m->id.INFOG(1) >= 0;
+  mumps_check(m,"factorization");
+
+  S->neg = m->id.INFOG(12);
+  S->zero = m->id.INFOG(28);
+  S->pos = S->N - S->neg - S->zero;
+}
+
+void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype)
+{ struct mumps_sys *m = (struct mumps_sys *)S->mumps;
+  (void)mtype;
+  if ( S->N == 0 ) return;
+  if ( !m || !m->analysed )
+    kb_error(6363,"Internal error: MUMPS solve before factoring.\n",RECOVERABLE);
+  if ( x != b ) memcpy(x,b,S->N*sizeof(REAL));
+  m->id.rhs = x;
+  m->id.nrhs = 1;
+  m->id.lrhs = S->N;
+  m->id.ICNTL(20) = 0;    /* dense right side */
+  m->id.ICNTL(21) = 0;    /* centralized solution, in rhs */
+  m->id.job = 3;
+  dmumps_c(&m->id);
+  mumps_check(m,"solve");
+}
+
+void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype)
+{ int k;
+  for ( k = 0 ; k < nrhs ; k++ )
+    mumps_solve(S,b[k],x[k],mtype);
+}
+
+void mumps_free_system(struct linsys *S)
+{ struct mumps_sys *m = (struct mumps_sys *)S->mumps;
+  if ( !m ) return;
+  m->id.job = -2;
+  dmumps_c(&m->id);
+  free(m->irn); free(m->jcn); free(m->a);
+  free(m);
+  S->mumps = NULL;
+}
+
+int fl_have_mumps(void) { return 1; }
+
+#else  /* no MUMPS in this build */
+
+void mumps_factor(struct linsys *S, int mtype)
+{ (void)S; (void)mtype;
+  kb_error(6364,"This Evolver was built without MUMPS.\n",RECOVERABLE);
+}
+void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype)
+{ (void)S; (void)b; (void)x; (void)mtype;
+  kb_error(6364,"This Evolver was built without MUMPS.\n",RECOVERABLE);
+}
+void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype)
+{ (void)S; (void)b; (void)x; (void)nrhs; (void)mtype;
+  kb_error(6364,"This Evolver was built without MUMPS.\n",RECOVERABLE);
+}
+void mumps_free_system(struct linsys *S) { (void)S; }
+int fl_have_mumps(void) { return 0; }
+
+#endif
