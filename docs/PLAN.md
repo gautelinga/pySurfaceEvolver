@@ -134,8 +134,15 @@ workers; the serial remainder is ~1-2% items.
 
 ## Phase C2 (remaining, in this order)
 
-1. **Lagrange facet setup** (small to medium, quick win for every curved-element
-   iteration). In `q_facet_setup_lagrange` (and the quadratic variant):
+1. **Done.** Packed, vectorized setup kernel (`fl_lagrange_facet_setup`), same
+   results: Lagrange-4 gradient step at 98k facets 3.71 -> ~1.4 s, Lagrange-2
+   `g 5` 4.85 -> 2.64 s; the typical-run ladder 65.7 -> 47.6 s. Setup is now ~25%
+   of a step (kernel), `get_facet_verts` ~10% (gathering control points); both go
+   parallel in step 4. Sharing setup across passes was not done: setup is already
+   shared across quantities within a pass, and coordinates change between passes.
+   The quadratic-model and edge setups still use `mat_mult` (not in the user's
+   ladder). Original item: **Lagrange facet setup** (small to medium, quick win
+   for every curved-element iteration). In `q_facet_setup_lagrange` (and the quadratic variant):
    1. Replace the generic `mat_mult` calls with a fixed-shape kernel on contiguous
       arrays (quadrature points x control points x 3).
    2. Compute each facet's quadrature points and tangents once per evaluation and
