@@ -1,6 +1,6 @@
 """The parallel facet loops (src/fastloops.c) agree with Evolver's original
 loops: single evaluations to round-off, relaxed equilibria to 1e-9, for any
-thread count, and reproducibly for a given thread count."""
+thread count, and (single evaluations) reproducibly for a given thread count."""
 
 import json
 import os

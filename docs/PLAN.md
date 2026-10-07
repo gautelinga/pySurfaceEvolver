@@ -11,8 +11,9 @@ it when a step is finished or a decision changes.
   untouched original. Bug fixes apply to every build (not behind `#ifdef PYSE`);
   only library hooks are guarded. Keep fixes in small, separate commits.
 - **Numerics:** speed first, as long as the physics is correct. Results may differ
-  from serial Evolver at round-off level; they must be reproducible run to run for
-  a given thread count. **Bit-identity is not a goal**: choose the fastest design
+  from serial Evolver at round-off level, and with several threads also from run
+  to run at round-off level (MUMPS's threaded factorization; making it bit-exact
+  costs 5-30% of a Newton step, not worth it). One thread is bit-reproducible. **Bit-identity is not a goal**: choose the fastest design
   and verify with tolerances (below). Identical results are only a free check when
   a change keeps the summation order anyway.
 - **Engine model:** one engine per process; every `Evolver` object is a handle to

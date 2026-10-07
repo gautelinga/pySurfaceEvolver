@@ -42,8 +42,10 @@ def test_runs_are_reproducible(load):
         ev = load("cube.fe")
         ev.command("g 5; r; g 5; hessian")
         results.append((ev.eval("total_energy"), ev.vertices))
-    assert results[0][0] == results[1][0]
-    np.testing.assert_array_equal(results[0][1], results[1][1])
+    # equal to round-off: with several threads MUMPS's factoring (hessian)
+    # is not bit-reproducible
+    assert results[0][0] == pytest.approx(results[1][0], rel=1e-12)
+    np.testing.assert_allclose(results[0][1], results[1][1], rtol=0, atol=1e-12)
 
 
 def sphere_area(volume):
