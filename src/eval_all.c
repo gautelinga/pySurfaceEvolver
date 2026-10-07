@@ -400,6 +400,11 @@ void eval_all(
              get_facet_normal(id,vect);
              (++stacktop)->value = vect[node->op2.coordnum];
              break;
+#ifdef PYSE
+          default:  /* see the same case in evaltree.c */
+             sprintf(errmsg,"Can't have x on %s.\n",typenames[id_type(id)]);
+             kb_error(2062,errmsg,RECOVERABLE);
+#endif
          }
          FIRST = 0.0;
         }

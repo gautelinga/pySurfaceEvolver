@@ -1966,6 +1966,16 @@ REAL eval (
              get_facet_normal(id,vect);
              *++stacktop = vect[node->op2.coordnum];
              break;
+#ifdef PYSE
+          /* Without this, nothing is pushed for bodies and the eval stack
+             goes out of step; printf then reads a garbage format string. */
+          default:
+             sprintf(errmsg,"Can't have x on %s, in %s.\n",
+               typenames[id_type(id)], ex_current.name);
+             sprintf(errmsg+strlen(errmsg),"(source file %s, line %d)\n",
+                 file_names[node->file_no],node->line_no);
+             kb_error(2062,errmsg,RECOVERABLE);
+#endif
          }
         break;
 
