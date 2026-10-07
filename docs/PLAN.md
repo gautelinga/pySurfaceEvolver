@@ -55,10 +55,28 @@ One linear iteration, 1.6M-facet cube, quiet machine, best of N:
 98k facets: 62 -> 32 ms at 1 thread. The main thread is now about as busy as the
 workers; the serial remainder is ~1-2% items.
 
-Newton (measured before C2): factorization (`mindeg.c` minimum degree) ~53% and
-Hessian assembly ~30% of a step at 24k facets; a step costs 5 linear iterations at
-98k facets and 11 at 393k. At Lagrange 4 one gradient step costs ~13 linear ones,
-and time splits about evenly between the `g 5` steps and the Newton step.
+**Where a typical run spends its time now** (cube at 98k facets, 4 threads:
+`g 20; hessian; hessian; lagrange 2; g 5; hessian; lagrange 4; g 5; hessian`,
+61 s in total):
+
+| stage | time | share |
+|---|---|---|
+| linear: `g 20` + 2 Newton steps | 1.5 s | 2% |
+| Lagrange 2: `g 5` + Newton | 8.0 s | 13% |
+| Lagrange 4: `g 5` | 18.4 s | 30% |
+| Lagrange 4: Newton step | 32.2 s | 53% |
+
+- A Lagrange-4 gradient step (3.7 s, ~120 linear iterations) is 89% serial.
+  Two-thirds of it is `mat_mult` in `q_facet_setup`: control points to quadrature
+  points and tangents, through the generic `REAL**` multiply, redone for every
+  quantity (area, each body volume) on the same facet. By caller: volume 45%,
+  energy 20%, gradients 18%; the method code itself is a few percent.
+- A Lagrange-4 Newton step is 99.96% serial: factorization 65% (`factor_recur` in
+  `xmd_factor`), Hessian assembly 28% (`hessian_fill`: tension and volume
+  Hessians), the rest 7%.
+- That ladder starts far from equilibrium at 98k facets, so its Lagrange Newton
+  steps raise the energy (v0.5.0 does the same; at 6k facets every build matches
+  and converges). Benchmarks must converge the linear stage first.
 
 ## How we work (lessons)
 
@@ -114,35 +132,48 @@ and time splits about evenly between the `g 5` steps and the Newton step.
   threshold, with `V`, `u`, `w`, `hessian`, `set facet noncontent`): this found the
   `sp_hash` overflow that the small-sample sweep never reaches.
 
-## Phase C2 (remaining)
+## Phase C2 (remaining, in this order)
 
+1. **Lagrange facet setup** (small to medium, quick win for every curved-element
+   iteration). In `q_facet_setup_lagrange` (and the quadratic variant):
+   1. Replace the generic `mat_mult` calls with a fixed-shape kernel on contiguous
+      arrays (quadrature points x control points x 3).
+   2. Compute each facet's quadrature points and tangents once per evaluation and
+      share them between quantities (area, every body volume), instead of redoing
+      the setup per quantity. Invalidate when coordinates move.
+   3. Measure on the Lagrange-2/4 gradient steps; target: setup from two-thirds of
+      a step to a small fraction. Serial gains only; threads come in step 4.
 2. **Benchmark that matches the workload** (small). Extend `bench/benchmark.py`:
-   linear iterations, the high-order ladder (Lagrange 2/4/6: convert, `g 5`,
-   `hessian`) and linear Newton steps at 98k / 393k / 1.6M facets, with
-   `--threads 1 2 4 8`, JSON output for comparing runs, and a load check
-   (warn if the 1-minute load average is high).
-3. **Faster Newton steps** (medium, highest value).
+   linear iterations, linear Newton steps, and the high-order ladder (Lagrange
+   2/4/6: convert, `g 5`, `hessian`) **from a converged linear surface**, at 98k /
+   393k / 1.6M facets, `--threads 1 2 4 8`, per-stage times, JSON output, and a
+   warning when the machine is loaded.
+3. **Faster Newton steps** (medium; 53% of the typical run).
    1. METIS experiment: port `src/metis.c` to the METIS 5 API, build METIS from
       source via CMake (Apache-2.0, shippable in wheels), compare fill-in and
-      factorization time with `mindeg.c` (linear and Lagrange, three sizes).
-      Default only if it wins. (System has libmetis.so.5 but no headers.)
-   2. Parallel Hessian assembly (`hessian_fill` and the named-quantity Hessian
-      path): per-facet blocks computed in parallel, merged into the sparse matrix
-      (the hash in `matrix.c`).
-   3. Decision point: if factorization still dominates at 1.6M, bring measurements
-      and a recommendation on a modern sparse LDL^T (must still report the Hessian
+      factorization time with the current ordering (linear and Lagrange, three
+      sizes). Default only if it wins. (System has libmetis.so.5 but no headers.)
+   2. Parallel Hessian assembly (`hessian_fill`, `calc_quant_hess`): per-facet
+      blocks computed in parallel, merged into the sparse matrix (the hash in
+      `matrix.c`).
+   3. Decision point: if factorization still dominates, bring measurements and a
+      recommendation on a modern sparse LDL^T (must still report the Hessian
       index/inertia). Expect parallel speedups to flatten at ~4 threads here.
       **Pause here and report.**
-4. **Parallel named-quantity loops** (large). Profile a Lagrange-4 iteration
-   first; parallelize the per-facet quantity value/gradient loops (`calc_quants`
-   and methods) with OpenMP, reusing the caches and `FL_FOR_SELECTED`. Retire
-   Evolver's old threading code in the same step: drop its scheduling (worker
-   threads, `thread_launch`, `-p`), turn its per-thread data (`thread_data`: eval
-   stacks, `q_info`) into OpenMP thread-local storage.
-6. **Thread defaults** (small, partly by the user on a quiet machine):
+4. **Parallel named-quantity loops** (large). Parallelize the per-facet quantity
+   value/gradient loops (`calc_quants`, `calc_quant_grads` and the methods) with
+   OpenMP, reusing the caches and `FL_FOR_SELECTED`; per-thread accumulation of
+   quantity values and gradients. Retire Evolver's old threading code in the same
+   step: drop its scheduling (worker threads, `thread_launch`, `-p`), turn its
+   per-thread data (`thread_data`: eval stacks, `q_info`) into OpenMP thread-local
+   storage.
+5. **Thread defaults** (small, partly by the user on a quiet machine):
    `bench/benchmark.py --threads 1 2 4 8`; set the default thread count (likely
    capped at physical cores, possibly 4 on hybrid laptops), `FL_PARALLEL_MIN`, and
    the `pse.map` split (more processes with fewer threads each may beat threads).
+
+Done earlier in C2: per-thread accumulation in the facet loops (was step 1) and
+the remaining linear hot spots (was step 5).
 
 Pause after step 3 (solver decision) and at the end of C2.
 
