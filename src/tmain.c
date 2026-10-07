@@ -19,6 +19,10 @@ int crit_count; /* debugging */
 #define WINVER 0x0400
 #endif
 #include "include.h"
+#ifdef PYSE
+#include "pyse_hooks.h"
+#define main evolver_main
+#endif
 
 #ifdef WIN32
 #include <psapi.h>
@@ -711,6 +715,9 @@ void affinity_mongering()
 
 void my_exit(int code)
 {
+#ifdef PYSE
+  if ( pyse_library_mode ) pyse_exit(code); /* does not return */
+#endif
   if ( OOGL_flag ) End_OOGL();
 
 #ifdef SIGTERM

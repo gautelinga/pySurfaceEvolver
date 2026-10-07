@@ -4212,7 +4212,11 @@ void more_other_stuff(
       break;
     
     case QUIT_NODE:
+#ifdef PYSE
+      my_exit((int)floor(*stacktop));
+#else
       exit((int)floor(*stacktop));
+#endif
       break;
 
     case NOTCH_NODE:

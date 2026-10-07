@@ -16,6 +16,9 @@
 #undef DOUBLE
 #endif
 #include "include.h"
+#ifdef PYSE
+#include "pyse_hooks.h"
+#endif
 
 /***********************************************************************
 *
@@ -36,6 +39,9 @@ void outstring(char *outmsg)
   if ( logfile_flag && (outfd==stdout) )
       fprintf(logfilefd,"%s",outmsg);
 
+#ifdef PYSE
+  if ( (outfd == stdout) && pyse_outstring(outmsg) ) return;
+#endif
 #if defined(MAC_APP) || defined(WIN32S) || defined(MAC_CW)
   if ( outfd == stdout )
      write_to_console(outmsg);
@@ -59,6 +65,12 @@ void erroutstring(char *outmsg)
 {
   if ( !outmsg || suppress_erroutstring ) 
 	  return;
+#ifdef PYSE
+  if ( (erroutfd == stderr) && pyse_erroutstring(outmsg) )
+  { if ( logfile_flag ) fprintf(logfilefd,"%s",outmsg);
+    return;
+  }
+#endif
 #if defined(MAC_APP) || defined(WIN32S) || defined(MAC_CW)
   write_to_console(outmsg);
 #else
@@ -141,6 +153,13 @@ void getstring(
 #if defined(MAC_APP) || defined(WIN32S) || defined(MAC_CW)
   read_line_from_console(inmsg);
 #else
+#ifdef PYSE
+  switch ( pyse_read_stdin(NULL,inmsg,max) )
+  { case 0: my_exit(0); break;  /* EOF */
+    case 1: return;
+    default: break;  /* not handled; fall through to stdin */
+  }
+#endif
   if ( my_fgets(inmsg,max,stdin) == NULL )
      my_exit(0);
   c = inmsg + strlen(inmsg) - 1;
@@ -430,6 +449,12 @@ if ( threadflag )
 #else
   {
   /* from stdin */
+#ifdef PYSE
+  { int k = pyse_read_stdin(promptmsg,inmsg,max);
+    if ( k == 0 ) return EOF;
+    if ( k == 1 ) goto pyse_got_line;
+  }
+#endif
   oldquiet = quiet_flag; quiet_flag = 0;
   outstring(promptmsg);
   quiet_flag = oldquiet;
@@ -453,6 +478,9 @@ if ( threadflag )
 #endif
 #endif
 
+#ifdef PYSE
+pyse_got_line:
+#endif
   current_prompt = NULL;
   /* strip whitespace from start of inmsg */
   ptr = inmsg;
@@ -768,6 +796,9 @@ void kb_error(
   else { fullmsg = errmsg; size = sizeof(errmsg); }
 
   last_error = errnum;
+#ifdef PYSE
+  pyse_note_error(errnum,emsg,mode);
+#endif
 
 /*  if ( read_depth > 1 ) 
   { sprintf(fullmsg,"\n%s Line %d:\n",
