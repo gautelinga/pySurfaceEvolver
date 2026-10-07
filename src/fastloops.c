@@ -20,6 +20,8 @@
 #include "include.h"
 #include "fastloops.h"
 
+extern REAL wee_area;   /* filml.c */
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -145,6 +147,8 @@ void fl_set_threads(int n)
 
 static double *vol_buf = NULL;
 static long vol_buf_size = 0;
+static body_id *body_buf = NULL;   /* front and back body per facet */
+static long body_buf_size = 0;
 
 int fl_facet_volumes(void)
 { long n, k;
@@ -161,12 +165,14 @@ int fl_facet_volumes(void)
   list = fl_facet_list(&n);
   if ( !corners || !list ) return 0;
   if ( fl_check() ) check_list(list,n);
-  if ( !ensure_size((void**)&vol_buf,&vol_buf_size,n,sizeof(double)) ) return 0;
+  if ( !ensure_size((void**)&vol_buf,&vol_buf_size,n,sizeof(double))
+       || !ensure_size((void**)&body_buf,&body_buf_size,2*n,sizeof(body_id)) )
+    return 0;
   threads = fl_threads();
   (void)threads;
 
-  /* pass 1: each facet's signed volume contribution; NAN marks a facet
-     that contributes nothing (NONCONTENT, or no body on either side) */
+  /* pass 1: each facet's bodies and signed volume contribution. Bodies
+     are recorded per call (they can change without a topology change). */
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) num_threads(threads) if(n >= FL_PARALLEL_MIN)
 #endif
@@ -174,10 +180,14 @@ int fl_facet_volumes(void)
   { facet_id f_id = list[k];
     vertex_id *c = corners + 3*ordinal(f_id);
     REAL *x0, *x1, *x2;
-    if ( (get_fattr(f_id) & NONCONTENT)
-         || (!valid_id(get_facet_body(f_id))
-             && !valid_id(get_facet_body(facet_inverse(f_id)))) )
-    { vol_buf[k] = NAN; continue; }
+    body_id b0 = NULLID, b1 = NULLID;
+    if ( !(get_fattr(f_id) & NONCONTENT) )
+    { b0 = get_facet_body(f_id);
+      b1 = get_facet_body(facet_inverse(f_id));
+    }
+    body_buf[2*k] = b0;
+    body_buf[2*k+1] = b1;
+    if ( !valid_id(b0) && !valid_id(b1) ) continue;
     x0 = get_coord(c[0]); x1 = get_coord(c[1]); x2 = get_coord(c[2]);
     /* same expression as facet_volume_l(), for identical rounding */
     vol_buf[k] = (x0[2]+x1[2]+x2[2])/6*
@@ -186,17 +196,9 @@ int fl_facet_volumes(void)
 
   /* pass 2: accumulate in facet order, as facet_volume_l() does */
   for ( k = 0 ; k < n ; k++ )
-  { facet_id f_id = list[k];
-    body_id b_id0, b_id1;
-    REAL vol = vol_buf[k];
-    if ( isnan(vol) && ((get_fattr(f_id) & NONCONTENT)
-         || (!valid_id(get_facet_body(f_id))
-             && !valid_id(get_facet_body(facet_inverse(f_id))))) )
-      continue;
-    b_id0 = get_facet_body(f_id);
-    b_id1 = get_facet_body(facet_inverse(f_id));
-    if ( valid_id(b_id0) ) add_body_volume(b_id0,vol);
-    if ( valid_id(b_id1) ) add_body_volume(b_id1,-vol);
+  { body_id b0 = body_buf[2*k], b1 = body_buf[2*k+1];
+    if ( valid_id(b0) ) add_body_volume(b0,vol_buf[k]);
+    if ( valid_id(b1) ) add_body_volume(b1,-vol_buf[k]);
   }
   return 1;
 }
@@ -279,6 +281,117 @@ int fl_facet_energies(void)
   for ( k = 0 ; k < n ; k++ )
   { binary_tree_add(web.total_area_addends,area_buf[k]);
     binary_tree_add(web.total_energy_addends,energy_buf[k]);
+  }
+  return 1;
+}
+
+/**************************************************************************
+ * Facet forces
+ */
+
+static double *force_buf = NULL;     /* 9 per facet: 3 vertices x 3 */
+static long force_buf_size = 0;
+static unsigned char *wee_buf = NULL;
+static long wee_buf_size = 0;
+
+int fl_facet_forces(void)
+{ long n, k;
+  facet_id *list;
+  vertex_id *corners;
+  int threads;
+  REAL grav = web.grav_const;
+  int gravflag = web.gravflag;
+
+  if ( fl_disabled() ) return 0;
+  if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
+       || web.modeltype != LINEAR || SDIM != 3 || web.metric_flag
+       || web.wulff_flag || calc_facet_forces != facet_force_l || threadflag
+       || itdebug || ((square_curvature_flag | mean_curv_int_flag) & EVALUATE) )
+    return 0;
+  corners = fl_facet_corners();
+  list = fl_facet_list(&n);
+  if ( !corners || !list ) return 0;
+  if ( fl_check() ) check_list(list,n);
+  if ( !ensure_size((void**)&force_buf,&force_buf_size,9*n,sizeof(double))
+       || !ensure_size((void**)&wee_buf,&wee_buf_size,n,1) )
+    return 0;
+  threads = fl_threads();
+  (void)threads;
+
+  /* pass 1: each facet's forces on its three vertices, with the same
+     operations, in the same order, as facet_force_l() */
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(threads) if(n >= FL_PARALLEL_MIN)
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { facet_id f_id = list[k];
+    vertex_id *c = corners + 3*ordinal(f_id);
+    REAL *x[3];
+    REAL side[3][3], z[3], f[3][3], ss, st, tt, area;
+    REAL density = get_facet_density(f_id);
+    int i, j, m;
+    x[0] = get_coord(c[0]); x[1] = get_coord(c[1]); x[2] = get_coord(c[2]);
+    for ( i = 0 ; i < 3 ; i++ )
+    { int ii = (i+1)%3;
+      for ( j = 0 ; j < 3 ; j++ )
+      { side[i][j] = x[ii][j] - x[i][j];
+        f[i][j] = 0.0;
+      }
+      z[i] = x[i][2];
+    }
+    ss = DOT3(side[0],side[0]);
+    st = DOT3(side[0],side[1]);
+    tt = DOT3(side[1],side[1]);
+    area = ss*tt-st*st;
+    if ( area < 0.0 ) area = 0.0;
+    area = sqrt(area)/2;
+    set_facet_area(f_id,area);
+    wee_buf[k] = area <= wee_area;
+    if ( wee_buf[k] ) continue;
+    { REAL coeff = density/4/area;
+      for ( m = 0 ; m < 3 ; m++ )
+      { f[0][m] += coeff*(side[0][m]*tt - st*side[1][m]);
+        f[1][m] -= coeff*(side[0][m]*tt - st*side[1][m]);
+        f[1][m] += coeff*(ss*side[1][m] - st*side[0][m]);
+        f[2][m] -= coeff*(ss*side[1][m] - st*side[0][m]);
+      }
+    }
+    if ( gravflag && !(get_fattr(f_id) & NONCONTENT) )
+    { REAL zz, gdensity, normz;
+      body_id b_id;
+      zz = (z[0]*z[0]+z[1]*z[1]+z[2]*z[2]+z[0]*z[1]+z[1]*z[2]+z[0]*z[2])/6;
+      b_id = get_facet_body(f_id);
+      gdensity = 0.0;
+      if ( valid_id(b_id) ) gdensity += get_body_density(b_id);
+      b_id = get_facet_body(facet_inverse(f_id));
+      if ( valid_id(b_id) ) gdensity -= get_body_density(b_id);
+      normz = side[0][0]*side[1][1] - side[0][1]*side[1][0];
+      for ( i = 0 ; i < 3 ; i++ )
+      { j = (i+1)%3;
+        f[i][0] += grav*gdensity*side[j][1]*zz/4;
+        f[i][1] -= grav*gdensity*side[j][0]*zz/4;
+        f[i][2] -= grav*gdensity*normz*(z[i]+z[0]+z[1]+z[2])/24;
+      }
+    }
+    memcpy(force_buf + 9*k,f,sizeof(f));
+  }
+
+  /* pass 2: add to the vertices in facet order; zero-area warnings in the
+     same order as facet_force_l() would print them */
+  for ( k = 0 ; k < n ; k++ )
+  { facet_id f_id = list[k];
+    vertex_id *c = corners + 3*ordinal(f_id);
+    int i, j;
+    if ( wee_buf[k] )
+    { sprintf(errmsg,"WARNING! Zero area for facet %s.\n",ELNAME(f_id));
+      outstring(errmsg);
+      continue;
+    }
+    for ( i = 0 ; i < 3 ; i++ )
+    { REAL *force = get_force(c[i]);
+      for ( j = 0 ; j < 3 ; j++ )
+        force[j] += force_buf[9*k + 3*i + j];
+    }
   }
   return 1;
 }

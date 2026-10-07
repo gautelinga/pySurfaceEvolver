@@ -10,7 +10,7 @@ import pytest
 from conftest import FE_DIR
 
 SCRIPT = r"""
-import json, sys, warnings
+import hashlib, json, sys, warnings
 warnings.simplefilter("ignore")
 from pysurfaceevolver import Evolver
 out = {}
@@ -18,7 +18,8 @@ for name in sys.argv[1:]:
     ev = Evolver(name)
     ev.command("g 5; r; g 5")
     out[name] = [ev.eval("total_energy"), ev.eval("total_area"),
-                 [float(v) for v in ev.bodies().volume]]
+                 [float(v) for v in ev.bodies().volume],
+                 hashlib.sha1(ev.vertices.tobytes()).hexdigest()]
 print(json.dumps(out))
 """
 

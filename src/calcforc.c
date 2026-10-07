@@ -377,7 +377,7 @@ void local_calc_force()
     /* find each triangle's contribution to forces on its vertices */
     if ( threadflag )
       thread_launch(TH_CALC_FACET_FORCES,FACET);
-    else
+    else if ( !fl_facet_forces() )  /* parallel version, fastloops.c */
       FOR_ALL_FACETS(f_id)
         (*calc_facet_forces)(f_id);
   }

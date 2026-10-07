@@ -25,6 +25,11 @@ int fl_facet_volumes(void);
    Returns 0, doing nothing, when the case isn't covered. */
 int fl_facet_energies(void);
 
+/* Facet tension and gravity forces for linear soapfilm surfaces, as
+   facet_force_l() for every facet: areas stored, forces added to the
+   vertices in facet order. Returns 0, doing nothing, when not covered. */
+int fl_facet_forces(void);
+
 /* Number of threads for the parallel loops (1 without OpenMP). */
 int fl_threads(void);
 void fl_set_threads(int n);
