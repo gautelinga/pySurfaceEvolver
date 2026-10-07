@@ -296,6 +296,9 @@ Phase C2 is complete (see the table in Status). After it, at the user's request:
 
 ## Phase D: polish and usability
 
+Decided 2026-10-08: all items, in the order 9, 8, 2, 1, 4, 5, 3, 7, 6 (docs last),
+pausing after each. The Python API may break (pre-1.0, no deprecation shims).
+
 1. Live view that only moves points (no PolyData rebuild) when topology is unchanged.
 2. Size warnings for curved tessellation and export (Lagrange-3 at 1.6M facets,
    6x6 tessellation = 57M triangles).
@@ -310,6 +313,7 @@ Phase C2 is complete (see the table in Status). After it, at the user's request:
    (e.g. a script read from stdin under the `spawn` start method), instead of
    failing every job.
 9. Add the OpenMP, refined-surface sanitizer run to `tools/run_sanitizers.sh`.
+   **Done** (7 refined samples, Newton in linear and Lagrange 2; ~9 min locally).
 
 ## Phase E: state refactor (long term)
 
@@ -325,8 +329,7 @@ Phase C2 is complete (see the table in Status). After it, at the user's request:
 
 - Tests: `pytest`; with `PYSE_CHECK_FACET_CACHE=1` for cache verification.
 - Sanitizers: `tools/run_sanitizers.sh [build-dir]` (stock program, ASan+UBSan,
-  all samples). OpenMP variant: build the stock program with `-fopenmp` added to
-  the sanitizer flags and run refined samples with `OMP_NUM_THREADS=8`.
+  all samples; then an OpenMP build on refined samples with Newton steps).
 - Benchmark: `python bench/benchmark.py --levels 6 8 --threads 1 4` (linear at 98k
   and 1.6M facets; Lagrange 2/4/6 at 6k and 24k; `--json` to compare runs).
 - Profiling build: `pip install . -C build-dir=<dir> -C cmake.define.PYSE_NOSTRIP=ON

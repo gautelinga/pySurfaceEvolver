@@ -1,7 +1,8 @@
 name: sanitizers
 
 # Runs every sample datafile through the stock Evolver program built with
-# AddressSanitizer and UBSan (tools/run_sanitizers.sh).
+# AddressSanitizer and UBSan, then refined samples with Newton steps through an
+# OpenMP build (tools/run_sanitizers.sh).
 
 on:
   push:
@@ -13,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build with ASan/UBSan and run the sample datafiles
+      - name: Build with ASan/UBSan (serial and OpenMP) and run the sample datafiles
         run: tools/run_sanitizers.sh "$RUNNER_TEMP/evolver-asan"
         env:
           PYSE_CHECK_FACET_CACHE: "1"
