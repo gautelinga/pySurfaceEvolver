@@ -1,0 +1,48 @@
+[build-system]
+requires = ["scikit-build-core>=0.10", "nanobind>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pysurfaceevolver"
+dynamic = ["version"]
+description = "Python frontend to Ken Brakke's Surface Evolver (2.70a)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+viz = ["pyvista>=0.40"]
+# h5py: meshio needs it for XDMF
+io = ["meshio>=5.3", "h5py"]
+all = ["pyvista>=0.40", "meshio>=5.3", "h5py"]
+test = ["pytest>=7", "pyvista>=0.40", "meshio>=5.3", "h5py"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}"
+cmake.build-type = "Release"
+wheel.packages = ["python/pysurfaceevolver"]
+# The manual and HTML docs aren't needed to build or test.
+sdist.exclude = [".venv", "build", "dist", "wheelhouse", "doc", "manual270.pdf"]
+
+[tool.scikit-build.metadata.version]
+# Single source of truth: __version__ in the package.
+provider = "scikit_build_core.metadata.regex"
+input = "python/pysurfaceevolver/__init__.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+# glibc (manylinux) only for now
+skip = "*-musllinux_*"
+# PyVista (VTK) is left out to keep wheel tests light; test_viz.py skips
+test-requires = ["pytest", "meshio"]
+test-command = "pytest {project}/tests -q"
+
+[[tool.mypy.overrides]]
+# meshio ships without type information
+module = ["meshio", "meshio.*"]
+ignore_missing_imports = true

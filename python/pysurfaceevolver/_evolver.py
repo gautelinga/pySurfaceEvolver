@@ -1,0 +1,834 @@
+"""High-level Python interface to Surface Evolver."""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+import tempfile
+import threading
+import warnings
+from collections.abc import MutableMapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Union
+
+import numpy as np
+
+from . import _core
+from ._build import Body, make_datafile
+from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
+
+if TYPE_CHECKING:
+    from ._viz import LiveView
+
+__all__ = [
+    "Evolver",
+    "IterationResult",
+    "Parameters",
+    "EvolverError",
+    "EvolverExit",
+    "EvolverFatalError",
+    "InvalidSurfaceError",
+    "EvolverWarning",
+]
+
+
+class EvolverError(RuntimeError):
+    """An error reported by Surface Evolver. The surface is still usable."""
+
+    def __init__(self, message: str, errnum: int = 0, output: str = ""):
+        super().__init__(message)
+        self.errnum = errnum
+        self.output = output
+
+
+class EvolverExit(EvolverError):
+    """Evolver tried to exit, for example because of the ``quit`` command.
+
+    The process keeps running and the engine is still usable.
+    """
+
+    def __init__(self, code: int, output: str = ""):
+        super().__init__(
+            f"Surface Evolver tried to exit (code {code}); the engine is still usable",
+            code, output)
+        self.code = code
+
+
+class EvolverFatalError(EvolverError):
+    """An unrecoverable Evolver error. Load a new datafile before going on."""
+
+
+class InvalidSurfaceError(EvolverError):
+    """There is no valid surface: the last datafile failed to load, or an
+    unrecoverable error happened. Only :meth:`Evolver.load` works until a
+    datafile loads successfully."""
+
+
+class EvolverWarning(UserWarning):
+    """A warning printed by Surface Evolver."""
+
+
+_REPRESENTATIONS = {1: "string", 2: "soapfilm", 3: "simplex"}
+_MODELS = {1: "linear", 2: "quadratic", 3: "lagrange"}
+_ELEMENT_TYPES = {
+    "vertex": _core.VERTEX, "vertices": _core.VERTEX,
+    "edge": _core.EDGE, "edges": _core.EDGE,
+    "facet": _core.FACET, "facets": _core.FACET,
+    "body": _core.BODY, "bodies": _core.BODY,
+}
+_QUANTITY_KINDS = {0: "energy", 1: "fixed", 2: "info", 3: "conserved"}
+_ELEMENT_NAMES = {_core.VERTEX: "vertex", _core.EDGE: "edge",
+                  _core.FACET: "facet", _core.BODY: "body"}
+_STATEMENTS_PER_COMMAND = 2000
+
+
+def _element_type(element: str) -> int:
+    try:
+        return _ELEMENT_TYPES[element]
+    except KeyError:
+        raise ValueError(
+            f"unknown element type {element!r}; "
+            "use 'vertex', 'edge', 'facet' or 'body'") from None
+
+
+def _import_meshio():
+    try:
+        import meshio
+    except ImportError:
+        raise ImportError(
+            "mesh file input/output needs meshio: pip install 'pysurfaceevolver[io]'") from None
+    return meshio
+
+
+def _target_format(path: str, file_format: Optional[str]) -> "tuple[Optional[str], str]":
+    """meshio file format and native-cell flavor for writing path.
+
+    meshio would read ".msh" as ANSYS; here it means Gmsh.
+    """
+    meshio = _import_meshio()
+    ext = os.path.splitext(path)[1].lower()
+    if file_format is None:
+        if ext == ".msh":
+            # Gmsh 2.2: meshio's 4.1 output lacks the $Entities section that
+            # Gmsh itself needs to open the file
+            file_format = "gmsh22"
+        elif ext not in meshio.extension_to_filetypes:
+            raise ValueError(f"unknown mesh file extension {ext!r}; pass file_format")
+    fmt = file_format or meshio.extension_to_filetypes[ext][0]
+    if fmt.startswith("gmsh"):
+        flavor = "gmsh"
+    elif fmt in ("vtu", "vtk"):
+        flavor = "vtk"
+    elif fmt == "xdmf":
+        flavor = "xdmf"
+    else:
+        flavor = "linear"
+    return file_format, flavor
+
+
+@dataclass
+class IterationResult:
+    """What :meth:`Evolver.iterate` did, one entry per iteration."""
+
+    energy: np.ndarray
+    area: np.ndarray
+    scale: np.ndarray
+    output: str
+
+# eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
+# (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
+_CAPTURE_WRAPPER = re.compile(
+    r'(?:foreach \w+ do )?printf "@pyse@%\.17g\\n", \((.*?)\)?$', re.MULTILINE)
+
+
+def _hide_capture_wrapper(error: EvolverError) -> EvolverError:
+    message = str(error)
+    if "@pyse@" not in message:
+        return error
+    cleaned = _CAPTURE_WRAPPER.sub(r"\1", message)
+    return type(error)(cleaned, error.errnum, error.output)
+
+
+# Surface Evolver keeps all of its state in C globals, so there is one engine
+# per process. Every Evolver object shares it; only the newest one may use it.
+_generation = 0
+_generation_lock = threading.Lock()
+
+
+class Evolver:
+    """The Surface Evolver engine for this process.
+
+    Parameters
+    ----------
+    datafile:
+        Optional path of a ``.fe`` datafile to load right away.
+    echo:
+        If true, print Evolver's output live while commands run. It's always
+        returned from :meth:`command` either way.
+    input:
+        Optional callable ``input(prompt) -> str | None`` that answers
+        Evolver's interactive prompts, for example in ``hessian_menu``.
+        ``None`` (the default) answers every prompt with end-of-file.
+
+    Notes
+    -----
+    There is one Surface Evolver engine per process. Creating a new
+    ``Evolver`` makes older ``Evolver`` objects stop working, and the surface
+    stays as it was until a datafile is loaded. To run several surfaces at
+    once, use separate processes, for example with ``multiprocessing``.
+
+    Calls are serialized: a call made while another thread is running one
+    raises ``RuntimeError`` instead of waiting.
+
+    Ctrl-C during a call (from the main thread) stops Evolver at the next
+    iteration or statement; pressing it again aborts the operation. Both
+    raise ``KeyboardInterrupt``.
+    """
+
+    def __init__(
+        self,
+        datafile: Optional[str | os.PathLike] = None,
+        *,
+        echo: bool = False,
+        input: Optional[Callable[[str], Optional[str]]] = None,
+    ):
+        global _generation
+        with _generation_lock:
+            _generation += 1
+            self._generation = _generation
+        self.echo = echo
+        self.input = input
+        self._call(_core.initialize)
+        if datafile is not None:
+            self.load(datafile)
+
+    # ------------------------------------------------------------------
+    # Running Evolver
+
+    def _check_current(self) -> None:
+        if self._generation != _generation:
+            raise RuntimeError(
+                "This Evolver was replaced by a newer Evolver instance; "
+                "there is only one Surface Evolver engine per process."
+            )
+
+    def _call(self, fn, *args):
+        """Run a guarded _core call; return (output, result) or raise.
+
+        The output buffers are local to the call and the callbacks travel
+        with it, so concurrent calls from other threads can't mix them up.
+        """
+        self._check_current()
+        out: list = []
+        err: list = []
+        echo = self.echo
+
+        def on_output(stream: int, text: str) -> None:
+            (err if stream else out).append(text)
+            if echo:
+                target = sys.stderr if stream else sys.stdout
+                target.write(text)
+                target.flush()
+
+        result = fn(*args, out=on_output, input=self.input,
+                    sigint=threading.current_thread() is threading.main_thread())
+        output = "".join(out)
+
+        for message in result.warnings:
+            warnings.warn(message.strip(), EvolverWarning, stacklevel=3)
+
+        status = result.status
+        if status == _core.OK:
+            return output, result
+        if status == _core.INTERRUPT:
+            raise KeyboardInterrupt("Surface Evolver operation interrupted")
+        if status == _core.EXIT:
+            raise EvolverExit(result.exit_code, output)
+        if status == _core.BUSY:
+            raise RuntimeError("Surface Evolver is busy (calls are not re-entrant)")
+        if status == _core.INVALID:
+            raise InvalidSurfaceError(result.message.strip(), result.errnum, output)
+        # Evolver's own error printout has the most context (input line, etc.)
+        printed = "".join(err).strip()
+        message = printed or f"ERROR {result.errnum}: {result.message.strip()}"
+        if status == _core.FATAL:
+            raise EvolverFatalError(
+                message + "\nThe surface is now invalid; load a new datafile.",
+                result.errnum, output)
+        raise EvolverError(message, result.errnum, output)
+
+    def load(self, datafile: str | os.PathLike) -> str:
+        """Load a ``.fe`` datafile, replacing the current surface.
+
+        Evolver looks for the file in the current directory, then in the
+        directories listed in the ``EVOLVERPATH`` environment variable.
+        Returns the output printed while loading.
+
+        If the datafile has errors, this raises :class:`EvolverError`, and
+        there is no valid surface until a datafile loads successfully.
+        """
+        path = os.fspath(datafile)
+        try:
+            output, _ = self._call(_core.load, path)
+        except EvolverError as e:
+            if e.errnum == _core.ERR_NO_DATAFILE:
+                raise FileNotFoundError(f"Cannot open datafile {path!r}") from None
+            raise
+        return output
+
+    def load_string(self, text: str, name: str = "surface.fe") -> str:
+        """Load a datafile given as a string.
+
+        The text goes to a temporary file first, so ``#include`` and ``read``
+        paths are resolved from the current directory.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, name)
+            with open(path, "w") as f:
+                f.write(text)
+            return self.load(path)
+
+    def command(self, text: str) -> str:
+        """Run Evolver commands, such as ``"g 10; r; hessian"``.
+
+        Returns everything Evolver printed to standard output. Raises
+        :class:`EvolverError` if Evolver reports an error.
+        """
+        output, _ = self._call(_core.command, text)
+        return output
+
+    __call__ = command
+
+    def eval(self, expr: str) -> float:
+        """Evaluate a numeric Evolver expression, like ``"body[1].volume"``.
+
+        Nothing gets defined in Evolver's symbol table. Non-finite results
+        come back as NaN.
+        """
+        try:
+            _, result = self._call(_core.eval, expr)
+        except EvolverError as e:
+            raise _hide_capture_wrapper(e) from None
+        return result.value
+
+    def values(self, element: str, expr: str) -> np.ndarray:
+        """Evaluate an expression for every element of one type.
+
+        ``element`` is ``"vertex"``, ``"edge"``, ``"facet"`` or ``"body"``.
+        Inside ``expr``, attributes refer to the element at hand, for example
+        ``ev.values("vertex", "x^2 + y^2")`` or ``ev.values("facet", "area")``.
+
+        The result is aligned with the rows of :meth:`mesh` (``vertices``,
+        ``edges``, ``faces``) and :meth:`bodies`.
+        """
+        element_type = _element_type(element)
+        try:
+            _, result = self._call(_core.values, element_type, expr)
+        except EvolverError as e:
+            raise _hide_capture_wrapper(e) from None
+        return result.data
+
+    def __getitem__(self, name: str) -> float:
+        """``ev["total_area"]`` evaluates a variable or expression."""
+        return self.eval(name)
+
+    def __setitem__(self, name: str, value: float) -> None:
+        """``ev["gravity"] = 0.5`` assigns a variable or parameter."""
+        self.command(f"{name} := {float(value)!r}")
+
+    # ------------------------------------------------------------------
+    # Operations
+
+    def iterate(self, n: int = 1, *, callback: Optional[Callable[["Evolver", int], Any]] = None,
+                every: int = 1) -> IterationResult:
+        """Run n gradient-descent iterations (Evolver's ``g``).
+
+        Returns the energy, area and scale factor after each iteration.
+        ``callback(ev, i)`` is called after every ``every``-th iteration and
+        after the last one, for example to update a :class:`LiveView`.
+        Ctrl-C stops between iterations with ``KeyboardInterrupt``.
+        """
+        if n < 0:
+            raise ValueError("n must be non-negative")
+        energy, area, scale, output = [], [], [], []
+        for i in range(1, n + 1):
+            output.append(self.command("g 1"))
+            energy.append(_core.total_energy())
+            area.append(_core.total_area())
+            scale.append(self.eval("scale"))
+            if callback is not None and (i % every == 0 or i == n):
+                callback(self, i)
+        return IterationResult(np.array(energy), np.array(area), np.array(scale),
+                               "".join(output))
+
+    def refine(self, times: int = 1) -> None:
+        """Refine the surface: split every edge and facet (Evolver's ``r``)."""
+        for _ in range(times):
+            self.command("r")
+
+    def equiangulate(self) -> None:
+        """Flip edges to improve triangle shapes (Evolver's ``u``)."""
+        self.command("u")
+
+    def vertex_average(self) -> None:
+        """Move vertices to the average of their neighbors (Evolver's ``V``)."""
+        self.command("V")
+
+    def hessian(self, seek: bool = False) -> None:
+        """One Newton step (``hessian``), or a Newton line search (``hessian_seek``)."""
+        self.command("hessian_seek" if seek else "hessian")
+
+    def set_model(self, model: str, order: Optional[int] = None) -> None:
+        """Switch to the ``"linear"``, ``"quadratic"`` or ``"lagrange"`` model.
+
+        Lagrange needs an ``order``.
+        """
+        model = model.lower()
+        if model == "lagrange":
+            if order is None:
+                raise ValueError("the Lagrange model needs an order")
+            self.command(f"lagrange {int(order)}")
+        elif model in ("linear", "quadratic"):
+            if order is not None:
+                raise ValueError(f"the {model} model has no order")
+            self.command(model)
+        else:
+            raise ValueError("model must be 'linear', 'quadratic' or 'lagrange'")
+
+    def recalc(self) -> None:
+        """Recalculate energies and quantities."""
+        self.command("recalc")
+
+    def dump(self, path: Union[str, os.PathLike]) -> None:
+        """Save the current surface as a datafile (Evolver's ``dump``)."""
+        self.command(f'dump "{os.fspath(path)}"')
+
+    # ------------------------------------------------------------------
+    # Writing element data
+
+    def _ids(self, element_type: int) -> np.ndarray:
+        if _core.count(element_type) == 0:
+            return np.zeros(0, dtype=np.int64)
+        return self.values(_ELEMENT_NAMES[element_type], "id").astype(np.int64)
+
+    def _selected(self, element: str, where) -> "tuple[str, np.ndarray, np.ndarray]":
+        element_type = _element_type(element)
+        ids = self._ids(element_type)
+        if where is None:
+            mask = np.ones(len(ids), dtype=bool)
+        else:
+            mask = np.asarray(where)
+            if mask.dtype != bool:
+                rows = mask.astype(int)
+                mask = np.zeros(len(ids), dtype=bool)
+                mask[rows] = True
+            elif mask.shape != ids.shape:
+                raise ValueError(f"where needs one entry per {_ELEMENT_NAMES[element_type]} "
+                                 f"({len(ids)}), got {mask.shape[0]}")
+        return _ELEMENT_NAMES[element_type], ids, mask
+
+    def _run_statements(self, statements: Iterable[str]) -> None:
+        batch: List[str] = []
+        for statement in statements:
+            batch.append(statement)
+            if len(batch) == _STATEMENTS_PER_COMMAND:
+                self.command("; ".join(batch))
+                batch = []
+        if batch:
+            self.command("; ".join(batch))
+
+    def set_values(self, element: str, attribute: str, values, *, where=None) -> None:
+        """Set a numeric attribute on every element of a type.
+
+        ``values`` is one number per element, aligned with :meth:`mesh` /
+        :meth:`values` rows, or a single number for all. ``where`` (a
+        boolean mask or rows) limits which elements change. Works for any
+        attribute Evolver's ``set`` command accepts: coordinates (``x``,
+        ``y``, ...), ``density``, ``tension``, ``target`` (bodies), extra
+        attributes from :meth:`define_attribute`, ...
+        """
+        name, ids, mask = self._selected(element, where)
+        vals = np.broadcast_to(np.asarray(values, dtype=float), ids.shape)
+        self._run_statements(f"set {name}[{i}] {attribute} {float(v)!r}"
+                             for i, v in zip(ids[mask], vals[mask]))
+
+    def fix(self, element: str, where=None) -> None:
+        """Fix vertices, edges or facets (all, or those selected by ``where``)."""
+        name, ids, mask = self._selected(element, where)
+        self._run_statements(f"set {name}[{i}] fixed" for i in ids[mask])
+
+    def unfix(self, element: str, where=None) -> None:
+        """Unfix vertices, edges or facets (all, or those selected by ``where``)."""
+        name, ids, mask = self._selected(element, where)
+        self._run_statements(f"unset {name}[{i}] fixed" for i in ids[mask])
+
+    def set_constraint(self, element: str, constraint: Union[int, str], where=None,
+                       on: bool = True) -> None:
+        """Put elements on a constraint (or take them off with ``on=False``)."""
+        name, ids, mask = self._selected(element, where)
+        verb = "set" if on else "unset"
+        self._run_statements(f"{verb} {name}[{i}] constraint {constraint}" for i in ids[mask])
+
+    def define_attribute(self, element: str, name: str, dtype: str = "real") -> None:
+        """Define an extra per-element attribute (``real`` or ``integer``).
+
+        Read it with :meth:`values` and write it with :meth:`set_values`.
+        """
+        self.command(f"define {_ELEMENT_NAMES[_element_type(element)]} attribute {name} {dtype}")
+
+    # ------------------------------------------------------------------
+    # Building surfaces
+
+    def load_arrays(self, vertices, faces=None, **kwargs: Any) -> str:
+        """Load a surface given as arrays; see :func:`make_datafile` for options."""
+        return self.load_string(make_datafile(vertices, faces, **kwargs))
+
+    def load_mesh_file(self, path: Union[str, os.PathLike], *,
+                       volume: Union[None, float, str] = None,
+                       fix_boundary: bool = True, merge_tolerance: float = 1e-9,
+                       **kwargs: Any) -> str:
+        """Load a triangle surface from a mesh file (STL, OBJ, PLY, VTK, ...).
+
+        Duplicate points (closer than ``merge_tolerance`` times the bounding
+        box size) are merged, and quads are split into triangles.
+
+        volume:
+            ``None``: no body. A number: one body enclosed by the whole
+            surface, with that target volume. ``"current"``: the same, with
+            the volume the surface encloses now. The surface must be closed;
+            its orientation is fixed up so the volume is positive.
+        fix_boundary:
+            Fix the vertices and edges on open boundaries, so a film spanning
+            a wire keeps its wire.
+
+        Other keyword arguments go to :func:`make_datafile`.
+        """
+        meshio = _import_meshio()
+        mesh = meshio.read(os.fspath(path))
+        tris = []
+        for block in mesh.cells:
+            if block.type == "triangle":
+                tris.append(block.data)
+            elif block.type == "quad":
+                q = block.data
+                tris.append(np.vstack([q[:, [0, 1, 2]], q[:, [0, 2, 3]]]))
+        if not tris:
+            raise ValueError(f"{os.fspath(path)} has no triangles or quads")
+        points, faces = _merge_points(np.asarray(mesh.points, float), np.vstack(tris),
+                                      merge_tolerance)
+        if volume is not None:
+            if not is_watertight(faces):
+                raise ValueError("volume needs a closed, consistently oriented surface")
+            current = _signed_volume(points, faces)
+            sign = 1 if current >= 0 else -1
+            target = abs(current) if volume == "current" else float(volume)
+            kwargs.setdefault("bodies", [Body(faces=range(len(faces)), volume=target,
+                                              orientation=[sign] * len(faces))])
+        if fix_boundary and "fixed" not in kwargs:
+            boundary = _boundary_vertices(faces)
+            if len(boundary):
+                kwargs["fixed"] = boundary
+        return self.load_arrays(points, faces, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Export and visualization
+
+    def write(self, path: Union[str, os.PathLike], *, curved: str = "tessellate",
+              n: Optional[int] = None, file_format: Optional[str] = None) -> None:
+        """Write the surface to a mesh file with meshio (STL, OBJ, PLY, VTU,
+        Gmsh .msh, XDMF, ...); the format follows the file extension.
+
+        ``curved="tessellate"`` writes flat triangles sampled on curved
+        elements (``n`` per facet edge); ``curved="native"`` writes the
+        high-order elements themselves: Gmsh up to order 10, VTU/VTK any
+        order, XDMF order 2; STL, OBJ, PLY etc. only take flat triangles.
+        XDMF needs h5py. ``.msh`` means Gmsh format 2.2 (meshio alone would pick ANSYS, and
+        its Gmsh 4.1 output can't be opened by Gmsh). See
+        :meth:`Mesh.to_meshio` for cell data.
+        """
+        meshio = _import_meshio()
+        file_format, flavor = _target_format(os.fspath(path), file_format)
+        data = self.mesh().to_meshio(curved, n, flavor=flavor)
+        meshio.write(os.fspath(path), data, file_format=file_format)
+
+    def body_surfaces(self, *, curved: str = "tessellate", n: Optional[int] = None,
+                      cap: bool = False) -> Dict[int, BodySurface]:
+        """The closed surface around each body, with outward normals.
+
+        See :meth:`Mesh.body_surfaces`.
+        """
+        return self.mesh().body_surfaces(curved, n, cap=cap)
+
+    def write_bodies(self, pattern: str = "body_{id}.stl", *, curved: str = "tessellate",
+                     n: Optional[int] = None, cap: bool = False,
+                     require_watertight: bool = True,
+                     file_format: Optional[str] = None) -> Dict[int, str]:
+        """Write one closed surface per body, for volume meshing.
+
+        ``pattern`` is formatted with the body ``id``. Raises ``ValueError``
+        for a body whose surface isn't watertight (for example a drop that
+        Evolver closes with a constraint plane) unless ``cap=True`` closes it
+        or ``require_watertight=False``. Returns ``{body id: path}``.
+        """
+        meshio = _import_meshio()
+        surfaces = self.body_surfaces(curved=curved, n=n, cap=cap)
+        if require_watertight:
+            open_ = [b for b, s in surfaces.items() if not s.watertight]
+            if open_:
+                raise ValueError(
+                    f"bodies {open_} are not closed by facets (they likely end on a "
+                    "constraint); use cap=True to close planar openings, or "
+                    "require_watertight=False")
+        written = {}
+        for b, surface in surfaces.items():
+            path = pattern.format(id=b)
+            fmt, flavor = _target_format(path, file_format)
+            meshio.write(path, surface.to_meshio(flavor), file_format=fmt)
+            written[b] = path
+        return written
+
+    def plot(self, scalars: Union[None, str, np.ndarray] = None, *, element: Optional[str] = None,
+             n: Optional[int] = None, off_screen: bool = False,
+             screenshot: Optional[str] = None, **kwargs: Any) -> Any:
+        """Show the surface with PyVista.
+
+        ``scalars`` colors it: an Evolver expression evaluated per facet
+        (or per vertex with ``element="vertex"``), or an array with one value
+        per facet or vertex row. Curved elements are tessellated with ``n``
+        subdivisions. Other keyword arguments go to ``Plotter.add_mesh``.
+        """
+        from ._viz import _import_pyvista, surface_dataset
+        pv = _import_pyvista()
+        dataset, name = surface_dataset(self, scalars, element, n)
+        plotter = pv.Plotter(off_screen=off_screen)
+        plotter.add_mesh(dataset, scalars=name, **{"show_edges": True, **kwargs})
+        return plotter.show(screenshot=screenshot)
+
+    def live_view(self, scalars: Union[None, str, np.ndarray] = None, **kwargs: Any) -> "LiveView":
+        """A PyVista view that redraws on :meth:`LiveView.update`; see :class:`LiveView`.
+
+        Typical use: ``ev.iterate(200, callback=ev.live_view().update, every=10)``.
+        """
+        from ._viz import LiveView
+        return LiveView(self, scalars, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Surface data
+
+    @property
+    def datafile(self) -> str:
+        """Name of the loaded datafile, or ``""`` if none."""
+        self._check_current()
+        return _core.datafile()
+
+    @property
+    def valid(self) -> bool:
+        """Whether there is a usable surface (see :class:`InvalidSurfaceError`)."""
+        self._check_current()
+        return _core.surface_valid()
+
+    @property
+    def sdim(self) -> int:
+        """Dimension of the ambient space."""
+        self._check_current()
+        return _core.sdim()
+
+    @property
+    def representation(self) -> str:
+        """``"string"``, ``"soapfilm"`` or ``"simplex"``."""
+        self._check_current()
+        return _REPRESENTATIONS.get(_core.representation(), "unknown")
+
+    @property
+    def model(self) -> str:
+        """``"linear"``, ``"quadratic"`` or ``"lagrange"``."""
+        self._check_current()
+        return _MODELS.get(_core.modeltype(), "unknown")
+
+    @property
+    def lagrange_order(self) -> int:
+        self._check_current()
+        return _core.lagrange_order()
+
+    @property
+    def torus(self) -> bool:
+        """Whether the domain is periodic (torus model)."""
+        self._check_current()
+        return _core.torus()
+
+    @property
+    def total_energy(self) -> float:
+        """Total energy as of the last iteration or recalculation."""
+        self._check_current()
+        return _core.total_energy()
+
+    @property
+    def total_area(self) -> float:
+        """Total area as of the last iteration or recalculation."""
+        self._check_current()
+        return _core.total_area()
+
+    @property
+    def counts(self) -> dict:
+        """Number of vertices, edges, facets and bodies."""
+        self._check_current()
+        return {
+            "vertices": _core.count(_core.VERTEX),
+            "edges": _core.count(_core.EDGE),
+            "facets": _core.count(_core.FACET),
+            "bodies": _core.count(_core.BODY),
+        }
+
+    @property
+    def vertices(self) -> np.ndarray:
+        """Vertex coordinates as an ``(n, sdim)`` array (a copy).
+
+        Assigning an array of the same shape moves the vertices and
+        recalculates energies. Constraints aren't re-projected until the next
+        iteration.
+        """
+        _, result = self._call(_core.vertices)
+        return result.data[0]
+
+    @vertices.setter
+    def vertices(self, xyz) -> None:
+        arr = np.ascontiguousarray(xyz, dtype=np.float64)
+        if arr.ndim != 2:
+            raise ValueError("vertex coordinates must be a 2-D array")
+        self._call(_core.set_vertex_coords, arr)
+
+    def mesh(self) -> Mesh:
+        """Return the current geometry and connectivity as NumPy arrays.
+
+        Faces exist only in the soapfilm representation. For quadratic and
+        Lagrange models the high-order node layout is included too; see
+        :meth:`Mesh.tessellate`.
+        """
+        _, r = self._call(_core.vertices)
+        xyz, vids, fixed = r.data
+        _, r = self._call(_core.edges)
+        edges, eids = r.data
+        faces = fids = fbodies = None
+        if _core.representation() == 2:
+            _, r = self._call(_core.facets)
+            faces, fids, fbodies = r.data
+
+        order, bezier = 1, False
+        edge_nodes = edge_index = facet_nodes = facet_index = None
+        _, r = self._call(_core.element_nodes, _core.EDGE)
+        if r.data is not None:
+            edge_nodes, edge_index, order, bezier = r.data
+        if faces is not None:
+            _, r = self._call(_core.element_nodes, _core.FACET)
+            if r.data is not None:
+                facet_nodes, facet_index, order, bezier = r.data
+        return Mesh(xyz, edges, faces, vids, eids, fids, fbodies, fixed.astype(bool),
+                    order, bezier, edge_nodes, edge_index, facet_nodes, facet_index)
+
+    def bodies(self) -> Bodies:
+        """Return volumes, target volumes and pressures of all bodies."""
+        _, result = self._call(_core.bodies)
+        ids, volume, target, pressure, fixed = result.data
+        return Bodies(ids, volume, target, pressure, fixed.astype(bool))
+
+    @property
+    def parameters(self) -> "Parameters":
+        """The datafile's parameters, as a live dict-like view.
+
+        ``ev.parameters["angle"] = 60`` assigns, and Evolver recalculates
+        whatever depends on it.
+        """
+        self._check_current()
+        return Parameters(self)
+
+    def quantities(self) -> Dict[str, Quantity]:
+        """Named quantities from the datafile, recalculated now."""
+        _, result = self._call(_core.quantities)
+        out = {}
+        for name, value, target, modulus, pressure, kind in result.data:
+            kind_name = _QUANTITY_KINDS.get(kind, "energy")
+            if kind_name != "fixed":
+                target = float("nan")
+            out[name] = Quantity(name, value, target, modulus, pressure, kind_name)
+        return out
+
+    def __repr__(self) -> str:
+        if self._generation != _generation:
+            return "<Evolver (replaced)>"
+        name = self.datafile or "no datafile"
+        if not _core.surface_valid():
+            return f"<Evolver {name!r}: no valid surface>"
+        c = self.counts
+        return (f"<Evolver {name!r}: {c['vertices']} vertices, {c['edges']} edges, "
+                f"{c['facets']} facets, {c['bodies']} bodies>")
+
+
+def _merge_points(points: np.ndarray, faces: np.ndarray, tolerance: float):
+    """Merge points closer than tolerance * bounding box size; drop unused ones."""
+    size = float(np.ptp(points, axis=0).max()) or 1.0
+    keys = np.round(points / (tolerance * size)).astype(np.int64)
+    _, first, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
+    faces = inverse.ravel()[faces]
+    points = points[first]
+    faces = faces[(faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2])
+                  & (faces[:, 0] != faces[:, 2])]
+    used, local = np.unique(faces, return_inverse=True)
+    return points[used], local.reshape(faces.shape)
+
+
+def _signed_volume(points: np.ndarray, faces: np.ndarray) -> float:
+    a, b, c = (points[faces[:, i]] for i in range(3))
+    return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6)
+
+
+def _boundary_vertices(faces: np.ndarray) -> np.ndarray:
+    edges = np.sort(np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]),
+                    axis=1)
+    unique, counts = np.unique(edges, axis=0, return_counts=True)
+    return np.unique(unique[counts == 1])
+
+
+class Parameters(MutableMapping):
+    """Live view of the parameters declared in the loaded datafile.
+
+    Only existing parameters can be assigned, and none can be deleted.
+    """
+
+    def __init__(self, evolver: Evolver):
+        self._evolver = evolver
+
+    def _snapshot(self):
+        _, result = self._evolver._call(_core.parameters)
+        return result.data
+
+    def __getitem__(self, name: str) -> float:
+        for key, value, _ in self._snapshot():
+            if key == name:
+                return value
+        raise KeyError(name)
+
+    def __setitem__(self, name: str, value: float) -> None:
+        if name not in self:
+            raise KeyError(f"{name!r} is not a parameter of this datafile")
+        self._evolver.command(f"{name} := {float(value)!r}")
+
+    def __delitem__(self, name: str) -> None:
+        raise TypeError("Evolver parameters can't be deleted")
+
+    def __iter__(self) -> Iterator[str]:
+        return iter([name for name, _, _ in self._snapshot()])
+
+    def __len__(self) -> int:
+        return len(self._snapshot())
+
+    def __contains__(self, name: object) -> bool:
+        return any(key == name for key, _, _ in self._snapshot())
+
+    @property
+    def optimizing(self) -> frozenset:
+        """Names of the optimizing parameters."""
+        return frozenset(name for name, _, opt in self._snapshot() if opt)
+
+    def __repr__(self) -> str:
+        return repr({name: value for name, value, _ in self._snapshot()})

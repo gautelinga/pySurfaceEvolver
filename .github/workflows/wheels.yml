@@ -1,0 +1,65 @@
+name: wheels
+
+# Builds manylinux wheels and an sdist, tests them, and uploads them as
+# workflow artifacts. Nothing is published.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  wheels:
+    name: Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Native runners for both architectures. ubuntu-24.04-arm is free for
+        # public repositories; for a private one, drop it or build aarch64
+        # under QEMU instead (docker/setup-qemu-action + CIBW_ARCHS=aarch64).
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and test wheels
+        # Versions, skips and the test command are in [tool.cibuildwheel]
+        # in pyproject.toml.
+        run: |
+          python -m pip install cibuildwheel
+          python -m cibuildwheel --output-dir wheelhouse
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist
+        run: |
+          python -m pip install build
+          python -m build --sdist
+
+      - name: Install from the sdist and test
+        run: |
+          python -m pip install "$(ls dist/*.tar.gz)[test]"
+          python -m pytest -q
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
