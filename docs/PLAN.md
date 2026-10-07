@@ -302,6 +302,10 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
 1. Live view that only moves points (no PolyData rebuild) when topology is unchanged.
 2. Size warnings for curved tessellation and export (Lagrange-3 at 1.6M facets,
    6x6 tessellation = 57M triangles).
+   **Done** (user chose warn only, module setting): `pse.tessellation_limit`
+   (default 10M triangles, None: off) gives a `LargeTessellationWarning` with the
+   count and an estimate of the memory (393k Lagrange 3, n=6: 14M triangles,
+   estimated 1.2 GB, measured peak 0.94 GB, 1.4 s).
 3. Generic wrappers in `bindings/module.cpp`; a more uniform `Mesh`.
 4. Notebook: `_repr_html_`; the user checks the live view in Jupyter.
 5. Optional wait-with-timeout instead of the immediate "busy" error.

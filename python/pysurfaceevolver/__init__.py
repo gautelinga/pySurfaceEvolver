@@ -11,7 +11,7 @@
 """
 
 import contextlib
-from typing import Generator
+from typing import Generator, Optional
 
 from ._build import Body, make_datafile
 from ._evolver import (
@@ -25,10 +25,14 @@ from ._evolver import (
     Parameters,
     Snapshot,
 )
-from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
+from ._mesh import Bodies, BodySurface, LargeTessellationWarning, Mesh, Quantity, is_watertight
 from ._viz import LiveView
 from . import examples
 from ._parallel import JobError, WorkerCrashed, WorkerStartError, map  # noqa: A004 (pse.map)
+
+#: Tessellations (plots, live views, export of curved surfaces) with more
+#: triangles than this give a LargeTessellationWarning; None: no check.
+tessellation_limit: Optional[int] = 10_000_000
 
 
 def set_threads(n: int) -> None:
@@ -102,6 +106,7 @@ __all__ = [
     "InvalidSurfaceError",
     "IterationResult",
     "JobError",
+    "LargeTessellationWarning",
     "LiveView",
     "Mesh",
     "Parameters",

@@ -3,6 +3,8 @@ and conversion to meshio and PyVista."""
 
 from __future__ import annotations
 
+import sys
+import warnings
 from dataclasses import dataclass
 from math import factorial
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
@@ -13,7 +15,28 @@ if TYPE_CHECKING:  # optional dependencies
     import meshio
     import pyvista
 
-__all__ = ["Mesh", "Bodies", "Quantity", "BodySurface"]
+__all__ = ["Mesh", "Bodies", "Quantity", "BodySurface", "LargeTessellationWarning"]
+
+
+class LargeTessellationWarning(UserWarning):
+    """A tessellation has more triangles than ``pse.tessellation_limit``."""
+
+
+def _check_tessellation_size(facets: int, n: int, sdim: int) -> None:
+    """Warn when ``facets`` facets subdivided ``n`` times exceed the limit."""
+    limit = getattr(sys.modules.get("pysurfaceevolver"), "tessellation_limit", None)
+    triangles = facets * n * n
+    if limit is None or triangles <= limit:
+        return
+    per_facet = (n + 1) * (n + 2) // 2
+    # sampled points (and the merged copy), triangles (and their renumbered copy)
+    gb = facets * (2 * per_facet * sdim * 8 + 2 * n * n * 3 * 8) / 1e9
+    warnings.warn(
+        f"tessellating {facets:,} facets with n={n} gives {triangles:,} triangles "
+        f"(about {gb:.1f} GB while building, more for plotting or export); pass a "
+        f"smaller n, or raise pse.tessellation_limit (now {limit:,}; None: no check)",
+        LargeTessellationWarning, stacklevel=3)
+
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +325,8 @@ class Mesh:
         triangles follow the actual surface. ``n`` defaults to 1 for linear
         elements and 2*order otherwise. Triangle ``t`` belongs to facet
         ``t // n**2``, and is oriented like that facet's ``faces`` row.
+        More than ``pse.tessellation_limit`` triangles (default 10 million)
+        gives a :class:`LargeTessellationWarning`.
 
         With ``merge=True`` (the default), points shared by neighboring
         facets appear once, so the result is a connected surface. With
@@ -316,6 +341,7 @@ class Mesh:
         """
         faces, nodes, index = self._facet_data()
         n = self._default_n(n)
+        _check_tessellation_size(len(nodes), n, self.vertices.shape[1])
         lattice = _lattice(n, 2)
         weights = _basis(index, self.order, self.bezier, lattice / n)   # (P, nodes)
         points = np.einsum("pn,knd->kpd", weights, self.vertices[nodes])  # (k, P, sdim)
