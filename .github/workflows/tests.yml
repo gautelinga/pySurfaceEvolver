@@ -34,6 +34,9 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -v
+        env:
+          # verify every cached facet corner against the topology walk
+          PYSE_CHECK_FACET_CACHE: "1"
 
       - name: Type-check the package against its stubs
         run: |

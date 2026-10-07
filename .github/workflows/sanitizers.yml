@@ -15,3 +15,5 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build with ASan/UBSan and run the sample datafiles
         run: tools/run_sanitizers.sh "$RUNNER_TEMP/evolver-asan"
+        env:
+          PYSE_CHECK_FACET_CACHE: "1"
