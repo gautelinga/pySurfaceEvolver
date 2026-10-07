@@ -339,7 +339,7 @@ REAL lagrange_facet_tension_hess(struct qinfo *f_info)
   int dim = web.dimension;
   struct gauss_lag *gl = &gauss_lagrange[dim][web.gauss2D_order];
   MAT2D(mat,MAXCOORD,MAXCOORD);
-  REAL **sums;
+  MAT2D(sums,MAXVCOUNT,MAXCOORD);  /* no allocation: thread-safe (fasthess.c) */
   REAL ****dethess=NULL;
   REAL detinv;
 
@@ -347,7 +347,6 @@ REAL lagrange_facet_tension_hess(struct qinfo *f_info)
       density = get_facet_density(f_info->id);
   else density = 1.0;
 
-  sums = dmatrix(0,gl->lagpts-1,0,SDIM-1);
   if ( dim > 2 ) dethess = dmatrix4(dim,dim,dim,dim);
 
   for ( m = 0 ; m < gl->gnumpts ; m++ )  /*  integration point number */
@@ -457,7 +456,6 @@ REAL lagrange_facet_tension_hess(struct qinfo *f_info)
         }
       }
 
-  free_matrix(sums);
   if ( dim > 2 ) free_matrix4(dethess);
 
   return density*value/factorial[dim];

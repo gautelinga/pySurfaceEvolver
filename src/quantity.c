@@ -2617,6 +2617,9 @@ void calc_quant_hess(
    {
    
     global_needs = global_meth_needs(type);
+    if ( (type == FACET)  /* parallel version, fasthess.c */
+          && fl_quant_hess_facets(S,hess_mode,mode,rhs,global_needs) )
+      continue;
     FOR_ALL_ELEMENTS(type,q_info->id)
     { int setup_flag = 0;
       int needs;

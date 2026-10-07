@@ -11,6 +11,12 @@
 vertex_id *fl_facet_corners(void);
 /* Facets in FOR_ALL_FACETS order; *n gets their number. */
 facet_id *fl_facet_list(long *n);
+/* Nonzero when PYSE_NO_FAST_LOOPS is set: use Evolver's original loops. */
+int fl_disabled(void);
+/* Parallel facet part of calc_quant_hess() (fasthess.c); returns 0, doing
+   nothing, when the case isn't covered. */
+int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
+                         int global_needs);
 /* Nonzero when PYSE_CHECK_FACET_CACHE is set: verify every cached answer. */
 int fl_check(void);
 

@@ -152,6 +152,33 @@ def test_facet_body_changes(tmp_path):
         assert rel(v, w) < 1e-12
 
 
+LAGRANGE = r"""
+import json, warnings
+warnings.simplefilter("ignore")
+from pysurfaceevolver import Evolver
+ev = Evolver("cube.fe")
+ev.command("g 10; r; g 10; r; g 10; r; g 10; hessian; hessian")
+out = []
+for n in (2, 4):
+    ev.command(f"lagrange {n}; g 3; hessian; hessian")
+    out.append([ev.eval("total_energy"), float(ev.bodies().volume[0]),
+                float(ev.bodies().pressure[0]), ev.command("eigenprobe 0").strip()])
+print(json.dumps(out))
+"""
+
+
+def test_lagrange_newton_steps_match_original():
+    """The parallel Hessian assembly (src/fasthess.c) gives the original's
+    Newton steps."""
+    original = run(LAGRANGE, [], MODES["original"])
+    for mode in ("1 thread", "4 threads"):
+        got = run(LAGRANGE, [], MODES[mode])
+        for (e, v, p, index), (e0, v0, p0, index0) in zip(got, original):
+            assert rel(e, e0) < 1e-12 and rel(v, v0) < 1e-12, mode
+            assert abs(p - p0) < 1e-9 * max(abs(p0), 1.0), mode
+            assert index == index0, mode
+
+
 def test_reproducible_for_a_thread_count(dumps):
     env = {"OMP_NUM_THREADS": "4"}
     assert run(EVALUATE, dumps, env) == run(EVALUATE, dumps, env)

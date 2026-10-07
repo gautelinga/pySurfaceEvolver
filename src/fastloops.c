@@ -43,7 +43,7 @@ static int fv_check = -1;
 
 /* PYSE_NO_FAST_LOOPS turns the parallel loops off (the original loops run),
    for comparing results. */
-static int fl_disabled(void)
+int fl_disabled(void)
 { static int disabled = -1;
   if ( disabled < 0 ) disabled = getenv("PYSE_NO_FAST_LOOPS") != NULL;
   return disabled;

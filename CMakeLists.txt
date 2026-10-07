@@ -30,7 +30,7 @@ set(EVOLVER_SOURCES
   sdrv odrv userfunc kusner simequi2 geomgraph symtable exprint quantity
   meanint mindeg dodecGroup registry khyp gauss knot1 eval_all lexinit2
   evalmore knot2 knot3 teix sqcurve2 hessian2 hessian3 method1 method2
-  method3 bk method4 method5 eval_sec sqcurve3 metis lagrange
+  method3 bk method4 method5 eval_sec sqcurve3 metis lagrange fasthess
   nulgraph fastloops)
 list(TRANSFORM EVOLVER_SOURCES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/src/)
 list(TRANSFORM EVOLVER_SOURCES APPEND .c)
