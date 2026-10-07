@@ -51,14 +51,16 @@ Done (see `git log`):
   force variant (CSR, bit-identical) was measured and was slower (0.32 s).
   **Iteration wall time unchanged** (~1.8 s at 8 threads): see lesson 9.
 
-- **Phase C2 step 5 (partly)**: parallel `film_grad_l` (`fl_film_grad`, per-vertex
-  gather from the corner cache) and a compact per-facet body table for the volume
-  loop. One iteration at 1.6M facets (quiet machine): ~1.48 -> 1.31 s at 1 thread,
-  ~0.72 s at 8. Fixed a signed overflow in the sparse Hessian hash (`sp_hash`,
-  hit from ~10k vertices). A parallel scan of the edge content loop in
-  `local_calc_content` gained 5% at 4 threads but lost 17% at 8 (unexplained,
-  not the wait policy): dropped. Remaining serial (4 threads): `save_coords`,
-  `project_all`/`volume_restore`, `calc_leftside`, edge content scan, each 3-9%.
+- **Phase C2 step 5 (done)**: parallel `film_grad_l` (`fl_film_grad`, per-vertex
+  gather from the corner cache); compact per-facet body table for the volume loop;
+  a cached vertex list for parallel per-vertex work (zero forces, move, save/restore
+  coordinates, volume restoration, DV^T DV with per-thread matrices, dense and
+  sparse); `FL_FOR_SELECTED` (parallel scan, serial in-order body) for constraint
+  and boundary vertices and edge energy/force/content integrals. Fixed a signed
+  overflow in the sparse Hessian hash (`sp_hash`). One iteration at 1.6M facets vs
+  v0.5.0 (quiet machine, best of N): 1.97 -> 1.30 s at 1 thread, 1.45 -> 0.65 s at
+  4, 1.43 -> 0.74 s at 8; 98k facets: 62 -> 32 ms (1 thread). The main thread is
+  now about as busy as the workers; what is left serial is ~1-2% items.
 
 Version 0.5.0. 231 tests; mypy clean; manylinux wheel builds and passes.
 
@@ -135,7 +137,7 @@ tests pass.
    drop its scheduling (worker threads, `thread_launch`, `-p`), turn its
    per-thread data (`thread_data`: eval stacks, `q_info`) into OpenMP thread-local
    storage.
-5. **Remaining linear hot spots** (medium): volume gradients (`film_grad_l`,
+5. **Done.** Remaining linear hot spots (medium): volume gradients (`film_grad_l`,
    ~16% of an iteration) and the volume-restoring projection (`volume_restore`,
    ~12%), with per-thread accumulation.
 6. **Scaling run on a quiet machine** (later, by the user): `bench/benchmark.py
