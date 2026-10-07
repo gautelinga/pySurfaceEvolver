@@ -192,11 +192,15 @@ workers; the serial remainder is ~1-2% items.
       quantities (`src/fasthess.c`: order 6 at 24k, 4 threads, 22 -> 14.7 s);
       METIS 5 port of `metis.c` and the `metis_factor` fall-through fix
       (METIS ordering alone: -3% to -16%, slower at 98k).
-   4. Integrate MUMPS (sequential, OpenBLAS) into the build and wheels; new
-      factoring mode, default when built in; verify Newton steps and Hessian
-      index against the current solver.
-   5. Parallel assembly for the linear Newton path (`hessian.c`:
-      `body_hessian`, `area_hessian`, ~37% of a linear Newton step).
+   4. **Done.** MUMPS integrated (`src/mumpsfactor.c`, optional FetchContent
+      build, OpenBLAS; manylinux wheel 15.8 MB bundles OpenBLAS + gfortran
+      runtime). Matches Evolver's factoring (energies 1e-16, same index).
+   5. **Done.** Parallel assembly for the linear Newton path (`area_hessian`,
+      `body_hessian` via the runner in `fasthess.c`).
+      One Newton step, 4 threads, now vs v0.5.0-era: linear 393k facets
+      3.1 -> 1.2 s, 1.6M 25.4 -> 6.0 s; Lagrange 6 at 24k 22.6 -> 8.2 s.
+      Open: the wheel's OpenBLAS is the serial build (dev with threaded
+      OpenBLAS is 10-20% faster on large linear steps; try openblaso).
 4. **Thread defaults** (small, partly by the user on a quiet machine):
    `bench/benchmark.py --threads 1 2 4 8`; set the default thread count (likely
    capped at physical cores, possibly 4 on hybrid laptops), `FL_PARALLEL_MIN`, and
