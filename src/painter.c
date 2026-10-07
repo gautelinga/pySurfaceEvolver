@@ -1812,7 +1812,7 @@ struct vis_vertex sentinelv[4]; /* for sentinel endpoints */
 struct vis_conedge **check_list;
 int check_list_count;
 int check_list_max;
-void check_visible ();
+void check_visible (void);
 void check_one_visible (struct vis_conedge *);
 
 /* random rotation coefficients for sweep line */
@@ -2222,7 +2222,7 @@ void visibility_end()
     { /* do vertex event */
       next_u = vis_vertices[vertex_event_spot].x[0];
       if ( (next_u - sweep_u) > 1e-10 )
-         check_visible((next_u+sweep_u)/2); 
+         check_visible(); 
       sweep_u = next_u;
       retval = handle_vertex_event(vis_vertices+vertex_event_spot);
       if ( retval < 0 )
@@ -2237,7 +2237,7 @@ void visibility_end()
       next_u = vis_heap[0].time;
 
       if ( (next_u - sweep_u) > 1e-10 )
-         check_visible((next_u+sweep_u)/2); 
+         check_visible(); 
       e1 = vis_heap[0].e1; 
       e2 = vis_heap[0].e2;
       vis_delete_heap(0);
@@ -3083,7 +3083,7 @@ void check_one_visible(struct vis_conedge *e)
 *
 */
 
-void check_visible()
+void check_visible(void)
 {
   int i;
 

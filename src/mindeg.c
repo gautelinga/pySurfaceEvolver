@@ -79,7 +79,7 @@ static int total_fill;  /* total number of fill in factored matrix */
 static REAL total_flops; /* total operation count, counting mul+add as 2 */
 static int passes;  /* number of times through main loop */
 
-void dsolve();
+void dsolve(struct linsys *);
 extern int mindeg_debug_level;  /*
                           0  none
                           1  print lowest degree
