@@ -17,6 +17,12 @@ int fl_disabled(void);
    nothing, when the case isn't covered. */
 int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
                          int global_needs);
+/* Linear-model area and body volume Hessians (hessian3.c) in parallel
+   (fasthess.c); each returns 0, doing nothing, when not covered. */
+int fl_area_hessian(struct linsys *S, REAL *rhs);
+int fl_body_hessian_linear(struct linsys *S, REAL *rhs, REAL *Z);
+int fl_body_hessian_quadratic(struct linsys *S, REAL *Z);
+
 /* MUMPS factoring (mumpsfactor.c), the MUMPS_FACTORING mode */
 void mumps_factor(struct linsys *S, int mtype);
 void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype);

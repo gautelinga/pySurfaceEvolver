@@ -14,6 +14,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 /********************************************************************
 *
@@ -35,6 +36,8 @@ void area_hessian(
   MAT2D(otherD,MAXCOORD,MAXCOORD);
 
   /* fill in sparse matrix rows and volume constraint rows */
+
+  if ( fl_area_hessian(S,rhs) ) return;  /* parallel version, fasthess.c */
 
   FOR_ALL_FACETS(f_id)
   {
@@ -286,6 +289,7 @@ int body_hessian(
   }
 
   /* body volume constraints, linear part */
+  if ( !fl_body_hessian_linear(S,rhs,Z) )  /* parallel version, fasthess.c */
   FOR_ALL_FACETS(f_id)
   {
     REAL side[FACET_EDGES][MAXCOORD];    /* 3 sides of facet */
@@ -381,7 +385,7 @@ int body_hessian(
   self[0][0] = self[1][1] = self[2][2] = 0.0;
   self[0][1] = self[1][0] = 0.0;
   /* now add constraint hessians to energy hessian */
-  if ( hess_flag )
+  if ( hess_flag && !fl_body_hessian_quadratic(S,Z) )  /* fasthess.c */
   { FOR_ALL_FACETS(f_id)
      {
         facetedge_id fe_id;         

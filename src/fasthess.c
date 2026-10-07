@@ -219,47 +219,29 @@ static void facet_ops(struct linsys *S, struct qinfo *q_info, facet_id f_id,
 
 #define FH_MAXTHREADS 256
 
-int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
-                         int global_needs)
-{ facet_id *list;
+/* One facet's work: record its additions in b. me is the thread number. */
+typedef void (*facet_fn)(struct linsys *S, facet_id f_id, vertex_id *c, int me,
+                         struct hbuf *b, void *ctx);
+
+/* Run fn on all facets in chunks: in parallel within a chunk, then make the
+   recorded additions serially in facet order. Returns 0 (nothing done) if
+   it can't start. */
+static int run_facets(struct linsys *S, REAL *rhs, facet_fn fn, void *ctx, int threads)
+{ static struct hbuf buf[FH_MAXTHREADS];
+  facet_id *list;
+  vertex_id *corners;
   long n, start, chunk, k;
-  int threads, t, mk, meth_offset = get_meth_offset(FACET);
-  static struct qinfo qi[FH_MAXTHREADS];
-  static struct hbuf buf[FH_MAXTHREADS];
-  long *fstart = NULL;   /* per chunk facet: start, end in its thread's buffer */
-  int *fthread = NULL;
-  int ok = 1;
+  long *fstart;   /* per chunk facet: start, end in its thread's buffer */
+  int *fthread;
+  int t, ok = 1;
 
-  if ( fl_disabled() || !hess_mode || threadflag || nprocs > 1
-       || web.modeltype != LAGRANGE || SDIM != 3 || web.dimension != 2
-       || compound_quant_list_head >= 0 || (sym_flags & NEED_FORM_UNWRAPPING)
-       || dirichlet_flag || sobolev_flag || web.torus_flag )
-    return 0;
-  for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
-  { struct method_instance *mi = METH_INSTANCE(mk);
-    if ( mi->flags & Q_DELETED ) continue;
-    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) && !method_ok(mi) )
-      return 0;
-  }
+  corners = fl_facet_corners();
   list = fl_facet_list(&n);
-  if ( !list || n == 0 ) return 0;
-
-  threads = fl_threads();
-  if ( threads > FH_MAXTHREADS ) threads = FH_MAXTHREADS;
-  if ( threads < 1 ) threads = 1;
+  if ( !corners || !list || n == 0 ) return 0;
   chunk = 64*threads;
   fstart = (long*)malloc(2*chunk*sizeof(long));
   fthread = (int*)malloc(chunk*sizeof(int));
   if ( !fstart || !fthread ) { free(fstart); free(fthread); return 0; }
-
-  /* per-thread work space (Evolver's allocator is not thread-safe) */
-  for ( t = 0 ; t < threads ; t++ )
-  { q_info_init(&qi[t],METHOD_HESSIAN);
-    qi[t].hess = dmatrix4(MAXVCOUNT,MAXVCOUNT,SDIM,SDIM);
-  }
-  /* first facet serially: lazy one-time setup (e.g. packed basis matrices) */
-  qi[0].id = list[0];
-  (*q_setup[FACET])(S,&qi[0],global_needs|NEED_SIDE);
 
   for ( start = 0 ; start < n && ok ; start += chunk )
   { long end = start + chunk < n ? start + chunk : n;
@@ -275,7 +257,7 @@ int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
 #endif
       fthread[k-start] = me;
       fstart[2*(k-start)] = buf[me].n;
-      facet_ops(S,&qi[me],list[k],global_needs,meth_offset,mode,&buf[me]);
+      (*fn)(S,list[k],corners + 3*ordinal(list[k]),me,&buf[me],ctx);
       fstart[2*(k-start)+1] = buf[me].n;
     }
     for ( t = 0 ; t < threads ; t++ )
@@ -300,19 +282,286 @@ int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
         }
       }
     }
-    comp_quant_stamp += (int)(end - start);
-  }
-
-  for ( t = 0 ; t < threads ; t++ )
-  { free_matrix4(qi[t].hess);
-    qi[t].hess = NULL;
-    q_info_free(&qi[t]);
   }
   free(fstart);
   free(fthread);
   if ( !ok )
     kb_error(6350,"Out of memory in parallel Hessian assembly.\n",RECOVERABLE);
   return 1;
+}
+
+static int hess_threads(void)
+{ int threads = fl_threads();
+  if ( threads > FH_MAXTHREADS ) threads = FH_MAXTHREADS;
+  return threads < 1 ? 1 : threads;
+}
+
+/* ---- named quantities on facets (calc_quant_hess) ---- */
+
+struct quant_ctx { struct qinfo *qi; int global_needs, meth_offset, mode; };
+
+static void quant_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
+                        struct hbuf *b, void *ctx)
+{ struct quant_ctx *q = (struct quant_ctx *)ctx;
+  (void)c;
+  facet_ops(S,q->qi + me,f_id,q->global_needs,q->meth_offset,q->mode,b);
+}
+
+int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
+                         int global_needs)
+{ static struct qinfo qi[FH_MAXTHREADS];
+  struct quant_ctx ctx;
+  facet_id *list;
+  long n;
+  int threads, t, mk, done;
+
+  if ( fl_disabled() || !hess_mode || threadflag || nprocs > 1
+       || web.modeltype != LAGRANGE || SDIM != 3 || web.dimension != 2
+       || compound_quant_list_head >= 0 || (sym_flags & NEED_FORM_UNWRAPPING)
+       || dirichlet_flag || sobolev_flag || web.torus_flag )
+    return 0;
+  for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
+  { struct method_instance *mi = METH_INSTANCE(mk);
+    if ( mi->flags & Q_DELETED ) continue;
+    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) && !method_ok(mi) )
+      return 0;
+  }
+  list = fl_facet_list(&n);
+  if ( !list || n == 0 ) return 0;
+
+  threads = hess_threads();
+  /* per-thread work space (Evolver's allocator is not thread-safe) */
+  for ( t = 0 ; t < threads ; t++ )
+  { q_info_init(&qi[t],METHOD_HESSIAN);
+    qi[t].hess = dmatrix4(MAXVCOUNT,MAXVCOUNT,SDIM,SDIM);
+  }
+  /* first facet serially: lazy one-time setup (e.g. packed basis matrices) */
+  qi[0].id = list[0];
+  (*q_setup[FACET])(S,&qi[0],global_needs|NEED_SIDE);
+
+  ctx.qi = qi;
+  ctx.global_needs = global_needs;
+  ctx.meth_offset = get_meth_offset(FACET);
+  ctx.mode = mode;
+  done = run_facets(S,rhs,quant_facet,&ctx,threads);
+  if ( done ) comp_quant_stamp += (int)n;
+
+  for ( t = 0 ; t < threads ; t++ )
+  { free_matrix4(qi[t].hess);
+    qi[t].hess = NULL;
+    q_info_free(&qi[t]);
+  }
+  return done;
+}
+
+/* ---- linear model: area and body volume Hessians (hessian3.c) ---- */
+
+static int linear_ok(void)
+{ return !fl_disabled() && !threadflag && web.representation == SOAPFILM
+      && web.modeltype == LINEAR && SDIM == 3 && !web.symmetry_flag
+      && !web.torus_flag;
+}
+
+static void side_of(vertex_id *c, int i, REAL *side)
+{ REAL *t = get_coord(c[i]), *h = get_coord(c[(i+1)%3]);
+  int k;
+  for ( k = 0 ; k < SDIM ; k++ ) side[k] = h[k] - t[k];   /* get_fe_side() */
+}
+
+/* area_hessian()'s loop body */
+static void area_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
+                       struct hbuf *b, void *ctx)
+{ REAL side[FACET_EDGES][MAXCOORD], ss[FACET_EDGES], sd[FACET_EDGES];
+  REAL first[FACET_VERTS][MAXCOORD], two_area;
+  struct hess_verlist *v[FACET_VERTS];
+  REAL density = get_facet_density(f_id);
+  MAT2D(self2,MAXCOORD,MAXCOORD);
+  MAT2D(otherD,MAXCOORD,MAXCOORD);
+  struct hop op;
+  int i, j, k;
+  (void)me; (void)ctx; (void)S;
+
+  if ( density == 0.0 ) return;
+  for ( i = 0 ; i < FACET_EDGES ; i++ )
+  { v[i] = get_vertex_vhead(c[i]);
+    side_of(c,i,side[i]);
+  }
+  for ( i = 0 ; i < FACET_EDGES ; i++ )
+  { ss[i] = SDIM_dot(side[i],side[i]);
+    sd[i] = -SDIM_dot(side[(i+1)%FACET_EDGES],side[(i+2)%FACET_EDGES]);
+  }
+  two_area = sqrt(ss[1]*ss[2] - sd[0]*sd[0]);
+
+  for ( i = 0 ; i < FACET_EDGES ; i++ )
+  { int ii = (i+2)%FACET_EDGES, jj = (i+1)%FACET_EDGES;
+    if ( v[i]->freedom <= 0 ) continue;
+    op.kind = OP_GRAD; op.v = c[i];
+    for ( k = 0 ; k < SDIM ; k++ )
+    { first[i][k] = (side[ii][k]*ss[jj] - sd[i]*(-side[jj][k]))/2/two_area;
+      op.x[k] = density*first[i][k];
+    }
+    put(b,&op);
+  }
+
+  if ( hess_flag )
+    for ( i = 0 ; i < FACET_EDGES ; i++ )
+    { REAL self, other;
+      int ii = (i+2)%FACET_EDGES, jj = (i+1)%FACET_EDGES;
+      if ( v[i]->freedom <= 0 ) continue;
+      for ( j = 0 ; j < SDIM ; j++ )
+        for ( k = 0 ; k < SDIM ; k++ )
+        { self = -(side[jj][j]*side[jj][k])/2;
+          if ( j == k ) self += ss[jj]/2;
+          self2[j][k] = density*(self - 2*first[i][j]*first[i][k])/two_area;
+          if ( v[jj]->freedom <= 0 ) continue;
+          other = -side[ii][j]*side[jj][k] - side[jj][j]*(-side[ii][k])/2;
+          if ( j == k ) other -= sd[i]/2;
+          otherD[j][k] = density*(other - 2*first[i][j]*first[jj][k])/two_area;
+        }
+      self_entry(b,c[i],self2);
+      if ( v[jj]->freedom > 0 )
+        mixed_entry(b,c[i],c[jj],otherD);
+    }
+}
+
+int fl_area_hessian(struct linsys *S, REAL *rhs)
+{ if ( !linear_ok() ) return 0;
+  return run_facets(S,rhs,area_facet,NULL,hess_threads());
+}
+
+/* body_hessian()'s first facet loop: volume constraint gradients */
+static void body_linear_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
+                              struct hbuf *b, void *ctx)
+{ REAL *Z = (REAL *)ctx;
+  REAL side[FACET_EDGES][MAXCOORD], *x[FACET_VERTS], coe, zsum, ssum;
+  struct hess_verlist *v[FACET_VERTS];
+  body_id b_id, bb_id;
+  int do_b, do_bb, i, j;
+  ATTR a;
+  struct hop op;
+  (void)me;
+
+  if ( get_attr(f_id) & NONCONTENT ) return;
+  b_id = get_facet_body(f_id);
+  if ( valid_id(b_id) )
+  { a = get_battr(b_id);
+    do_b = (a & FIXEDVOL) && !(a & REDUNDANT_BIT);
+  } else do_b = 0;
+  bb_id = get_facet_body(inverse_id(f_id));
+  if ( valid_id(bb_id) )
+  { a = get_battr(bb_id);
+    do_bb = (a & FIXEDVOL) && !(a & REDUNDANT_BIT);
+  } else do_bb = 0;
+  if ( !do_b && !do_bb ) return;
+
+  for ( i = 0 ; i < FACET_EDGES ; i++ )
+  { v[i] = get_vertex_vhead(c[i]);
+    x[i] = get_coord(c[i]);
+    side_of(c,i,side[i]);
+  }
+  coe = 0.0;
+  if ( valid_id(b_id) ) coe += Z[loc_ordinal(b_id)];
+  if ( valid_id(bb_id) ) coe -= Z[loc_ordinal(bb_id)];
+  zsum = (x[0][2]+x[1][2]+x[2][2]);
+  ssum = side[0][0]*side[1][1] - side[0][1]*side[1][0];
+
+  for ( i = 0 ; i < FACET_VERTS ; i++ )
+  { REAL g[MAXCOORD], gg[MAXCOORD], *ggg;
+    int ii = (i+1)%3, iii = (i+2)%3;
+    if ( web.symmetric_content )
+      cross_prod(x[ii],x[iii],g);
+    else
+    { g[0] = zsum*(x[ii][1]-x[iii][1]);
+      g[1] = zsum*(x[iii][0]-x[ii][0]);
+      g[2] = ssum;
+    }
+    op.kind = OP_GRAD; op.v = c[i];
+    for ( j = 0 ; j < SDIM ; j++ ) op.x[j] = -coe*g[j]/6;
+    put(b,&op);
+    if ( !hess_flag ) continue;
+    if ( v[i]->proj )
+    { vec_mat_mul(g,v[i]->proj,gg,SDIM,v[i]->freedom);
+      ggg = gg;
+    }
+    else ggg = g;
+    if ( do_b )
+    { int currentrow = S->bodyrowstart + loc_ordinal(b_id);
+      for ( j = 0 ; j < v[i]->freedom ; j++ )
+        put_entry(b,v[i]->rownum+j,currentrow,ggg[j]/6);
+    }
+    if ( do_bb )
+    { int currentrow = S->bodyrowstart + loc_ordinal(bb_id);
+      for ( j = 0 ; j < v[i]->freedom ; j++ )
+        put_entry(b,v[i]->rownum+j,currentrow,-ggg[j]/6);
+    }
+  }
+}
+
+int fl_body_hessian_linear(struct linsys *S, REAL *rhs, REAL *Z)
+{ if ( !linear_ok() ) return 0;
+  return run_facets(S,rhs,body_linear_facet,Z,hess_threads());
+}
+
+/* body_hessian()'s second facet loop: volume constraint Hessians */
+static void body_quadratic_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
+                                 struct hbuf *b, void *ctx)
+{ REAL *Z = (REAL *)ctx;
+  REAL *x[FACET_VERTS], coe, zsum;
+  struct hess_verlist *v[FACET_VERTS];
+  body_id b_id;
+  int i;
+  MAT2D(otherD,MAXCOORD,MAXCOORD);
+  MAT2D(self,MAXCOORD,MAXCOORD);
+  (void)me; (void)S;
+
+  otherD[0][0] = otherD[1][1] = otherD[2][2] = 0.0;
+  self[0][0] = self[1][1] = self[2][2] = 0.0;
+  self[0][1] = self[1][0] = 0.0;
+  if ( get_attr(f_id) & NONCONTENT ) return;
+  coe = 0.0;
+  b_id = get_facet_body(f_id);
+  if ( valid_id(b_id) ) coe += Z[loc_ordinal(b_id)];
+  b_id = get_facet_body(inverse_id(f_id));
+  if ( valid_id(b_id) ) coe -= Z[loc_ordinal(b_id)];
+  coe /= 6;
+  if ( coe == 0.0 ) return;
+  for ( i = 0 ; i < FACET_EDGES ; i++ )
+  { v[i] = get_vertex_vhead(c[i]);
+    x[i] = get_coord(c[i]);
+  }
+  zsum = x[0][2] + x[1][2] + x[2][2];
+  for ( i = 0 ; i < FACET_EDGES ; i++ )
+  { int jj = (i+1)%FACET_EDGES, ii = (i+2)%FACET_EDGES;
+    if ( v[i]->freedom <= 0 ) continue;
+    if ( !web.symmetric_content )
+    { self[0][2] = self[2][0] = coe*(x[jj][1]-x[ii][1]);
+      self[1][2] = self[2][1] = coe*(x[ii][0]-x[jj][0]);
+      self_entry(b,c[i],self);
+    }
+    if ( v[jj]->freedom <= 0 ) continue;
+    if ( web.symmetric_content )
+    { otherD[0][1] = -coe*x[ii][2];
+      otherD[1][0] =  coe*x[ii][2];
+      otherD[0][2] =  coe*x[ii][1];
+      otherD[2][0] = -coe*x[ii][1];
+      otherD[2][1] =  coe*x[ii][0];
+      otherD[1][2] = -coe*x[ii][0];
+    }
+    else
+    { otherD[0][1] = -coe*zsum;
+      otherD[1][0] =  coe*zsum;
+      otherD[0][2] = -coe*(x[jj][1]-x[ii][1]);
+      otherD[2][0] = -coe*(x[ii][1]-x[i ][1]);
+      otherD[1][2] = -coe*(x[ii][0]-x[jj][0]);
+      otherD[2][1] = -coe*(x[i ][0]-x[ii][0]);
+    }
+    mixed_entry(b,c[i],c[jj],otherD);
+  }
+}
+
+int fl_body_hessian_quadratic(struct linsys *S, REAL *Z)
+{ if ( !linear_ok() ) return 0;
+  return run_facets(S,NULL,body_quadratic_facet,Z,hess_threads());
 }
 
 /**************************************************************************
