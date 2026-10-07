@@ -11,6 +11,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 /*********************************************************************
 
@@ -85,7 +86,7 @@ REAL q_facet_tension_value(struct qinfo *f_info)
       proc_total_area[GET_THREAD_ID] += area;
      else
 #endif
-     binary_tree_add(web.total_area_addends,area);
+     fl_total_area_add(area);  /* thread-safe; fastloops.h */
   }
   if ( mi->flags & USE_DENSITY )
       area *= get_facet_density(f_info->id);

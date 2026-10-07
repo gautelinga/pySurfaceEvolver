@@ -1566,6 +1566,9 @@ REAL calc_quants(int mode  /* energy, constraint, and/or info flag bits */)
 #endif
   {
     global_needs = global_meth_needs(type);
+    if ( (type == FACET)  /* parallel version, fasthess.c */
+          && fl_quant_values_facets(mode,global_needs) )
+      continue;
     FOR_ALL_ELEMENTS(type,q_info->id)
     { int setup_flag = 0;
       REAL value;
@@ -2213,6 +2216,9 @@ void calc_quant_grads(
 #endif
     /* Don't put anything here; non-shared falls through!! */
     
+    if ( (type == FACET)  /* parallel version, fasthess.c */
+          && fl_quant_grads_facets(mode,global_needs) )
+      continue;
     FOR_ALL_ELEMENTS(type,q_info->id)
     { int j;
       int setup_flag = 0;

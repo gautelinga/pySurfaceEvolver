@@ -27,6 +27,15 @@ int fl_disabled(void);
    nothing, when the case isn't covered. */
 int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
                          int global_needs);
+/* web.total_area_addends += area, thread-safe in the parallel facet loops
+   (fasthess.c) */
+void fl_total_area_add(REAL area);
+
+/* The facet loops of calc_quants() and calc_quant_grads() in parallel
+   (fasthess.c); each returns 0, doing nothing, when not covered. */
+int fl_quant_values_facets(int mode, int global_needs);
+int fl_quant_grads_facets(int mode, int global_needs);
+
 /* Linear-model area and body volume Hessians (hessian3.c) in parallel
    (fasthess.c); each returns 0, doing nothing, when not covered. */
 int fl_area_hessian(struct linsys *S, REAL *rhs);

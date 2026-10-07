@@ -24,15 +24,22 @@
 #endif
 
 /* one recorded addition */
-enum { OP_ENTRY, OP_GRAD, OP_VALUE };
+enum { OP_ENTRY, OP_GRAD, OP_VALUE, OP_QVALUE, OP_FORCE, OP_VGRAD, OP_AREA };
 struct hop
 { int kind;
-  int r, c;          /* OP_ENTRY: matrix row, column; OP_VALUE: method */
-  vertex_id v;       /* OP_GRAD: vertex */
-  REAL x[MAXCOORD];  /* OP_ENTRY: x[0]; OP_GRAD: gradient; OP_VALUE: x[0], x[1] */
+  int r, c;          /* OP_ENTRY: matrix row, column; OP_VALUE, OP_QVALUE:
+                        method; OP_VGRAD: fixnum, quantity */
+  vertex_id v;       /* OP_GRAD, OP_FORCE, OP_VGRAD: vertex */
+  body_id b;         /* OP_VGRAD: body */
+  REAL s;            /* OP_FORCE, OP_VGRAD: coefficient */
+  REAL x[MAXCOORD];  /* OP_ENTRY: x[0]; OP_GRAD: gradient; OP_VALUE: x[0], x[1];
+                        OP_QVALUE: x[0]; OP_FORCE, OP_VGRAD: vector */
 };
 
 struct hbuf { struct hop *ops; long n, size; int failed; };
+
+/* the buffer the current thread records into, while run_facets() runs */
+static __thread struct hbuf *recording = NULL;
 
 static void put(struct hbuf *b, struct hop *op)
 { if ( b->failed ) return;
@@ -258,7 +265,9 @@ static int run_facets(struct linsys *S, REAL *rhs, facet_fn fn, void *ctx, int t
 #endif
       fthread[k-start] = me;
       fstart[2*(k-start)] = buf[me].n;
+      recording = &buf[me];
       (*fn)(S,list[k],corners + 3*ordinal(list[k]),me,&buf[me],ctx);
+      recording = NULL;
       fstart[2*(k-start)+1] = buf[me].n;
     }
     fl_leave();   /* may abort (Ctrl-C): nothing of this chunk added yet */
@@ -279,6 +288,25 @@ static int run_facets(struct linsys *S, REAL *rhs, facet_fn fn, void *ctx, int t
           { struct method_instance *mi = METH_INSTANCE(op->r);
             mi->newvalue += op->x[0];
             mi->abstotal += op->x[1];
+            break;
+          }
+          case OP_QVALUE:   /* as calc_quants() */
+          { struct method_instance *mi = METH_INSTANCE(op->r);
+            binary_tree_add(mi->value_addends,op->x[0]);
+            mi->abstotal += fabs(op->x[0]);
+            break;
+          }
+          case OP_FORCE:    /* as calc_quant_grads() */
+            vector_add_smul(get_force(op->v),op->x,op->s,SDIM);
+            break;
+          case OP_AREA:     /* methods' total area, see fl_total_area_add() */
+            binary_tree_add(web.total_area_addends,op->x[0]);
+            break;
+          case OP_VGRAD:
+          { volgrad *vgptr = get_bv_new_vgrad(op->r,op->v);
+            vgptr->bb_id = op->b;
+            vgptr->qnum = op->c;
+            vector_add_smul(vgptr->grad,op->x,op->s,SDIM);
             break;
           }
         }
@@ -354,6 +382,180 @@ int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
     q_info_free(&qi[t]);
   }
   return done;
+}
+
+/* The area methods add each facet's area to the total area: recorded
+   while run_facets() runs (the addition is made in facet order), added
+   right away otherwise. */
+void fl_total_area_add(REAL area)
+{ if ( recording )
+  { struct hop op;
+    op.kind = OP_AREA; op.x[0] = area;
+    put(recording,&op);
+  }
+  else binary_tree_add(web.total_area_addends,area);
+}
+
+/* ---- named-quantity values and gradients on facets ---- */
+
+/* methods whose setup, value and gradient are thread-safe (for the linear
+   and Lagrange models: they reach only allocation-free kernels) */
+static int method_ok_values(struct method_instance *mi)
+{ struct gen_quant_method *gm = basic_gen_methods + mi->gen_method;
+  if ( mi->flags & Q_COMPOUND ) return 0;
+  return (gm->value == q_facet_tension_value && gm->gradient == q_facet_tension_gradient)
+      || (gm->value == q_facet_volume && gm->gradient == q_facet_volume_grad);
+}
+
+static int quant_values_ok(void)
+{ int mk;
+  if ( fl_disabled() || threadflag || nprocs > 1
+       || (web.modeltype != LAGRANGE && web.modeltype != LINEAR)
+       || SDIM != 3 || web.dimension != 2 || web.representation != SOAPFILM
+       || compound_quant_list_head >= 0 || (sym_flags & NEED_FORM_UNWRAPPING)
+       || web.symmetry_flag || dirichlet_flag || sobolev_flag || web.torus_flag )
+    return 0;
+  for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
+  { struct method_instance *mi = METH_INSTANCE(mk);
+    if ( mi->flags & Q_DELETED ) continue;
+    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) && !method_ok_values(mi) )
+      return 0;
+  }
+  return 1;
+}
+
+/* the methods of a facet in calc_quants() order: global ones, then the
+   facet's own (mm < 0: opposite sign); calls fn for each to do */
+#define FOR_FACET_METHODS(e_ptr,meth_offset,flag,k,inum,mm,sign) \
+  for ( flag = 0, inum = global_meth_inst_count[FACET] ; flag < 2 ; \
+        flag++, inum = (e_ptr)->method_count ) \
+    for ( k = 0 ; k < inum ; k++ ) \
+      if ( (mm = flag ? ((int*)((char*)(e_ptr)+(meth_offset)))[k] \
+                      : global_meth_inst[FACET][k]), \
+           (sign = (flag && mm < 0) ? -1 : 1), 0 ) ; else
+
+static int facet_needs(struct element *e_ptr, int global_needs, int meth_offset)
+{ int k, needs = global_needs;
+  for ( k = 0 ; k < e_ptr->method_count ; k++ )
+  { struct method_instance *mi =
+        METH_INSTANCE(abs(((int*)((char*)e_ptr+meth_offset))[k]));
+    if ( (mi->flags & Q_DOTHIS) && (mi->type == FACET) )
+      needs |= basic_gen_methods[mi->gen_method].flags;
+  }
+  return needs;
+}
+
+/* calc_quants()'s element loop body */
+static void quant_value_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
+                              struct hbuf *b, void *ctx)
+{ struct quant_ctx *q = (struct quant_ctx *)ctx;
+  struct qinfo *q_info = q->qi + me;
+  struct element *e_ptr = elptr(f_id);
+  int needs, setup_flag = 0, flag, k, inum, mm, sign;
+  struct hop op;
+  (void)S; (void)c;
+
+  q_info->id = f_id;
+  needs = facet_needs(e_ptr,q->global_needs,q->meth_offset);
+  FOR_FACET_METHODS(e_ptr,q->meth_offset,flag,k,inum,mm,sign)
+  { struct method_instance *mi = METH_INSTANCE(abs(mm));
+    REAL value;
+    q_info->method = abs(mm);
+    if ( !(mi->flags & Q_DOTHIS) || (mi->type != FACET) ) continue;
+    if ( !setup_flag ) { (*q_setup[FACET])(NULL,q_info,needs); setup_flag = 1; }
+    value = (*basic_gen_methods[mi->gen_method].value)(q_info);
+    if ( mi->flags & ELEMENT_MODULUS_FLAG )
+      value *= *(REAL*)get_extra(q_info->id,mi->elmodulus);
+    if ( sign < 0 ) value = -value;
+    op.kind = OP_QVALUE; op.r = abs(mm); op.x[0] = value;
+    put(b,&op);
+  }
+}
+
+/* calc_quant_grads()'s element loop body (no compound quantities, no
+   symmetry: no unwrapping) */
+static void quant_grad_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
+                             struct hbuf *b, void *ctx)
+{ struct quant_ctx *q = (struct quant_ctx *)ctx;
+  struct qinfo *q_info = q->qi + me;
+  struct element *e_ptr = elptr(f_id);
+  int needs, setup_flag = 0, flag, k, inum, mm, sign, i, j;
+  struct hop op;
+  (void)S; (void)c;
+
+  q_info->id = f_id;
+  needs = facet_needs(e_ptr,q->global_needs,q->meth_offset);
+  FOR_FACET_METHODS(e_ptr,q->meth_offset,flag,k,inum,mm,sign)
+  { struct method_instance *mi = METH_INSTANCE(abs(mm));
+    REAL value;
+    q_info->method = abs(mm);
+    if ( !(mi->flags & Q_DOTHIS) || (mi->type != FACET) ) continue;
+    if ( !setup_flag ) { (*q_setup[FACET])(NULL,q_info,needs); setup_flag = 1; }
+    for ( i = 0 ; i < q_info->vcount ; i++ )
+      for ( j = 0 ; j < SDIM ; j++ )
+        q_info->grad[i][j] = 0.0;
+    value = (*basic_gen_methods[mi->gen_method].gradient)(q_info);
+    if ( mi->flags & ELEMENT_MODULUS_FLAG )
+    { REAL emdls = *(REAL*)get_extra(q_info->id,mi->elmodulus);
+      value *= emdls;
+      for ( i = 0 ; i < q_info->vcount ; i++ )
+        for ( j = 0 ; j < SDIM ; j++ )
+          q_info->grad[i][j] *= emdls;
+    }
+    op.kind = OP_VALUE; op.r = abs(mm);
+    op.x[0] = sign*value; op.x[1] = fabs(value);
+    put(b,&op);
+    for ( i = 0 ; i < q_info->vcount ; i++ )
+      for ( j = 0 ; j < MMAXQUANTS ; j++ )
+      { struct gen_quant *gq;
+        REAL cc;
+        if ( mi->quants[j] < 0 ) continue;
+        gq = GEN_QUANT(mi->quants[j]);
+        cc = sign*mi->modulus*gq->modulus;
+        if ( gq->flags & Q_ENERGY & q->mode )
+        { op.kind = OP_FORCE; op.s = -cc; }
+        else if ( gq->flags & (Q_FIXED|Q_CONSERVED) & q->mode )
+        { op.kind = OP_VGRAD; op.s = cc;
+          op.r = gq->fixnum; op.c = mi->quants[j]; op.b = gq->b_id;
+        }
+        else continue;
+        op.v = q_info->v[i];
+        memcpy(op.x,q_info->grad[i],SDIM*sizeof(REAL));
+        put(b,&op);
+      }
+  }
+}
+
+static int quant_facets(facet_fn fn, int qmode, int mode, int global_needs)
+{ static struct qinfo qi[FH_MAXTHREADS];
+  struct quant_ctx ctx;
+  facet_id *list;
+  long n;
+  int threads, t, done;
+
+  if ( !quant_values_ok() ) return 0;
+  list = fl_facet_list(&n);
+  if ( !list || n == 0 ) return 0;
+  threads = hess_threads();
+  for ( t = 0 ; t < threads ; t++ ) q_info_init(&qi[t],qmode);
+  qi[0].id = list[0];   /* lazy one-time setup, serially */
+  (*q_setup[FACET])(NULL,&qi[0],global_needs|NEED_SIDE);
+  ctx.qi = qi;
+  ctx.global_needs = global_needs;
+  ctx.meth_offset = get_meth_offset(FACET);
+  ctx.mode = mode;
+  done = run_facets(NULL,NULL,fn,&ctx,threads);
+  if ( done ) comp_quant_stamp += (int)n;
+  for ( t = 0 ; t < threads ; t++ ) q_info_free(&qi[t]);
+  return done;
+}
+
+int fl_quant_values_facets(int mode, int global_needs)
+{ return quant_facets(quant_value_facet,METHOD_VALUE,mode,global_needs);
+}
+
+int fl_quant_grads_facets(int mode, int global_needs)
+{ return quant_facets(quant_grad_facet,METHOD_GRADIENT,mode,global_needs);
 }
 
 /* ---- linear model: area and body volume Hessians (hessian3.c) ---- */
