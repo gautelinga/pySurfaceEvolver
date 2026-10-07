@@ -89,6 +89,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(_core PRIVATE -Wall -Wextra)
 endif()
 install(TARGETS _core LIBRARY DESTINATION pysurfaceevolver)
+# Evolver's sample datafiles and command scripts (see pysurfaceevolver.examples)
+install(DIRECTORY fe/ DESTINATION pysurfaceevolver/data/fe)
 
 # Type stubs (_core.pyi), generated from the installed module.
 nanobind_add_stub(

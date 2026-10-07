@@ -1,7 +1,7 @@
 """Python frontend to Ken Brakke's Surface Evolver.
 
 >>> from pysurfaceevolver import Evolver
->>> ev = Evolver("cube.fe")
+>>> ev = Evolver("cube.fe")          # sample datafiles are found anywhere
 >>> ev.iterate(5); ev.refine(); ev.iterate(5)
 >>> ev.eval("body[1].volume")
 >>> ev.values("vertex", "x^2 + y^2")   # one value per vertex
@@ -24,6 +24,9 @@ from ._evolver import (
 )
 from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
 from ._viz import LiveView
+from . import examples
+
+examples._add_to_evolverpath()
 
 __all__ = [
     "Bodies",
@@ -42,6 +45,7 @@ __all__ = [
     "Quantity",
     "Snapshot",
     "is_watertight",
+    "examples",
     "make_datafile",
 ]
 __version__ = "0.3.0"
