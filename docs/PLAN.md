@@ -174,10 +174,28 @@ workers; the serial remainder is ~1-2% items.
    2. Parallel Hessian assembly (`hessian_fill`, `calc_quant_hess`): per-facet
       blocks computed in parallel, merged into the sparse matrix (the hash in
       `matrix.c`).
-   3. Decision point: if factorization still dominates, bring measurements and a
-      recommendation on a modern sparse LDL^T (must still report the Hessian
-      index/inertia). Expect parallel speedups to flatten at ~4 threads here.
-      **Pause here and report.**
+   3. **Decided (2026-10-07): MUMPS** replaces Evolver's factorization as the
+      default for Newton steps; Evolver's own (mindeg) stays as an option and
+      as the fallback in builds without MUMPS. Measured on exported Newton
+      matrices (`PYSE_DUMP_HESSIAN`), factor incl. ordering, 4 threads:
+      linear 393k facets 1.39 s (Evolver) -> MUMPS 0.31 s / PARDISO 0.21 s;
+      linear 1.6M 18.9 s -> 2.2 / 1.7 s (1 thread: 3.0 / 3.1 s); Lagrange 4
+      24k 1.79 -> 0.43 / 0.30 s; Lagrange 6 24k 7.9 -> 1.03 / 0.74 s. CHOLMOD
+      (simplicial LDL^T, the only indefinite option) no faster than Evolver.
+      MUMPS: open source (CeCILL-C), inertia incl. null pivots, sequential
+      build without MPI, any platform; PARDISO: ~1.3x faster but closed MKL,
+      ~200 MB, x86 only. The ordering can be reused while the topology is
+      unchanged. Expected Newton step: linear 1.6M 26 -> ~9 s; Lagrange 6 24k
+      (4 threads) 16 -> ~9 s.
+      Done before the decision: parallel Hessian assembly for Lagrange facet
+      quantities (`src/fasthess.c`: order 6 at 24k, 4 threads, 22 -> 14.7 s);
+      METIS 5 port of `metis.c` and the `metis_factor` fall-through fix
+      (METIS ordering alone: -3% to -16%, slower at 98k).
+   4. Integrate MUMPS (sequential, OpenBLAS) into the build and wheels; new
+      factoring mode, default when built in; verify Newton steps and Hessian
+      index against the current solver.
+   5. Parallel assembly for the linear Newton path (`hessian.c`:
+      `body_hessian`, `area_hessian`, ~37% of a linear Newton step).
 4. **Thread defaults** (small, partly by the user on a quiet machine):
    `bench/benchmark.py --threads 1 2 4 8`; set the default thread count (likely
    capped at physical cores, possibly 4 on hybrid laptops), `FL_PARALLEL_MIN`, and

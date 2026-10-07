@@ -17,6 +17,9 @@ int fl_disabled(void);
    nothing, when the case isn't covered. */
 int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
                          int global_needs);
+/* PYSE_DUMP_HESSIAN debugging hooks around the factoring (fasthess.c) */
+void fl_hessian_before_factor(struct linsys *S);
+void fl_hessian_after_factor(struct linsys *S);
 /* Nonzero when PYSE_CHECK_FACET_CACHE is set: verify every cached answer. */
 int fl_check(void);
 

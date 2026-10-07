@@ -11,6 +11,7 @@
 /************************************************************************/  
 
 #include "include.h"
+#include "fastloops.h"
 
 /**************************************************************************/
 
@@ -1785,8 +1786,10 @@ void sp_Hessian_solver(
   (*sp_AIJ_setup_func)(S->A_rows,S);
   (*sp_constraint_setup_func)
      (web.skel[BODY].max_ord+1 + gen_quant_count,S);
+  fl_hessian_before_factor(S);  /* debugging, fastloops.h */
   if ( sp_ordering_func ) (*sp_ordering_func)(S);
   sp_factor(S,MKL_INDEF);
+  fl_hessian_after_factor(S);
   (*sp_hess_project_setup_func)(S);
 
   if ( hess_debug )

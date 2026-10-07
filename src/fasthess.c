@@ -314,3 +314,41 @@ int fl_quant_hess_facets(struct linsys *S, int hess_mode, int mode, REAL *rhs,
     kb_error(6350,"Out of memory in parallel Hessian assembly.\n",RECOVERABLE);
   return 1;
 }
+
+/**************************************************************************
+ * Debugging and solver experiments: PYSE_DUMP_HESSIAN=path writes the
+ * Newton-step matrix that is about to be factored (upper triangle, as
+ * stored, in Matrix Market format) to path, overwriting it each time, and
+ * reports the time of Evolver's factoring.
+ */
+
+static double fh_t0;
+
+void fl_hessian_before_factor(struct linsys *S)
+{ const char *path = getenv("PYSE_DUMP_HESSIAN");
+  FILE *fd;
+  int i, j;
+  if ( !path ) return;
+  fd = fopen(path,"w");
+  if ( fd )
+  { fprintf(fd,"%%%%MatrixMarket matrix coordinate real symmetric\n");
+    fprintf(fd,"%% pySE Newton-step matrix: N %d, A_rows %d, quanrowstart %d\n",
+            S->N,S->A_rows,S->quanrowstart);
+    fprintf(fd,"%d %d %d\n",S->N,S->N,S->IA[S->N]-A_OFF);
+    for ( i = 0 ; i < S->N ; i++ )
+      for ( j = S->IA[i]-A_OFF ; j < S->IA[i+1]-A_OFF ; j++ )
+        fprintf(fd,"%d %d %.17g\n",S->JA[j]-A_OFF+1,i+1,S->A[j]);
+    fclose(fd);
+  }
+#ifdef _OPENMP
+  fh_t0 = omp_get_wtime();
+#endif
+}
+
+void fl_hessian_after_factor(struct linsys *S)
+{ if ( !getenv("PYSE_DUMP_HESSIAN") ) return;
+#ifdef _OPENMP
+  fprintf(stderr,"PYSE_DUMP_HESSIAN: N %d, nnz %d, factor %.3f s, inertia %d neg %d zero %d pos\n",
+          S->N,S->IA[S->N]-A_OFF,omp_get_wtime()-fh_t0,S->neg,S->zero,S->pos);
+#endif
+}
