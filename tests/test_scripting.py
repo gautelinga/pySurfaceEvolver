@@ -218,7 +218,7 @@ def test_fast_writes_match_set_command(load):
     ev = load("cube.fe")
     ev.refine()
     ids = ev.values("vertex", "id").astype(int)
-    ev.command("; ".join(f"set vertex[{i}] x {v!r}" for i, v in zip(ids, x)))
+    ev.command("; ".join(f"set vertex[{i}] x {float(v)!r}" for i, v in zip(ids, x)))
     np.testing.assert_array_equal(ev.vertices, fast[0])
     assert ev.total_energy == fast[1]
 
