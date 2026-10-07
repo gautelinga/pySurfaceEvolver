@@ -751,3 +751,287 @@ int fl_film_grad(void)
   int_val = ordinal(get_original(list[n-1])) + 1;
   return 1;
 }
+
+/**************************************************************************
+ * Vertices and selected elements
+ *
+ * The vertex list (FOR_ALL_VERTICES order, cached like the facet list)
+ * lets per-vertex loops run in parallel. Loops that must stay serial
+ * (expression evaluation, ordered sums) but act on few elements use
+ * FL_FOR_SELECTED: a parallel scan for the elements with given attribute
+ * bits, then the loop body for those, in traversal order.
+ */
+
+static vertex_id *vl_list = NULL;
+static long vl_list_size = 0;
+static long vl_count = 0;
+static long vl_stamp = -1;
+static long vl_vcount = -1;
+static long vl_maxord = -1;
+
+/* traversal-order list of VERTEX or EDGE elements, or NULL */
+static element_id *type_list(int type, long *n)
+{ element_id **list;
+  long *size, *count, *stamp, *ecount, *maxord;
+  element_id id;
+  long k;
+  static edge_id *edges = NULL;
+  static long edges_size = 0, edges_count = 0, edges_stamp = -1,
+              edges_ecount = -1, edges_maxord = -1;
+
+  if ( type == VERTEX )
+  { list = &vl_list; size = &vl_list_size; count = &vl_count;
+    stamp = &vl_stamp; ecount = &vl_vcount; maxord = &vl_maxord;
+  }
+  else
+  { list = &edges; size = &edges_size; count = &edges_count;
+    stamp = &edges_stamp; ecount = &edges_ecount; maxord = &edges_maxord;
+  }
+  if ( !(*list && *stamp == top_timestamp && *ecount == web.skel[type].count
+         && *maxord == (long)web.skel[type].max_ord) )
+  { if ( !ensure_size((void**)list,size,web.skel[type].count + 1,sizeof(element_id)) )
+      return NULL;
+    k = 0;
+    for ( id = web.skel[type].used ; valid_id(id) ; id = elptr(id)->forechain )
+    { if ( !valid_element(id) ) continue;
+      if ( k < *size ) (*list)[k] = id;
+      k++;
+    }
+    if ( k != web.skel[type].count ) return NULL;
+    *count = k;
+    *stamp = top_timestamp;
+    *ecount = web.skel[type].count;
+    *maxord = (long)web.skel[type].max_ord;
+  }
+  else if ( fl_check() )
+  { k = 0;
+    for ( id = web.skel[type].used ; valid_id(id) ; id = elptr(id)->forechain )
+    { if ( !valid_element(id) ) continue;
+      if ( k >= *count || !equal_id((*list)[k],id) )
+      { fprintf(stderr,"%s list cache mismatch at position %ld\n",
+                typenames[type],k);
+        abort();
+      }
+      k++;
+    }
+    if ( k != *count )
+    { fprintf(stderr,"%s list cache has %ld, surface %ld\n",typenames[type],*count,k);
+      abort();
+    }
+  }
+  *n = *count;
+  return *list;
+}
+
+/* the vertex list, when the parallel vertex loops apply */
+static vertex_id *vertex_list(long *n)
+{ if ( fl_disabled() || threadflag ) return NULL;
+  return type_list(VERTEX,n);
+}
+
+#define FL_SELECT_SITES 8
+static element_id *sel_buf[FL_SELECT_SITES];
+static long sel_buf_size[FL_SELECT_SITES];
+static unsigned char *sel_mark = NULL;
+static long sel_mark_size = 0;
+
+void fl_sel_begin(fl_sel *s, int type, ATTR bits, int site)
+{ element_id *list;
+  long n, k, hits = 0;
+  s->type = type;
+  s->bits = bits;
+  s->list = NULL;
+  s->n = s->k = 0;
+  s->id = NULLID;
+  if ( fl_disabled() || threadflag || site < 0 || site >= FL_SELECT_SITES )
+    return;
+  list = type_list(type,&n);
+  if ( !list ) return;
+  if ( bits == 0 ) { s->list = list; s->n = n; return; }
+  if ( !ensure_size((void**)&sel_mark,&sel_mark_size,n,1) ) return;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n)) reduction(+:hits)
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { sel_mark[k] = (elptr(list[k])->attr & bits) != 0;
+    hits += sel_mark[k];
+  }
+  if ( !ensure_size((void**)&sel_buf[site],&sel_buf_size[site],hits+1,sizeof(element_id)) )
+    return;
+  s->n = 0;
+  for ( k = 0 ; s->n < hits ; k++ )
+    if ( sel_mark[k] ) sel_buf[site][s->n++] = list[k];
+  s->list = sel_buf[site];
+}
+
+int fl_sel_next(fl_sel *s, element_id *id)
+{ if ( s->list )
+  { if ( s->k >= s->n ) return 0;
+    *id = s->list[s->k++];
+    return 1;
+  }
+  /* fallback: Evolver's own traversal, same selection */
+  if ( !valid_id(s->id) ) s->id = (s->k++ == 0) ? web.skel[s->type].used : NULLID;
+  else s->id = elptr(s->id)->forechain;
+  while ( valid_id(s->id) && (!valid_element(s->id)
+            || (s->bits && !(elptr(s->id)->attr & s->bits))) )
+    s->id = elptr(s->id)->forechain;
+  if ( !valid_id(s->id) ) return 0;
+  *id = s->id;
+  return 1;
+}
+
+int fl_zero_forces(void)
+{ vertex_id *list;
+  long n, k;
+  if ( !(list = vertex_list(&n)) ) return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { REAL *f = get_force(list[k]);
+    int i;
+    for ( i = 0 ; i < SDIM ; i++ ) f[i] = 0.0;
+    set_vertex_valence(list[k],0);
+  }
+  return 1;
+}
+
+int fl_move_vertices(REAL scale, int dim)
+{ vertex_id *list;
+  long n, k;
+  if ( !(list = vertex_list(&n)) ) return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    ATTR attr = get_vattr(v_id);
+    REAL *velocity, *x;
+    int i;
+    if ( attr & FIXED ) continue;
+    velocity = get_velocity(v_id);
+    if ( attr & BOUNDARY )
+    { int pcount = get_boundary(v_id)->pcount;
+      REAL *param = get_param(v_id);
+      for ( i = 0 ; i < pcount ; i++ )
+        param[i] += scale*velocity[i];
+    }
+    else
+    { x = get_coord(v_id);
+      for ( i = 0 ; i < dim ; i++ )
+        x[i] += scale*velocity[i];
+    }
+  }
+  return 1;
+}
+
+int fl_save_coords(REAL (*coord)[MAXCOORD])
+{ vertex_id *list;
+  long n, k;
+  if ( !(list = vertex_list(&n)) ) return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    REAL *to = coord ? coord[loc_ordinal(v_id)] : get_oldcoord(v_id);
+    if ( get_vattr(v_id) & BOUNDARY )
+      memcpy(to,get_param(v_id),sizeof(REAL)*web.maxparam);
+    else
+      memcpy(to,get_coord(v_id),sizeof(REAL)*SDIM);
+  }
+  return 1;
+}
+
+int fl_restore_coords(REAL (*coord)[MAXCOORD])
+{ vertex_id *list;
+  long n, k;
+  if ( !(list = vertex_list(&n)) ) return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    if ( get_vattr(v_id) & BOUNDARY ) continue;   /* serial: evaluates */
+    memcpy(get_coord(v_id),coord ? coord[loc_ordinal(v_id)] : get_oldcoord(v_id),
+           sizeof(REAL)*SDIM);
+  }
+  return 1;
+}
+
+int fl_volume_restore(REAL stepsize, REAL *vol_restore, int fixcount)
+{ vertex_id *list;
+  long n, k;
+  if ( approx_curve_flag ) return 0;
+  if ( !(list = vertex_list(&n)) ) return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    ATTR attr = get_vattr(v_id);
+    REAL *x;
+    volgrad *vgptr;
+    int bi, i;
+    if ( attr & (CONSTRAINT|BOUNDARY|FIXED) ) continue;  /* serial or none */
+    x = get_coord(v_id);
+    for ( vgptr = get_vertex_vgrad(v_id) ; vgptr ; vgptr = vgptr->chain )
+    { bi = vgptr->fixnum;
+      if ( (bi < 0) || (bi >= fixcount) ) continue;
+      for ( i = 0 ; i < SDIM ; i++ )
+        x[i] += stepsize*vol_restore[bi]*vgptr->velocity[i];
+    }
+  }
+  return 1;
+}
+
+/* dense DV^T DV for at most this many constraints */
+#define FL_LEFTSIDE_MAX 256
+
+static double *ls_buf = NULL;
+static long ls_buf_size = 0;
+
+int fl_calc_leftside(REAL **rleftside, int fixcount, int *degfree)
+{ vertex_id *list;
+  long n, k, m = (long)fixcount*fixcount;
+  int threads, t, deg = 0;
+  if ( approx_curve_flag || fixcount > FL_LEFTSIDE_MAX ) return 0;
+  if ( !(list = vertex_list(&n)) ) return 0;
+  threads = loop_threads(n);
+  if ( !ensure_size((void**)&ls_buf,&ls_buf_size,threads*m,sizeof(double)) )
+    return 0;
+  memset(ls_buf,0,threads*m*sizeof(double));
+#ifdef _OPENMP
+  #pragma omp parallel num_threads(threads) reduction(+:deg)
+#endif
+  { double *a = ls_buf + THREAD_NUM()*m;
+    long kk;
+#ifdef _OPENMP
+    #pragma omp for schedule(static)
+#endif
+    for ( kk = 0 ; kk < n ; kk++ )
+    { vertex_id v_id = list[kk];
+      volgrad *vgi, *vgj;
+      if ( get_vattr(v_id) & FIXED ) continue;
+      for ( vgi = get_vertex_vgrad(v_id) ; vgi ; vgi = vgi->chain )
+      { int bi = vgi->fixnum;
+        if ( (bi < 0) || (bi >= fixcount) ) continue;
+        deg++;
+        a[bi*fixcount+bi] += SDIM_dot(vgi->velocity,vgi->grad);
+        for ( vgj = vgi->chain ; vgj ; vgj = vgj->chain )
+        { int bj = vgj->fixnum;
+          REAL tmp = SDIM_dot(vgi->grad,vgj->velocity);
+          if ( (bj < 0) || (bj >= fixcount) ) continue;
+          a[bi*fixcount+bj] += tmp;
+          a[bj*fixcount+bi] += tmp;
+        }
+      }
+    }
+  }
+  for ( t = 0 ; t < threads ; t++ )
+    for ( k = 0 ; k < m ; k++ )
+      rleftside[k/fixcount][k%fixcount] += ls_buf[t*m + k];
+  *degfree += deg;
+  return 1;
+}

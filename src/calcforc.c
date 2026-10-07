@@ -90,6 +90,7 @@ void local_calc_energy()
   int i;
   body_id    b_id;
   edge_id e_id;
+  fl_sel sel;
 
   if ( web.torus_flag ) calc_periods(ADJUST_VOLUMES);
   else if ( web.torus_period ) calc_periods(NO_ADJUST_VOLUMES);
@@ -178,7 +179,7 @@ void local_calc_energy()
        (*calc_facet_energy)(f_id,ALL_ENERGIES);
     }
 
-    FOR_ALL_EDGES(e_id)
+    FL_FOR_SELECTED(sel,EDGE,e_id,BDRY_ENERGY|DENSITY,0)  /* fastloops.c */
     { ATTR attr = get_eattr(e_id);
       if ( attr & BDRY_ENERGY ) 
         { if ( attr & CONSTRAINT )
@@ -281,8 +282,10 @@ void local_calc_force()
   facet_id f_id;
   edge_id e_id;
   int i;
+  fl_sel sel;
 
   /* zero out vertex cumulative quantities */
+  if ( !fl_zero_forces() )  /* parallel version, fastloops.c */
   MFOR_ALL_VERTICES(v_id)
   { REAL *f = get_force(v_id);
     for ( i = 0 ; i < SDIM ; i ++ ) f[i] = 0.0;           
@@ -348,7 +351,7 @@ void local_calc_force()
     }
   }
   else /* SOAPFILM */
-  { FOR_ALL_EDGES(e_id)
+  { FL_FOR_SELECTED(sel,EDGE,e_id,BDRY_ENERGY|DENSITY,1)  /* fastloops.c */
     { ATTR attr = get_eattr(e_id);
      if ( attr & DENSITY )
        (*calc_edge_forces)(e_id);  /* for triple line energies */
@@ -796,6 +799,7 @@ void  local_calc_content (
   { if ( web.torus_flag ) torvol();
     else
     { edge_id e_id;
+      fl_sel sel;
 
       if ( threadflag )
         thread_launch(TH_CALC_FACET_VOLUME,FACET);
@@ -806,7 +810,7 @@ void  local_calc_content (
       if ( threadflag )
         thread_launch(TH_CALC_EDGE_CON_VOLUME,EDGE);
       else
-      FOR_ALL_EDGES(e_id)
+      FL_FOR_SELECTED(sel,EDGE,e_id,BDRY_CONTENT,2)  /* fastloops.c */
       { ATTR attr = get_eattr(e_id);
         if ( !(attr & BDRY_CONTENT) ) continue;
         if ( attr & CONSTRAINT )

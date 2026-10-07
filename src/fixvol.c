@@ -712,7 +712,8 @@ void local_calc_leftside()
   int bi,bj;
   
   /* generate  DV^T DV */
-  if ( !approx_curve_flag )
+  if ( !approx_curve_flag && (sparse_constraints_flag
+          || !fl_calc_leftside(rleftside,fixcount,&degfree)) )  /* fastloops.c */
   { FOR_ALL_VERTICES(v_id)
     {
       volgrad *vgptri,*vgptrj;
@@ -1223,9 +1224,15 @@ void local_volume_restore(
 )
 { vertex_id v_id;
   int bi,i,k;
+  fl_sel sel;
+  ATTR bits = 0;  /* all vertices */
   
+  /* parallel version for plain vertices, fastloops.c; the rest here */
+  if ( fl_volume_restore(stepsize,vol_restore,fixcount) )
+    bits = CONSTRAINT|BOUNDARY;
+
   /* vertices */
-  FOR_ALL_VERTICES(v_id)
+  FL_FOR_SELECTED(sel,VERTEX,v_id,bits,5)
   { REAL *x;
     volgrad *vgptr;
     int ord = loc_ordinal(v_id);

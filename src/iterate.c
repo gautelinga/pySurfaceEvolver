@@ -11,6 +11,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 int volgrads_changed_flag; /* whether volgrads recalced during move */
 
@@ -585,7 +586,7 @@ void local_move_vertices(
   { thread_scale = scale;
     thread_launch(TH_MOVE_VERTICES,VERTEX);
   }
-  else
+  else if ( !fl_move_vertices(scale,dim) )  /* parallel version, fastloops.c */
   FOR_ALL_VERTICES(v_id)
   {
     if ( get_vattr(v_id) & FIXED ) continue ;
@@ -662,6 +663,7 @@ void project_all(
   int mode2  /* TEST_MOVE or ACTUAL_MOVE */
 )
 { vertex_id v_id;
+  fl_sel sel;
   int one_sided_mode = (mode2==TEST_MOVE) ? KEEP_ONESIDEDNESS : RESET_ONESIDEDNESS;
   /* project to constraints and boundaries */
 
@@ -673,7 +675,7 @@ void project_all(
     thread_launch(task,VERTEX);
   }
   else
-  FOR_ALL_VERTICES(v_id)
+  FL_FOR_SELECTED(sel,VERTEX,v_id,CONSTRAINT|BOUNDARY,3)  /* fastloops.c */
   { ATTR attr = get_vattr(v_id);
     if ( attr & CONSTRAINT )
        project_v_constr(v_id,mode2,one_sided_mode);
@@ -829,6 +831,7 @@ void local_save_coords(
     saver->coord = (REAL (*)[MAXCOORD])temp_calloc(web.skel[VERTEX].max_ord+1,
                                                   sizeof(REAL)*MAXCOORD);
 
+    if ( !fl_save_coords(saver->coord) )  /* parallel version, fastloops.c */
     FOR_ALL_VERTICES(v_id)
     { if ( get_vattr(v_id) & BOUNDARY )
         memcpy((char *)(saver->coord+loc_ordinal(v_id)),(char *)get_param(v_id),
@@ -841,6 +844,7 @@ void local_save_coords(
   }
   else
   {
+    if ( !fl_save_coords(NULL) )  /* parallel version, fastloops.c */
     FOR_ALL_VERTICES(v_id)
     { if ( get_vattr(v_id) & BOUNDARY )
         memcpy((char *)(get_oldcoord(v_id)),(char *)get_param(v_id),
@@ -932,6 +936,12 @@ void local_restore_coords(
      }
   }
 
+  if ( fl_restore_coords(mode == SAVE_SEPARATE ? saver->coord : NULL) )
+  { fl_sel sel;   /* parallel version did all but boundary vertices */
+    FL_FOR_SELECTED(sel,VERTEX,v_id,BOUNDARY,4)
+      restore_vertex(v_id,saver,mode);
+  }
+  else
   FOR_ALL_VERTICES(v_id)
      restore_vertex(v_id,saver,mode);
 

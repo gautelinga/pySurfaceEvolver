@@ -36,6 +36,36 @@ int fl_facet_forces(void);
    the case isn't covered. */
 int fl_film_grad(void);
 
+/* Per-vertex loops over all vertices, in parallel (iterate.c, fixvol.c,
+   calcforc.c). Each returns 0, doing nothing, when it doesn't apply.
+   Boundary vertices (and in fl_volume_restore() constraint vertices)
+   are left to the caller's serial loop: they evaluate expressions. */
+int fl_zero_forces(void);
+int fl_move_vertices(REAL scale, int dim);
+int fl_save_coords(REAL (*coord)[MAXCOORD]);     /* NULL: to __oldx */
+int fl_restore_coords(REAL (*coord)[MAXCOORD]);  /* NULL: from __oldx */
+int fl_volume_restore(REAL stepsize, REAL *vol_restore, int fixcount);
+/* DV^T DV added to dense rleftside, degrees of freedom to *degfree */
+int fl_calc_leftside(REAL **rleftside, int fixcount, int *degfree);
+
+/* Serial loops over the vertices or edges whose attributes have any of
+   `bits` (all of them for bits 0), in FOR_ALL order, found by a parallel
+   scan; Evolver's own traversal when that doesn't apply. `site` is a
+   small number unique to the call site (its own result buffer).
+     fl_sel sel;
+     FL_FOR_SELECTED(sel,EDGE,e_id,BDRY_ENERGY|DENSITY,0) { ... }  */
+typedef struct
+{ element_id *list;
+  long n, k;
+  element_id id;
+  int type;
+  ATTR bits;
+} fl_sel;
+void fl_sel_begin(fl_sel *s, int type, ATTR bits, int site);
+int fl_sel_next(fl_sel *s, element_id *id);
+#define FL_FOR_SELECTED(sel,type,id,bits,site) \
+  for ( fl_sel_begin(&(sel),(type),(bits),(site)) ; fl_sel_next(&(sel),&(id)) ; )
+
 /* Bumped when facet NONCONTENT attributes change or bodies are deleted
    (the loops cache facet bodies; set_facet_body() bumps top_timestamp). */
 extern long fl_body_stamp;
