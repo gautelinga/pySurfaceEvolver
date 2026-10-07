@@ -277,9 +277,20 @@ Phase C2 is complete (see the table in Status). After it, at the user's request:
      factorization-bound). Tests, stock sanitizers and an OpenMP sanitizer run
      on refined samples (cube, mound, catbody, column, sphere, twointor,
      phelanc) pass.
-- Further options discussed, not chosen: hash-free direct CSR assembly (5-10%),
-  reusing a factorization over several Newton steps (algorithmic; user decision),
-  phase E compact data layouts.
+- Future speed options (noted 2026-10-07; the user chose phase D first; effort
+  and gain are estimates, not measured):
+  - Hash-free direct assembly: build the sparsity pattern once per topology and
+    add entries straight into CSR slots instead of `sp_hash_search`; hash path
+    kept as fallback. Effort 1-2 days (fasthess.c, linsys setup). Gain 5-10% of
+    a linear Newton step (older noisy profile), little for Lagrange. Low risk.
+  - Factorization reuse over several Newton steps (chord Newton), opt-in;
+    refactor when convergence slows. Effort small-medium, mostly convergence
+    testing. Gain up to ~2x on a `hessian` ladder (factorization dominates
+    Lagrange 6 and 1.6M). Changes the algorithm (linear convergence, can fail
+    far from equilibrium): user decision.
+  - Phase E compact layouts / state struct: weeks, high risk; speed gain
+    uncertain (perhaps 10-30% in memory-bound loops); main value is fresh state
+    per load and multiple engines.
 - Scratch tools (session scratchpad, lost on restart): newton_t.py, prof_newton2.py,
   solvers.c harness, matrix dumps (`PYSE_DUMP_HESSIAN=path` recreates them).
 
