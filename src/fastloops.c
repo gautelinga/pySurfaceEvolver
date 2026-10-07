@@ -251,6 +251,8 @@ int fl_threads(void)
 { return fl_thread_count > 0 ? fl_thread_count : default_threads();
 }
 
+int fl_thread_setting(void) { return fl_thread_count; }
+
 /* Also sets OpenMP's default, which MUMPS and an OpenMP BLAS use. */
 void fl_set_threads(int n)
 { fl_thread_count = n > 0 ? n : 0;

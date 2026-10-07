@@ -121,7 +121,9 @@ thread-safe; integrands that use only arithmetic, math functions, parameters and
 coordinates qualify, others (user procedures, assignments, ...) run serially.
 
 Threads default to the number of physical cores. `pse.set_threads(n)` /
-`pse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`); `pse.map`
+`pse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`);
+`with pse.threads_limit(n):` sets them for a block, and `ev.relax(...,
+threads=n)` / `ev.hessian(threads=n)` for one call; `pse.map`
 workers run single-threaded by default, since for sweeps more processes beat more
 threads. With several threads, results can differ from run to run at round-off
 level; with one thread they are reproducible bit for bit. `PYSE_NO_FAST_LOOPS=1`

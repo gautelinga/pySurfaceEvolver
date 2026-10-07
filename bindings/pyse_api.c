@@ -1123,6 +1123,7 @@ void pyse_set_handle_sigint(int flag) { handle_sigint = flag; }
 
 void pyse_set_threads(int n) { fl_set_threads(n); }
 int pyse_threads(void) { return fl_threads(); }
+int pyse_thread_setting(void) { return fl_thread_setting(); }
 
 int pyse_set_solver(const char *name)
 { int newh, quiet = quiet_flag;

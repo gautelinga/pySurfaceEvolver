@@ -192,3 +192,32 @@ def test_thread_setting():
     assert pse.threads() == 2
     pse.set_threads(0)
     assert pse.threads() == default
+
+
+def test_threads_limit_restores_the_setting():
+    import pysurfaceevolver as pse
+    from pysurfaceevolver import _core
+    pse.set_threads(0)
+    default = pse.threads()
+    with pse.threads_limit(2):
+        assert pse.threads() == 2
+        with pse.threads_limit(3):
+            assert pse.threads() == 3
+        assert pse.threads() == 2
+    assert pse.threads() == default and _core.thread_setting() == 0
+    pse.set_threads(5)
+    try:
+        with pytest.raises(RuntimeError):
+            with pse.threads_limit(1):
+                raise RuntimeError
+        assert pse.threads() == 5
+    finally:
+        pse.set_threads(0)
+
+
+def test_threads_argument_for_one_call(load):
+    ev = load("cube.fe")
+    ev.relax(max_iter=5, threads=1)
+    ev.hessian(threads=1)
+    from pysurfaceevolver import _core
+    assert _core.thread_setting() == 0

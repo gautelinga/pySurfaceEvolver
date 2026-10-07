@@ -136,6 +136,7 @@ extern long fl_body_stamp;
 
 /* Number of threads for the parallel loops (1 without OpenMP). */
 int fl_threads(void);
+int fl_thread_setting(void);   /* as set: 0 for the default */
 void fl_set_threads(int n);
 
 #endif

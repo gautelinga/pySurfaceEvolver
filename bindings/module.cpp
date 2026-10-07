@@ -419,6 +419,7 @@ NB_MODULE(_core, m) {
   m.def("surface_version", []() { Lock lock; return pyse_surface_version(); });
   m.def("set_threads", [](int n) { Lock lock; pyse_set_threads(n); }, "n"_a);
   m.def("threads", []() { Lock lock; return pyse_threads(); });
+  m.def("thread_setting", []() { Lock lock; return pyse_thread_setting(); });
   m.def("set_solver", [](const std::string &name) {
     Lock lock;
     return pyse_set_solver(name.c_str()) != 0;

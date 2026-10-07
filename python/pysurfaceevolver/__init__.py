@@ -10,6 +10,9 @@
 >>> ev.plot("area")                    # PyVista
 """
 
+import contextlib
+from typing import Iterator
+
 from ._build import Body, make_datafile
 from ._evolver import (
     Evolver,
@@ -37,9 +40,26 @@ def set_threads(n: int) -> None:
 
 
 def threads() -> int:
-    """Threads the parallel facet loops use (1 if built without OpenMP)."""
+    """Threads the parallel loops and Newton steps use (1 without OpenMP)."""
     from . import _core
     return _core.threads()
+
+
+@contextlib.contextmanager
+def threads_limit(n: int) -> Iterator[None]:
+    """Use ``n`` threads inside the ``with`` block, then restore the previous
+    setting (including "the default")::
+
+        with pse.threads_limit(4):
+            ev.relax(hessian=True)
+    """
+    from . import _core
+    previous = _core.thread_setting()
+    _core.set_threads(int(n))
+    try:
+        yield
+    finally:
+        _core.set_threads(previous)
 
 def _start_engine() -> None:
     """Start the engine if it isn't running (it applies PYSE_SOLVER then)."""
@@ -95,5 +115,6 @@ __all__ = [
     "set_threads",
     "solver",
     "threads",
+    "threads_limit",
 ]
 __version__ = "0.5.0"

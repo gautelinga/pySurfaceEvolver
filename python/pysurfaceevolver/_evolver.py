@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import sys
@@ -32,6 +33,20 @@ __all__ = [
     "InvalidSurfaceError",
     "EvolverWarning",
 ]
+
+
+@contextlib.contextmanager
+def _threads_for_call(threads: Optional[int]) -> Iterator[None]:
+    """Use `threads` threads for one call (None: leave the setting alone)."""
+    if threads is None:
+        yield
+        return
+    previous = _core.thread_setting()
+    _core.set_threads(int(threads))
+    try:
+        yield
+    finally:
+        _core.set_threads(previous)
 
 
 class EvolverError(RuntimeError):
@@ -387,7 +402,7 @@ class Evolver:
     def relax(self, tol: float = 1e-10, max_iter: int = 1000, *, window: int = 5,
               hessian: bool = False, max_hessian: int = 10,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
-              every: int = 1) -> IterationResult:
+              every: int = 1, threads: Optional[int] = None) -> IterationResult:
         """Iterate until the energy stops changing.
 
         Runs gradient iterations until the relative energy change
@@ -399,8 +414,17 @@ class Evolver:
         Returns the gradient iterations' :class:`IterationResult`, with
         ``converged`` and ``hessian_steps`` set. ``callback(ev, i)`` works as
         in :meth:`iterate`. It doesn't refine; refine and relax again for a
-        finer surface.
+        finer surface. ``threads`` sets the threads for this call only (see
+        :func:`pysurfaceevolver.threads_limit`).
         """
+        with _threads_for_call(threads):
+            return self._relax(tol, max_iter, window=window, hessian=hessian,
+                               max_hessian=max_hessian, callback=callback, every=every)
+
+    def _relax(self, tol: float, max_iter: int, *, window: int, hessian: bool,
+               max_hessian: int, callback: Optional[Callable[["Evolver", int], Any]],
+               every: int) -> IterationResult:
+        """relax() without the thread setting."""
         if tol <= 0 or max_iter < 1 or window < 1:
             raise ValueError("tol must be positive; max_iter and window at least 1")
         energy: List[float] = []
@@ -448,9 +472,12 @@ class Evolver:
         """Move vertices to the average of their neighbors (Evolver's ``V``)."""
         self.command("V")
 
-    def hessian(self, seek: bool = False) -> None:
-        """One Newton step (``hessian``), or a Newton line search (``hessian_seek``)."""
-        self.command("hessian_seek" if seek else "hessian")
+    def hessian(self, seek: bool = False, *, threads: Optional[int] = None) -> None:
+        """One Newton step (``hessian``), or a Newton line search (``hessian_seek``).
+        ``threads`` sets the threads for this call only (see
+        :func:`pysurfaceevolver.threads_limit`)."""
+        with _threads_for_call(threads):
+            self.command("hessian_seek" if seek else "hessian")
 
     def set_model(self, model: str, order: Optional[int] = None) -> None:
         """Switch to the ``"linear"``, ``"quadratic"`` or ``"lagrange"`` model.

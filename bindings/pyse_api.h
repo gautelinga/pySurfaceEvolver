@@ -119,6 +119,7 @@ int pyse_get_quantities(char (*names)[PYSE_NAME_SIZE], double *value,
    the OpenMP default.  PYSE_THREADS sets the initial value. */
 void pyse_set_threads(int n);
 int pyse_threads(void);
+int pyse_thread_setting(void);   /* 0: the default */
 /* Factoring for Newton steps: "mumps" (default when built with MUMPS) or
    "evolver" (Evolver's own minimal degree). Returns 0 if unknown/unavailable. */
 int pyse_set_solver(const char *name);
