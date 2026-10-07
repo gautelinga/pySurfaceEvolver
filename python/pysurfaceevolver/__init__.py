@@ -29,8 +29,9 @@ from ._parallel import JobError, WorkerCrashed, map  # noqa: A004 (pse.map)
 
 
 def set_threads(n: int) -> None:
-    """Threads for Evolver's parallel facet loops; n <= 0 restores the
-    default (all cores, or OMP_NUM_THREADS / PYSE_THREADS)."""
+    """Threads for Evolver's parallel loops and the Newton-step solver;
+    n <= 0 restores the default: the physical cores (or OMP_NUM_THREADS /
+    PYSE_THREADS when set)."""
     from . import _core
     _core.set_threads(int(n))
 

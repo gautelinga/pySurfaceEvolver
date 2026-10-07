@@ -45,8 +45,24 @@ static void mumps_check(struct mumps_sys *m, const char *what)
   }
 }
 
+/* OpenBLAS, if that is the BLAS: a pthreads build runs its own threads
+   inside MUMPS's OpenMP threads (oversubscription: 1.2 s -> 2.2 s per
+   Newton step at 4 threads), so make it single-threaded; an OpenMP build
+   already runs serially inside parallel regions. Weak: other BLAS work. */
+extern int openblas_get_parallel(void) __attribute__((weak));
+extern void openblas_set_num_threads(int) __attribute__((weak));
+
+static void blas_threads(void)
+{ static int done = 0;
+  if ( done ) return;
+  done = 1;
+  if ( openblas_get_parallel && openblas_set_num_threads
+       && openblas_get_parallel() == 1 )
+    openblas_set_num_threads(1);
+}
+
 static void mumps_controls(struct mumps_sys *m)
-{ m->id.ICNTL(1) = -1;    /* no error messages */
+{ blas_threads(); m->id.ICNTL(1) = -1;    /* no error messages */
   m->id.ICNTL(2) = -1;    /* no diagnostics */
   m->id.ICNTL(3) = -1;    /* no global information */
   m->id.ICNTL(4) = 0;

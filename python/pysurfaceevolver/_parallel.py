@@ -116,8 +116,9 @@ def map(fn: Callable[[Any], Any], params: Iterable[Any], *, processes: Optional[
         Number of worker processes (default: number of CPUs, at most the
         number of jobs).
     threads:
-        Threads per worker for Evolver's parallel loops (default: CPUs /
-        processes, at least 1); sets ``OMP_NUM_THREADS`` in the workers.
+        Threads per worker for Evolver's parallel loops and Newton steps
+        (default 1: for sweeps, more processes beat threads); sets
+        ``OMP_NUM_THREADS`` in the workers.
     errors:
         ``"raise"`` (default): after all jobs finish, raise the first
         failure as :class:`JobError` (its ``results`` attribute has all
@@ -139,7 +140,7 @@ def map(fn: Callable[[Any], Any], params: Iterable[Any], *, processes: Optional[
         return []
     cpus = os.cpu_count() or 1
     processes = max(1, min(processes or cpus, len(params)))
-    threads = threads or max(1, cpus // processes)
+    threads = threads or 1
     ctx = mp.get_context("spawn")
     payloads = [_dumps((fn, p)) for p in params]
     results: Dict[int, Any] = {}

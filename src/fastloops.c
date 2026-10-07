@@ -27,6 +27,10 @@ extern REAL wee_area;   /* filml.c */
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 
 static vertex_id *fv_cache = NULL;      /* 3 per facet ordinal */
 static long fv_cache_size = 0;
@@ -193,19 +197,66 @@ static body_id *facet_bodies(facet_id *list, long n)
  * Threads
  */
 
-static int fl_thread_count = 0;   /* 0: OpenMP's default */
+static int fl_thread_count = 0;   /* 0: the default */
 
-int fl_threads(void)
+/* Physical cores available to this process (hyperthreads add little to
+   memory-bound loops and dense factoring); 0 if unknown. */
+static int physical_cores(void)
+{ int cores = 0;
+#if defined(__linux__)
+  { long n = sysconf(_SC_NPROCESSORS_ONLN), i, k;
+    long *seen = n > 0 ? (long*)malloc(n*sizeof(long)) : NULL;
+    for ( i = 0 ; seen && i < n ; i++ )
+    { char path[128];
+      int core = -1, pkg = 0;
+      FILE *f;
+      sprintf(path,"/sys/devices/system/cpu/cpu%ld/topology/core_id",i);
+      if ( (f = fopen(path,"r")) ) { if ( fscanf(f,"%d",&core) != 1 ) core = -1; fclose(f); }
+      sprintf(path,"/sys/devices/system/cpu/cpu%ld/topology/physical_package_id",i);
+      if ( (f = fopen(path,"r")) ) { if ( fscanf(f,"%d",&pkg) != 1 ) pkg = 0; fclose(f); }
+      if ( core < 0 ) continue;
+      for ( k = 0 ; k < cores ; k++ )
+        if ( seen[k] == ((long)pkg << 20 | core) ) break;
+      if ( k == cores ) seen[cores++] = (long)pkg << 20 | core;
+    }
+    free(seen);
+  }
+#elif defined(__APPLE__)
+  { size_t size = sizeof(cores);
+    if ( sysctlbyname("hw.physicalcpu",&cores,&size,NULL,0) != 0 ) cores = 0;
+  }
+#endif
+  return cores;
+}
+
+/* Default threads: OMP_NUM_THREADS if set, else the physical cores (at
+   most the processors this process may use). */
+static int default_threads(void)
 {
 #ifdef _OPENMP
-  return fl_thread_count > 0 ? fl_thread_count : omp_get_max_threads();
+  static int dflt = 0;
+  if ( dflt == 0 )
+  { int procs = omp_get_num_procs(), cores = physical_cores();
+    if ( getenv("OMP_NUM_THREADS") ) dflt = omp_get_max_threads();
+    else dflt = (cores > 0 && cores < procs) ? cores : procs;
+    if ( dflt < 1 ) dflt = 1;
+  }
+  return dflt;
 #else
   return 1;
 #endif
 }
 
+int fl_threads(void)
+{ return fl_thread_count > 0 ? fl_thread_count : default_threads();
+}
+
+/* Also sets OpenMP's default, which MUMPS and an OpenMP BLAS use. */
 void fl_set_threads(int n)
 { fl_thread_count = n > 0 ? n : 0;
+#ifdef _OPENMP
+  omp_set_num_threads(fl_threads());
+#endif
 }
 
 /* Below this many facets the loops stay serial (thread start-up costs

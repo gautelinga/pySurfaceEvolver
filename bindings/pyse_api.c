@@ -371,7 +371,7 @@ static void init_body(void *arg)
   }
   scoeff_init();
   vcoeff_init();
-  if ( getenv("PYSE_THREADS") ) fl_set_threads(atoi(getenv("PYSE_THREADS")));
+  fl_set_threads(getenv("PYSE_THREADS") ? atoi(getenv("PYSE_THREADS")) : 0);
   if ( getenv("PYSE_SOLVER") ) pyse_set_solver(getenv("PYSE_SOLVER"));
   push_commandfd(stdin,"stdin");
   subshell_depth = 0;
