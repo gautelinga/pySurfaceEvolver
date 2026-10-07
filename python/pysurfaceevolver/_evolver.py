@@ -512,20 +512,24 @@ class Evolver:
             return np.zeros(0, dtype=np.int64)
         return self.values(_ELEMENT_NAMES[element_type], "id").astype(np.int64)
 
+    @staticmethod
+    def _mask(element_type: int, where, n: int) -> np.ndarray:
+        """A boolean mask over n elements from where (a mask or rows)."""
+        mask = np.asarray(where)
+        if mask.dtype != bool:
+            rows = mask.astype(int)
+            mask = np.zeros(n, dtype=bool)
+            mask[rows] = True
+        elif mask.shape != (n,):
+            raise ValueError(f"where needs one entry per {_ELEMENT_NAMES[element_type]} "
+                             f"({n}), got {mask.shape[0]}")
+        return mask
+
     def _selected(self, element: str, where) -> "tuple[str, np.ndarray, np.ndarray]":
         element_type = _element_type(element)
         ids = self._ids(element_type)
-        if where is None:
-            mask = np.ones(len(ids), dtype=bool)
-        else:
-            mask = np.asarray(where)
-            if mask.dtype != bool:
-                rows = mask.astype(int)
-                mask = np.zeros(len(ids), dtype=bool)
-                mask[rows] = True
-            elif mask.shape != ids.shape:
-                raise ValueError(f"where needs one entry per {_ELEMENT_NAMES[element_type]} "
-                                 f"({len(ids)}), got {mask.shape[0]}")
+        mask = (np.ones(len(ids), dtype=bool) if where is None
+                else self._mask(element_type, where, len(ids)))
         return _ELEMENT_NAMES[element_type], ids, mask
 
     def _run_statements(self, statements: Iterable[str]) -> None:
@@ -565,7 +569,19 @@ class Evolver:
         attribute Evolver's ``set`` command accepts: coordinates (``x``,
         ``y``, ...), ``density``, ``tension``, ``target`` (bodies), extra
         attributes from :meth:`define_attribute`, ...
+
+        Coordinates and scalar extra attributes are written directly in C;
+        other attributes go through Evolver's ``set`` command, in batches.
         """
+        element_type = _element_type(element)
+        if _core.fast_attribute(element_type, attribute):
+            n = _core.count(element_type)
+            mask = None if where is None else self._mask(element_type, where, n)
+            vals = np.ascontiguousarray(
+                np.broadcast_to(np.asarray(values, dtype=float), (n,)))
+            self._call(_core.set_values, element_type, attribute, vals,
+                       None if mask is None else mask.astype(np.uint8))
+            return
         name, ids, mask = self._selected(element, where)
         vals = np.broadcast_to(np.asarray(values, dtype=float), ids.shape)
         self._run_statements(f"set {name}[{i}] {attribute} {float(v)!r}"
@@ -828,24 +844,11 @@ class Evolver:
         return mesh
 
     def _build_mesh(self) -> Mesh:
-        _, r = self._call(_core.vertices)
-        xyz, vids, fixed = r.data
-        _, r = self._call(_core.edges)
-        edges, eids = r.data
-        faces = fids = fbodies = None
-        if _core.representation() == 2:
-            _, r = self._call(_core.facets)
-            faces, fids, fbodies = r.data
-
-        order, bezier = 1, False
-        edge_nodes = edge_index = facet_nodes = facet_index = None
-        _, r = self._call(_core.element_nodes, _core.EDGE)
-        if r.data is not None:
-            edge_nodes, edge_index, order, bezier = r.data
-        if faces is not None:
-            _, r = self._call(_core.element_nodes, _core.FACET)
-            if r.data is not None:
-                facet_nodes, facet_index, order, bezier = r.data
+        _, r = self._call(_core.mesh)
+        (xyz, vids, fixed, edges, eids, faces, fids, fbodies,
+         edge_nodes, edge_index, facet_nodes, facet_index, order, bezier) = r.data
+        if edge_nodes is None and facet_nodes is None:
+            order, bezier = 1, False
         fixed = fixed.astype(bool)
         _read_only(xyz, edges, faces, vids, eids, fids, fbodies, fixed,
                    edge_nodes, edge_index, facet_nodes, facet_index)

@@ -304,6 +304,32 @@ def test_mesh_string_model_has_no_faces(load):
     assert m.edges.shape == (ev.counts["edges"], 2)
 
 
+@pytest.mark.parametrize("datafile, command", [
+    ("cube.fe", "r"), ("cube.fe", "r; lagrange 3"), ("cube.fe", "quadratic"),
+    ("knotty.fe", "g 1"), ("100grain.fe", "g 1"), ("simplex3.fe", "g 1"),
+])
+def test_one_call_mesh_matches_parts(load, datafile, command):
+    from pysurfaceevolver import _core
+    ev = load(datafile)
+    ev.command(command)
+    m = ev.mesh()
+    kw = dict(out=None, input=None, sigint=False)
+    xyz, vids, fixed = _core.vertices(**kw).data
+    edges, eids = _core.edges(**kw).data
+    np.testing.assert_array_equal(m.vertices, xyz)
+    np.testing.assert_array_equal(m.vertex_ids, vids)
+    np.testing.assert_array_equal(m.edges, edges)
+    np.testing.assert_array_equal(m.edge_ids, eids)
+    if ev.representation == "soapfilm":
+        faces, fids, fbodies = _core.facets(**kw).data
+        np.testing.assert_array_equal(m.faces, faces)
+        np.testing.assert_array_equal(m.face_bodies, fbodies)
+        nodes = _core.element_nodes(_core.FACET, **kw).data
+        np.testing.assert_array_equal(m.facet_nodes, nodes[0])
+    else:
+        assert m.faces is None
+
+
 def test_mesh_is_cached_until_the_surface_changes(cube):
     first = cube.mesh()
     assert cube.mesh() is first

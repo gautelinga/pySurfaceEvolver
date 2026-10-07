@@ -11,12 +11,14 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -212,6 +214,24 @@ NB_MODULE(_core, m) {
           });
         }, "xyz"_a, CALLBACK_NAMES);
 
+  m.def("fast_attribute", [](int type, const std::string &attribute) {
+    Lock lock;
+    return bool(pyse_fast_attribute(type, attribute.c_str()));
+  }, "type"_a, "attribute"_a);
+
+  m.def("set_values",
+        [](int type, const std::string &attribute,
+           nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu> values,
+           std::optional<nb::ndarray<const uint8_t, nb::ndim<1>, nb::c_contig, nb::device::cpu>> mask,
+           CALLBACK_ARGS) {
+          CALL_SCOPE;
+          const uint8_t *m = mask ? mask->data() : nullptr;
+          return run_guarded([&] {
+            return pyse_set_values(type, attribute.c_str(), values.data(), m,
+                                   long(values.shape(0)));
+          });
+        }, "type"_a, "attribute"_a, "values"_a, "mask"_a.none(), CALLBACK_NAMES);
+
   // ---- surface snapshots (guarded) -------------------------------------------
   m.def("vertices", [](CALLBACK_ARGS) {
     CALL_SCOPE;
@@ -273,6 +293,59 @@ NB_MODULE(_core, m) {
                               to_numpy(std::move(fixed), {size_t(n)}));
     return r;
   }, CALLBACK_NAMES, "data: (ids, volume, target (NaN if free), pressure, fixed)");
+
+  m.def("mesh", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    pyse_mesh_arrays a{};
+    long nv = pyse_count(PYSE_VERTEX), ne = pyse_count(PYSE_EDGE), nf = pyse_count(PYSE_FACET);
+    int sdim = pyse_sdim();
+    bool soapfilm = pyse_representation() == 2;
+    int edge_per = pyse_element_node_count(PYSE_EDGE);
+    int facet_per = soapfilm ? pyse_element_node_count(PYSE_FACET) : -1;
+    std::vector<double> xyz(size_t(nv) * sdim);
+    std::vector<int64_t> vids(nv), edges(size_t(ne) * 2), eids(ne);
+    std::vector<uint8_t> fixed(nv);
+    std::vector<int64_t> faces, fids, fbodies, enodes, fnodes;
+    a.xyz = xyz.data(); a.vertex_ids = vids.data(); a.fixed = fixed.data();
+    a.nv = nv; a.sdim = sdim;
+    a.edges = edges.data(); a.edge_ids = eids.data(); a.ne = ne;
+    if (soapfilm) {
+      faces.resize(size_t(nf) * 3); fids.resize(nf); fbodies.resize(size_t(nf) * 2);
+      a.faces = faces.data(); a.face_ids = fids.data(); a.face_bodies = fbodies.data();
+      a.nf = nf;
+    }
+    if (edge_per > 0) {
+      enodes.resize(size_t(ne) * edge_per);
+      a.edge_nodes = enodes.data(); a.edge_nodes_per = edge_per;
+    }
+    if (facet_per > 0) {
+      fnodes.resize(size_t(nf) * facet_per);
+      a.facet_nodes = fnodes.data(); a.facet_nodes_per = facet_per;
+    }
+    CallResult r = run_guarded([&] { return pyse_get_mesh(&a); });
+    if (r.status != PYSE_OK) return r;
+    auto layout = [](int type, int per) -> nb::object {
+      if (per <= 0) return nb::none();
+      int dim = (type == PYSE_EDGE) ? 1 : 2;
+      std::vector<int32_t> index(size_t(per) * (dim + 1));
+      pyse_node_layout(type, index.data(), per);
+      return to_numpy(std::move(index), {size_t(per), size_t(dim + 1)});
+    };
+    nb::object none = nb::none();
+    r.data = nb::make_tuple(
+        to_numpy(std::move(xyz), {size_t(nv), size_t(sdim)}),
+        to_numpy(std::move(vids), {size_t(nv)}), to_numpy(std::move(fixed), {size_t(nv)}),
+        to_numpy(std::move(edges), {size_t(ne), 2}), to_numpy(std::move(eids), {size_t(ne)}),
+        soapfilm ? to_numpy(std::move(faces), {size_t(nf), 3}) : none,
+        soapfilm ? to_numpy(std::move(fids), {size_t(nf)}) : none,
+        soapfilm ? to_numpy(std::move(fbodies), {size_t(nf), 2}) : none,
+        edge_per > 0 ? to_numpy(std::move(enodes), {size_t(ne), size_t(edge_per)}) : none,
+        layout(PYSE_EDGE, edge_per),
+        facet_per > 0 ? to_numpy(std::move(fnodes), {size_t(nf), size_t(facet_per)}) : none,
+        layout(PYSE_FACET, facet_per),
+        pyse_element_order(), bool(pyse_bezier()));
+    return r;
+  }, CALLBACK_NAMES, "data: everything Mesh needs, in one call (see _evolver.py)");
 
   m.def("element_nodes", [](int type, CALLBACK_ARGS) {
     CALL_SCOPE;

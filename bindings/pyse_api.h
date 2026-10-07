@@ -64,6 +64,15 @@ int pyse_eval(const char *expr, double *value);
    pyse_get_* arrays.  n must equal pyse_count(type). */
 int pyse_values(int type, const char *expr, double *out, long n);
 int pyse_set_vertex_coords(const double *xyz, long n, int sdim);
+/* Fast element writes, without going through Evolver commands.
+   pyse_fast_attribute() says whether an attribute can be written this way:
+   vertex coordinates (x, y, z, x1, x2, ...) and scalar real or integer
+   extra attributes without an on-assign procedure.  pyse_set_values()
+   writes values[i] to element i (in pyse_get_* order) where mask[i] is
+   nonzero (mask may be NULL), then recalculates if autorecalc is on. */
+int pyse_fast_attribute(int type, const char *attribute);
+int pyse_set_values(int type, const char *attribute, const double *values,
+                    const unsigned char *mask, long n);
 
 int pyse_get_vertices(double *xyz, int64_t *ids, unsigned char *fixed, long n,
                       int sdim);
@@ -78,6 +87,18 @@ int pyse_get_bodies(int64_t *ids, double *volume, double *target,
    (n, nodes) array of vertex rows; pyse_node_layout() fills a
    (nodes, dim+1) array with each node's barycentric multi-index, whose
    entries sum to pyse_element_order(). */
+/* Everything pyse_get_vertices/_edges/_facets/_element_nodes return, in one
+   call with one vertex lookup table.  Pointers for parts that don't exist
+   (facets outside the soapfilm model, node layouts) must be NULL. */
+struct pyse_mesh_arrays {
+  double *xyz; int64_t *vertex_ids; unsigned char *fixed; long nv; int sdim;
+  int64_t *edges; int64_t *edge_ids; long ne;
+  int64_t *faces; int64_t *face_ids; int64_t *face_bodies; long nf;
+  int64_t *edge_nodes; int edge_nodes_per;
+  int64_t *facet_nodes; int facet_nodes_per;
+};
+int pyse_get_mesh(struct pyse_mesh_arrays *m);
+
 int pyse_element_node_count(int type);
 int pyse_get_element_nodes(int type, int64_t *nodes, long n, int nodes_per);
 int pyse_node_layout(int type, int *index, int nodes_per);

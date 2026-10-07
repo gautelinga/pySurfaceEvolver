@@ -181,6 +181,48 @@ def test_failed_bulk_write_restores_autorecalc(cube):
     assert cube.eval("autorecalc") == 1
 
 
+def test_fast_coordinate_writes(load):
+    ev = load("cube.fe")
+    ev.refine()
+    z = ev.values("vertex", "z") * 1.5
+    ev.set_values("vertex", "z", z)
+    np.testing.assert_array_equal(ev.values("vertex", "z"), z)
+    assert ev.total_area == pytest.approx(ev.eval("sum(facet, area)"), rel=1e-12)
+
+
+def test_fast_extra_attribute_writes(load):
+    ev = load("mound.fe")
+    ev.define_attribute("vertex", "weight")
+    ev.define_attribute("facet", "label", "integer")
+    n = ev.counts["vertices"]
+    w = np.linspace(0, 1, n)
+    ev.set_values("vertex", "weight", w)
+    np.testing.assert_array_equal(ev.values("vertex", "weight"), w)
+    labels = np.arange(ev.counts["facets"]) % 4
+    ev.set_values("facet", "label", labels)
+    np.testing.assert_array_equal(ev.values("facet", "label"), labels)
+    mask = np.zeros(n, dtype=bool)
+    mask[::3] = True
+    ev.set_values("vertex", "weight", -1.0, where=mask)
+    out = ev.values("vertex", "weight")
+    assert (out[mask] == -1).all() and np.array_equal(out[~mask], w[~mask])
+
+
+def test_fast_writes_match_set_command(load):
+    # the same writes through Evolver's set command give the same surface
+    ev = load("cube.fe")
+    ev.refine()
+    x = ev.values("vertex", "x") + 0.01 * ev.values("vertex", "y")
+    ev.set_values("vertex", "x", x)
+    fast = (ev.vertices, ev.total_energy)
+    ev = load("cube.fe")
+    ev.refine()
+    ids = ev.values("vertex", "id").astype(int)
+    ev.command("; ".join(f"set vertex[{i}] x {v!r}" for i, v in zip(ids, x)))
+    np.testing.assert_array_equal(ev.vertices, fast[0])
+    assert ev.total_energy == fast[1]
+
+
 def test_where_wrong_length(cube):
     with pytest.raises(ValueError, match="one entry per vertex"):
         cube.fix("vertex", where=np.ones(3, dtype=bool))

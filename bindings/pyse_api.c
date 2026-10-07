@@ -31,6 +31,15 @@ static int datafile_global_limit = 0;
 /* See pyse_surface_version(). */
 static long surface_version = 0;
 
+/* Map from vertex ordinal to row in the pyse_get_vertices() arrays. */
+struct vertex_map { long *rows; long size; };
+/* Set by mesh_body() so the snapshot bodies share one table; reset at the
+   end of every guarded call. */
+static struct vertex_map *shared_vertex_map = NULL;
+
+static void inconsistent(const char *what);
+static void expect_rows(long row, long n);
+
 static pyse_output_fn out_cb = NULL;
 static void *out_ud = NULL;
 static pyse_input_fn in_cb = NULL;
@@ -286,6 +295,7 @@ static int protected_call(body_fn body, void *arg)
   body(arg);
 
 done:
+  shared_vertex_map = NULL;
   if ( sigint_installed )
     sigaction(SIGINT,&old_action,NULL);
   in_signal = 0;
@@ -555,6 +565,92 @@ int pyse_set_vertex_coords(const double *xyz, long n, int sdim)
   return surface_call(set_coords_body,&a);
 }
 
+/* Fast writes: a vertex coordinate index (>= 0), or an extra attribute. */
+struct fast_target { int coord; int extra; };
+
+static int coordinate_index(const char *name)
+{ if ( name[1] == 0 )
+  { if ( name[0] == 'x' ) return 0;
+    if ( name[0] == 'y' ) return 1;
+    if ( name[0] == 'z' ) return 2;
+    return -1;
+  }
+  if ( name[0] == 'x' && name[1] >= '1' && name[1] <= '9' )
+  { char *end;
+    long k = strtol(name+1,&end,10);
+    if ( *end == 0 ) return (int)k - 1;
+  }
+  return -1;
+}
+
+static int find_fast_target(int type, const char *attribute, struct fast_target *t)
+{ int n;
+  struct extra *ex;
+  t->coord = -1; t->extra = -1;
+  if ( type < PYSE_VERTEX || type > PYSE_BODY ) return 0;
+  if ( type == PYSE_VERTEX )
+  { int k = coordinate_index(attribute);
+    if ( k >= 0 ) { t->coord = k; return k < SDIM; }
+  }
+  ex = EXTRAS(type);
+  for ( n = 0 ; n < web.skel[type].extra_count ; n++, ex++ )
+    if ( strcmp(ex->name,attribute) == 0 )
+    { if ( ex->array_spec.dim != 0
+           || (ex->flags & (FUNCTION_ATTR|READ_ONLY_ATTR|VIRTUAL_ATTR|INTERNAL_ATTR)) )
+        return 0;
+      if ( ex->type != REAL_TYPE && ex->type != INTEGER_TYPE ) return 0;
+      t->extra = n;
+      return 1;
+    }
+  return 0;
+}
+
+int pyse_fast_attribute(int type, const char *attribute)
+{ struct fast_target t;
+  if ( !initialized || !surface_valid ) return 0;
+  return find_fast_target(type,attribute,&t);
+}
+
+struct set_values_args
+{ int type; struct fast_target t; const double *values; const unsigned char *mask; long n; };
+
+static void set_values_body(void *arg)
+{ struct set_values_args *a = (struct set_values_args *)arg;
+  element_id id;
+  long row = 0;
+  FOR_ALL_ELEMENTS(a->type,id)
+  { if ( row >= a->n ) inconsistent("element count changed");
+    if ( !a->mask || a->mask[row] )
+    { double v = a->values[row];
+      if ( a->t.coord >= 0 )
+        get_coord(id)[a->t.coord] = (REAL)v;
+      else if ( EXTRAS(a->type)[a->t.extra].type == REAL_TYPE )
+        *(REAL*)get_extra(id,a->t.extra) = (REAL)v;
+      else
+        *(int*)get_extra(id,a->t.extra) = (int)v;
+    }
+    row++;
+  }
+  expect_rows(row,a->n);
+  if ( autorecalc_flag ) recalc();
+}
+
+int pyse_set_values(int type, const char *attribute, const double *values,
+                    const unsigned char *mask, long n)
+{ struct set_values_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( !find_fast_target(type,attribute,&a.t) )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "No fast write for this attribute; use Evolver's set command.");
+  if ( n != web.skel[type].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Value array does not match the element count.");
+  a.type = type; a.values = values; a.mask = mask; a.n = n;
+  surface_version++;
+  return surface_call(set_values_body,&a);
+}
+
 /**************************************************************************
  * Surface snapshots.  These run inside the guard too, so an inconsistency
  * becomes an Evolver error instead of a bad memory read.
@@ -565,9 +661,8 @@ static void inconsistent(const char *what)
   kb_error(PYSE_ERR_INVALID_SURFACE,errmsg,RECOVERABLE);
 }
 
-/* Map from vertex ordinal to row in the pyse_get_vertices() arrays.
-   Allocated with temp_calloc(), which Evolver frees between commands. */
-struct vertex_map { long *rows; long size; };
+/* Vertex maps are allocated with temp_calloc(), which Evolver frees
+   between commands. */
 
 static void vertex_map_build(struct vertex_map *m)
 { long k, row = 0;
@@ -581,6 +676,18 @@ static void vertex_map_build(struct vertex_map *m)
     if ( ord < 0 || ord >= m->size ) inconsistent("vertex number out of range");
     m->rows[ord] = row++;
   }
+}
+
+static void vertex_map_get(struct vertex_map *m)
+{ if ( shared_vertex_map ) *m = *shared_vertex_map;
+  else vertex_map_build(m);
+}
+
+/* Free a table from vertex_map_get() unless it is the shared one. (After
+   an error the table stays allocated until Evolver's next temp_free_all.) */
+static void vertex_map_release(struct vertex_map *m)
+{ if ( !shared_vertex_map || m->rows != shared_vertex_map->rows )
+    temp_free((char*)m->rows);
 }
 
 static int64_t vertex_row(struct vertex_map *m, vertex_id v_id)
@@ -630,7 +737,7 @@ static void edges_body(void *arg)
   struct vertex_map m;
   edge_id e_id;
   long row = 0;
-  vertex_map_build(&m);
+  vertex_map_get(&m);
   FOR_ALL_EDGES(e_id)
   { if ( row >= a->n ) inconsistent("too many edges");
     a->verts[2*row]   = vertex_row(&m,get_edge_tailv(e_id));
@@ -639,6 +746,7 @@ static void edges_body(void *arg)
     row++;
   }
   expect_rows(row,a->n);
+  vertex_map_release(&m);
 }
 
 int pyse_get_edges(int64_t *verts, int64_t *ids, long n)
@@ -660,7 +768,7 @@ static void facets_body(void *arg)
   if ( web.representation != SOAPFILM )
     kb_error(PYSE_ERR_BAD_ARGUMENT,
       "Facet triangles exist only in the soapfilm representation.\n",RECOVERABLE);
-  vertex_map_build(&m);
+  vertex_map_get(&m);
   FOR_ALL_FACETS(f_id)
   { facetedge_id fe = get_facet_fe(f_id);
     int i;
@@ -676,6 +784,7 @@ static void facets_body(void *arg)
     row++;
   }
   expect_rows(row,a->n);
+  vertex_map_release(&m);
 }
 
 int pyse_get_facets(int64_t *verts, int64_t *ids, int64_t *bodies, long n)
@@ -777,7 +886,7 @@ static void nodes_body(void *arg)
   if ( np != pyse_element_node_count(a->type) )
     kb_error(PYSE_ERR_BAD_ARGUMENT,
       "No node layout for this element type and model.\n",RECOVERABLE);
-  vertex_map_build(&m);
+  vertex_map_get(&m);
   if ( a->type == PYSE_EDGE )
   { edge_id e_id;
     FOR_ALL_EDGES(e_id)
@@ -819,6 +928,7 @@ static void nodes_body(void *arg)
     }
   }
   expect_rows(row,a->n);
+  vertex_map_release(&m);
 }
 
 int pyse_get_element_nodes(int type, int64_t *nodes, long n, int nodes_per)
@@ -826,6 +936,43 @@ int pyse_get_element_nodes(int type, int64_t *nodes, long n, int nodes_per)
   a.type = type; a.nodes = nodes; a.n = n; a.nodes_per = nodes_per;
   return surface_call(nodes_body,&a);
 }
+
+static void mesh_body(void *arg)
+{ struct pyse_mesh_arrays *m = (struct pyse_mesh_arrays *)arg;
+  struct vertex_map map;
+  struct vertices_args va;
+  struct edges_args ea;
+  vertex_map_build(&map);
+  shared_vertex_map = &map;
+  va.xyz = m->xyz; va.ids = m->vertex_ids; va.fixed = m->fixed; va.n = m->nv;
+  va.sdim = m->sdim;
+  vertices_body(&va);
+  ea.verts = m->edges; ea.ids = m->edge_ids; ea.n = m->ne;
+  edges_body(&ea);
+  if ( m->faces )
+  { struct facets_args fa;
+    fa.verts = m->faces; fa.ids = m->face_ids; fa.bodies = m->face_bodies;
+    fa.n = m->nf;
+    facets_body(&fa);
+  }
+  if ( m->edge_nodes )
+  { struct nodes_args na;
+    na.type = PYSE_EDGE; na.nodes = m->edge_nodes; na.n = m->ne;
+    na.nodes_per = m->edge_nodes_per;
+    nodes_body(&na);
+  }
+  if ( m->facet_nodes )
+  { struct nodes_args na;
+    na.type = PYSE_FACET; na.nodes = m->facet_nodes; na.n = m->nf;
+    na.nodes_per = m->facet_nodes_per;
+    nodes_body(&na);
+  }
+  shared_vertex_map = NULL;
+  temp_free((char*)map.rows);
+}
+
+int pyse_get_mesh(struct pyse_mesh_arrays *m)
+{ return surface_call(mesh_body,m); }
 
 /**************************************************************************
  * Parameters and named quantities.
