@@ -14,11 +14,15 @@ pip install ".[all]"     # + PyVista (visualization) and meshio (mesh files)
 ```python
 from pysurfaceevolver import Evolver
 
-ev = Evolver("fe/cube.fe")
+ev = Evolver("cube.fe")              # bundled samples are found from anywhere
 result = ev.iterate(10)              # energy, area, scale per iteration
-ev.refine(); ev.iterate(10)
-ev.hessian()
+ev.refine()
+ev.relax(tol=1e-10, hessian=True)    # iterate until the energy settles, then Newton
 ev.set_model("lagrange", 3)
+
+snapshot = ev.save()                 # exact snapshot of the surface
+ev.refine(2); ev.relax()
+ev.restore(snapshot)                 # back to it, bit for bit
 
 ev.eval("body[1].volume")            # numeric expressions -> float
 ev.values("vertex", "x^2 + y^2")     # one value per vertex, aligned with ev.mesh()
@@ -33,6 +37,12 @@ ev.quantities()                      # named quantities: value, target, modulus,
 
 ev.command("g 5; r; u")              # anything else: plain Evolver commands
 ```
+
+There is one Evolver engine per process: every `Evolver` object is a handle to
+it, so all handles see the same surface. Use `save()`/`restore()` to keep surfaces
+around, and separate processes to work on several at once. `ev.mesh()` is cached
+until the surface changes, so its arrays are read-only. The sample datafiles and
+command scripts are in `pysurfaceevolver.examples`.
 
 ## Building surfaces in Python
 
@@ -81,10 +91,10 @@ datafile loads), warnings are issued as `EvolverWarning`, and Ctrl-C stops a lon
 at the next iteration; pressing it again aborts the operation (`KeyboardInterrupt`).
 Pass `echo=True` to see output live, and `input=` to answer interactive prompts.
 
-Limitations: Evolver keeps its state in C globals, so there is one engine per process
-(use `multiprocessing` for parallel runs). Calls from several threads are serialized:
-a call made while another is running raises `RuntimeError`. Builds and CI cover
-Linux only. Torus models aren't unwrapped for plotting or export.
+Limitations: calls from several threads are serialized (a call made while another is
+running raises `RuntimeError`). Some global Evolver settings, such as display modes,
+carry over from one datafile to the next. Builds and CI cover Linux only. Torus
+models aren't unwrapped for plotting or export.
 
 ## Development
 
@@ -93,14 +103,19 @@ pip install ".[test]"
 pytest
 ```
 
-CI (`.github/workflows/`) runs the tests and mypy on several Python versions, and
-builds manylinux wheels (x86_64, aarch64) plus an sdist as workflow artifacts.
+CI (`.github/workflows/`) runs the tests and mypy on several Python versions, runs
+every sample datafile through the stock program under AddressSanitizer and UBSan
+(`tools/run_sanitizers.sh`), and builds manylinux wheels (x86_64, aarch64) plus an
+sdist as workflow artifacts. The build uses link-time optimization (`PYSE_LTO`);
+`-C cmake.define.PYSE_NOSTRIP=ON -C install.strip=false` keeps symbols for profiling.
 The version lives in `python/pysurfaceevolver/__init__.py` only.
 
 ## Layout
 
-- `src/` – the Surface Evolver C sources. The stock `Makefile` still builds the
-  standalone program; edits for the library build are guarded by `#ifdef PYSE`.
+- `src/` – the Surface Evolver C sources, maintained as a fork of 2.70a (the first git
+  commit is the untouched original). Bug fixes apply to every build, and the stock
+  `Makefile` still builds the standalone program (`GRAPH=nulgraph.o` for headless);
+  hooks for the Python library are guarded by `#ifdef PYSE`.
 - `bindings/` – C glue (`pyse_api.c`) that contains Evolver's `setjmp`/`longjmp`
   error handling, and the nanobind module (`module.cpp`).
 - `python/pysurfaceevolver/` – the Python API; type stubs for the extension are
