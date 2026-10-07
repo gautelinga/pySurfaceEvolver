@@ -687,7 +687,7 @@ int delete_facet(facet_id f_id)
 {
   REAL side[MAXCOORD];  /* side vector */
   REAL sside[FACET_EDGES]; /* squares of side lengths */
-  facetedge_id fe[FACET_EDGES]; /* edges of triangle */
+  facetedge_id fe[FACET_EDGES+1]; /* edges of triangle; the loop below fills one more */
   edge_id e_id;
   int i;              /* side number */
   int elimcount;
