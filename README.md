@@ -137,7 +137,8 @@ models aren't unwrapped for plotting or export.
 ```bash
 pip install ".[test]"
 pytest
-python bench/benchmark.py --levels 6 8   # timings at 98k and 1.6M facets
+python bench/benchmark.py --levels 6 8 --threads 1 4   # linear at 98k and 1.6M facets,
+                                                       # Lagrange 2/4/6 at 6k and 24k
 ```
 
 CI (`.github/workflows/`) runs the tests and mypy on several Python versions, runs

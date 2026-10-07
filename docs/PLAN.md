@@ -150,16 +150,27 @@ workers; the serial remainder is ~1-2% items.
       the setup per quantity. Invalidate when coordinates move.
    3. Measure on the Lagrange-2/4 gradient steps; target: setup from two-thirds of
       a step to a small fraction. Serial gains only; threads come in step 4.
-2. **Benchmark that matches the workload** (small). Extend `bench/benchmark.py`:
-   linear iterations, linear Newton steps, and the high-order ladder (Lagrange
-   2/4/6: convert, `g 5`, `hessian`) **from a converged linear surface**, at 98k /
-   393k / 1.6M facets, `--threads 1 2 4 8`, per-stage times, JSON output, and a
-   warning when the machine is loaded.
-3. **Faster Newton steps** (medium; 53% of the typical run).
+2. **Done.** Benchmark: `bench/benchmark.py` (extended, not replaced). Linear
+   section: bulk operations plus `g 1` and `hessian` on a relaxed surface
+   (`--levels`). Lagrange section (`--lagrange-levels`, default 6k and 24k
+   facets; `--orders`, default 2 4 6): the manual's pattern, linear relaxation
+   then per order `lagrange n; g 5; hessian; hessian; hessian`, each timed.
+   `--threads 1 4`, JSON output, load warning.
+   The Evolver manual (5.3, 16.11) is explicit that the Lagrange model is a
+   limited, short final stage: no refining or other triangulation changes, a
+   few `g` steps and a few Newton steps, on a mesh settled in the linear model;
+   higher order on a coarse mesh beats refinement for accuracy (refinement 2 at
+   order 6: 3e-10; linear at refinement 5: 8e-4) and cost climbs steeply with
+   order. So **Newton steps at high order are the Lagrange cost**, not gradient
+   steps; the facet counts at which the user converts are still to be confirmed
+   (benchmark defaults 6k and 24k).
+3. **Faster Newton steps** (medium; the main cost of both the Lagrange stage and
+   large linear runs).
    1. METIS experiment: port `src/metis.c` to the METIS 5 API, build METIS from
       source via CMake (Apache-2.0, shippable in wheels), compare fill-in and
-      factorization time with the current ordering (linear and Lagrange, three
-      sizes). Default only if it wins. (System has libmetis.so.5 but no headers.)
+      factorization time with the current ordering (linear and Lagrange 2/4/6,
+      benchmark sizes). Default only if it wins. (System has libmetis.so.5 but no
+      headers.)
    2. Parallel Hessian assembly (`hessian_fill`, `calc_quant_hess`): per-facet
       blocks computed in parallel, merged into the sparse matrix (the hash in
       `matrix.c`).
@@ -167,17 +178,18 @@ workers; the serial remainder is ~1-2% items.
       recommendation on a modern sparse LDL^T (must still report the Hessian
       index/inertia). Expect parallel speedups to flatten at ~4 threads here.
       **Pause here and report.**
-4. **Parallel named-quantity loops** (large). Parallelize the per-facet quantity
-   value/gradient loops (`calc_quants`, `calc_quant_grads` and the methods) with
-   OpenMP, reusing the caches and `FL_FOR_SELECTED`; per-thread accumulation of
-   quantity values and gradients. Retire Evolver's old threading code in the same
-   step: drop its scheduling (worker threads, `thread_launch`, `-p`), turn its
-   per-thread data (`thread_data`: eval stacks, `q_info`) into OpenMP thread-local
-   storage.
-5. **Thread defaults** (small, partly by the user on a quiet machine):
+4. **Thread defaults** (small, partly by the user on a quiet machine):
    `bench/benchmark.py --threads 1 2 4 8`; set the default thread count (likely
    capped at physical cores, possibly 4 on hybrid laptops), `FL_PARALLEL_MIN`, and
    the `pse.map` split (more processes with fewer threads each may beat threads).
+5. **Parallel named-quantity loops** (large; demoted: Lagrange runs take few
+   gradient steps, so this matters mainly for named-quantity-heavy models).
+   Parallelize the per-facet quantity value/gradient loops (`calc_quants`,
+   `calc_quant_grads` and the methods) with OpenMP, reusing the caches and
+   `FL_FOR_SELECTED`; per-thread accumulation. Retire Evolver's old threading
+   code in the same step: drop its scheduling (worker threads, `thread_launch`,
+   `-p`), turn its per-thread data (`thread_data`: eval stacks, `q_info`) into
+   OpenMP thread-local storage. Re-profile before starting.
 
 Done earlier in C2: per-thread accumulation in the facet loops (was step 1) and
 the remaining linear hot spots (was step 5).
@@ -217,7 +229,8 @@ Pause after step 3 (solver decision) and at the end of C2.
 - Sanitizers: `tools/run_sanitizers.sh [build-dir]` (stock program, ASan+UBSan,
   all samples). OpenMP variant: build the stock program with `-fopenmp` added to
   the sanitizer flags and run refined samples with `OMP_NUM_THREADS=8`.
-- Benchmark: `python bench/benchmark.py --levels 6 8` (98k and 1.6M facets).
+- Benchmark: `python bench/benchmark.py --levels 6 8 --threads 1 4` (linear at 98k
+  and 1.6M facets; Lagrange 2/4/6 at 6k and 24k; `--json` to compare runs).
 - Profiling build: `pip install . -C build-dir=<dir> -C cmake.define.PYSE_NOSTRIP=ON
   -C install.strip=false -C cmake.define.CMAKE_C_FLAGS="-g -fno-omit-frame-pointer"`;
   then `perf` (above) or `valgrind --tool=callgrind --toggle-collect=iterate`

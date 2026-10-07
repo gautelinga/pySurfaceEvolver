@@ -1,10 +1,25 @@
-"""Time pySE's bulk operations on large surfaces.
+"""Time pySE on large surfaces: bulk operations, linear iterations and Newton
+steps, and the Lagrange stage.
 
-usage: python bench/benchmark.py [--levels 6 8] [--repeat 3] [--json out.json]
+usage: python bench/benchmark.py [--levels 6 8] [--lagrange-levels 4 5]
+                                 [--orders 2 4 6] [--threads 1 4]
+                                 [--repeat 3] [--json out.json]
 
-The test surface is the sample cube relaxed a little and refined
-``level`` times (each refinement quadruples the facets: level 6 is 98k
-facets, level 8 is 1.6M). Each timing is the best of ``--repeat`` runs.
+The test surface is the sample cube relaxed a little and refined ``level``
+times (each refinement quadruples the facets: level 4 is 6k facets, 5 is
+24k, 6 is 98k, 8 is 1.6M).
+
+Linear section (``--levels``): bulk operations, one iteration (``g 1``) and
+one Newton step (``hessian``) on the relaxed surface; each timing is the best
+of ``--repeat`` runs.
+
+Lagrange section (``--lagrange-levels``): as recommended in the Evolver
+manual (sections 5.3 and 16.11), the triangulation is settled in the linear
+model and then each order is a short final stage: ``lagrange n`` and
+``g 5; hessian; hessian; hessian``, for each order in ``--orders`` in turn.
+Each command is timed once.
+
+Everything is repeated for each thread count in ``--threads``.
 """
 
 from __future__ import annotations
@@ -16,8 +31,7 @@ import tempfile
 import time
 import warnings
 
-import numpy as np
-
+import pysurfaceevolver as pse
 from pysurfaceevolver import Evolver
 
 warnings.simplefilter("ignore")
@@ -32,11 +46,23 @@ def best(f, repeat):
     return min(times)
 
 
-def run(level: int, repeat: int) -> dict:
+def once(f):
+    t = time.perf_counter()
+    f()
+    return time.perf_counter() - t
+
+
+def relaxed_cube(level: int) -> Evolver:
+    """The cube refined `level` times and relaxed to near equilibrium."""
     ev = Evolver("cube.fe")
     ev.command("g 5")
     ev.refine(level)
-    ev.command("g 1")
+    ev.command("g 20; hessian; hessian; hessian")
+    return ev
+
+
+def run_linear(level: int, repeat: int) -> dict:
+    ev = relaxed_cube(level)
     facets = ev.counts["facets"]
     out = {"level": level, "facets": facets, "vertices": ev.counts["vertices"]}
 
@@ -49,6 +75,7 @@ def run(level: int, repeat: int) -> dict:
     tmp = tempfile.mkdtemp()
     ops = {
         "g 1": lambda: ev.command("g 1"),
+        "hessian": lambda: ev.command("hessian"),
         "mesh()": fresh_mesh,
         "vertices (read)": lambda: ev.vertices,
         "values(vertex, x)": lambda: ev.values("vertex", "x"),
@@ -77,21 +104,63 @@ def run(level: int, repeat: int) -> dict:
     return out
 
 
+def run_lagrange(level: int, orders: list) -> dict:
+    ev = relaxed_cube(level)
+    out = {"level": level, "facets": ev.counts["facets"], "vertices": ev.counts["vertices"]}
+    for n in orders:
+        out[f"lagrange {n}"] = once(lambda: ev.command(f"lagrange {n}"))
+        out[f"L{n} g 5"] = once(lambda: ev.command("g 5"))
+        for i in (1, 2, 3):
+            out[f"L{n} hessian {i}"] = once(lambda: ev.command("hessian"))
+        out[f"L{n} energy"] = ev.total_energy
+    return out
+
+
+def table(title: str, results: list) -> None:
+    names = [k for k in results[0]
+             if k not in ("level", "facets", "vertices", "threads") and "energy" not in k]
+    for r in results[1:]:
+        names += [k for k in r if k not in names and k not in
+                  ("level", "facets", "vertices", "threads") and "energy" not in k]
+    print(f"\n{title:32}" + "".join(f"{r['facets']:>11,}f {r['threads']:>2}t" for r in results))
+    for name in names:
+        print(f"{name:32}" + "".join(
+            f"{r[name] * 1e3:13.1f}ms" if name in r else f"{'-':>15}" for r in results))
+
+
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--levels", type=int, nargs="+", default=[6, 8])
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--levels", type=int, nargs="*", default=[6, 8],
+                   help="refinement levels for the linear section")
+    p.add_argument("--lagrange-levels", type=int, nargs="*", default=[4, 5],
+                   help="refinement levels for the Lagrange section")
+    p.add_argument("--orders", type=int, nargs="+", default=[2, 4, 6],
+                   help="Lagrange orders, run in turn")
+    p.add_argument("--threads", type=int, nargs="+", default=[pse.threads()])
     p.add_argument("--repeat", type=int, default=3)
     p.add_argument("--json")
     args = p.parse_args()
-    results = [run(level, args.repeat) for level in args.levels]
-    names = [k for k in results[0] if k not in ("level", "facets", "vertices")]
-    print(f"{'operation':32}" + "".join(f"{r['facets']:>12,} f" for r in results))
-    for name in names:
-        print(f"{name:32}" + "".join(
-            f"{r[name] * 1e3:12.1f} ms" if name in r else f"{'-':>14}" for r in results))
+
+    load = os.getloadavg()[0]
+    if load > 0.5 * (os.cpu_count() or 1):
+        print(f"warning: load average {load:.1f}; timings will be noisy")
+    linear, lagrange = [], []
+    for threads in args.threads:
+        pse.set_threads(threads)
+        for level in args.levels:
+            linear.append(dict(run_linear(level, args.repeat), threads=threads))
+        for level in args.lagrange_levels:
+            lagrange.append(dict(run_lagrange(level, args.orders), threads=threads))
+    pse.set_threads(0)
+    if linear:
+        table("linear", linear)
+    if lagrange:
+        table("lagrange", lagrange)
     if args.json:
         with open(args.json, "w") as f:
-            json.dump(results, f, indent=1)
+            json.dump({"linear": linear, "lagrange": lagrange,
+                       "load": load, "cpus": os.cpu_count()}, f, indent=1)
 
 
 if __name__ == "__main__":
