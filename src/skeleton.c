@@ -683,6 +683,11 @@ edge_id dup_edge(edge_id old_e)
 */
 void recalc_facet_area(facet_id f_id)
 {
+  /* String-model facets are polygonal cells; the default area quantity
+     there is edge length, and the facet setup code assumes triangles
+     (heap overflow in q_facet_setup_q/_lagrange). The non-quantity path
+     below already skips them. */
+  if ( web.representation == STRING ) return;
   if ( everything_quantities_flag )
     quantity_attribute(f_id,default_area_quant_num);
   else if ( web.representation == SOAPFILM )
