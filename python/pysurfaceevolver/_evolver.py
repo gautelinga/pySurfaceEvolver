@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Gener
 
 import numpy as np
 
-from . import _core
+from . import _core, _html
 from ._build import Body, make_datafile
 from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
 
@@ -916,6 +916,35 @@ class Evolver:
         return (f"<Evolver {name!r}: {c['vertices']} vertices, {c['edges']} edges, "
                 f"{c['facets']} facets, {c['bodies']} bodies>")
 
+    def _repr_html_(self) -> Optional[str]:
+        try:   # e.g. busy with a run in another thread: plain repr instead
+            return self._html()
+        except Exception:
+            return None
+
+    def _html(self) -> str:
+        name = self.datafile or "no datafile"
+        if not _core.surface_valid():
+            return _html.fields("Evolver", [("datafile", name), ("surface", "none (not valid)")])
+        model = self.model
+        if model == "lagrange":
+            model = f"Lagrange {self.lagrange_order}"
+        c = self.counts
+        rows = [
+            ("datafile", name),
+            ("model", f"{self.representation}, {model}" + (", torus" if self.torus else "")),
+            ("elements", " · ".join(f"{_html.number(c[k])} {k if c[k] != 1 else one}"
+                                    for k, one in (("vertices", "vertex"), ("edges", "edge"),
+                                                   ("facets", "facet"), ("bodies", "body")))),
+            ("energy", _html.number(self.total_energy)),
+            ("area", _html.number(self.total_area)),
+            ("threads", f"{_core.threads()} · solver {_core.solver()}"),
+        ]
+        out = _html.fields("Evolver", rows)
+        if c["bodies"]:
+            out += self.bodies()._repr_html_()
+        return out
+
 
 def _merge_points(points: np.ndarray, faces: np.ndarray, tolerance: float):
     """Merge points closer than tolerance * bounding box size; drop unused ones."""
@@ -985,3 +1014,10 @@ class Parameters(MutableMapping):
 
     def __repr__(self) -> str:
         return repr({name: value for name, value, _ in self._snapshot()})
+
+    def _repr_html_(self) -> str:
+        rows = [(name, _html.number(value), "optimizing" if opt else "")
+                for name, value, opt in self._snapshot()]
+        if not rows:
+            return _html.fields("Parameters", [("none", "")])
+        return _html.table(rows, ["parameter", "value", ""], title="Parameters")

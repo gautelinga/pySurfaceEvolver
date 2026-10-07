@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from . import _html
+
 if TYPE_CHECKING:  # optional dependencies
     import meshio
     import pyvista
@@ -347,6 +349,26 @@ class Mesh:
     edge_node_index: Optional[np.ndarray] = None   # (order+1, 2) barycentric
     facet_nodes: Optional[np.ndarray] = None       # (k, nodes) vertex rows
     facet_node_index: Optional[np.ndarray] = None  # (nodes, 3) barycentric
+
+    def _repr_html_(self) -> str:
+        order = "linear" if self.order == 1 else f"order {self.order}"
+        if self.bezier:
+            order += " (Bezier)"
+        corners = len(np.unique(self.faces)) if self.faces is not None else None
+        rows = [("elements", " · ".join(
+                    [f"{_html.number(len(self.vertices))} vertex rows"]
+                    + ([f"{_html.number(corners)} corners"]
+                       if corners is not None and self.order > 1 else [])
+                    + [f"{_html.number(len(self.edges))} edges"]
+                    + ([f"{_html.number(len(self.faces))} facets"]
+                       if self.faces is not None else []))),
+                ("order", order),
+                ("fixed vertices", _html.number(int(self.fixed.sum())))]
+        if len(self.vertices):
+            lo, hi = self.vertices.min(axis=0), self.vertices.max(axis=0)
+            rows.append(("bounds", " × ".join(f"[{_html.number(a)}, {_html.number(b)}]"
+                                               for a, b in zip(lo, hi))))
+        return _html.fields(f"Mesh ({self.vertices.shape[1]}D)", rows)
 
     # ---- tessellation -----------------------------------------------------
 
@@ -757,6 +779,14 @@ class Bodies:
     target_volume: np.ndarray  # (b,) prescribed volume, NaN if not fixed
     pressure: np.ndarray       # (b,) Lagrange multiplier for the volume
     fixed: np.ndarray          # (b,) bool, volume constraint active
+
+    def _repr_html_(self) -> str:
+        rows = [(_html.number(i), _html.number(v), _html.number(t), _html.number(p),
+                 "fixed" if f else "")
+                for i, v, t, p, f in zip(self.ids[:_html.MAX_ROWS], self.volume,
+                                         self.target_volume, self.pressure, self.fixed)]
+        return _html.table(rows, ["body", "volume", "target", "pressure", ""],
+                           title="Bodies", total=len(self.ids))
 
 
 @dataclass(frozen=True)

@@ -499,3 +499,13 @@ def test_quit_does_not_end_process(run_python):
     """)
     assert result.returncode == 0, result.stderr
     assert "EXIT 7" in result.stdout and "ALIVE" in result.stdout
+
+
+def test_html_reprs(cube):
+    html = cube._repr_html_()
+    assert "cube.fe" in html and "24 facets" in html and "1 body" in html
+    assert "<th>pressure</th>" in html                     # the bodies table
+    assert "Mesh (3D)" in cube.mesh()._repr_html_()
+    assert "Parameters" in cube.parameters._repr_html_()
+    cube.command("lagrange 2")
+    assert "Lagrange 2" in cube._repr_html_()

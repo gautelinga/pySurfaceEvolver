@@ -315,6 +315,10 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    estimated 1.2 GB, measured peak 0.94 GB, 1.4 s).
 3. Generic wrappers in `bindings/module.cpp`; a more uniform `Mesh`.
 4. Notebook: `_repr_html_`; the user checks the live view in Jupyter.
+   `_repr_html_` **done** (user's choice: summary table, no image): `Evolver`
+   (datafile, model, counts, energy/area, threads/solver, bodies), `Mesh`,
+   `Bodies`, `Parameters`. Live view in Jupyter: pending the user's check
+   (needs `pyvista[jupyter]`).
 5. Optional wait-with-timeout instead of the immediate "busy" error.
 6. Docs: API reference and a tutorial notebook (load/build -> relax -> plot ->
    export for FEM).
