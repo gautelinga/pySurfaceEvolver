@@ -32,3 +32,7 @@ void display()
   graphgen();
   LEAVE_GRAPH_MUTEX
 }
+
+/* Window titles are set by the graph commands in evalmore.c. */
+void set_graphics_title(int which, char *title)
+{ (void)which; (void)title; }

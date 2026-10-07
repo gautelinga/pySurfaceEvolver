@@ -65,10 +65,6 @@ static long capture_max = 0;
 static long capture_count = 0;
 static int capture_bad = 0;
 
-/* nulgraph.c (the headless graphics driver) lacks this one. */
-void set_graphics_title(int which, char *title)
-{ (void)which; (void)title; }
-
 /**************************************************************************
  * Hooks called from the patched Evolver sources.
  */
