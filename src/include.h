@@ -628,7 +628,8 @@ extern "C" {
 #endif
 
 #ifndef MAXINT
-#define MAXINT (~(1<<(8*sizeof(int)-1)))
+#include <limits.h>
+#define MAXINT INT_MAX  /* ~(1<<31) overflowed a signed int */
 #endif
 
 #ifndef FPRESET
