@@ -51,7 +51,16 @@ Done (see `git log`):
   force variant (CSR, bit-identical) was measured and was slower (0.32 s).
   **Iteration wall time unchanged** (~1.8 s at 8 threads): see lesson 9.
 
-Version 0.5.0. 230 tests; mypy clean; manylinux wheel builds and passes.
+- **Phase C2 step 5 (partly)**: parallel `film_grad_l` (`fl_film_grad`, per-vertex
+  gather from the corner cache) and a compact per-facet body table for the volume
+  loop. One iteration at 1.6M facets (quiet machine): ~1.48 -> 1.31 s at 1 thread,
+  ~0.72 s at 8. Fixed a signed overflow in the sparse Hessian hash (`sp_hash`,
+  hit from ~10k vertices). A parallel scan of the edge content loop in
+  `local_calc_content` gained 5% at 4 threads but lost 17% at 8 (unexplained,
+  not the wait policy): dropped. Remaining serial (4 threads): `save_coords`,
+  `project_all`/`volume_restore`, `calc_leftside`, edge content scan, each 3-9%.
+
+Version 0.5.0. 231 tests; mypy clean; manylinux wheel builds and passes.
 
 ## Lessons
 
@@ -84,6 +93,11 @@ Version 0.5.0. 230 tests; mypy clean; manylinux wheel builds and passes.
    `local_calc_content`, `get_bv_new_vgrad`, `volume_restore`, `calc_leftside`
    ~17%. The three parallel loops are ~22%. So C2 step 5 is where linear
    iterations gain now; parallel loops alone have hit Amdahl's limit.
+11. This machine is a hybrid laptop CPU (Ryzen AI 7 PRO 350: 4 fast + 4 compact
+    cores, SMT): 8 threads are barely faster than 4 and 8-thread timings are
+    noisy; compare loop-level timers rather than whole iterations. Check for
+    stray background jobs first (an orphaned `pse.map` sweep from a stdin script
+    ran 4 h, every job dying at worker startup; `map` should fail fast then).
 10. `perf` works via `/usr/lib/linux-tools-6.8.0-146/perf` (the 6.17 kernel's
     tools package ships no perf). Use `-D -1 --control fifo:...` and have the
     script write `enable`/`disable` to profile just the iterations; per-thread
