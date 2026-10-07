@@ -115,8 +115,16 @@ loops to round-off (about 1e-15 per evaluation; runs that stop short of
 equilibrium can drift further apart, equilibria agree) and are reproducible for a
 given thread count. One iteration on a 1.6M-facet surface went from 11 s to 2.3 s.
 
-`pse.set_threads(n)` / `pse.threads()` control the threads (also `OMP_NUM_THREADS`,
-or `PYSE_THREADS`, which `pse.map` sets for its workers). `PYSE_NO_FAST_LOOPS=1`
+Named quantities (the Lagrange model, `convert_to_quantities`, quantity integrals
+on facets, edges and vertices) run in parallel too, for methods known to be
+thread-safe; integrands that use only arithmetic, math functions, parameters and
+coordinates qualify, others (user procedures, assignments, ...) run serially.
+
+Threads default to the number of physical cores. `pse.set_threads(n)` /
+`pse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`); `pse.map`
+workers run single-threaded by default, since for sweeps more processes beat more
+threads. With several threads, results can differ from run to run at round-off
+level; with one thread they are reproducible bit for bit. `PYSE_NO_FAST_LOOPS=1`
 switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
 facet corner against Evolver's own topology (CI runs with it).
 

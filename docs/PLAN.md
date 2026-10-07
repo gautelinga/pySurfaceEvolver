@@ -20,8 +20,11 @@ it when a step is finished or a decision changes.
   it. `save()`/`restore()` for exact snapshots; `pse.map` (worker processes,
   crash-isolated) for sweeps. Long term: move Evolver's globals into one state
   struct (phase E).
-- **Threads:** OpenMP, on by default; `pse.set_threads(n)`, `OMP_NUM_THREADS`,
-  `PYSE_THREADS` (set by `pse.map` workers to CPUs/processes). **Don't expect
+- **Threads:** OpenMP; default = physical cores; `pse.set_threads(n)`,
+  `OMP_NUM_THREADS`, `PYSE_THREADS`; `pse.map` workers 1 thread each. Evolver's
+  old pthread mode (`-p`, `thread_launch`, `THREADS` blocks) stays in the source
+  but is compiled out and unsupported (user's choice: keep `src/` close to
+  upstream); per-thread data (`GET_THREAD_DATA`) is per OpenMP thread. **Don't expect
   scaling above about 4 threads** on the development machine (4 fast + 4 compact
   cores, 2-way SMT, laptop memory bandwidth): 8 threads gain 0-10% over 4 or lose,
   and the facet loops are memory-bound. The default thread count is decided in C2
@@ -55,6 +58,19 @@ One linear iteration, 1.6M-facet cube, quiet machine, best of N:
 
 98k facets: 62 -> 32 ms at 1 thread. The main thread is now about as busy as the
 workers; the serial remainder is ~1-2% items.
+
+**End of C2 vs v0.5.0** (`bench/benchmark.py --threads 8`, same machine, same
+energies; Lagrange stage = `lagrange n; g 5; hessian` x3 after a converged
+linear surface):
+
+| | v0.5.0 | C2 |
+|---|---|---|
+| linear 98k: `g 1` / Newton step | 75 ms / 0.49 s | 40 ms / 0.24 s |
+| linear 1.6M: `g 1` / Newton step | 1.34 s / 25.5 s | 0.58 s / 6.4 s |
+| Lagrange 2 stage, 24k facets | 2.5 s | 0.9 s |
+| Lagrange 4 stage, 24k facets | 17.7 s | 5.4 s |
+| Lagrange 6 stage, 24k facets | 88.9 s | 22.5 s |
+| Lagrange 6 stage, 6k facets | 17.5 s | 5.0 s |
 
 **Where a typical run spends its time now** (cube at 98k facets, 4 threads:
 `g 20; hessian; hessian; lagrange 2; g 5; hessian; lagrange 4; g 5; hessian`,
@@ -213,12 +229,15 @@ workers; the serial remainder is ~1-2% items.
    at 24k: 3.01 / 1.82 / 1.60 s. Also: Ctrl-C is safe with threads (aborts are
    deferred out of parallel regions and MUMPS; signals on worker threads are
    forwarded to the engine thread).
-5. **Parallel named-quantity loops** (user chose the full scope). Done so far:
+5. **Done.** Parallel named-quantity loops (user chose the full scope). Done:
    facet loops of `calc_quants`/`calc_quant_grads` for the area and volume
    methods (linear, Lagrange), record-and-replay, bit-identical at 1 thread;
    `g 5` at 24k facets: order 2 0.51 -> 0.17 s, 4 1.84 -> 0.75 s, 6 4.66 ->
-   1.82 s. Remaining: per-OpenMP-thread `thread_data` and expression-based
-   methods; edge and vertex methods; removing the dead pthread code.
+   1.82 s. Then: per-OpenMP-thread `thread_data` (eval stacks); error traps
+   (`kb_error` in a parallel loop jumps back; the element is redone serially,
+   so messages are unchanged); facet/edge/vertex integral methods with
+   read-only integrands (expression node whitelist); values, gradients and
+   Hessians. Dead pthread code kept (see Decisions).
    Original text: (large; demoted: Lagrange runs take few
    gradient steps, so this matters mainly for named-quantity-heavy models).
    Parallelize the per-facet quantity value/gradient loops (`calc_quants`,
