@@ -31,7 +31,7 @@ set(EVOLVER_SOURCES
   meanint mindeg dodecGroup registry khyp gauss knot1 eval_all lexinit2
   evalmore knot2 knot3 teix sqcurve2 hessian2 hessian3 method1 method2
   method3 bk method4 method5 eval_sec sqcurve3 metis lagrange
-  nulgraph)
+  nulgraph fastloops)
 list(TRANSFORM EVOLVER_SOURCES PREPEND ${CMAKE_CURRENT_SOURCE_DIR}/src/)
 list(TRANSFORM EVOLVER_SOURCES APPEND .c)
 
@@ -56,6 +56,16 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(evolver_core PRIVATE -w
     -Wno-error=implicit-function-declaration -Wno-error=implicit-int
     -Wno-error=int-conversion -Wno-error=incompatible-pointer-types)
+endif()
+# OpenMP for the parallel facet loops (fastloops.c); serial without it.
+option(PYSE_OPENMP "Use OpenMP for parallel facet loops" ON)
+if(PYSE_OPENMP)
+  find_package(OpenMP COMPONENTS C)
+  if(OpenMP_C_FOUND)
+    target_link_libraries(evolver_core PUBLIC OpenMP::OpenMP_C)
+  else()
+    message(STATUS "OpenMP not found: facet loops run serially")
+  endif()
 endif()
 find_library(MATH_LIBRARY m)
 if(MATH_LIBRARY)

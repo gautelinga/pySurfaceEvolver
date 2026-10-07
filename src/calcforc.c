@@ -13,6 +13,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 #ifdef THREADS
 /******************************************************************
@@ -172,7 +173,7 @@ void local_calc_energy()
 
     if ( threadflag )
       thread_launch(TH_CALC_FACET_ENERGY,FACET);
-    else
+    else if ( !fl_facet_energies() )  /* parallel version, fastloops.c */
     { FOR_ALL_FACETS(f_id)
        (*calc_facet_energy)(f_id,ALL_ENERGIES);
     }
@@ -798,7 +799,7 @@ void  local_calc_content (
 
       if ( threadflag )
         thread_launch(TH_CALC_FACET_VOLUME,FACET);
-      else
+      else if ( !fl_facet_volumes() )  /* parallel version, fastloops.c */
       FOR_ALL_FACETS(f_id)
         (*calc_facet_volume)(f_id);
 

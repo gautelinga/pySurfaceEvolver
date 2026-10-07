@@ -11,6 +11,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 /**************************************************************
 *  
@@ -2839,50 +2840,7 @@ void get_edge_verts(
 *
 */
 
-/* Facet corner cache.  get_facet_verts() is called dozens of times per
-   facet per iteration (every line-search step evaluates energies and
-   volumes), and walking facet -> facet-edge -> edge -> vertex for each
-   corner dominated iteration time.  For linear soapfilm surfaces without
-   symmetry, keep each facet's three corner vertices, rebuilt whenever the
-   topology changes (top_timestamp) or facets are added or removed.
-   Setting the environment variable PYSE_CHECK_FACET_CACHE compares every
-   cached answer with the walk and aborts on a mismatch. */
-static vertex_id *fv_cache = NULL;
-static long fv_cache_size = 0;
-static long fv_cache_stamp = -1;
-static long fv_cache_count = -1;
-static long fv_cache_maxord = -1;
-static int fv_cache_check = -1;
-
-static vertex_id *facet_corner_cache(void)
-{ facet_id f_id;
-  long size;
-  if ( fv_cache && fv_cache_stamp == top_timestamp
-       && fv_cache_count == web.skel[FACET].count
-       && fv_cache_maxord == (long)web.skel[FACET].max_ord )
-    return fv_cache;
-  if ( fv_cache_check < 0 )
-    fv_cache_check = getenv("PYSE_CHECK_FACET_CACHE") != NULL;
-  size = 3*((long)web.skel[FACET].max_ord + 1);
-  if ( size > fv_cache_size )
-  { free(fv_cache);
-    fv_cache = (vertex_id*)malloc((size_t)size*sizeof(vertex_id));
-    if ( !fv_cache ) { fv_cache_size = 0; return NULL; }
-    fv_cache_size = size;
-  }
-  FOR_ALL_FACETS(f_id)
-  { facetedge_id fe = get_facet_fe(f_id);
-    vertex_id *c = fv_cache + 3*ordinal(f_id);
-    c[0] = get_fe_tailv(fe); fe = get_next_edge(fe);
-    c[1] = get_fe_tailv(fe); fe = get_next_edge(fe);
-    c[2] = get_fe_tailv(fe);
-  }
-  fv_cache_stamp = top_timestamp;
-  fv_cache_count = web.skel[FACET].count;
-  fv_cache_maxord = (long)web.skel[FACET].max_ord;
-  return fv_cache;
-}
-
+/* get_facet_verts() uses the facet corner cache in fastloops.c. */
 void get_facet_verts(
   facet_id f_id,
   REAL **verts,    /* fourth spot NULL if don't want midpts in quadratic */
@@ -2997,14 +2955,14 @@ void get_facet_verts(
   }
   else
   { vertex_id *cache = (web.representation == SOAPFILM && FACET_VERTS == 3)
-                       ? facet_corner_cache() : NULL;
+                       ? fl_facet_corners() : NULL;
     if ( cache )
     { vertex_id *c = cache + 3*ordinal(f_id);
       /* an inverted facet runs its loop backwards: corners 1, 0, 2 */
       vertex_id v[3];
       if ( inverted(f_id) ) { v[0] = c[1]; v[1] = c[0]; v[2] = c[2]; }
       else { v[0] = c[0]; v[1] = c[1]; v[2] = c[2]; }
-      if ( fv_cache_check )
+      if ( fl_check() )
         for ( i = 0 ; i < 3 ; i++, fe = get_next_edge(fe) )
           if ( !equal_id(v[i],get_fe_tailv(fe)) )
           { fprintf(stderr,"facet corner cache mismatch: facet %ld corner %d\n",

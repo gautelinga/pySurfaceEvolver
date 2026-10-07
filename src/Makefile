@@ -226,7 +226,7 @@ OBJ= calcforc.o  variable.o trirevis.o  stringl.o stringq.o model.o\
 	 dodecGroup.o registry.o khyp.o gauss.o knot1.o eval_all.o\
 	 lexinit2.o evalmore.o knot2.o knot3.o teix.o sqcurve2.o\
 	 hessian2.o hessian3.o method1.o method2.o method3.o  bk.o\
-	 method4.o method5.o eval_sec.o sqcurve3.o metis.o lagrange.o
+	 method4.o method5.o eval_sec.o sqcurve3.o metis.o lagrange.o fastloops.o
 
 
 evolver: makemark  $(OBJ)  $(GRAPH)
