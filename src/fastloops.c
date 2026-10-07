@@ -133,6 +133,63 @@ static void check_list(facet_id *list, long n)
 }
 
 /**************************************************************************
+ * Facet bodies
+ *
+ * The front and back body of every facet in list order, NULLID for
+ * NONCONTENT facets: the loops read these instead of the (large) facet
+ * records. Rebuilt when the topology changes (set_facet_body() counts as
+ * one), or NONCONTENT attributes or bodies are changed or deleted
+ * (fl_body_stamp, bumped where Evolver does that).
+ */
+
+long fl_body_stamp = 0;
+
+static int loop_threads(long n);
+
+static body_id *fb_cache = NULL;    /* 2 per facet in list order */
+static long fb_cache_size = 0;
+static long fb_top_stamp = -1;
+static long fb_body_stamp = -1;
+static long fb_count = -1;
+
+static void facet_bodies_of(facet_id f_id, body_id *b)
+{ if ( get_fattr(f_id) & NONCONTENT ) b[0] = b[1] = NULLID;
+  else
+  { b[0] = get_facet_body(f_id);
+    b[1] = get_facet_body(facet_inverse(f_id));
+  }
+}
+
+/* The body table for the facet list (n facets), or NULL. */
+static body_id *facet_bodies(facet_id *list, long n)
+{ long k;
+  if ( fb_cache && fb_top_stamp == fv_cache_stamp
+       && fb_body_stamp == fl_body_stamp && fb_count == n )
+  { if ( fl_check() )
+      for ( k = 0 ; k < n ; k++ )
+      { body_id b[2];
+        facet_bodies_of(list[k],b);
+        if ( !equal_id(b[0],fb_cache[2*k]) || !equal_id(b[1],fb_cache[2*k+1]) )
+        { fprintf(stderr,"facet body cache mismatch at position %ld\n",k);
+          abort();
+        }
+      }
+    return fb_cache;
+  }
+  if ( !ensure_size((void**)&fb_cache,&fb_cache_size,2*n,sizeof(body_id)) )
+    return NULL;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+    facet_bodies_of(list[k],fb_cache + 2*k);
+  fb_top_stamp = fv_cache_stamp;
+  fb_body_stamp = fl_body_stamp;
+  fb_count = n;
+  return fb_cache;
+}
+
+/**************************************************************************
  * Threads
  */
 
@@ -193,6 +250,7 @@ int fl_facet_volumes(void)
   facet_id *list;
   vertex_id *corners;
   body_id b_id;
+  body_id *bodies;
   int threads, t;
 
   if ( fl_disabled() ) return 0;
@@ -204,6 +262,8 @@ int fl_facet_volumes(void)
   list = fl_facet_list(&n);
   if ( !corners || !list ) return 0;
   if ( fl_check() ) check_list(list,n);
+  bodies = facet_bodies(list,n);
+  if ( !bodies ) return 0;
   threads = loop_threads(n);
   nb = (long)web.skel[BODY].max_ord + 1;
   if ( !ensure_size((void**)&vol_sums,&vol_sums_size,threads*nb,sizeof(csum))
@@ -212,8 +272,7 @@ int fl_facet_volumes(void)
   memset(vol_sums,0,threads*nb*sizeof(csum));
   memset(vol_abs,0,threads*nb*sizeof(double));
 
-  /* each thread sums the signed volumes of its facets per body. Bodies
-     are looked up per call (they can change without a topology change). */
+  /* each thread sums the signed volumes of its facets per body */
 #ifdef _OPENMP
   #pragma omp parallel num_threads(threads)
 #endif
@@ -227,10 +286,7 @@ int fl_facet_volumes(void)
     { facet_id f_id = list[k];
       vertex_id *c = corners + 3*ordinal(f_id);
       REAL *x0, *x1, *x2, vol;
-      body_id b0, b1;
-      if ( get_fattr(f_id) & NONCONTENT ) continue;
-      b0 = get_facet_body(f_id);
-      b1 = get_facet_body(facet_inverse(f_id));
+      body_id b0 = bodies[2*k], b1 = bodies[2*k+1];
       if ( !valid_id(b0) && !valid_id(b1) ) continue;
       x0 = get_coord(c[0]); x1 = get_coord(c[1]); x2 = get_coord(c[2]);
       /* as facet_volume_l() */

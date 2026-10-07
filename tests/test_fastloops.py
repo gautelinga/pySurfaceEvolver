@@ -129,6 +129,29 @@ def test_relaxed_equilibria_match_original():
             assert got["index"] == ref["index"], (name, mode)
 
 
+BODY_CHANGES = r"""
+import json, warnings
+warnings.simplefilter("ignore")
+from pysurfaceevolver import Evolver
+ev = Evolver("cube.fe")
+ev.command("g 2; r; r; r; r; g 2")
+out = []
+for step in ["set facet noncontent where id <= 3000", "unset facet noncontent",
+             "unset facet frontbody where id <= 2000", "set facet frontbody 1 where id <= 1000"]:
+    ev.command(step + "; recalc")    # bodies change, topology doesn't
+    out.append(float(ev.bodies().volume[0]))
+print(json.dumps(out))
+"""
+
+
+def test_facet_body_changes(tmp_path):
+    original = run(BODY_CHANGES, [], MODES["original"])
+    fast = run(BODY_CHANGES, [], MODES["8 threads"])   # checks the body cache too
+    assert len(set(original)) == 4
+    for v, w in zip(fast, original):
+        assert rel(v, w) < 1e-12
+
+
 def test_reproducible_for_a_thread_count(dumps):
     env = {"OMP_NUM_THREADS": "4"}
     assert run(EVALUATE, dumps, env) == run(EVALUATE, dumps, env)

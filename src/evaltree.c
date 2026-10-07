@@ -15,6 +15,7 @@
 */
 
 #include "include.h" 
+#include "fastloops.h"
 #include "ytab.h"
  
 /* for breakpoints */
@@ -3850,6 +3851,7 @@ REAL eval (
           kb_error(2484,errmsg, RECOVERABLE);
         }
         set_attr(q_id,NONCONTENT);
+        fl_body_stamp++;   /* fastloops.c caches NONCONTENT */
         /* go back to next element generator */
         node += node->op1.skipsize - 1;  /* back to start of loop */
         break;
@@ -3862,6 +3864,7 @@ REAL eval (
           kb_error(2595,errmsg, RECOVERABLE);
         }
         unset_attr(q_id,NONCONTENT);
+        fl_body_stamp++;   /* fastloops.c caches NONCONTENT */
         /* go back to next element generator */
         node += node->op1.skipsize - 1;  /* back to start of loop */
         break;

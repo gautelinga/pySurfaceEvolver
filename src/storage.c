@@ -15,6 +15,7 @@
 *        This version has element ids implemented as longs.
 */
 #include "include.h"
+#include "fastloops.h"
 
 struct blocklist_struct *blocklist[NUMELEMENTS]; /* list of allocated blocks */
 int blockcount[NUMELEMENTS];  /* how many blocks allocated */
@@ -588,6 +589,9 @@ void free_element(element_id id)
     set_facet_body(id,NULLID);
     set_facet_body(inverse_id(id),NULLID);
   }
+
+  if ( type == BODY )
+    fl_body_stamp++;   /* bodies cached in fastloops.c */
 
   if ( (type == BODY) && everything_quantities_flag )
   { // should deallocate body quantity, but don't have that implemented,

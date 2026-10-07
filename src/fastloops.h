@@ -36,6 +36,10 @@ int fl_facet_forces(void);
    the case isn't covered. */
 int fl_film_grad(void);
 
+/* Bumped when facet NONCONTENT attributes change or bodies are deleted
+   (the loops cache facet bodies; set_facet_body() bumps top_timestamp). */
+extern long fl_body_stamp;
+
 /* Number of threads for the parallel loops (1 without OpenMP). */
 int fl_threads(void);
 void fl_set_threads(int n);
