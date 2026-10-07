@@ -204,11 +204,22 @@ workers; the serial remainder is ~1-2% items.
       time), so serial is right; the wheel is still 0-19% slower than a dev
       build with OpenBLAS 0.3.26 (likely no Zen 4/5 kernels in 0.3.15).
       Follow-up option: build a recent OpenBLAS from source for the wheels.
-4. **Thread defaults** (small, partly by the user on a quiet machine):
-   `bench/benchmark.py --threads 1 2 4 8`; set the default thread count (likely
-   capped at physical cores, possibly 4 on hybrid laptops), `FL_PARALLEL_MIN`, and
-   the `pse.map` split (more processes with fewer threads each may beat threads).
-5. **Parallel named-quantity loops** (large; demoted: Lagrange runs take few
+4. **Done.** Thread defaults (user's choices, 2026-10-07): physical cores (at most
+   the available processors; OMP_NUM_THREADS / PYSE_THREADS / set_threads
+   override; also given to OpenMP so MUMPS follows); `pse.map` workers 1 thread
+   each. A pthreads OpenBLAS is made single-threaded at run time (its threads
+   inside MUMPS's oversubscribe: 393k-facet Newton step at 8 threads 3.0 -> 1.2 s).
+   Measured 1/4/8 threads, Newton step 393k: 1.65 / 1.23 / 1.21 s; Lagrange 4
+   at 24k: 3.01 / 1.82 / 1.60 s. Also: Ctrl-C is safe with threads (aborts are
+   deferred out of parallel regions and MUMPS; signals on worker threads are
+   forwarded to the engine thread).
+5. **Parallel named-quantity loops** (user chose the full scope). Done so far:
+   facet loops of `calc_quants`/`calc_quant_grads` for the area and volume
+   methods (linear, Lagrange), record-and-replay, bit-identical at 1 thread;
+   `g 5` at 24k facets: order 2 0.51 -> 0.17 s, 4 1.84 -> 0.75 s, 6 4.66 ->
+   1.82 s. Remaining: per-OpenMP-thread `thread_data` and expression-based
+   methods; edge and vertex methods; removing the dead pthread code.
+   Original text: (large; demoted: Lagrange runs take few
    gradient steps, so this matters mainly for named-quantity-heavy models).
    Parallelize the per-facet quantity value/gradient loops (`calc_quants`,
    `calc_quant_grads` and the methods) with OpenMP, reusing the caches and
