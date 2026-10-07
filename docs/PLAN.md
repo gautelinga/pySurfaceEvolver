@@ -265,11 +265,10 @@ Phase C2 is complete (see the table in Status). After it, at the user's request:
   (MUMPS calls BLAS from several threads). The OpenMP build is both safe and 4-13%
   faster than serial+locking.
 - Speed-up items the user asked for ("do 1 and 2"):
-  1. Reuse MUMPS's analysis across Newton steps: **done, committed (8701b7c), all
-     tests pass, speed-up NOT measured yet**. Measure next: `newton_t.py`-style
-     timing of the 2nd+ Newton step at 393k/1.6M facets and Lagrange 6 at 24k,
-     against the final benchmark (1.6M Newton step 6.45 s at 8 threads; 393k 1.21 s;
-     Lagrange 6 24k 6.57 s). Expected 5-15% at 1.6M.
+  1. Reuse MUMPS's analysis across Newton steps: **done (8701b7c)**. Measured
+     (8 threads, best of 3-4 consecutive steps, two interleaved rounds, load ~7,
+     against 66420bd): 393k 1.22 -> 1.16 s; 1.6M 6.45 -> 5.93 s; Lagrange 6 at 24k
+     6.78 -> 6.49 s. About 4-8%, at the noise level; energies agree.
   2. Parallelize the remaining serial Newton-step setup: **not started**.
      Candidates from the last profile (1.6M linear, noisy): `hessian_init`,
      per-vertex normal projections (`new_calc_vertex_normal`, `get_edge_valence`,
