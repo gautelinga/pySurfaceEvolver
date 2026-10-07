@@ -30,6 +30,40 @@ def test_iterate_callback(cube):
     assert calls == [3, 6, 7]
 
 
+def test_relax_converges(cube):
+    result = cube.relax(tol=1e-12)
+    assert result.converged
+    assert len(result.energy) < 1000
+    last = result.energy[-5:]
+    assert np.ptp(last) <= 1e-12 * max(1.0, abs(last[-1])) * 5
+    # nothing left to gain from more gradient steps
+    assert cube.iterate(5).energy[-1] == pytest.approx(result.energy[-1], rel=1e-11)
+
+
+def test_relax_reports_no_convergence(cube):
+    cube.refine(2)
+    result = cube.relax(tol=1e-14, max_iter=3)
+    assert result.converged is False and len(result.energy) == 3
+
+
+def test_relax_with_hessian(cube):
+    cube.iterate(5)
+    cube.refine()
+    gradient_only = cube.save()
+    plain = cube.relax(tol=1e-9)
+    cube.restore(gradient_only)
+    polished = cube.relax(tol=1e-9, hessian=True)
+    assert polished.converged and polished.hessian_steps >= 1
+    assert cube.total_energy <= plain.energy[-1] + 1e-12
+
+
+def test_relax_callback(cube):
+    calls = []
+    result = cube.relax(tol=1e-8, callback=lambda ev, i: calls.append(i), every=4)
+    assert calls and all(i % 4 == 0 for i in calls[:-1])
+    assert calls[-1] == len(result.energy)
+
+
 def test_refine_and_model_operations(cube):
     cube.iterate(3)
     cube.refine()

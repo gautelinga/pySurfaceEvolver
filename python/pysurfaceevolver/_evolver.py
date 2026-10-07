@@ -130,12 +130,18 @@ def _target_format(path: str, file_format: Optional[str]) -> "tuple[Optional[str
 
 @dataclass
 class IterationResult:
-    """What :meth:`Evolver.iterate` did, one entry per iteration."""
+    """What :meth:`Evolver.iterate` or :meth:`Evolver.relax` did.
+
+    ``energy``, ``area`` and ``scale`` have one entry per gradient iteration.
+    ``converged`` and ``hessian_steps`` are set by :meth:`Evolver.relax`.
+    """
 
     energy: np.ndarray
     area: np.ndarray
     scale: np.ndarray
     output: str
+    converged: Optional[bool] = None
+    hessian_steps: int = 0
 
 # eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
 # (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
@@ -360,16 +366,74 @@ class Evolver:
         """
         if n < 0:
             raise ValueError("n must be non-negative")
-        energy, area, scale, output = [], [], [], []
+        energy: List[float] = []
+        area: List[float] = []
+        scale: List[float] = []
+        output: List[str] = []
         for i in range(1, n + 1):
-            output.append(self.command("g 1"))
-            energy.append(_core.total_energy())
-            area.append(_core.total_area())
-            scale.append(self.eval("scale"))
+            self._step(energy, area, scale, output)
             if callback is not None and (i % every == 0 or i == n):
                 callback(self, i)
         return IterationResult(np.array(energy), np.array(area), np.array(scale),
                                "".join(output))
+
+    def _step(self, energy: List[float], area: List[float], scale: List[float],
+              output: List[str]) -> None:
+        output.append(self.command("g 1"))
+        energy.append(_core.total_energy())
+        area.append(_core.total_area())
+        scale.append(self.eval("scale"))
+
+    def relax(self, tol: float = 1e-10, max_iter: int = 1000, *, window: int = 5,
+              hessian: bool = False, max_hessian: int = 10,
+              callback: Optional[Callable[["Evolver", int], Any]] = None,
+              every: int = 1) -> IterationResult:
+        """Iterate until the energy stops changing.
+
+        Runs gradient iterations until the relative energy change
+        ``|E[i] - E[i-1]| / max(1, |E[i]|)`` stays below ``tol`` for
+        ``window`` consecutive iterations, or ``max_iter`` is reached.
+        With ``hessian=True``, Newton steps (``hessian``) follow, until one
+        changes the energy by less than ``tol`` (at most ``max_hessian``).
+
+        Returns the gradient iterations' :class:`IterationResult`, with
+        ``converged`` and ``hessian_steps`` set. ``callback(ev, i)`` works as
+        in :meth:`iterate`. It doesn't refine; refine and relax again for a
+        finer surface.
+        """
+        if tol <= 0 or max_iter < 1 or window < 1:
+            raise ValueError("tol must be positive; max_iter and window at least 1")
+        energy: List[float] = []
+        area: List[float] = []
+        scale: List[float] = []
+        output: List[str] = []
+        previous = _core.total_energy()
+        quiet = 0
+        converged = False
+        for i in range(1, max_iter + 1):
+            self._step(energy, area, scale, output)
+            if callback is not None and i % every == 0:
+                callback(self, i)
+            change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
+            previous = energy[-1]
+            quiet = quiet + 1 if change < tol else 0
+            if quiet >= window:
+                converged = True
+                break
+        if callback is not None and len(energy) % every != 0:
+            callback(self, len(energy))
+        steps = 0
+        if hessian:
+            converged = False
+            for steps in range(1, max_hessian + 1):
+                before = _core.total_energy()
+                output.append(self.command("hessian"))
+                after = _core.total_energy()
+                if abs(after - before) / max(1.0, abs(after)) < tol:
+                    converged = True
+                    break
+        return IterationResult(np.array(energy), np.array(area), np.array(scale),
+                               "".join(output), converged, steps)
 
     def refine(self, times: int = 1) -> None:
         """Refine the surface: split every edge and facet (Evolver's ``r``)."""
