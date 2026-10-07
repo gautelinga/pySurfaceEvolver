@@ -6042,6 +6042,7 @@ tree stuff not working
             case MKL_FACTORING: outstring("(was MKL)\n"); break;
          }
      }
+     break;
      case MKL_FACTORING:
       { 
          sp_mul_func = bk_mul;
