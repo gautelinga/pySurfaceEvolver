@@ -167,6 +167,8 @@ endif()
 install(TARGETS _core LIBRARY DESTINATION pysurfaceevolver COMPONENT python)
 # Evolver's sample datafiles and command scripts (see pysurfaceevolver.examples)
 install(DIRECTORY fe/ DESTINATION pysurfaceevolver/data/fe COMPONENT python)
+# licenses of the bundled third-party software (MUMPS, OpenBLAS, GCC runtime, ...)
+install(FILES THIRD_PARTY_LICENSES.txt DESTINATION pysurfaceevolver COMPONENT python)
 
 # Type stubs (_core.pyi), generated from the installed module.
 nanobind_add_stub(

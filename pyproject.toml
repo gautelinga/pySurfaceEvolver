@@ -47,9 +47,9 @@ test-command = "pytest {project}/tests -q"
 [tool.cibuildwheel.linux]
 # MUMPS (Hessian factoring) is Fortran and needs LAPACK/BLAS: the manylinux
 # image has gfortran; OpenBLAS is bundled into the wheel by auditwheel.
-before-all = "dnf install -y openblas-devel"
-# The default libopenblas is single-threaded; that is what we want: MUMPS
-# runs the threads (a threaded BLAS inside them oversubscribes the cores).
+# A pinned recent OpenBLAS, OpenMP build (see the script). AlmaLinux's own is
+# 0.3.15, up to ~20% slower on this workload.
+before-all = "bash {project}/tools/build_openblas.sh"
 
 [[tool.mypy.overrides]]
 # these ship without type information
