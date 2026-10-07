@@ -199,8 +199,11 @@ workers; the serial remainder is ~1-2% items.
       `body_hessian` via the runner in `fasthess.c`).
       One Newton step, 4 threads, now vs v0.5.0-era: linear 393k facets
       3.1 -> 1.2 s, 1.6M 25.4 -> 6.0 s; Lagrange 6 at 24k 22.6 -> 8.2 s.
-      Open: the wheel's OpenBLAS is the serial build (dev with threaded
-      OpenBLAS is 10-20% faster on large linear steps; try openblaso).
+      Wheel BLAS: AlmaLinux 8's serial OpenBLAS 0.3.15. Threaded BLAS inside
+      MUMPS's threads oversubscribes (pthreads OpenBLAS is made serial at run
+      time), so serial is right; the wheel is still 0-19% slower than a dev
+      build with OpenBLAS 0.3.26 (likely no Zen 4/5 kernels in 0.3.15).
+      Follow-up option: build a recent OpenBLAS from source for the wheels.
 4. **Thread defaults** (small, partly by the user on a quiet machine):
    `bench/benchmark.py --threads 1 2 4 8`; set the default thread count (likely
    capped at physical cores, possibly 4 on hybrid laptops), `FL_PARALLEL_MIN`, and

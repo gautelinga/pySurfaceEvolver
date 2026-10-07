@@ -48,6 +48,8 @@ test-command = "pytest {project}/tests -q"
 # MUMPS (Hessian factoring) is Fortran and needs LAPACK/BLAS: the manylinux
 # image has gfortran; OpenBLAS is bundled into the wheel by auditwheel.
 before-all = "dnf install -y openblas-devel"
+# The default libopenblas is single-threaded; that is what we want: MUMPS
+# runs the threads (a threaded BLAS inside them oversubscribes the cores).
 
 [[tool.mypy.overrides]]
 # these ship without type information
