@@ -105,6 +105,19 @@ on the curved surface (`curved="tessellate"`, the default, works everywhere) or 
 native high-order cells. Per-body surfaces have outward normals; films between
 two bodies appear in both. `.msh` means Gmsh format 2.2.
 
+## Performance
+
+For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature
+energies), the facet volume, energy and force loops use a cached facet topology
+and run in two passes: per-facet values in parallel (OpenMP), then the sums in
+facet order, so results are bit-identical to Evolver's original loops. One
+iteration on a 1.6M-facet surface went from 11 s to 2.3 s.
+
+`pse.set_threads(n)` / `pse.threads()` control the threads (also `OMP_NUM_THREADS`,
+or `PYSE_THREADS`, which `pse.map` sets for its workers). `PYSE_NO_FAST_LOOPS=1`
+switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
+facet corner against Evolver's own topology (CI runs with it).
+
 ## Errors and interrupts
 
 Errors raise `EvolverError` (with `InvalidSurfaceError` after a failed load, until a
