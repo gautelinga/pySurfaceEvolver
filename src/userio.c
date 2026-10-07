@@ -1117,7 +1117,13 @@ bailout:
   }
   #endif
   if ( subshell_depth == 0 )
-     temp_free_all();      
+  { temp_free_all();      
+    /* pointers into the temporary memory just freed; hessian_cleanup()
+       would free them again (saved.coord is NULL for SAVE_IN_ATTR, so
+       the restore above doesn't release the rest) */
+    saved.coord = NULL; saved.bod = NULL; saved.quant = NULL; saved.meth = NULL;
+    vhead = NULL; pressures = NULL; conrhs = NULL;
+  }
   if ( list && (list != permlist) )
     { myfree((char*)list); list = NULL; } /* plug memory leak */
   quiet_flag = 0;

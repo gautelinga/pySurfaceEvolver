@@ -174,3 +174,15 @@ def test_type_information_is_installed():
     stub = files.joinpath("_core.pyi").read_text()
     assert "class CallResult" in stub
     assert "def command(" in stub
+
+
+def test_failed_hessian_twice(load):
+    """A failed Newton step left pointers to freed memory that the next one
+    freed again (tankex: gap energy has no Hessian)."""
+    ev = load("tankex.fe")
+    ev.command("g 5")
+    for _ in range(2):
+        with pytest.raises(EvolverError):
+            ev.command("hessian")
+    ev.command("g 5")
+    assert ev.eval("total_energy") > 0
