@@ -8,9 +8,13 @@
  * system S (upper triangle, rows IA, columns JA, values A), report its
  * inertia in S->neg, S->zero, S->pos, and solve with the factors.
  *
- * MUMPS (sequential build, LDL^T with pivoting, null pivot detection) keeps
- * one instance per linear system, in S->mumps. The analysis (ordering and
- * symbolic factorization) is reused while the sparsity pattern is the same.
+ * MUMPS (sequential build, LDL^T with pivoting, null pivot detection) runs
+ * as one shared instance. Its analysis (ordering and symbolic factorization)
+ * is kept from one Newton step to the next and reused while the sparsity
+ * pattern and the thread count are the same (each step builds a new linear
+ * system, but the pattern changes only with the topology); freeing a system
+ * frees the factors but keeps the analysis. The factors belong to one system
+ * at a time (owner); a solve for another system refactors it first.
  * Null pivots, as Evolver's ZEROPIVOT, are pivots below hessian_epsilon
  * relative to the matrix norm; MUMPS fixes them so their solution
  * components are zero.
@@ -34,8 +38,12 @@ struct mumps_sys
   int64_t nnz;
   MUMPS_INT *irn, *jcn;    /* pattern of the current analysis, 1-based */
   double *a;               /* values given to MUMPS (lambda subtracted) */
-  int analysed;
+  int analysed;            /* analysis valid for irn, jcn, threads */
+  int threads;             /* ICNTL(16) of the analysis */
+  struct linsys *owner;    /* system the current factors are of, or NULL */
 };
+
+static struct mumps_sys *shared = NULL;
 
 static void mumps_check(struct mumps_sys *m, const char *what)
 { if ( m->id.INFOG(1) < 0 )
@@ -74,7 +82,7 @@ static void mumps_controls(struct mumps_sys *m)
 }
 
 void mumps_factor(struct linsys *S, int mtype)
-{ struct mumps_sys *m = (struct mumps_sys *)S->mumps;
+{ struct mumps_sys *m = shared;
   int64_t nnz, k;
   int i, same, job, tries;
   (void)mtype;
@@ -95,12 +103,14 @@ void mumps_factor(struct linsys *S, int mtype)
       free(m);
       kb_error(6360,errmsg,RECOVERABLE);
     }
-    S->mumps = m;
+    shared = m;
   }
+  S->mumps = m;
+  m->owner = NULL;   /* until this factoring succeeds */
 
   /* pattern; same as the last analysis? */
   nnz = S->IA[S->N] - A_OFF;
-  same = m->analysed && m->n == S->N && m->nnz == nnz;
+  same = m->analysed && m->n == S->N && m->nnz == nnz && m->threads == fl_threads();
   if ( !same )
   { free(m->irn); free(m->jcn); free(m->a);
     m->irn = (MUMPS_INT *)malloc(nnz*sizeof(MUMPS_INT));
@@ -139,7 +149,9 @@ void mumps_factor(struct linsys *S, int mtype)
     break;
   }
   m->analysed = m->id.INFOG(1) >= 0;
+  m->threads = m->id.ICNTL(16);
   mumps_check(m,"factorization");
+  m->owner = S;
 
   S->neg = m->id.INFOG(12);
   S->zero = m->id.INFOG(28);
@@ -147,11 +159,12 @@ void mumps_factor(struct linsys *S, int mtype)
 }
 
 void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype)
-{ struct mumps_sys *m = (struct mumps_sys *)S->mumps;
-  (void)mtype;
+{ struct mumps_sys *m = shared;
   if ( S->N == 0 ) return;
-  if ( !m || !m->analysed )
+  if ( !m || !S->mumps )
     kb_error(6363,"Internal error: MUMPS solve before factoring.\n",RECOVERABLE);
+  if ( m->owner != S )   /* the factors are another system's now */
+    mumps_factor(S,mtype);
   if ( x != b ) memcpy(x,b,S->N*sizeof(REAL));
   m->id.rhs = x;
   m->id.nrhs = 1;
@@ -169,14 +182,15 @@ void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype
     mumps_solve(S,b[k],x[k],mtype);
 }
 
+/* The system is going away: free the factors, keep the analysis. */
 void mumps_free_system(struct linsys *S)
-{ struct mumps_sys *m = (struct mumps_sys *)S->mumps;
-  if ( !m ) return;
-  m->id.job = -2;
-  fl_enter(); dmumps_c(&m->id); fl_leave();
-  free(m->irn); free(m->jcn); free(m->a);
-  free(m);
+{ struct mumps_sys *m = shared;
   S->mumps = NULL;
+  if ( !m || m->owner != S ) return;
+  m->owner = NULL;
+  m->id.job = -4;   /* free factors, keep the analysis */
+  fl_enter(); dmumps_c(&m->id); fl_leave();
+  if ( m->id.INFOG(1) < 0 ) m->analysed = 0;
 }
 
 int fl_have_mumps(void) { return 1; }
