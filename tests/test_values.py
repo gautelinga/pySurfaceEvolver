@@ -17,6 +17,15 @@ def test_eval_is_exact(cube):
     assert cube.eval("1e-300") == 1e-300
 
 
+def test_eval_handles_huge_and_non_finite_values(cube):
+    assert cube.eval("1e301") == 1e301
+    assert cube.eval("2^1023*1.5") == 2.0**1023 * 1.5
+    assert cube.eval("1e-320") == 1e-320
+    assert cube.eval("-1e308*10") == -math.inf
+    assert math.isnan(cube.eval("1e308*10 - 1e308*10"))
+    assert cube.values("vertex", "x*1e305").max() == 1e305
+
+
 def test_eval_defines_no_variable(cube):
     cube.eval("total_area")
     out = cube.command("list topinfo")

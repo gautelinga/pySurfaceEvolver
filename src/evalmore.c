@@ -3925,10 +3925,8 @@ void more_other_stuff(
                  f[0] = f[-1]; f[-1] = 'L'; f[1] = 0;
 #endif
                  ++formatcount;
-                 if ( !is_finite(*(stacktop-n + formatcount)) )
-                    strcat(msgspot,"(NaN)");  
-                 else
-                    sprintf(msgspot,format,(*(stacktop-n + formatcount)));
+                 /* C prints inf and nan itself */
+                 sprintf(msgspot,format,(*(stacktop-n + formatcount)));
                  break;
 
                case 'n': 

@@ -303,8 +303,8 @@ class Evolver:
     def eval(self, expr: str) -> float:
         """Evaluate a numeric Evolver expression, like ``"body[1].volume"``.
 
-        Nothing gets defined in Evolver's symbol table. Non-finite results
-        come back as NaN.
+        Nothing gets defined in Evolver's symbol table. Results are exact
+        doubles, including infinities and NaN.
         """
         try:
             _, result = self._call(_core.eval, expr)

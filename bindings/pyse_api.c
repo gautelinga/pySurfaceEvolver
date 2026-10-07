@@ -88,14 +88,9 @@ static void hold_signal_text(const char *text)
 
 static void capture_line(const char *text)
 { const char *p = text + strlen(CAPTURE_TAG);
-  double v;
-  if ( strncmp(p,"(NaN)",5) == 0 )
-    v = NAN;   /* Evolver's printf prints non-finite values as (NaN) */
-  else
-  { char *end;
-    v = strtod(p,&end);
-    if ( end == p ) capture_bad = 1;
-  }
+  char *end;
+  double v = strtod(p,&end);  /* also reads inf and nan */
+  if ( end == p ) capture_bad = 1;
   if ( capture_count < capture_max )
     capture_out[capture_count] = v;
   capture_count++;

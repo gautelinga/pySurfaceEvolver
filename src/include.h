@@ -108,7 +108,7 @@ extern int DPREC;
 #include <sys/param.h>
 #define drand48()    ((REAL)rand()/RAND_MAX)
 #define srand48(seed)    srand(seed)
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 /* MAXALLOC is maximum size allocable by calloc() */
 #define    MAXALLOC 0x7FFFFFFFL
 /* Some don't declare calloc, getenv, and bsearch in header files */
@@ -144,7 +144,7 @@ char *bsearch();
 #include <sys/times.h>
 #include <sys/time.h>
 #include <sys/param.h>
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 #define    MAXALLOC 0x7FFFFFFFL
 char *getenv();
 #define PATHCHAR '/'
@@ -172,7 +172,7 @@ char *getenv();
 #include <sys/sysinfo.h>
 #endif
 #include <glob.h>
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 /* MAXALLOC is maximum size allocable by calloc() */
 #define    MAXALLOC 0x7FFFFFFFL
 /* Some don't declare calloc, getenv, and bsearch in header files */
@@ -205,7 +205,7 @@ char *bsearch();
 #include <sys/times.h>
 #include <sys/time.h>
 #include <sys/param.h>
-#define is_finite(x) finite(x)
+#define is_finite(x) isfinite(x)
 #define    MAXALLOC 0x7FFFFFFFL
 char *getenv();
 #define PATHCHAR '/'
@@ -227,7 +227,7 @@ char *getenv();
 #include <setjmp.h>
 #include <signal.h>
 #include <unix.h>
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 /* MAXALLOC is maximum size allocable by calloc() */
 #define    MAXALLOC 0x7FFFFFFFL
 /* Macs don't have environments */
@@ -264,7 +264,7 @@ char *getenv();
 #include <signal.h>
 #include <unix.h>
 #include <alloca.h>
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 /* MAXALLOC is maximum size allocable by calloc() */
 #define    MAXALLOC 0x7FFFFFFFL
 /* Macs don't have environments */
@@ -322,7 +322,7 @@ typedef unsigned size_t;
 #include <stropts.h>
 #include <poll.h>
 #include <fp_class.h>
-#define  is_finite(x) finite(x)
+#define  is_finite(x) isfinite(x)
 #define    MAXALLOC 0x7FFFFFFFL
 #define PATHCHAR '/'
 #define ENVPATHCHAR ":"
@@ -371,7 +371,7 @@ extern void m_unlock(void);
 #include <sys/times.h>
 #include <sys/time.h>
 #include <sys/param.h>
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 #define MAXALLOC 0x7FFFFFFFL
 #ifdef MSDOS
 #define PATHCHAR '\\'
@@ -406,7 +406,7 @@ extern void m_unlock(void);
 #include <sys/time.h>
 #include <sys/param.h>
 #include <values.h>
-#define is_finite(x)  finite(x)
+#define is_finite(x) isfinite(x)
 #define MAXALLOC 0x7FFFFFFFL
 char *getenv();
 /* char *calloc(); */
@@ -441,7 +441,7 @@ char *getenv();
 #include <direct.h>
 #include <process.h>
 #include <sys/types.h>
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 #ifndef MAXINT
 #define MAXINT INT_MAX
 #endif
@@ -477,7 +477,7 @@ char *getenv();
 #include <signal.h>
 #include <values.h>
 #include <process.h>
-#define is_finite(x) (((x)>(-1e300))&&((x)<1e300)) 
+#define is_finite(x) isfinite(x) 
 #define    MAXALLOC 0x7FFFFFFFL
 #define PATHCHAR '\\'
 #define ENVPATHCHAR ";"
