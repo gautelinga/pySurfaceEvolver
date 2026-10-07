@@ -14,6 +14,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 static  int maxquants;  /* total number of constraints */
 REAL *vpressures = NULL; /* so global pressures not messed */
@@ -124,7 +125,9 @@ void local_calc_volgrads(
     else if ( web.representation == STRING )
       (*string_grad)();
     else /* web.representation == SOAPFILM */
-      (*film_grad)();
+    { if ( !fl_film_grad() )  /* parallel version, fastloops.c */
+        (*film_grad)();
+    }
   }
   calc_quant_grads(Q_FIXED|Q_CONSERVED);
 

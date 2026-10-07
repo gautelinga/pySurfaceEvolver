@@ -11,13 +11,15 @@ import pytest
 
 from conftest import FE_DIR
 
-# soapfilm samples with bodies, gravity (mound), density (catbody); refined
+# soapfilm samples with bodies (several meeting at vertices in
+# addload_example), gravity (mound), density (catbody); refined
 # past the size where the loops use threads
 SURFACES = {
     "cube.fe": "g 5; r; g 5; r; g 5; r; g 5; r; g 2",
     "mound.fe": "g 5; r; g 5; r; g 5; r; g 5; r; g 2",
     "catbody.fe": "g 5; r; g 5; r; g 5; r; g 5; r; g 2",
     "tankex.fe": "g 5; r; g 5; r; g 5; r; g 5; r; r; g 2",
+    "addload_example.fe": "g 5; r; g 5; r; g 5; r; g 2",   # 9 bodies
 }
 
 DUMP = r"""

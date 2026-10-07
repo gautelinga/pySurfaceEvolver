@@ -31,6 +31,11 @@ int fl_facet_energies(void);
    vertices via per-thread arrays. Returns 0, doing nothing, when not covered. */
 int fl_facet_forces(void);
 
+/* Body volume gradients for linear soapfilm surfaces, as film_grad_l(),
+   in parallel and with identical results. Returns 0, doing nothing, when
+   the case isn't covered. */
+int fl_film_grad(void);
+
 /* Number of threads for the parallel loops (1 without OpenMP). */
 int fl_threads(void);
 void fl_set_threads(int n);

@@ -489,3 +489,209 @@ int fl_facet_forces(void)
       }
   return 1;
 }
+
+/**************************************************************************
+ * Body volume gradients
+ *
+ * film_grad_l() for linear soapfilm surfaces without torus or symmetry:
+ * each facet adds its volume gradient at its corners to the volgrad
+ * structure of each of its fixed-volume or pressure bodies. Here the
+ * per-facet terms are computed in parallel, then each vertex (in parallel)
+ * builds its chain and sums its facets' terms in facet order. Chains are in
+ * the same order and the sums in the same order as film_grad_l(), so the
+ * gradients are identical.
+ */
+
+extern int vgrad_attr;  /* fixvol.c */
+
+/* For each vertex ordinal, the volume gradient terms that go to it:
+   vg_start[ord]..vg_start[ord+1] index vg_terms, which holds 3k+j for
+   term j of the k-th facet in the list (term j goes to corner (j+2)%3,
+   as film_grad_l() visits them). Built with the facet corner cache. */
+static long *vg_start = NULL;
+static long vg_start_size = 0;
+static long *vg_terms = NULL;
+static long vg_terms_size = 0;
+static long vg_stamp = -1;
+static long vg_count = -1;
+
+static int build_vertex_terms(facet_id *list, vertex_id *corners, long n, long nv)
+{ long k, v;
+  int j;
+  if ( !ensure_size((void**)&vg_start,&vg_start_size,nv+1,sizeof(long))
+       || !ensure_size((void**)&vg_terms,&vg_terms_size,3*n,sizeof(long)) )
+    return 0;
+  for ( v = 0 ; v <= nv ; v++ ) vg_start[v] = 0;
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id *c = corners + 3*ordinal(list[k]);
+    for ( j = 0 ; j < 3 ; j++ ) vg_start[ordinal(c[j])+1]++;
+  }
+  for ( v = 0 ; v < nv ; v++ ) vg_start[v+1] += vg_start[v];
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id *c = corners + 3*ordinal(list[k]);
+    for ( j = 0 ; j < 3 ; j++ )
+      vg_terms[vg_start[ordinal(c[(j+2)%3])]++] = 3*k + j;
+  }
+  for ( v = nv ; v > 0 ; v-- ) vg_start[v] = vg_start[v-1];
+  vg_start[0] = 0;
+  vg_stamp = fv_cache_stamp;
+  vg_count = n;
+  return 1;
+}
+
+static double *vg_grad = NULL;     /* 3 terms x 3 per facet */
+static long vg_grad_size = 0;
+static int *vg_fixnum = NULL;      /* per facet: front, back body fixnum or -1 */
+static long vg_fixnum_size = 0;
+static body_id *vg_body = NULL;    /* per facet: front, back body */
+static long vg_body_size = 0;
+static long *vg_first = NULL;      /* per vertex ordinal: first volgrad */
+static long vg_first_size = 0;
+static volgrad **vg_pool = NULL;   /* the volgrads, by vertex */
+static long vg_pool_size = 0;
+
+/* most bodies at one vertex for the parallel version */
+#define VG_MAXBODIES 64
+
+int fl_film_grad(void)
+{ long n, nv, k, total;
+  facet_id *list;
+  vertex_id *corners;
+  int threads, overflow = 0;
+
+  if ( fl_disabled() ) return 0;
+  if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
+       || web.symmetric_content || web.modeltype != LINEAR || SDIM != 3
+       || film_grad != film_grad_l || threadflag || one_sided_present )
+    return 0;
+  corners = fl_facet_corners();
+  list = fl_facet_list(&n);
+  if ( !corners || !list || n == 0 ) return 0;
+  if ( fl_check() ) check_list(list,n);
+  nv = fv_verts_count;
+  if ( vg_stamp != fv_cache_stamp || vg_count != n || vg_start_size < nv+1 )
+    if ( !build_vertex_terms(list,corners,n,nv) ) return 0;
+  if ( !ensure_size((void**)&vg_grad,&vg_grad_size,9*n,sizeof(double))
+       || !ensure_size((void**)&vg_fixnum,&vg_fixnum_size,2*n,sizeof(int))
+       || !ensure_size((void**)&vg_body,&vg_body_size,2*n,sizeof(body_id))
+       || !ensure_size((void**)&vg_first,&vg_first_size,nv+1,sizeof(long)) )
+    return 0;
+  threads = loop_threads(n);
+
+  /* pass 1: each facet's bodies and gradient terms, as film_grad_l() */
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(threads)
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { facet_id f_id = list[k];
+    vertex_id *c = corners + 3*ordinal(f_id);
+    body_id bi_id = get_facet_body(f_id);
+    body_id bj_id = get_facet_body(facet_inverse(f_id));
+    REAL side[3][3], *x[3], z, normal2;
+    double *g = vg_grad + 9*k;
+    int i, j;
+    vg_fixnum[2*k] = vg_fixnum[2*k+1] = -1;
+    vg_body[2*k] = bi_id;
+    vg_body[2*k+1] = bj_id;
+    if ( valid_id(bi_id) && (get_battr(bi_id) & (FIXEDVOL|PRESSURE)) )
+      vg_fixnum[2*k] = get_body_fixnum(bi_id);
+    if ( valid_id(bj_id) && (get_battr(bj_id) & (FIXEDVOL|PRESSURE)) )
+      vg_fixnum[2*k+1] = get_body_fixnum(bj_id);
+    if ( vg_fixnum[2*k] < 0 && vg_fixnum[2*k+1] < 0 ) continue;
+    for ( i = 0 ; i < 3 ; i++ )
+    { REAL *t = get_coord(c[i]), *h = get_coord(c[(i+1)%3]);
+      for ( j = 0 ; j < 3 ; j++ ) side[i][j] = h[j] - t[j];
+      x[i] = h;
+    }
+    for ( i = 0, z = 0.0 ; i < 3 ; i++ ) z += x[i][2];
+    normal2 = side[0][0]*side[1][1] - side[0][1]*side[1][0];
+    for ( j = 0 ; j < 3 ; j++ )
+    { g[3*j] = -side[j][1]*z/6.0;
+      g[3*j+1] = side[j][0]*z/6.0;
+      g[3*j+2] = normal2/6.0;
+    }
+  }
+
+  /* pass 2: how many bodies each vertex needs a volgrad for */
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(threads) reduction(|:overflow)
+#endif
+  for ( k = 0 ; k < nv ; k++ )
+  { vertex_id v_id = fv_verts[k];
+    int seen[VG_MAXBODIES], count = 0, m;
+    long e;
+    vg_first[k] = 0;
+    if ( !valid_id(v_id) || (get_vattr(v_id) & FIXED) ) continue;
+    for ( e = vg_start[k] ; e < vg_start[k+1] ; e++ )
+    { long f = vg_terms[e]/3;
+      int s;
+      for ( s = 0 ; s < 2 ; s++ )
+      { int fixnum = vg_fixnum[2*f+s];
+        if ( fixnum < 0 ) continue;
+        for ( m = 0 ; m < count ; m++ ) if ( seen[m] == fixnum ) break;
+        if ( m < count ) continue;
+        if ( count == VG_MAXBODIES ) { overflow = 1; break; }
+        seen[count++] = fixnum;
+      }
+    }
+    vg_first[k] = count;
+  }
+  if ( overflow ) return 0;   /* nothing changed yet: the original runs */
+
+  /* allocate, in vertex order */
+  for ( k = 0, total = 0 ; k < nv ; k++ )
+  { long count = vg_first[k];
+    vg_first[k] = total;
+    total += count;
+  }
+  vg_first[nv] = total;
+  if ( !ensure_size((void**)&vg_pool,&vg_pool_size,total+1,sizeof(volgrad*)) )
+    return 0;
+  for ( k = 0 ; k < total ; k++ ) vg_pool[k] = new_vgrad();
+
+  /* pass 3: each vertex links its chain in the order film_grad_l() would
+     and sums its terms in facet order */
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(threads)
+#endif
+  for ( k = 0 ; k < nv ; k++ )
+  { volgrad **mine = vg_pool + vg_first[k];
+    int count = 0, m;
+    long e;
+    if ( vg_first[k+1] == vg_first[k] ) continue;
+    for ( e = vg_start[k] ; e < vg_start[k+1] ; e++ )
+    { long f = vg_terms[e]/3;
+      double *g = vg_grad + 3*vg_terms[e];
+      int s;
+      for ( s = 0 ; s < 2 ; s++ )
+      { int fixnum = vg_fixnum[2*f+s];
+        volgrad *vg;
+        if ( fixnum < 0 ) continue;
+        for ( m = 0 ; m < count ; m++ ) if ( mine[m]->fixnum == fixnum ) break;
+        vg = mine[m];
+        if ( m == count )
+        { vg->fixnum = fixnum;
+          vg->bb_id = vg_body[2*f+s];
+          vg->chain = NULL;
+          if ( count ) mine[count-1]->chain = vg;
+          count++;
+        }
+        if ( s == 0 )
+        { vg->grad[0] += g[0];
+          vg->grad[1] += g[1];
+          vg->grad[2] += g[2];
+        }
+        else
+        { vg->grad[0] -= g[0];
+          vg->grad[1] -= g[1];
+          vg->grad[2] -= g[2];
+        }
+      }
+    }
+    set_vertex_vgrad(fv_verts[k],mine[0]);
+  }
+
+  /* film_grad_l() leaves int_val at the last facet */
+  int_val = ordinal(get_original(list[n-1])) + 1;
+  return 1;
+}
