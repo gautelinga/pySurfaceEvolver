@@ -1,0 +1,17 @@
+name: sanitizers
+
+# Runs every sample datafile through the stock Evolver program built with
+# AddressSanitizer and UBSan (tools/run_sanitizers.sh).
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with ASan/UBSan and run the sample datafiles
+        run: tools/run_sanitizers.sh "$RUNNER_TEMP/evolver-asan"
