@@ -312,6 +312,9 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
 8. `pse.map` fails fast with a clear error when workers die before taking a job
    (e.g. a script read from stdin under the `spawn` start method), instead of
    failing every job.
+   **Done**: workers report ready; a death before that raises `WorkerStartError`
+   (with the cause: stdin/`-c` scripts, missing `__main__` guard). README example
+   now has the guard.
 9. Add the OpenMP, refined-surface sanitizer run to `tools/run_sanitizers.sh`.
    **Done** (7 refined samples, Newton in linear and Lagrange 2; ~9 min locally).
 

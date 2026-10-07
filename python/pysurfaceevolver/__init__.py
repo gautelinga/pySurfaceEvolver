@@ -28,7 +28,7 @@ from ._evolver import (
 from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
 from ._viz import LiveView
 from . import examples
-from ._parallel import JobError, WorkerCrashed, map  # noqa: A004 (pse.map)
+from ._parallel import JobError, WorkerCrashed, WorkerStartError, map  # noqa: A004 (pse.map)
 
 
 def set_threads(n: int) -> None:
@@ -108,6 +108,7 @@ __all__ = [
     "Quantity",
     "Snapshot",
     "WorkerCrashed",
+    "WorkerStartError",
     "is_watertight",
     "examples",
     "make_datafile",

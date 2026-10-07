@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from multiprocessing.connection import wait
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-__all__ = ["map", "JobError", "WorkerCrashed"]
+__all__ = ["map", "JobError", "WorkerCrashed", "WorkerStartError"]
 
 _builtin_map = map
 
@@ -26,6 +26,26 @@ class WorkerCrashed(RuntimeError):
 
     def __init__(self, exitcode: Optional[int]):
         super().__init__(f"worker process died while running the job (exit code {exitcode})")
+        self.exitcode = exitcode
+
+
+class WorkerStartError(RuntimeError):
+    """Worker processes died before they could take a job.
+
+    Workers are started with the ``spawn`` method, which re-imports the
+    main script in every worker. That fails for a script read from stdin
+    or ``python -c``, and a script whose top-level code calls
+    :func:`map` without an ``if __name__ == "__main__":`` guard starts
+    workers recursively.
+    """
+
+    def __init__(self, exitcode: Optional[int]):
+        super().__init__(
+            f"a worker process died while starting (exit code {exitcode}); its error "
+            "output is above. pse.map starts workers with the 'spawn' method, which "
+            "re-imports the main script: run the script from a file (not stdin or "
+            "python -c) and put the code that calls pse.map under "
+            "'if __name__ == \"__main__\":'.")
         self.exitcode = exitcode
 
 
@@ -56,8 +76,12 @@ def _dumps(obj: Any) -> bytes:
         return pickle.dumps(obj)
 
 
+_READY = b"ready"
+
+
 def _worker(conn, threads: int) -> None:
     os.environ["PYSE_THREADS"] = str(threads)
+    conn.send_bytes(_READY)   # started: a later death is the job's fault
     while True:
         message = conn.recv_bytes()
         if not message:
@@ -91,6 +115,7 @@ class _Worker:
                 os.environ["OMP_NUM_THREADS"] = env_before
         child.close()
         self.job: Optional[int] = None
+        self.started = False
 
     def stop(self) -> None:
         try:
@@ -131,7 +156,9 @@ def map(fn: Callable[[Any], Any], params: Iterable[Any], *, processes: Optional[
     ``fn`` must be picklable: a module-level function, or anything when
     ``cloudpickle`` is installed (which also covers functions defined in
     notebooks). A job that crashes its worker gives a :class:`JobError`
-    wrapping :class:`WorkerCrashed`; the other jobs are unaffected.
+    wrapping :class:`WorkerCrashed`; the other jobs are unaffected. Workers
+    that die while starting raise :class:`WorkerStartError` right away
+    (see there for the usual causes).
     """
     if errors not in ("raise", "return"):
         raise ValueError("errors must be 'raise' or 'return'")
@@ -174,10 +201,12 @@ def map(fn: Callable[[Any], Any], params: Iterable[Any], *, processes: Optional[
                     continue
                 w, index = found, found.job
                 try:
-                    _, (status, value) = pickle.loads(w.conn.recv_bytes())
+                    message = w.conn.recv_bytes()
                 except (EOFError, OSError):
-                    # the worker died: only its current job is lost
                     w.process.join(timeout=5)
+                    if not w.started:   # the same would happen to every worker
+                        raise WorkerStartError(w.process.exitcode) from None
+                    # the worker died: only its current job is lost
                     finish(index, JobError(index, params[index],
                                            WorkerCrashed(w.process.exitcode)))
                     w.job = None
@@ -187,6 +216,10 @@ def map(fn: Callable[[Any], Any], params: Iterable[Any], *, processes: Optional[
                     workers.append(replacement)
                     assign(replacement)
                     continue
+                if message == _READY:
+                    w.started = True
+                    continue
+                _, (status, value) = pickle.loads(message)
                 if status == "ok":
                     finish(index, value)
                 else:

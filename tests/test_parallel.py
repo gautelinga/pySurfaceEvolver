@@ -1,6 +1,8 @@
 """pse.map: sweeps in worker processes."""
 
 import os
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -76,3 +78,17 @@ def test_map_callback_and_empty():
     pse.map(fails_for_two, [1, 3], callback=lambda i, r: seen.append((i, r)))
     assert sorted(seen) == [(0, 10), (1, 30)]
     assert pse.map(fails_for_two, []) == []
+
+
+def test_workers_that_cannot_start_fail_fast():
+    # spawn re-imports the main script, which doesn't exist for stdin
+    script = ("import pysurfaceevolver as pse\n"
+              "def f(x): return x\n"
+              "try:\n"
+              "    pse.map(f, range(20), processes=2)\n"
+              "except pse.WorkerStartError as e:\n"
+              "    print('start error:', e)\n")
+    out = subprocess.run([sys.executable, "-"], input=script, capture_output=True,
+                         text=True, timeout=120)
+    assert "start error:" in out.stdout
+    assert "if __name__" in out.stdout

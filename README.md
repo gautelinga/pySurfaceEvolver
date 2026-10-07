@@ -56,13 +56,16 @@ def run(volume):
     ev.relax(tol=1e-10)
     return ev.eval("total_area")
 
-areas = pse.map(run, [0.5, 1, 2, 4], processes=4)   # one engine per worker process
+if __name__ == "__main__":   # needed in scripts: workers re-import them
+    areas = pse.map(run, [0.5, 1, 2, 4], processes=4)   # one engine per worker process
 ```
 
 Each worker process runs jobs one after another. A job that raises, or even crashes
 its worker, comes back as a `JobError` (`errors="raise"` or `"return"`) without
 affecting the other jobs. With `cloudpickle` installed, functions defined in a
-notebook work too.
+notebook work too. Workers are started with `spawn`, which re-imports the main
+script: run scripts from a file, with the guard above; if workers die while
+starting, `pse.map` raises `WorkerStartError` right away.
 
 ## Building surfaces in Python
 
