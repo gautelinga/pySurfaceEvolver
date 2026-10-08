@@ -486,6 +486,23 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    per-engine (`strtok`, `rand`/`drand48`, time formatting, `chdir`).
 4. Explicit state passing only in hot paths where profiling shows a gain.
 
+Probe done 2026-10-08 (nm on the stock build's plain objects, current sources):
+2051 globals (~210 KB), 293 file statics + 17 function statics (~970 KB, mostly
+fasthess.c's per-thread qinfo array and the parser tables); 9 static names in more
+than one file, 10 statics named like a global; 24 global names also used as struct
+members (list, view, metric, filename, hashtable, line_no, ...), which a `#define
+name (state->name)` scheme would break, so those globals would be renamed. Besides:
+libc state (strtok, drand48, chdir), pySE's 108 statics (fastloops/fasthess caches,
+the shared MUMPS instance). Feasible with a generated header and a few dozen renames.
+Expected gain: no speed (one extra pointer load per global access, likely 0-3% cost);
+the value is several independent surfaces per process. Today's alternative:
+save/restore at 25k/98k/393k facets 0.21/0.51/1.93 s save, 0.15/0.43/2.08 s
+restore; pse.map for sweeps. Estimate: engines used one at a time 3-5 days,
+concurrent engines 2-3 weeks; risk of silent state sharing through a missed static.
+**User decision (2026-10-08): not now** (they don't alternate between large
+surfaces in one session); if done later: engines one at a time, libc state
+(random, cwd) per engine.
+
 ## Tools and conventions
 
 - Tests: `pytest`; with `PYSE_CHECK_FACET_CACHE=1` for cache verification.
