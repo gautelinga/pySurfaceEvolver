@@ -304,6 +304,11 @@ curved constraints and volume meshing in pySE: `ev.body_surfaces(cap=True)` caps
 opening on the constraint its rim lies on (ring caps, points projected by Evolver via
 temporary vertices), `BodySurface.cap_ids`/`cap_constraints`, `BodySurface.volume_mesh()`
 (Gmsh, discrete surfaces kept, physical groups).
+Slit example (docs/slit_droplet.ipynb): bead between walls z = +-0.5, mirrors x = 0, y = 0,
+x = ell; bead integrals over the dry part (poles inside the wetted region) + volconst.
+A touching bead (R = 0.5) fails (zero-thickness wedge); R = 0.48 works. Droplets pinch
+on the y = 0 mirror when the wall meniscus sag ~0.5(1 - sin t)/cos t reaches the
+half-width, and for non-wetting beads; the notebook checks and explains.
 MUMPS ordering re-checked now that the analysis is reused (2026-10-08, 8 threads,
 analysis + factor): 393k AMD 0.06+0.157 s, AMF 0.05+0.159, PORD 0.45+0.124;
 Lagrange 6 24k AMD 0.23+0.546, AMF 0.24+0.613, PORD 0.39+0.535; 1.6M AMD
