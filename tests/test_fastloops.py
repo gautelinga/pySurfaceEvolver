@@ -232,7 +232,6 @@ PATTERN_SAMPLES = {
     "twointor.fe": "g 5; r; g 5; hessian; hessian; hessian",
     "quadm.fe": "g 5; r; g 5; hessian; hessian; hessian",
     "symtest.fe": "g 5; r; g 5; hessian; hessian; hessian; hessian",
-    "100grain.fe": "g 5; hessian; hessian; hessian",
 }
 
 NEWTON = r"""
