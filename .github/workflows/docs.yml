@@ -25,6 +25,8 @@ jobs:
 
       - name: Build and install
         run: |
+          # the gmsh wheel (liquid-bridge example) needs these
+          sudo apt-get update && sudo apt-get install -y libglu1-mesa libxcursor1 libxft2 libxinerama1
           python -m pip install --upgrade pip
           python -m pip install -v ".[docs]"
 
