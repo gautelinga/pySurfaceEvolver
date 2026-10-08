@@ -28,8 +28,14 @@ run() {
   shift 3
   for f in "$@"; do
     log="$dir/$f.$label.log"
-    printf "$script" | timeout 600 "$dir/evolver" "$f" >"$log" 2>&1 || true
-    if grep -q "ERROR: AddressSanitizer\|runtime error" "$log"; then
+    # SIGKILL on timeout: SIGTERM runs Evolver's handler, which dumps the
+    # surface from inside the signal handler and can trip ASan by itself
+    local status=0
+    printf "$script" | timeout -s KILL 1500 "$dir/evolver" "$f" >"$log" 2>&1 || status=$?
+    if [ "$status" = 137 ]; then
+      echo "FAIL $f ($label): timed out after 1500 s"
+      failures=$((failures + 1))
+    elif grep -q "ERROR: AddressSanitizer\|runtime error" "$log"; then
       echo "FAIL $f ($label):"
       grep -A12 "ERROR: AddressSanitizer\|runtime error" "$log" | head -16
       failures=$((failures + 1))

@@ -57,6 +57,7 @@ test-command = "pytest {project}/tests -q"
 before-all = "bash {project}/tools/build_openblas.sh"
 
 [[tool.mypy.overrides]]
-# these ship without type information
-module = ["meshio", "meshio.*", "cloudpickle", "gmsh"]
+# these ship without type information, or are optional and may be absent
+# (IPython: only for notebook display)
+module = ["meshio", "meshio.*", "cloudpickle", "gmsh", "IPython", "IPython.*"]
 ignore_missing_imports = true
