@@ -1,0 +1,14 @@
+# Valgrind suppressions for the pySurfaceEvolver module (memcheck):
+#   valgrind --suppressions=tools/valgrind.supp python ...
+# Use PYTHONMALLOC=malloc and a PYSE_NOSTRIP=ON build so function names resolve.
+
+# MUMPS 5.9 (fac_asm_build_sort_index_m.F, the `IF (KEEP(400) > 0)` /
+# `present(MUMPS_TPS_ARR)` checks): at -O3 gfortran tests the stride of the
+# optional MUMPS_TPS_ARR array before present(), so when the argument is absent
+# it branches on an unset stack slot; either way the same code runs. Not
+# reported at -O2. (Checked 2026-10-08 against the disassembly.)
+{
+   mumps-build-sort-index-optional-stride
+   Memcheck:Cond
+   fun:__mumps_build_sort_index_m_MOD_mumps_build_sort_index
+}

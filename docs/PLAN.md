@@ -329,8 +329,10 @@ Speed items the user picked next (2026-10-08, "do 2, then 1"):
   Found on the way: the Lagrange basis tables cached in fastloops.c went stale when
   `bezier_basis` rebuilt them in place (wrong energies); fixed with a version counter
   bumped by gauss_lagrange_setup().
-  Valgrind shows 85 "uninitialised value" reports in an OpenMP loop of the stripped
-  module, the same with the new kernels off: pre-existing, not yet located.
+  Valgrind's 85 "uninitialised value" reports (also with the new kernels off) were
+  traced to MUMPS's mumps_build_sort_index: at -O3 gfortran tests an absent optional
+  argument's stride before present(); harmless, none at -O2. Suppressed in
+  tools/valgrind.supp; nothing in our code.
 
 ### 2026-10-07, before a session restart
 
@@ -458,6 +460,8 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
   -C install.strip=false -C cmake.define.CMAKE_C_FLAGS="-g -fno-omit-frame-pointer"`;
   then `perf` (above) or `valgrind --tool=callgrind --toggle-collect=iterate`
   (LTO may inline/rename functions; `--threshold=100` shows small entries).
+- Memcheck: same build, `PYTHONMALLOC=malloc valgrind --suppressions=tools/valgrind.supp
+  python <script>` (the file explains its one entry, an -O3 false positive in MUMPS).
 - Reference build for A/B timing: `git worktree add <dir> <commit>` + separate venv.
 - Evolver source files use CRLF line endings: edit them with a script that keeps
   CRLF (never rewrite them with LF). Our own files (`fastloops.c/h`, bindings,
