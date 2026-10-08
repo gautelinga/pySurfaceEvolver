@@ -252,7 +252,14 @@ the remaining linear hot spots (was step 5).
 
 Pause after step 3 (solver decision) and at the end of C2.
 
-## Current state and next steps (2026-10-07, before a session restart)
+## Current state and next steps
+
+2026-10-08: C2 speed items done (MUMPS analysis reuse 4-8%; parallel Newton-step
+normals 17-25% at 393k-1.6M); phase D complete (all nine items, see below). Open:
+the future speed options below (user decision), phase E, publishing the docs,
+pySE's own license.
+
+### 2026-10-07, before a session restart
 
 Phase C2 is complete (see the table in Status). After it, at the user's request:
 
