@@ -292,7 +292,10 @@ Not built. User decision (2026-10-08): their problems are often non-smooth
 factorization reuse; Newton steps stay exact.
 Comparison with Brakke's original 2.70a (2026-10-08): table in README and
 docs/performance.md (8 threads: `g 1` 10-13x, linear Newton 5-8x, Lagrange 6
-Newton 4.5-5.6x; 1 thread: 4-8x / 2-4x / 1.4-1.7x).
+Newton 4.5-5.6x; 1 thread: 4-8x / 2-4x / 1.4-1.7x). Re-measured with the OpenMP
+OpenBLAS (static): 8 threads `g 1` 8-11x, linear Newton 5-10x, Lagrange 6 3.8-5.1x.
+OpenBLAS: source builds link the system's OpenMP OpenBLAS statically with private
+symbols (3c1dd35); a pthreads one loaded first by the system NumPy had replaced it.
 MUMPS ordering re-checked now that the analysis is reused (2026-10-08, 8 threads,
 analysis + factor): 393k AMD 0.06+0.157 s, AMF 0.05+0.159, PORD 0.45+0.124;
 Lagrange 6 24k AMD 0.23+0.546, AMF 0.24+0.613, PORD 0.39+0.535; 1.6M AMD

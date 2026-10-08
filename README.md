@@ -116,15 +116,15 @@ two bodies appear in both. `.msh` means Gmsh format 2.2.
 
 Against Brakke's original Evolver 2.70a (its own `gcc -O3` build and sparse solver),
 on the sample cube refined to N facets, seconds (rough: one run each, lightly loaded
-16-core machine; details in the docs' performance page):
+16-core machine; pySE with the OpenMP OpenBLAS; details in the docs' performance page):
 
 | | original | pySE, 1 thread | 4 threads | 8 threads |
 |---|---|---|---|---|
-| `g 1`, 98k facets | 0.32 | 0.039 | 0.026 | 0.029 |
-| `g 1`, 1.6M facets | 7.1 | 1.17 | 0.91 | 0.54 |
-| Newton step, 393k facets | 3.9 | 1.43 | 0.84 | 0.59 |
-| Newton step, 1.6M facets | 28.7 | 7.3 | 4.9 | 3.6 |
-| Newton step, Lagrange 6, 24k facets | 22.9 | 13.5 | 6.9 | 4.1 |
+| `g 1`, 98k facets | 0.32 | 0.035 | 0.035 | 0.039 |
+| `g 1`, 1.6M facets | 7.1 | 1.14 | 0.49 | 0.65 |
+| Newton step, 393k facets | 3.9 | 1.42 | 0.62 | 0.55 |
+| Newton step, 1.6M facets | 28.7 | 7.2 | 3.3 | 2.8 |
+| Newton step, Lagrange 6, 24k facets | 22.9 | 13.8 | 6.2 | 4.5 |
 
 For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature
 energies), the facet volume, energy and force loops and the body volume
