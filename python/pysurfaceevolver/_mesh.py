@@ -269,7 +269,8 @@ class BodySurface:
                                       "gmsh:geometrical": [self.facet_ids]})
 
     def volume_mesh(self, size: Optional[float] = None, path: Optional[str] = None,
-                    *, algorithm: int = 10) -> "meshio.Mesh":
+                    *, algorithm: int = 10,
+                    names: Optional[Dict[int, str]] = None) -> "meshio.Mesh":
         """Tetrahedra filling this closed surface, made with Gmsh
         (``pip install gmsh``); the surface triangles are kept as they are.
 
@@ -280,7 +281,8 @@ class BodySurface:
         element size (default: the mean edge length of the surface);
         ``path`` also writes the mesh (``.msh`` through Gmsh, with the group
         names; other formats through meshio). ``algorithm`` is Gmsh's
-        ``Mesh.Algorithm3D`` (10: HXT, 1: Delaunay).
+        ``Mesh.Algorithm3D`` (10: HXT, 1: Delaunay). ``names`` overrides
+        group names, keyed by cap id (0: the Evolver facets).
         """
         if self.cell_type != "triangle":
             raise ValueError("volume_mesh() needs flat triangles (curved='tessellate')")
@@ -300,6 +302,9 @@ class BodySurface:
         for k in sorted(set(caps.tolist()) - {0}):
             con = self.cap_constraints.get(k)
             groups[1 + k] = f"cap {k}" + (f" (constraint {con})" if con else "")
+        for k, name in (names or {}).items():
+            if 1 + k in groups:
+                groups[1 + k] = name
         if size is None:
             a, b = self.points[self.cells[:, 0]], self.points[self.cells[:, 1]]
             size = float(np.linalg.norm(a - b, axis=1).mean())
