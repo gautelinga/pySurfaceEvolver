@@ -258,6 +258,38 @@ static int element_needs(int type, struct element *e_ptr, int global_needs, int 
 
 struct quant_ctx { struct qinfo *qi; int type, global_needs, meth_offset, mode; };
 
+/* q_setup[type]() for an element, from the facet's cached corners where
+   q_facet_setup() would walk the facet's facet-edges for them: linear
+   soapfilm facets without symmetry wraps, needing at most sides, normal and
+   Gauss points. The same vertices in the same (tail) order and the same
+   arithmetic as q_facet_setup(). */
+static void element_setup(struct linsys *S, struct qinfo *q, int type, vertex_id *c, int needs)
+{ int i, j;
+  if ( type != FACET || !c || web.modeltype != LINEAR || web.representation != SOAPFILM
+       || web.symmetry_flag || inverted(q->id)
+       || (needs & ALL_NEEDS & ~(NEED_SIDE|NEED_NORMAL|NEED_GAUSS)) )
+  { (*q_setup[type])(S,q,needs);
+    return;
+  }
+  q->S = S;
+  q->vcount = FACET_VERTS;
+  for ( i = 0 ; i < FACET_VERTS ; i++ )
+  { REAL *p = get_coord(c[i]);
+    q->v[i] = c[i];
+    q->x[i] = q->xx[i];
+    q->wraps[i] = 0;
+    for ( j = 0 ; j < SDIM ; j++ ) q->xx[i][j] = p[j];
+  }
+  if ( needs & NEED_SIDE )
+    for ( i = 0 ; i < web.dimension ; i++ )
+      for ( j = 0 ; j < SDIM ; j++ )
+        q->sides[0][i][j] = q->x[i+1][j] - q->x[0][j];
+  if ( needs & NEED_NORMAL )
+    cross_prod(q->sides[0][0],q->sides[0][1],q->normal);
+  if ( needs & NEED_GAUSS )
+    mat_mult(gpoly,q->x,q->gauss_pt,gauss2D_num,ctrl_num,SDIM);
+}
+
 /* per thread: an element's summed Hessian blocks, [vcount][vcount] blocks of
    MAXCOORD x MAXCOORD */
 static __thread REAL *acc_buf = NULL;
@@ -296,7 +328,7 @@ static void quant_hess_element(struct linsys *S, element_id id, vertex_id *c, in
     REAL value, coeff = 0.0;
     q_info->method = abs(mm);
     if ( !(mi->flags & Q_DOTHIS) || (mi->type != type) ) continue;
-    if ( !setup_flag ) { (*q_setup[type])(S,q_info,needs); setup_flag = 1; }
+    if ( !setup_flag ) { element_setup(S,q_info,type,c,needs); setup_flag = 1; }
     for ( j = 0 ; j < MMAXQUANTS ; j++ )
     { if ( mi->quants[j] < 0 ) continue;
       gq = GEN_QUANT(mi->quants[j]);
@@ -406,7 +438,7 @@ static void quant_value_element(struct linsys *S, element_id id, vertex_id *c, i
     REAL value;
     q_info->method = abs(mm);
     if ( !(mi->flags & Q_DOTHIS) || (mi->type != type) ) continue;
-    if ( !setup_flag ) { (*q_setup[type])(NULL,q_info,needs); setup_flag = 1; }
+    if ( !setup_flag ) { element_setup(NULL,q_info,type,c,needs); setup_flag = 1; }
     value = (*basic_gen_methods[mi->gen_method].value)(q_info);
     if ( mi->flags & ELEMENT_MODULUS_FLAG )
       value *= *(REAL*)get_extra(q_info->id,mi->elmodulus);
@@ -435,7 +467,7 @@ static void quant_grad_element(struct linsys *S, element_id id, vertex_id *c, in
     REAL value;
     q_info->method = abs(mm);
     if ( !(mi->flags & Q_DOTHIS) || (mi->type != type) ) continue;
-    if ( !setup_flag ) { (*q_setup[type])(NULL,q_info,needs); setup_flag = 1; }
+    if ( !setup_flag ) { element_setup(NULL,q_info,type,c,needs); setup_flag = 1; }
     for ( i = 0 ; i < q_info->vcount ; i++ )
       for ( j = 0 ; j < SDIM ; j++ )
         q_info->grad[i][j] = 0.0;

@@ -8,6 +8,7 @@
 #include "fastloops.h"
 
 int find_vertex_average ( vertex_id , REAL *, int);
+static int stored_facet_areas = 0;  /* pySE: vertex_average() computed them */
 void old_vertex_average (int);
 
 /**************************************************************
@@ -55,9 +56,17 @@ int mode     /* VOLKEEP to keep volumes on both sides same */
 
   if ( !fl_vertex_averages(mode,average[0].x,&average[0].status,
                            sizeof(struct averages)) )   /* pySE: parallel */
-  FOR_ALL_VERTICES(v_id)
-     average[loc_ordinal(v_id)].status = 
+  { /* pySE: each facet's area once (get_facet_area() recomputes at every
+       call, about three times per facet in the search) */
+    facet_id f_id;
+    FOR_ALL_FACETS(f_id)
+      recalc_facet_area(f_id);
+    stored_facet_areas = 1;
+    FOR_ALL_VERTICES(v_id)
+       average[loc_ordinal(v_id)].status = 
               find_vertex_average(v_id,average[loc_ordinal(v_id)].x,mode);
+    stored_facet_areas = 0;
+  }
 
   FOR_ALL_VERTICES(v_id)
   {
@@ -701,11 +710,13 @@ int find_vertex_average(
         weight = 0.0;
         if ( valid_id(fe) )
           do { facet_id f_id = get_fe_facet(fe);
-		       /* pySE: in the parallel search, the area as get_facet_area()
-		          computes it, but not stored (it stores, and threads share facets) */
+		       /* pySE: the areas computed beforehand (get_facet_area()
+		          recomputes and stores at every call: three times per facet,
+		          and threads in the parallel search share facets) */
 		       int par = fl_vertex_average_active();
-		       REAL a = par ? fl_facet_area(f_id) : get_facet_area(f_id);
-		       if ( a == 0.0 && !par ) 
+		       REAL a = (par || stored_facet_areas) ? fptr(f_id)->area
+		                                            : get_facet_area(f_id);
+		       if ( a == 0.0 && !par && !stored_facet_areas ) 
 			   { (*calc_facet_energy)(f_id,AREA_ONLY);
 			      a = get_facet_area(f_id);
 			   }

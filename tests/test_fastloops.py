@@ -322,5 +322,11 @@ def test_parallel_vertex_average_and_equiangulation_match_serial():
     args = [x for item in MESH_OPS_SAMPLES.items() for x in item]
     fast = run(MESH_OPS, args, {"OMP_NUM_THREADS": "4"})
     serial = run(MESH_OPS, args, {"OMP_NUM_THREADS": "4", "PYSE_NO_FAST_MESH": "1"})
-    assert fast == serial
+    for name in MESH_OPS_SAMPLES:
+        if "convert_to_quantities" in MESH_OPS_SAMPLES[name]:
+            # quantity mode: the area there is computed differently (round-off)
+            assert fast[name]["swaps"] == serial[name]["swaps"], name
+            assert rel(fast[name]["energy"], serial[name]["energy"]) < 1e-10, name
+        else:
+            assert fast[name] == serial[name], name
     assert sum(fast["cube.fe"]["swaps"]) > 0

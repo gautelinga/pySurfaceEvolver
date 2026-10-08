@@ -1412,12 +1412,12 @@ void fl_trap_error(void)
  * the search runs in parallel for vertices without constraints or
  * boundaries (those keep the serial path: constraint formulas). The search
  * weighs neighbours by facet areas, and get_facet_area() recomputes and
- * stores the area at every call (facet_energy_l(AREA_ONLY); in quantity
- * mode through a shared qinfo, so that mode stays serial): the parallel
- * search computes the same area for the same (oriented) facet id without
- * storing it. vertex_average()'s recalc() recomputes the stored areas anyway.
- * Positions don't change in between, so the results are those of the serial
- * loop, bit for bit.
+ * stores the area at every call (facet_energy_l(AREA_ONLY), or in quantity
+ * mode the default area quantity through a shared qinfo): here every facet's
+ * area is computed once beforehand, each by one thread, and the search reads
+ * it, as vertex_average()'s serial loop does. Positions don't change in
+ * between, so the results are those of the serial loop: bit for bit, or to
+ * round-off in quantity mode (there the area is computed by Gram-Schmidt).
  */
 
 int find_vertex_average(vertex_id v_id, REAL *vx, int mode);   /* veravg.c */
@@ -1451,16 +1451,40 @@ REAL fl_facet_area(facet_id f_id)
 
 int fl_vertex_average_active(void) { return va_active; }
 
+/* In quantity mode get_facet_area() reads the area the default area
+   quantity's value stores: q_facet_tension_value() of its default instance
+   stores the plain geometric area (before density or moduli; to round-off,
+   being computed by Gram-Schmidt) when that quantity has just this one
+   global facet_area instance. */
+static int quantity_area_is_plain(void)
+{ struct gen_quant *q;
+  struct method_instance *mi;
+  if ( default_area_quant_num < 0 || default_area_quant_num >= gen_quant_count ) return 0;
+  q = GEN_QUANT(default_area_quant_num);
+  if ( q->method_count != 1 ) return 0;
+  mi = METH_INSTANCE(q->meth_inst[0]);
+  return mi->type == FACET && !(mi->flags & Q_DELETED)
+         && (mi->flags & GLOBAL_INST) && (mi->flags & DEFAULT_INSTANCE)
+         && basic_gen_methods[mi->gen_method].value == q_facet_tension_value;
+}
+
 static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t stride)
 { vertex_id *list;
   facet_id *facets;
   long n, nf, k;
   int failed = 0;
   if ( fast_mesh_disabled() || web.modeltype != LINEAR || web.representation != SOAPFILM
-       || web.metric_flag || everything_quantities_flag || calc_facet_energy != facet_energy_l
+       || web.metric_flag || (everything_quantities_flag && !quantity_area_is_plain())
+       || (!everything_quantities_flag && calc_facet_energy != facet_energy_l)
        || hessian_special_normal_flag || (web.symmetry_flag && !web.torus_flag) )
     return 0;
   if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return 0;
+  if ( !(facets = fl_facet_list(&nf)) ) return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
+#endif
+  for ( k = 0 ; k < nf ; k++ )
+    set_facet_area(facets[k],fl_facet_area(facets[k]));
 #ifdef _OPENMP
   #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
 #endif

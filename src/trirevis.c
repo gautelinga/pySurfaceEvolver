@@ -2041,7 +2041,10 @@ static int equiangulate_test_stored(edge_id e_id)
 }
 
 int equiangulate_edge(edge_id e_id)
-{ if ( !equiangulate_test(e_id,0) ) return 0;
+{ /* pySE: within equiangulate() all lengths are calculated beforehand and
+     do_edgeswap() recalculates the swapped edge's, so the stored ones are
+     current (get_edge_length() would recalculate each, five per test) */
+  if ( !equiangulate_test(e_id,did_global_edge_calc) ) return 0;
   return do_edgeswap(e_id);
 } /* end equiangulate_edge() */ 
 
