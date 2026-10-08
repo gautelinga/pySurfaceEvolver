@@ -178,8 +178,8 @@ sphinx-build -W docs docs/_build/html   # API reference + tutorial (docs/tutoria
 
 CI (`.github/workflows/`) runs the tests and mypy on several Python versions, runs
 every sample datafile through the stock program under AddressSanitizer and UBSan,
-plus refined samples with Newton steps through an OpenMP build (`tools/run_sanitizers.sh`), builds the docs, and builds manylinux wheels (x86_64, aarch64) plus an
-sdist; the docs, wheels and sdist are uploaded as workflow artifacts. The build uses link-time optimization (`PYSE_LTO`);
+plus refined samples with Newton steps through an OpenMP build (`tools/run_sanitizers.sh`), builds the docs (published to GitHub Pages from `main`), and builds manylinux wheels
+(x86_64, aarch64) plus an sdist as workflow artifacts. The build uses link-time optimization (`PYSE_LTO`);
 `-C cmake.define.PYSE_NOSTRIP=ON -C install.strip=false` keeps symbols for profiling.
 The version lives in `python/pysurfaceevolver/__init__.py` only.
 

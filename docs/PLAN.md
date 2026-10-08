@@ -255,9 +255,11 @@ Pause after step 3 (solver decision) and at the end of C2.
 ## Current state and next steps
 
 2026-10-08: C2 speed items done (MUMPS analysis reuse 4-8%; parallel Newton-step
-normals 17-25% at 393k-1.6M); phase D complete (all nine items, see below). Open:
-the future speed options below (user decision), phase E, publishing the docs,
-pySE's own license.
+normals 17-25% at 393k-1.6M); phase D complete (all nine items, see below).
+User decisions (2026-10-08): pySE's own code is MIT (LICENSE); docs published to
+GitHub Pages from main (workflow ready; the repo has no remote yet, Pages must be
+enabled with "GitHub Actions" as source); next speed item: opt-in factorization
+reuse over Newton steps; hash-free assembly not chosen; phase E not now.
 
 ### 2026-10-07, before a session restart
 
