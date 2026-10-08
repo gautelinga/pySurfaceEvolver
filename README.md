@@ -10,6 +10,9 @@ pip install ".[all]"     # + PyVista (visualization, also in Jupyter) and meshio
 pip install ".[jupyter]" # PyVista with its notebook backend only
 ```
 
+Documentation: an API reference and a tutorial (a double bubble, from arrays to a
+FEM-ready mesh) are built from `docs/` with Sphinx (see Development).
+
 ## Scripting
 
 ```python
@@ -168,12 +171,15 @@ pip install ".[test]"
 pytest
 python bench/benchmark.py --levels 6 8 --threads 1 4   # linear at 98k and 1.6M facets,
                                                        # Lagrange 2/4/6 at 6k and 24k
+pip install ".[docs]"
+sphinx-build -W docs docs/_build/html   # API reference + tutorial (docs/tutorial.ipynb,
+                                       # executed during the build)
 ```
 
 CI (`.github/workflows/`) runs the tests and mypy on several Python versions, runs
 every sample datafile through the stock program under AddressSanitizer and UBSan,
-plus refined samples with Newton steps through an OpenMP build (`tools/run_sanitizers.sh`), and builds manylinux wheels (x86_64, aarch64) plus an
-sdist as workflow artifacts. The build uses link-time optimization (`PYSE_LTO`);
+plus refined samples with Newton steps through an OpenMP build (`tools/run_sanitizers.sh`), builds the docs, and builds manylinux wheels (x86_64, aarch64) plus an
+sdist; the docs, wheels and sdist are uploaded as workflow artifacts. The build uses link-time optimization (`PYSE_LTO`);
 `-C cmake.define.PYSE_NOSTRIP=ON -C install.strip=false` keeps symbols for profiling.
 The version lives in `python/pysurfaceevolver/__init__.py` only.
 

@@ -334,6 +334,12 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    (RuntimeError subclass, defined in the bindings).
 6. Docs: API reference and a tutorial notebook (load/build -> relax -> plot ->
    export for FEM).
+   **Done** (user's choices: Sphinx + autodoc, all four topics, built in CI without
+   publishing): `docs/conf.py`, `index.md`, `api.md`, `tutorial.ipynb` (double
+   bubble of volumes 1 and 2 built with make_datafile: relax with refinement and
+   Newton, Young-Laplace check via pressures and mean curvature, Lagrange 2-4
+   vs a finer linear mesh, plots, watertight per-body STL and native .msh).
+   Executed at build time (~8 s); `docs` extra; `.github/workflows/docs.yml`.
 7. Optional stop-gap for global settings that leak between datafiles (the
    "clipped" display mode from the torus sample; the real fix is phase E).
    **Done**, measured first: every sample loaded after every other (25x25, plain

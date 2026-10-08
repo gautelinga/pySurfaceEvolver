@@ -18,6 +18,8 @@ jupyter = ["pyvista[jupyter]>=0.40"]
 io = ["meshio>=5.3", "h5py"]
 all = ["pyvista[jupyter]>=0.40", "meshio>=5.3", "h5py"]
 test = ["pytest>=7", "pyvista>=0.40", "meshio>=5.3", "h5py"]
+# Sphinx docs with the executed tutorial notebook (docs/)
+docs = ["sphinx>=7", "myst-nb>=1", "furo", "matplotlib", "pyvista[jupyter]>=0.40", "meshio>=5.3", "h5py"]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
