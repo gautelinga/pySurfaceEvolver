@@ -14,6 +14,7 @@ pip install ".[all]"     # + PyVista (also in Jupyter) and meshio
 
 tutorial
 api
+performance
 ```
 
 The README has a

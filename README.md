@@ -114,13 +114,25 @@ two bodies appear in both. `.msh` means Gmsh format 2.2.
 
 ## Performance
 
+Against Brakke's original Evolver 2.70a (its own `gcc -O3` build and sparse solver),
+on the sample cube refined to N facets, seconds (rough: one run each, lightly loaded
+16-core machine; details in the docs' performance page):
+
+| | original | pySE, 1 thread | 4 threads | 8 threads |
+|---|---|---|---|---|
+| `g 1`, 98k facets | 0.32 | 0.039 | 0.026 | 0.029 |
+| `g 1`, 1.6M facets | 7.1 | 1.17 | 0.91 | 0.54 |
+| Newton step, 393k facets | 3.9 | 1.43 | 0.84 | 0.59 |
+| Newton step, 1.6M facets | 28.7 | 7.3 | 4.9 | 3.6 |
+| Newton step, Lagrange 6, 24k facets | 22.9 | 13.5 | 6.9 | 4.1 |
+
 For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature
 energies), the facet volume, energy and force loops and the body volume
 gradients use a cached facet topology and run in parallel (OpenMP): each thread
 sums its share of the facets, and the partial sums are merged in thread order. Results agree with Evolver's original
 loops to round-off (about 1e-15 per evaluation; runs that stop short of
 equilibrium can drift further apart, equilibria agree) and are reproducible for a
-given thread count. One iteration on a 1.6M-facet surface went from 11 s to 2.3 s.
+given thread count.
 
 Named quantities (the Lagrange model, `convert_to_quantities`, quantity integrals
 on facets, edges and vertices) run in parallel too, for methods known to be
@@ -143,8 +155,8 @@ Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.or
 (sequential, LDL^T with pivoting, inertia for the Hessian index) when pySE is built
 with it: wheels are; a source build downloads and builds MUMPS if a Fortran compiler
 and LAPACK/BLAS are found (use an optimized BLAS such as OpenBLAS: the reference BLAS
-makes MUMPS several times slower), and otherwise uses Evolver's own factoring. A
-Newton step on a 1.6M-facet surface takes 9 s instead of 25 s. `pse.set_solver("evolver")`
+makes MUMPS several times slower), and otherwise uses Evolver's own factoring.
+`pse.set_solver("evolver")`
 (or `PYSE_SOLVER=evolver`) switches back to Evolver's minimal-degree factoring;
 `pse.solver()` tells which is in use. For the Lagrange model, the Hessian is also
 assembled in parallel.

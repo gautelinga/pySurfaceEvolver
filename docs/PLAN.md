@@ -290,6 +290,9 @@ Experiment (scratch build, not committed), 8 threads:
 Not built. User decision (2026-10-08): their problems are often non-smooth
 (foams, triple junctions) and need robustness, so no chord Newton or other
 factorization reuse; Newton steps stay exact.
+Comparison with Brakke's original 2.70a (2026-10-08): table in README and
+docs/performance.md (8 threads: `g 1` 10-13x, linear Newton 5-8x, Lagrange 6
+Newton 4.5-5.6x; 1 thread: 4-8x / 2-4x / 1.4-1.7x).
 
 ### 2026-10-07, before a session restart
 
