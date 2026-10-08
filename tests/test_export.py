@@ -316,3 +316,13 @@ def test_volume_mesh(drop_on_sphere, tmp_path):
     assert set(groups["triangle"].tolist()) == {1, 2} and set(groups["tetra"].tolist()) == {1}
     assert (groups["triangle"] == 2).sum() == (s.cap_ids == 1).sum()   # the cap kept as it is
     assert meshio.read(tmp_path / "drop.msh").cells_dict["tetra"].shape == tets.shape
+
+
+def test_caps_in_any_dimension():
+    from pysurfaceevolver._mesh import _cap_loops
+    for dim in (2, 4):
+        square = np.zeros((4, dim))
+        square[:, :2] = [(0, 0), (1, 0), (1, 1), (0, 1)]
+        tri = np.array([[0, 1, 2]])               # (any surface triangles)
+        points, tris, _, caps = _cap_loops(square, tri, [7], [[0, 1, 2, 3]])
+        assert points.shape[1] == dim and (caps == 1).sum() == len(tris) - 1

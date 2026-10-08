@@ -93,6 +93,9 @@ def test_torus_display_mode_does_not_carry_over(load):
     assert "clipped" in ev.save().text
     ev.load("cube.fe")
     assert "clipped" not in ev.save().text
+    ev.load("100grain.fe")
+    ev.command('load "cube.fe"')         # Evolver's own load command
+    assert "clipped" not in ev.save().text
 
 
 # --- invalid surfaces ---------------------------------------------------------------

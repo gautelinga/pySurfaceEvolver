@@ -728,28 +728,49 @@ class Evolver:
         See :meth:`Mesh.body_surfaces`. With ``cap=True``, an opening whose
         boundary vertices all lie on a constraint (a drop on a curved solid,
         say) is closed by a cap on that constraint: Evolver projects its
-        points, so any constraint formula works. ``cap_constraints`` says
-        which constraint each cap is on (None: not on one; a flat cap).
+        points, so any constraint formula works (3D models; elsewhere caps
+        are flat). ``cap_constraints`` says which constraint each cap is on
+        (None: not on one; a flat cap).
+
+        Projecting creates and dissolves temporary vertices: the surface is
+        left as it was, but Evolver counts it as changed (the next Newton
+        step rebuilds its matrix pattern, and later new elements may get
+        other numbers than without the export).
         """
         mesh = self.mesh()
-        if not cap:
-            return mesh.body_surfaces(curved, n)
-        on = self._vertex_constraints()
-        index = _vertex_index(mesh.vertices)
+        if not cap or curved != "tessellate":
+            return mesh.body_surfaces(curved, n, cap=cap)
+        lookup: Dict[str, Any] = {}       # built on the first loop that needs it
+        constraint_of: Dict[bytes, Optional[int]] = {}
+
+        def constraint_for(loop_points) -> Optional[int]:
+            key = np.asarray(loop_points).tobytes()
+            if key not in constraint_of:
+                if not lookup:
+                    lookup["on"] = self._vertex_constraints()
+                    lookup["index"] = _vertex_index(mesh.vertices)
+                constraint_of[key] = self._loop_constraint(lookup["index"], lookup["on"],
+                                                           loop_points)
+            return constraint_of[key]
 
         def project(points, loop_points):
-            con = self._loop_constraint(index, on, loop_points)
+            if self.sdim != 3:
+                return points
+            con = constraint_for(loop_points)
             return points if con is None else self._project_points(points, con)
 
         surfaces = mesh.body_surfaces(curved, n, cap=True, project=project)
         for s in surfaces.values():   # the constraint of each cap, from its rim
             assert s.cap_ids is not None
+            if not s.cap_constraints:
+                continue
             rim = np.zeros(len(s.points), bool)
             rim[s.cells[s.cap_ids == 0].ravel()] = True
             for k in s.cap_constraints:
                 cap_points = np.zeros(len(s.points), bool)
                 cap_points[s.cells[s.cap_ids == k].ravel()] = True
-                s.cap_constraints[k] = self._loop_constraint(index, on, s.points[cap_points & rim])
+                rim_points = s.points[cap_points & rim]
+                s.cap_constraints[k] = (constraint_for(rim_points) if self.sdim == 3 else None)
         return surfaces
 
     def _vertex_constraints(self) -> Dict[int, np.ndarray]:
@@ -767,6 +788,9 @@ class Evolver:
         if len(rows) == 0:
             return None
         common = [k for k, mask in on.items() if mask[rows].all()]
+        if len(common) > 1:
+            warnings.warn(f"an opening lies on constraints {common} at once; "
+                          f"its cap follows constraint {common[0]}", stacklevel=4)
         return common[0] if common else None
 
     def _project_points(self, points, constraint: int) -> np.ndarray:

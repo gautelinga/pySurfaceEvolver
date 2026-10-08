@@ -240,6 +240,14 @@ static void run_datafile_commands(void)
    it, even if one of the datafile's trailing commands then fails. */
 static void load_datafile(char *name)
 {
+  /* The torus display mode, which Evolver keeps from one datafile to the
+     next for its own graphics (pySE has none); it would show up as
+     "clipped" in later dumps, and so in save()/restore(). Here so that
+     both pyse_load() and Evolver's own "load" command reset it. */
+  web.torus_clip_flag = 0;
+  web.torus_body_flag = 0;
+  torus_display_mode = TORUS_DEFAULT_MODE;
+  former_torus_display_mode = TORUS_DEFAULT_MODE;
   surface_valid = 0;
   startup(name);
   surface_valid = 1;
@@ -431,13 +439,6 @@ static void load_body(void *arg)
     kb_error(PYSE_ERR_NO_DATAFILE,errmsg,RECOVERABLE);
   }
   fclose(fd);
-  /* The torus display mode, which Evolver keeps from one datafile to the
-     next for its own graphics (pySE has none); it would show up as
-     "clipped" in later dumps, and so in save()/restore(). */
-  web.torus_clip_flag = 0;
-  web.torus_body_flag = 0;
-  torus_display_mode = TORUS_DEFAULT_MODE;
-  former_torus_display_mode = TORUS_DEFAULT_MODE;
   load_datafile((char*)arg);
 }
 

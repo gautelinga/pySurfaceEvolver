@@ -887,19 +887,21 @@ def _cap_loops(points, tris, fids, loops, project=None):
         rings = max(1, int(round(np.linalg.norm(P - centre, axis=1).mean() / edge.mean())))
         outer, s_outer = list(loop), s_loop
         cap = []
+        new = []
         for r in range(1, rings):
             f = 1 - r / rings
             m = max(3, int(round(len(loop) * f)))
             t = np.arange(m) / m
-            on_loop = np.column_stack([np.interp(t * length[-1], length, closed[:, d]) for d in range(3)])
-            ring = centre + f * (on_loop - centre)
-            if project is not None:
-                ring = project(ring, P)
-            points.append(ring)
+            on_loop = np.column_stack([np.interp(t * length[-1], length, closed[:, d])
+                                       for d in range(closed.shape[1])])
+            new.append(centre + f * (on_loop - centre))
             inner = list(range(count, count + m))
             count += m
             cap += _zip_rings(outer, s_outer, inner, t)
             outer, s_outer = inner, t
+        if new:     # all ring points at once
+            ring_points = np.vstack(new)
+            points.append(project(ring_points, P) if project is not None else ring_points)
         points.append(centre[None])
         c = count
         count += 1
