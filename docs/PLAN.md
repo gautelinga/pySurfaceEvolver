@@ -361,9 +361,15 @@ element allocation/freeing, modify.c's NEGBOUNDARY flips; PYSE_CHECK_FACET_CACHE
 verifies every reuse; stress over all samples with fix/density/constraint/tension
 changes between g steps: no stale selection). After (load ~5): 98k 21.2/15.2/12.0/
 12.7 ms, 393k 219/127/88/68 ms.
-Found on the way, pre-existing, not fixed: quadm.fe + `set edge density 2 where id % 5
-== 0` overflows a stack buffer (edge_energy_l -> simplex_energy_metric -> vec_mat_mul,
-metric.c:291), also in the stock program.
+Found on the way and fixed (stringl.c): quadm.fe + `set edge density 2` overflowed a
+stack buffer, also in the stock program. Edges with a density in a soapfilm model with
+a metric took their length from simplex_energy_metric()/simplex_force_metric(), which
+use the model's simplices (facets) and read a third vertex. Now edge_metric_length():
+metric at the midpoint (as edge_energy_l_metric()), with its exact gradient; forces
+match finite differences (full and conformal metric, tests in test_numerics.py).
+Unverified, not changed: metric.c edge_force_l_metric()'s conformal branch lacks the
+1/4 on the metric-derivative term (fp = gg_partial*|v|^2, the non-conformal branch has
+/4); it is installed only by quad_to_linear() and no sample reached it.
 
 ### 2026-10-07, before a session restart
 

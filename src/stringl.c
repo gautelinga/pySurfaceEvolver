@@ -23,6 +23,59 @@
 *
 */
 
+/* pySE: an edge's length in the metric (evaluated at the midpoint, as
+   edge_energy_l_metric()) and, if forces, density times minus its gradient.
+   For edges of a soapfilm model: simplex_energy_metric() and
+   simplex_force_metric() take the model's simplices, facets there, and read a
+   third vertex the edge doesn't have. */
+static REAL edge_metric_length(edge_id e_id, REAL **x, REAL density,
+                               REAL forces[2][MAXCOORD])
+{ REAL v[MAXCOORD], midx[MAXCOORD], len;
+  REAL g[MAXCOORD][MAXCOORD], g_partial[MAXCOORD][MAXCOORD][MAXCOORD];
+  REAL gg = 0.0, gg_partial[MAXCOORD];
+  int i, j, k;
+  for ( i = 0 ; i < SDIM ; i++ )
+  { midx[i] = (x[0][i] + x[1][i])/2;
+    v[i] = x[1][i] - x[0][i];
+  }
+  if ( web.conformal_flag )
+  { if ( forces ) eval_all(&web.metric[0][0],midx,SDIM,&gg,gg_partial,e_id);
+    else gg = eval(&web.metric[0][0],midx,e_id,NULL);
+    len = gg*SDIM_dot(v,v);
+  }
+  else
+  { for ( i = 0 ; i < SDIM ; i++ )
+      for ( j = 0 ; j < SDIM ; j++ )
+        if ( forces )
+          eval_all(&web.metric[i][j],midx,SDIM,&g[i][j],g_partial[i][j],e_id);
+        else g[i][j] = eval(&web.metric[i][j],midx,e_id,NULL);
+    for ( len = 0.0, i = 0 ; i < SDIM ; i++ )
+      for ( j = 0 ; j < SDIM ; j++ )
+        len += v[i]*g[i][j]*v[j];
+  }
+  if ( len < 0.0 )
+    kb_error(2170,"Metric not positive definite.\n",RECOVERABLE);
+  len = sqrt(len);
+  if ( forces && len != 0.0 )
+    for ( k = 0 ; k < SDIM ; k++ )
+    { /* d len/d tail = (-f + fp)/len, d len/d head = (f + fp)/len */
+      REAL f = 0.0, fp = 0.0;
+      if ( web.conformal_flag )
+      { fp = gg_partial[k]*SDIM_dot(v,v)/4;
+        f = gg*v[k];
+      }
+      else
+        for ( i = 0 ; i < SDIM ; i++ )
+        { for ( j = 0 ; j < SDIM ; j++ )
+            fp += g_partial[i][j][k]*v[i]*v[j]/4;
+          f += (g[k][i] + g[i][k])/2*v[i];
+        }
+      forces[0][k] += density*(f - fp)/len;
+      forces[1][k] -= density*(f + fp)/len;
+    }
+  return len;
+}
+
 void edge_energy_l(edge_id e_id)
 {
   REAL energy;
@@ -46,6 +99,8 @@ void edge_energy_l(edge_id e_id)
   if ( web.metric_flag )
   { if ( klein_metric_flag )
        energy = klein_length(x[0],x[1]);
+    else if ( web.dimension != 1 )
+       energy = edge_metric_length(e_id,x,0.0,NULL);   /* pySE */
     else
        energy = simplex_energy_metric(v,x);
   }
@@ -125,6 +180,8 @@ void edge_force_l(edge_id e_id)
     { len = klein_length(x[0],x[1]);
       klein_length_grad(x[0],x[1],forces[0],forces[1]);
     }
+    else if ( web.dimension != 1 )
+      len = edge_metric_length(e_id,x,density,forces);   /* pySE */
     else
     { len = simplex_energy_metric(v,x);
       simplex_force_metric(v,x,density,forceptr);

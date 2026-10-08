@@ -98,3 +98,61 @@ def test_hessian_converges(cube):
     after = cube.eval("total_energy")
     # at a critical point another Newton step changes almost nothing
     assert abs(after - before) < 1e-8 * before
+
+
+# Edges with a density in a soapfilm model with a metric: their length used
+# the facet routines and read a third vertex the edge doesn't have (stack
+# overflow, crash in quadm.fe). Now the metric length at the edge midpoint,
+# with its gradient as the force.
+def test_metric_edge_density_does_not_crash(run_python):
+    result = run_python("""
+        import warnings; warnings.simplefilter("ignore")
+        from pysurfaceevolver import Evolver
+        ev = Evolver("quadm.fe")
+        ev.command("set edge density 2 where id % 5 == 0; g 3; r; g 3")
+        print("ok", ev.total_energy)
+    """)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("ok")
+
+
+METRIC_FULL = """\
+1+4*x1^2  4*x1*x2  2*x1
+4*x1*x2  1+4*x2^2  2*x2
+2*x1      2*x2      1
+"""
+
+
+@pytest.mark.parametrize("metric", [f"METRIC\n{METRIC_FULL}",
+                                    "CONFORMAL_METRIC\n1 + x1^2 + 0.5*x2\n"],
+                         ids=["metric", "conformal"])
+def test_metric_edge_force_is_energy_gradient(load, fe_dir, tmp_path, metric):
+    text = (fe_dir / "quadm.fe").read_text()
+    start, end = text.index("METRIC"), text.index("constraint 1")
+    path = tmp_path / "metric_edges.fe"
+    path.write_text(text[:start] + metric + "\n" + text[end:])
+    ev = load(str(path))
+    ev.command("g 3; r; g 3; r; g 3")
+    ev.command("set edge density 2 where not fixed and id % 3 == 0")
+    out = ev.command('foreach edge ee where density > 1.5 do { if not ee.vertex[1].fixed '
+                     'and sum(ee.vertex[1].edge, fixed) == 0 then printf "%d ", ee.vertex[1].id }')
+    vertices = sorted({int(x) for x in out.split()})[:4]
+    assert vertices
+    ev.command("m 0; g 1")   # forces (velocities: no constraints here), no move
+
+    def energy():
+        ev.command("recalc")
+        return ev.total_energy
+
+    for v in vertices:
+        force = [float(ev.command(f"print vertex[{v}].v_velocity[{k}]")) for k in (1, 2, 3)]
+        for k, c in enumerate("xyz"):
+            x0 = float(ev.command(f"print vertex[{v}].{c}"))
+            h = 1e-6
+            ev.command(f"set vertex[{v}] {c} {x0 + h!r}")
+            ep = energy()
+            ev.command(f"set vertex[{v}] {c} {x0 - h!r}")
+            em = energy()
+            ev.command(f"set vertex[{v}] {c} {x0!r}")
+            grad = (ep - em) / (2 * h)
+            assert abs(grad + force[k]) <= 1e-6 * max(1.0, abs(grad))
