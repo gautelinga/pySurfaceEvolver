@@ -296,6 +296,9 @@ Newton 4.5-5.6x; 1 thread: 4-8x / 2-4x / 1.4-1.7x). Re-measured with the OpenMP
 OpenBLAS (static): 8 threads `g 1` 8-11x, linear Newton 5-10x, Lagrange 6 3.8-5.1x.
 OpenBLAS: source builds link the system's OpenMP OpenBLAS statically with private
 symbols (3c1dd35); a pthreads one loaded first by the system NumPy had replaced it.
+Wheel re-checked after these CMake changes (cibuildwheel 4.3.0, podman, cp312
+manylinux_2_28): shared OpenMP OpenBLAS 0.3.34 bundled under a mangled name,
+16.4 MB, 232 tests pass; 393k Newton step 0.55 s (factor 0.16 s) from a plain venv.
 MUMPS ordering re-checked now that the analysis is reused (2026-10-08, 8 threads,
 analysis + factor): 393k AMD 0.06+0.157 s, AMF 0.05+0.159, PORD 0.45+0.124;
 Lagrange 6 24k AMD 0.23+0.546, AMF 0.24+0.613, PORD 0.39+0.535; 1.6M AMD
