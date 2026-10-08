@@ -767,11 +767,20 @@ int exec_commands(
       free_discards(DISCARDS_ALL); /* from previous cycle */
       memset(response,0,sizeof(response));
     }
+    waiting_for_command = 1;   /* pySE: SIGTERM may dump right away */
     if ( prompt(promptstring,response,sizeof(response)) == EOF ) 
+    { waiting_for_command = 0;
       pop_commandfd();
+    }
     else 
+    { waiting_for_command = 0;
       if ( old_menu(response) == END_COMMANDS )
          return END_COMMANDS;
+    }
+    if ( dump_and_exit_pending )   /* pySE: a SIGTERM during the command */
+    { do_dump(NULL);
+      my_exit(1);
+    }
   }
   return 0;
 } // end exec_commands()
@@ -889,10 +898,19 @@ void exec_file(
     temp_free_all(); /* stray memory blocks */
     free_discards(DISCARDS_SOME); /* from previous cycle */
     memset(response,0,sizeof(response));
+    waiting_for_command = 1;   /* pySE: SIGTERM may dump right away */
     if ( prompt("Enter command: ",response,sizeof(response)) == EOF ) 
+    { waiting_for_command = 0;
       pop_commandfd();
+    }
     else 
+    { waiting_for_command = 0;
       old_menu(response);
+    }
+    if ( dump_and_exit_pending )   /* pySE: a SIGTERM during the command */
+    { do_dump(NULL);
+      my_exit(1);
+    }
   }
   while ( read_depth > old_read_depth ); 
 } // end exec_file()

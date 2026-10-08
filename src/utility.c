@@ -86,20 +86,27 @@ void catcher(int sig)
     quiet_flag = 0; 
    }
     
+#if defined(SIGTERM) || defined(SIGHUP)
+  /* for outside kill and dump. pySE: dumping from inside the handler while
+     an operation runs can meet half-updated heap and surface data, so then
+     the operation is stopped (as by SIGINT) and the main loop dumps and exits
+     (dump_and_exit_pending); waiting for input, it is done at once. */
+  if ( 0
 #ifdef SIGTERM
-  if ( sig == SIGTERM )  /* for outside kill and dump */
-    { sprintf(errmsg,"Caught SIGTERM. proc %d ",getpid());
-      erroutstring(errmsg);
-      do_dump(NULL); /* dump to default */
-      my_exit(1);
-    }
+       || sig == SIGTERM
 #endif
-
 #ifdef SIGHUP
-  if ( sig == SIGHUP )  /* for outside kill and dump */
-    {
-      do_dump(NULL); /* dump to default */
-      my_exit(1);
+       || sig == SIGHUP
+#endif
+     )
+    { if ( waiting_for_command )
+      { do_dump(NULL); /* dump to default */
+        my_exit(1);
+      }
+      write(2,"\nCaught termination signal; will dump and exit after this operation.\n",69);
+      dump_and_exit_pending = 1;
+      breakflag = BREAKFULL;
+      iterate_flag = 0;
     }
 #endif
 
@@ -111,6 +118,9 @@ void catcher(int sig)
      }
 #endif
 } // end catcher()
+
+volatile sig_atomic_t dump_and_exit_pending = 0;  /* pySE: see catcher() */
+volatile sig_atomic_t waiting_for_command = 0;
 
 /***********************************************************************
 ************************************************************************

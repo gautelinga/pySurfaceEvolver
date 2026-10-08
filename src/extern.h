@@ -1902,6 +1902,8 @@ extern struct gauss_lag *gauss_lagrange[MAXCOORD];
 /* pySE: bumped on every element attribute change (fastloops.c keeps
    selections of elements by attribute until it changes) */
 extern long fl_attr_stamp;
+#include <signal.h>
+extern volatile sig_atomic_t dump_and_exit_pending, waiting_for_command;  /* catcher() */
 #define FL_ATTR_CHANGED() __atomic_add_fetch(&fl_attr_stamp,1,__ATOMIC_RELAXED)
 
 extern int maxgaussorder[MAXCOORD]; /* allocated for each dimension */

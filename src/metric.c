@@ -58,7 +58,11 @@ void edge_force_l_metric(edge_id e_id)
   hforce = get_force(hv);
   for ( k = 0 ; k < SDIM ; k++ )
   { if ( web.conformal_flag )
-    { fp = gg_partial[k]*SDIM_dot(v,v);
+    { /* pySE: len = sqrt(g(mid))|v|, dlen/dx_tail = (g'|v|^2/4 - g v)/len (the
+         midpoint moves half as far): the /4 was missing, as against the
+         general branch below. Only reachable without convert_to_quantities,
+         which quadratic metric models (the way here) require. */
+      fp = gg_partial[k]*SDIM_dot(v,v)/4;
       f  = gg*v[k];
     }
     else
