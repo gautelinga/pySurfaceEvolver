@@ -263,3 +263,56 @@ def test_is_watertight():
     flipped = tetra.copy()
     flipped[0] = flipped[0][::-1]
     assert not is_watertight(flipped)
+
+
+
+
+@pytest.fixture
+def drop_on_sphere(load):
+    from pysurfaceevolver import Body, make_datafile
+    n, a = 8, 0.5
+    z0 = (1 - a**2)**0.5
+    t = 2*np.pi*np.arange(n)/n
+    ring = np.column_stack([a*np.cos(t), a*np.sin(t), np.full(n, z0)])
+    vertices = np.vstack([ring, ring + [0, 0, 0.4], [[0, 0, z0 + 0.6]]])
+    faces = [[j, (j + 1) % n, n + (j + 1) % n, n + j] for j in range(n)]
+    faces += [[n + j, n + (j + 1) % n, 2*n] for j in range(n)]
+    ev = load("cube.fe")
+    ev.load_string(make_datafile(vertices, faces,
+                                 bodies=[Body(faces=range(len(faces)))],
+                                 constraints={1: "formula: x^2 + y^2 + z^2 = 1"},
+                                 vertex_constraints={1: range(n)}))
+    ev.refine(2)     # (no iterations: the volume would need the wetted cap's share)
+    return ev
+
+
+def test_cap_on_a_curved_constraint(drop_on_sphere):
+    s = drop_on_sphere.body_surfaces(cap=True)[1]
+    assert s.open_loops == 1 and s.watertight
+    assert s.cap_constraints == {1: 1}
+    cap = np.unique(s.cells[s.cap_ids == 1].ravel())
+    np.testing.assert_allclose(np.linalg.norm(s.points[cap], axis=1), 1, atol=1e-10)
+    # the flat cap of a Mesh (no engine) is not on the sphere
+    flat = drop_on_sphere.mesh().body_surfaces(cap=True)[1]
+    inner = np.unique(flat.cells[flat.cap_ids == 1].ravel())
+    assert np.linalg.norm(flat.points[inner], axis=1).min() < 0.99
+    # a Mesh can take a projection of its own
+    own = drop_on_sphere.mesh().body_surfaces(
+        cap=True, project=lambda p, loop: p / np.linalg.norm(p, axis=1)[:, None])[1]
+    np.testing.assert_allclose(own.points, s.points, atol=1e-10)
+
+
+def test_volume_mesh(drop_on_sphere, tmp_path):
+    pytest.importorskip("gmsh")
+    s = drop_on_sphere.body_surfaces(cap=True)[1]
+    mesh = s.volume_mesh(path=str(tmp_path / "drop.msh"))
+    tets = mesh.cells_dict["tetra"]
+    P = mesh.points
+    v = np.einsum("ij,ij->i", P[tets[:, 1]] - P[tets[:, 0]],
+                  np.cross(P[tets[:, 2]] - P[tets[:, 0]], P[tets[:, 3]] - P[tets[:, 0]]))
+    assert enclosed_volume(s.points, s.cells) > 0.25     # closed, outward
+    assert np.abs(v).sum() / 6 == pytest.approx(enclosed_volume(s.points, s.cells), rel=1e-10)
+    groups = mesh.cell_data_dict["gmsh:physical"]
+    assert set(groups["triangle"].tolist()) == {1, 2} and set(groups["tetra"].tolist()) == {1}
+    assert (groups["triangle"] == 2).sum() == (s.cap_ids == 1).sum()   # the cap kept as it is
+    assert meshio.read(tmp_path / "drop.msh").cells_dict["tetra"].shape == tets.shape

@@ -725,9 +725,64 @@ class Evolver:
                       cap: bool = False) -> Dict[int, BodySurface]:
         """The closed surface around each body, with outward normals.
 
-        See :meth:`Mesh.body_surfaces`.
+        See :meth:`Mesh.body_surfaces`. With ``cap=True``, an opening whose
+        boundary vertices all lie on a constraint (a drop on a curved solid,
+        say) is closed by a cap on that constraint: Evolver projects its
+        points, so any constraint formula works. ``cap_constraints`` says
+        which constraint each cap is on (None: not on one; a flat cap).
         """
-        return self.mesh().body_surfaces(curved, n, cap=cap)
+        mesh = self.mesh()
+        if not cap:
+            return mesh.body_surfaces(curved, n)
+        on = self._vertex_constraints()
+        index = _vertex_index(mesh.vertices)
+
+        def project(points, loop_points):
+            con = self._loop_constraint(index, on, loop_points)
+            return points if con is None else self._project_points(points, con)
+
+        surfaces = mesh.body_surfaces(curved, n, cap=True, project=project)
+        for s in surfaces.values():   # the constraint of each cap, from its rim
+            assert s.cap_ids is not None
+            rim = np.zeros(len(s.points), bool)
+            rim[s.cells[s.cap_ids == 0].ravel()] = True
+            for k in s.cap_constraints:
+                cap_points = np.zeros(len(s.points), bool)
+                cap_points[s.cells[s.cap_ids == k].ravel()] = True
+                s.cap_constraints[k] = self._loop_constraint(index, on, s.points[cap_points & rim])
+        return surfaces
+
+    def _vertex_constraints(self) -> Dict[int, np.ndarray]:
+        """{constraint: mask of vertex rows on it}"""
+        count = int(self.eval("high_constraint"))
+        return {k: self.values("vertex", f"on_constraint {k}") > 0 for k in range(1, count + 1)}
+
+    @staticmethod
+    def _loop_constraint(index, on: Dict[int, np.ndarray], loop_points) -> Optional[int]:
+        """The constraint all vertices of a boundary loop lie on, if any."""
+        if not on:
+            return None
+        rows = _rows_of(index, np.asarray(loop_points))
+        rows = rows[rows >= 0]
+        if len(rows) == 0:
+            return None
+        common = [k for k, mask in on.items() if mask[rows].all()]
+        return common[0] if common else None
+
+    def _project_points(self, points, constraint: int) -> np.ndarray:
+        """Points moved onto a constraint by Evolver itself: a temporary
+        vertex is put on the constraint (which projects it), read and
+        dissolved."""
+        lines = [f"pse_tmp_v := new_vertex({x!r}, {y!r}, {z!r}); "
+                 f"set vertex[pse_tmp_v] constraint {constraint}; "
+                 'printf "@pse %.17g %.17g %.17g\\n", vertex[pse_tmp_v].x, '
+                 "vertex[pse_tmp_v].y, vertex[pse_tmp_v].z; dissolve vertex[pse_tmp_v]"
+                 for x, y, z in np.asarray(points, float)[:, :3].tolist()]
+        out = []
+        for i in range(0, len(lines), 200):
+            out += [line for line in self.command("; ".join(lines[i:i + 200])).splitlines()
+                    if line.startswith("@pse ")]
+        return np.array([[float(v) for v in line.split()[1:]] for line in out])
 
     def write_bodies(self, pattern: str = "body_{id}.stl", *, curved: str = "tessellate",
                      n: Optional[int] = None, cap: bool = False,
@@ -952,6 +1007,20 @@ class Evolver:
         if c["bodies"]:
             out += self.bodies()._repr_html_()
         return out
+
+
+def _vertex_index(vertices: np.ndarray, tol: float = 1e-9):
+    """Lookup from (rounded) position to vertex row, for :func:`_rows_of`."""
+    step = tol * (float(np.abs(vertices).max()) or 1.0)
+    keys = np.round(vertices / step).astype(np.int64)
+    return step, {tuple(k): i for i, k in enumerate(keys.tolist())}
+
+
+def _rows_of(index, points: np.ndarray) -> np.ndarray:
+    """Vertex row at the position of each point, or -1."""
+    step, rows = index
+    keys = np.round(np.asarray(points, float) / step).astype(np.int64)
+    return np.array([rows.get(tuple(k), -1) for k in keys.tolist()], dtype=np.int64)
 
 
 def _merge_points(points: np.ndarray, faces: np.ndarray, tolerance: float):

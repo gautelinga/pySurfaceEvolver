@@ -104,13 +104,17 @@ poly = ev.mesh().to_pyvista()                    # or work with the data
 ev.write("surface.vtu")                    # STL, OBJ, PLY, VTU, Gmsh .msh, XDMF, ...
 ev.write("surface.msh", curved="native")   # high-order cells (Gmsh, VTU; XDMF order 2)
 ev.write_bodies("body_{id}.stl")           # one closed surface per body
-ev.write_bodies("drop_{id}.stl", cap=True) # close openings on constraint planes
+ev.write_bodies("drop_{id}.stl", cap=True) # close openings where a body meets a constraint
+surface = ev.body_surfaces(cap=True)[1]    # closed surface of body 1, caps tagged (cap_ids)
+mesh = surface.volume_mesh(size=0.05, path="drop.msh")   # tetrahedra with Gmsh, groups kept
 ```
 
 Curved (quadratic/Lagrange) elements are written either as flat triangles sampled
 on the curved surface (`curved="tessellate"`, the default, works everywhere) or as
 native high-order cells. Per-body surfaces have outward normals; films between
-two bodies appear in both. `.msh` means Gmsh format 2.2.
+two bodies appear in both. A body that ends on a constraint (a drop on a table or a
+bead) has openings; `cap=True` closes each with a cap on that constraint, Evolver
+projecting its points (any constraint formula). `volume_mesh` needs `pip install gmsh`. `.msh` means Gmsh format 2.2.
 
 ## Performance
 

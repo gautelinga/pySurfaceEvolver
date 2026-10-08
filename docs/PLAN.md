@@ -299,6 +299,11 @@ symbols (3c1dd35); a pthreads one loaded first by the system NumPy had replaced 
 Wheel re-checked after these CMake changes (cibuildwheel 4.3.0, podman, cp312
 manylinux_2_28): shared OpenMP OpenBLAS 0.3.34 bundled under a mangled name,
 16.4 MB, 232 tests pass; 393k Newton step 0.55 s (factor 0.16 s) from a plain venv.
+Liquid-bridge example (docs/liquid_bridge.ipynb). Then, at the user's request, caps on
+curved constraints and volume meshing in pySE: `ev.body_surfaces(cap=True)` caps each
+opening on the constraint its rim lies on (ring caps, points projected by Evolver via
+temporary vertices), `BodySurface.cap_ids`/`cap_constraints`, `BodySurface.volume_mesh()`
+(Gmsh, discrete surfaces kept, physical groups).
 MUMPS ordering re-checked now that the analysis is reused (2026-10-08, 8 threads,
 analysis + factor): 393k AMD 0.06+0.157 s, AMF 0.05+0.159, PORD 0.45+0.124;
 Lagrange 6 24k AMD 0.23+0.546, AMF 0.24+0.613, PORD 0.39+0.535; 1.6M AMD

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import factorial
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
@@ -253,6 +253,9 @@ class BodySurface:
     open_loops: int            # boundary loops before capping
     order: int = 1
     bezier: bool = False
+    cap_ids: Optional[np.ndarray] = None   # k on cells of cap k, 0 elsewhere
+    cap_constraints: Dict[int, Optional[int]] = field(default_factory=dict)
+    # the constraint cap k lies on (None: a flat cap)
 
     def to_meshio(self, flavor: str = "gmsh") -> "meshio.Mesh":
         """As a meshio mesh; ``flavor`` picks high-order cell names (see
@@ -264,6 +267,81 @@ class BodySurface:
                            cell_data={"facet_id": [self.facet_ids],
                                       "gmsh:physical": [np.full(len(self.cells), self.body)],
                                       "gmsh:geometrical": [self.facet_ids]})
+
+    def volume_mesh(self, size: Optional[float] = None, path: Optional[str] = None,
+                    *, algorithm: int = 10) -> "meshio.Mesh":
+        """Tetrahedra filling this closed surface, made with Gmsh
+        (``pip install gmsh``); the surface triangles are kept as they are.
+
+        Physical groups: 1 "surface" for the Evolver facets, 1 + k "cap k"
+        for cap k (see ``cap_ids``), and the body id for the tetrahedra. The
+        result is a meshio mesh with tetrahedra and boundary triangles, their
+        groups in ``cell_data["gmsh:physical"]``. ``size`` is the largest
+        element size (default: the mean edge length of the surface);
+        ``path`` also writes the mesh (``.msh`` through Gmsh, with the group
+        names; other formats through meshio). ``algorithm`` is Gmsh's
+        ``Mesh.Algorithm3D`` (10: HXT, 1: Delaunay).
+        """
+        if self.cell_type != "triangle":
+            raise ValueError("volume_mesh() needs flat triangles (curved='tessellate')")
+        if not self.watertight:
+            raise ValueError("the surface isn't closed (see body_surfaces(cap=True))")
+        try:
+            import gmsh
+        except ImportError:
+            raise ImportError("volume_mesh() needs Gmsh: pip install gmsh") from None
+        import contextlib
+        import io
+        import os
+        import tempfile
+        import meshio
+        caps = self.cap_ids if self.cap_ids is not None else np.zeros(len(self.cells), int)
+        groups = {1: "surface"}
+        for k in sorted(set(caps.tolist()) - {0}):
+            con = self.cap_constraints.get(k)
+            groups[1 + k] = f"cap {k}" + (f" (constraint {con})" if con else "")
+        if size is None:
+            a, b = self.points[self.cells[:, 0]], self.points[self.cells[:, 1]]
+            size = float(np.linalg.norm(a - b, axis=1).mean())
+        started = gmsh.isInitialized()
+        if not started:
+            gmsh.initialize()
+        old_terminal = gmsh.option.getNumber("General.Terminal")
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add(f"pysurfaceevolver body {self.body}")
+        try:
+            for tag in groups:
+                gmsh.model.addDiscreteEntity(2, tag)
+            gmsh.model.mesh.addNodes(2, 1, np.arange(1, len(self.points) + 1),
+                                     np.asarray(self.points, float).ravel())
+            for tag in groups:
+                cells = self.cells[caps == tag - 1]
+                gmsh.model.mesh.addElementsByType(tag, 2, [], (cells + 1).ravel())
+                gmsh.model.addPhysicalGroup(2, [tag], tag, groups[tag])
+            # a volume bounded by the discrete surfaces (a discrete volume
+            # would count as already meshed)
+            gmsh.model.geo.addVolume([gmsh.model.geo.addSurfaceLoop(list(groups))], 1)
+            gmsh.model.geo.synchronize()
+            gmsh.model.addPhysicalGroup(3, [1], self.body, f"body {self.body}")
+            gmsh.option.setNumber("Mesh.MeshSizeMax", size)
+            gmsh.option.setNumber("Mesh.Algorithm3D", algorithm)
+            gmsh.model.mesh.generate(3)
+            gmsh.model.mesh.optimize()
+            with tempfile.TemporaryDirectory() as tmp:
+                msh = os.path.join(tmp, "volume.msh")
+                gmsh.write(msh)
+                with contextlib.redirect_stdout(io.StringIO()):   # meshio prints a blank line
+                    mesh = meshio.read(msh)
+                if path is not None and str(path).endswith(".msh"):
+                    gmsh.write(str(path))
+        finally:
+            gmsh.model.remove()
+            gmsh.option.setNumber("General.Terminal", old_terminal)
+            if not started:
+                gmsh.finalize()
+        if path is not None and not str(path).endswith(".msh"):
+            meshio.write(path, mesh)
+        return mesh
 
     def to_pyvista(self) -> "pyvista.PolyData":
         if self.cell_type != "triangle":
@@ -561,7 +639,7 @@ class Mesh:
     # ---- per-body surfaces ----------------------------------------------------------
 
     def body_surfaces(self, curved: str = "tessellate", n: Optional[int] = None,
-                      *, cap: bool = False) -> Dict[int, BodySurface]:
+                      *, cap: bool = False, project=None) -> Dict[int, BodySurface]:
         """The surface around each body, with outward normals.
 
         Facets with the body in front keep their orientation; facets with it
@@ -569,8 +647,13 @@ class Mesh:
 
         Bodies that Evolver closes off with a constraint (for instance a drop
         on a plane) have open boundary loops. ``cap=True`` closes each loop
-        with a fan of triangles around its centroid, which is exact for
-        planar loops (``curved="tessellate"`` only). Check ``watertight``.
+        with a cap: rings of triangles between the loop and its centre, about
+        as fine as the loop (``curved="tessellate"`` only). The cap is flat,
+        which is exact for planar loops; ``project(points, loop_points)``,
+        returning the points moved onto the surface the loop lies on, makes
+        it follow a curved one (:meth:`Evolver.body_surfaces` does this for
+        loops on a constraint). ``cap_ids`` tells the caps apart. Check
+        ``watertight``.
         """
         faces, nodes, index = self._facet_data()
         bodies = self.facet_bodies
@@ -602,10 +685,15 @@ class Mesh:
                 body_points = points[used]
                 loops = _boundary_loops(body_tris)
                 open_loops = len(loops)
+                cap_ids = np.zeros(len(body_tris), dtype=np.int64)
                 if cap and loops:
-                    body_points, body_tris, fids = _cap_loops(body_points, body_tris, fids, loops)
+                    body_points, body_tris, fids, cap_ids = _cap_loops(
+                        body_points, body_tris, fids, loops, project)
                 out[b] = BodySurface(b, body_points, body_tris, "triangle",
-                                     np.asarray(fids), is_watertight(body_tris), open_loops)
+                                     np.asarray(fids), is_watertight(body_tris), open_loops,
+                                     cap_ids=cap_ids,
+                                     cap_constraints={k: None for k in range(1, len(loops) + 1)}
+                                     if cap else {})
             else:
                 if cap:
                     raise ValueError("cap=True needs curved='tessellate'")
@@ -754,20 +842,74 @@ class Mesh:
                                 (self.facet_bodies, other.facet_bodies)))
 
 
-def _cap_loops(points, tris, fids, loops):
-    """Close each boundary loop with a fan around its centroid."""
-    points = list(points)
-    new_tris = [tris]
+def _zip_rings(outer, s_outer, inner, s_inner):
+    """Triangles between two closed rings of points, given as index lists
+    with their positions along the ring (fractions in [0, 1), increasing):
+    a strip that advances along whichever ring has the nearer next point.
+    Oriented like the fans of :func:`_cap_loops` (the cap runs against the
+    loop)."""
+    A, B = list(outer) + [outer[0]], list(inner) + [inner[0]]
+    sa, sb = list(s_outer) + [1.0], list(s_inner) + [1.0]
+    a = b = 0
+    tris = []
+    while a < len(outer) or b < len(inner):
+        if a < len(outer) and (b >= len(inner) or sa[a + 1] <= sb[b + 1]):
+            tris.append((A[a + 1], A[a], B[b]))
+            a += 1
+        else:
+            tris.append((B[b], B[b + 1], A[a]))
+            b += 1
+    return tris
+
+
+def _cap_loops(points, tris, fids, loops, project=None):
+    """Close each boundary loop with a cap: rings of points between the loop
+    and its centre, fewer points on inner rings (spacing about that of the
+    loop), the centre last. With ``project(points, loop_points)``, every new
+    point is projected onto the surface the loop lies on; without, the cap
+    is flat for planar loops. Returns points, triangles, facet ids (0 on caps)
+    and cap ids (k on cap k, 0 elsewhere)."""
+    points = [np.asarray(points, float)]
+    count = len(points[0])
+    new_tris = [np.asarray(tris)]
     new_fids = [np.asarray(fids)]
-    for loop in loops:
-        centroid = np.mean([points[i] for i in loop], axis=0)
-        c = len(points)
-        points.append(centroid)
-        # the surface runs along the loop as u -> v; the cap uses v -> u
-        fan = np.array([(loop[(i + 1) % len(loop)], loop[i], c) for i in range(len(loop))])
-        new_tris.append(fan)
-        new_fids.append(np.zeros(len(fan), dtype=np.int64))
-    return np.array(points), np.vstack(new_tris), np.concatenate(new_fids)
+    cap_ids = [np.zeros(len(tris), dtype=np.int64)]
+    base = points[0]
+    for k, loop in enumerate(loops, start=1):
+        P = base[loop]
+        closed = np.vstack([P, P[:1]])
+        edge = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+        length = np.concatenate([[0.0], np.cumsum(edge)])
+        s_loop = length[:-1] / length[-1]
+        centre = P.mean(axis=0)
+        if project is not None:
+            centre = project(centre[None], P)[0]
+        rings = max(1, int(round(np.linalg.norm(P - centre, axis=1).mean() / edge.mean())))
+        outer, s_outer = list(loop), s_loop
+        cap = []
+        for r in range(1, rings):
+            f = 1 - r / rings
+            m = max(3, int(round(len(loop) * f)))
+            t = np.arange(m) / m
+            on_loop = np.column_stack([np.interp(t * length[-1], length, closed[:, d]) for d in range(3)])
+            ring = centre + f * (on_loop - centre)
+            if project is not None:
+                ring = project(ring, P)
+            points.append(ring)
+            inner = list(range(count, count + m))
+            count += m
+            cap += _zip_rings(outer, s_outer, inner, t)
+            outer, s_outer = inner, t
+        points.append(centre[None])
+        c = count
+        count += 1
+        cap += [(outer[(i + 1) % len(outer)], outer[i], c) for i in range(len(outer))]
+        cap = np.array(cap, dtype=np.int64)
+        new_tris.append(cap)
+        new_fids.append(np.zeros(len(cap), dtype=np.int64))
+        cap_ids.append(np.full(len(cap), k, dtype=np.int64))
+    return (np.vstack(points), np.vstack(new_tris), np.concatenate(new_fids),
+            np.concatenate(cap_ids))
 
 
 @dataclass

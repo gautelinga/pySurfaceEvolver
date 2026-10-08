@@ -58,5 +58,5 @@ before-all = "bash {project}/tools/build_openblas.sh"
 
 [[tool.mypy.overrides]]
 # these ship without type information
-module = ["meshio", "meshio.*", "cloudpickle"]
+module = ["meshio", "meshio.*", "cloudpickle", "gmsh"]
 ignore_missing_imports = true
