@@ -268,6 +268,14 @@ with atomics, misses merged through the hash; `PYSE_NO_PATTERN=1` off). Newton
 step, 8 threads: 393k 0.88 -> 0.60 s, 1.6M 4.75 -> 3.6 s, Lagrange 6 at 24k
 5.7 -> 4.15 s; 1 thread 11-14% faster. Energies identical in these runs.
 Factorization reuse: dropped for now (small gain, algorithm change).
+After the kept pattern the factor share grew (393k ~35%, 1.6M ~53%, Lagrange 6
+~17%); the user asked for mixed precision first. Measured with a harness
+(MUMPS single + double, AMD, 8 threads, saved Newton matrices): single factor only
+1.2-1.5x faster (393k 0.19 -> 0.12 s, 1.6M 1.29 -> 0.90 s, Lagrange 6 0.65 -> 0.53 s),
+and plain iterative refinement stalls (residual 8e-4 at 393k, 2e-2 at 1.6M after
+30 solves: too ill-conditioned for single). **Dropped.** Useful number: a double
+solve with existing factors is ~10x cheaper than a factor (393k 0.03 s, 1.6M
+0.15 s, Lagrange 6 0.07 s), which makes "old factors as preconditioner" plausible.
 
 ### 2026-10-07, before a session restart
 
