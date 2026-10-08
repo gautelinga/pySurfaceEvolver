@@ -7,6 +7,7 @@ name = "pysurfaceevolver"
 dynamic = ["version"]
 description = "Python frontend to Ken Brakke's Surface Evolver (2.70a)"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.9"
 dependencies = ["numpy"]
 

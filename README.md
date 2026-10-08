@@ -195,3 +195,9 @@ The version lives in `python/pysurfaceevolver/__init__.py` only.
   generated at build time.
 - `tests/` – the pytest suite.
 - `fe/`, `doc/`, `manual270.pdf` – Evolver's sample datafiles and manual.
+
+## License
+
+pySurfaceEvolver's own code is MIT-licensed (`LICENSE`). Surface Evolver itself (most
+of `src/`) is by Kenneth A. Brakke and freely available under his terms; the software
+bundled in the wheels keeps its own licenses (`THIRD_PARTY_LICENSES.txt`).

@@ -1,7 +1,8 @@
 Third-party software in pySurfaceEvolver
 ========================================
 
-pySurfaceEvolver includes or links the following software. Wheels contain
+pySurfaceEvolver's own code is under the MIT license (see LICENSE). It
+includes or links the following software. Wheels contain
 all of it; a source build contains Surface Evolver and nanobind, and MUMPS
 and OpenBLAS (or another LAPACK/BLAS) when they are found or downloaded.
 
