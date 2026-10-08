@@ -64,6 +64,16 @@ void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype
 void mumps_free_system(struct linsys *S);
 int fl_have_mumps(void);   /* nonzero if this build has MUMPS */
 
+/* The Newton-step matrix pattern kept across steps (fasthess.c):
+   hessian_init() calls fl_pattern_begin(S) after sp_hash_init();
+   sp_hash_search() first tries fl_pattern_add() (nonzero: added);
+   sp_hash_end() first tries fl_pattern_end() (>= 0: done, its return
+   value) and calls fl_pattern_store() at its end. */
+void fl_pattern_begin(struct linsys *S);
+int fl_pattern_add(struct linsys *S, int row, int col, REAL value);
+int fl_pattern_end(struct linsys *S, int rows, int cols, int index_start);
+void fl_pattern_store(struct linsys *S, int rows, int cols, int index_start);
+
 /* PYSE_DUMP_HESSIAN debugging hooks around the factoring (fasthess.c) */
 void fl_hessian_before_factor(struct linsys *S);
 void fl_hessian_after_factor(struct linsys *S);

@@ -133,8 +133,10 @@ Threads default to the number of physical cores. `pse.set_threads(n)` /
 threads=n)` / `ev.hessian(threads=n)` for one call; `pse.map`
 workers run single-threaded by default, since for sweeps more processes beat more
 threads. With several threads, results can differ from run to run at round-off
-level; with one thread they are reproducible bit for bit. `PYSE_NO_FAST_LOOPS=1`
-switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
+level; with one thread they are reproducible bit for bit. Newton steps keep the
+matrix's sparsity pattern from one step to the next while the topology is unchanged,
+and add entries into it in parallel (`PYSE_NO_PATTERN=1` turns that off).
+`PYSE_NO_FAST_LOOPS=1` switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
 facet corner against Evolver's own topology (CI runs with it).
 
 Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.org/)

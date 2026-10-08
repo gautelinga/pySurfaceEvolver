@@ -24,7 +24,8 @@
 #endif
 
 /* one recorded addition */
-enum { OP_ENTRY, OP_GRAD, OP_VALUE, OP_QVALUE, OP_FORCE, OP_VGRAD, OP_AREA };
+enum { OP_ENTRY, OP_GRAD, OP_VALUE, OP_QVALUE, OP_FORCE, OP_VGRAD, OP_AREA,
+       OP_DONE /* an OP_ENTRY already added to the kept pattern */ };
 struct hop
 { int kind;
   int r, c;          /* OP_ENTRY: matrix row, column; OP_VALUE, OP_QVALUE:
@@ -424,6 +425,147 @@ static void quant_grad_element(struct linsys *S, element_id id, vertex_id *c, in
 typedef void (*element_fn)(struct linsys *S, element_id id, vertex_id *c, int me,
                            struct hbuf *b, void *ctx);
 
+/* ---- Sparsity pattern kept across Newton steps --------------------------
+ *
+ * Each Newton step adds its matrix entries to a hash table, one at a time
+ * on one thread, and sp_hash_end() sorts them into CSR arrays. While the
+ * topology is unchanged the next step has (nearly) the same entries, so
+ * the last CSR pattern is kept: hessian_init() starts the system with
+ * fl_pattern_begin(), sp_hash_search() adds straight into the kept value
+ * array (fl_pattern_add()), and run_elements() adds each element's entries
+ * in parallel as soon as the element is done (atomically: the order of
+ * the additions to an entry, and so its round-off, can vary from run to
+ * run with several threads). Entries missing from the pattern go to the
+ * hash table as before; sp_hash_end() then merges the two and keeps the
+ * new pattern. Pattern entries that get no additions stay explicit zeros
+ * (a merge drops them). PYSE_NO_PATTERN=1 turns this off.
+ */
+
+static struct linsys *pc_S = NULL;   /* the system being filled with it */
+static int pc_live = 0;              /* the kept pattern applies to pc_S */
+static int pc_rows = -1;             /* rows (= columns) of the kept pattern */
+static long pc_stamp = -1;           /* top_timestamp it was made at */
+static int *pc_IA = NULL;            /* 0-based CSR row starts */
+static int *pc_JA = NULL;            /* columns, ascending within a row */
+static REAL *pc_A = NULL;            /* values */
+static long pc_nnz = 0;
+
+static int pattern_disabled(void)
+{ static int disabled = -1;
+  if ( disabled < 0 ) disabled = getenv("PYSE_NO_PATTERN") != NULL;
+  return disabled || fl_disabled();
+}
+
+void fl_pattern_begin(struct linsys *S)
+{ pc_S = NULL;
+  pc_live = 0;
+  if ( pattern_disabled() ) return;
+  pc_S = S;
+  pc_live = pc_IA && pc_stamp == top_timestamp && pc_rows == S->total_rows;
+  if ( pc_live ) memset(pc_A,0,pc_nnz*sizeof(REAL));
+}
+
+/* position of entry (row, col) in the kept pattern, or -1 */
+static long pattern_find(int row, int col)
+{ long lo, hi;
+  if ( row < 0 || row >= pc_rows ) return -1;
+  lo = pc_IA[row];
+  hi = pc_IA[row+1];
+  while ( lo < hi )
+  { long mid = (lo + hi)/2;
+    if ( pc_JA[mid] < col ) lo = mid + 1;
+    else hi = mid;
+  }
+  return ( lo < pc_IA[row+1] && pc_JA[lo] == col ) ? lo : -1;
+}
+
+int fl_pattern_add(struct linsys *S, int row, int col, REAL value)
+{ long pos;
+  if ( S != pc_S || !pc_live ) return 0;
+  pos = pattern_find(row,col);
+  if ( pos < 0 ) return 0;
+  pc_A[pos] += value;
+  return 1;
+}
+
+/* After an element's work: add its matrix entries to the kept pattern
+   (from any thread); those found are marked done for the serial replay. */
+static void pattern_add_entries(struct hbuf *b, long from)
+{ long e;
+  for ( e = from ; e < b->n ; e++ )
+  { struct hop *op = b->ops + e;
+    long pos;
+    if ( op->kind != OP_ENTRY ) continue;
+    pos = pattern_find(op->r,op->c);
+    if ( pos < 0 ) continue;   /* new entry: hash table, in the replay */
+#ifdef _OPENMP
+    #pragma omp atomic
+#endif
+    pc_A[pos] += op->x[0];
+    op->kind = OP_DONE;
+  }
+}
+
+int fl_pattern_end(struct linsys *S, int rows, int cols, int index_start)
+{ long i;
+  if ( S != pc_S ) return -1;
+  if ( pc_live && rows == pc_rows && cols == pc_rows && S->hashcount == 0 )
+  { /* every entry was in the pattern: hand out a copy of it */
+    S->N = rows;
+    S->maxN = rows;
+    S->IA = (int *)temp_calloc(rows+1,sizeof(int));
+    S->maxA = (int)pc_nnz + S->maxN;
+    S->JA = (int *)temp_calloc(S->maxA,sizeof(int));
+    S->A = (REAL *)temp_calloc(S->maxA,sizeof(REAL));
+    for ( i = 0 ; i <= rows ; i++ ) S->IA[i] = pc_IA[i] + index_start;
+    for ( i = 0 ; i < pc_nnz ; i++ ) S->JA[i] = pc_JA[i] + index_start;
+    memcpy(S->A,pc_A,pc_nnz*sizeof(REAL));
+    if ( !hessian_quiet_flag )
+    { sprintf(msg,"Sparse entries: %ld (kept pattern)\n",pc_nnz);
+      outstring(msg);
+    }
+    temp_free((char*)S->hashtable);
+    S->hashtable = NULL;
+    pc_S = NULL;
+    return (int)(pc_nnz + pc_nnz/3);
+  }
+  if ( pc_live )
+  { /* some new entries: merge the pattern's into the hash table, then
+       sp_hash_end() goes on as usual and fl_pattern_store() keeps the
+       result */
+    int row;
+    pc_live = 0;   /* so sp_hash_search() goes to the table */
+    for ( row = 0 ; row < pc_rows ; row++ )
+      for ( i = pc_IA[row] ; i < pc_IA[row+1] ; i++ )
+        sp_hash_search(S,row,pc_JA[i],pc_A[i]);   /* zeros are dropped */
+  }
+  return -1;
+}
+
+void fl_pattern_store(struct linsys *S, int rows, int cols, int index_start)
+{ long n, i;
+  int *ia, *ja;
+  REAL *a;
+  if ( S != pc_S ) return;
+  pc_S = NULL;
+  pc_live = 0;
+  pc_rows = -1;   /* nothing kept unless all goes well */
+  if ( rows != cols ) return;
+  n = S->IA[rows] - index_start;
+  ia = (int *)realloc(pc_IA,(rows+1)*sizeof(int));
+  if ( ia ) pc_IA = ia;
+  ja = (int *)realloc(pc_JA,(n > 0 ? n : 1)*sizeof(int));
+  if ( ja ) pc_JA = ja;
+  a = (REAL *)realloc(pc_A,(n > 0 ? n : 1)*sizeof(REAL));
+  if ( a ) pc_A = a;
+  if ( !ia || !ja || !a ) return;
+  for ( i = 0 ; i <= rows ; i++ ) pc_IA[i] = S->IA[i] - index_start;
+  for ( i = 0 ; i < n ; i++ ) pc_JA[i] = S->JA[i] - index_start;
+  pc_nnz = n;
+  pc_rows = rows;
+  pc_stamp = top_timestamp;
+}
+
 /* Run fn on all elements of `type` in chunks: in parallel within a chunk,
    then make the recorded additions serially in element order. An element
    whose work raises an error or warning (kb_error()) is redone serially
@@ -439,7 +581,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   long *fstart;   /* per chunk element: start, end in its thread's buffer */
   int *fthread;
   unsigned char *ftrapped;     /* per chunk element: hit an error */
-  int t, ok = 1;
+  int t, ok = 1, live;
 
   if ( type == FACET )
   { corners = fl_facet_corners();
@@ -455,6 +597,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   if ( !fstart || !fthread || !ftrapped )
   { free(fstart); free(fthread); free(ftrapped); return 0; }
   fl_prepare_threads(threads);
+  live = S && S == pc_S && pc_live;
 
 #define CORNERS(id) (corners ? corners + 3*ordinal(id) : NULL)
   for ( start = 0 ; start < n && ok ; start += chunk )
@@ -479,6 +622,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
       { fl_trap = &trap;   /* kb_error() comes back here */
         (*fn)(S,list[k],CORNERS(list[k]),me,&buf[me],ctx);
         fl_trap = NULL;
+        if ( live ) pattern_add_entries(&buf[me],fstart[2*(k-start)]);
       }
       else   /* error or warning: drop this element's records, redo it below */
       { buf[me].n = fstart[2*(k-start)];
@@ -557,7 +701,7 @@ static int hess_threads(void)
   return threads < 1 ? 1 : threads;
 }
 
-void fh_reset(void) { recording = NULL; }
+void fh_reset(void) { recording = NULL; pc_S = NULL; pc_live = 0; }
 
 /* The area methods add each facet's area to the total area: recorded
    while run_elements() runs (the addition is made in element order),

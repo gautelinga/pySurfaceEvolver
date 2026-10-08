@@ -260,6 +260,14 @@ User decisions (2026-10-08): pySE's own code is MIT (LICENSE); docs published to
 GitHub Pages from main (workflow ready; the repo has no remote yet, Pages must be
 enabled with "GitHub Actions" as source); next speed item: opt-in factorization
 reuse over Newton steps; hash-free assembly not chosen; phase E not now.
+Then measured before starting it: the factorization is only 11% (Lagrange 6 at
+24k), 24% (393k) and 39% (1.6M) of a step, so reuse would gain little; serial
+hash insertion was ~35% of a Lagrange 6 step. The user switched to hash-free
+assembly: **done** (kept CSR pattern across steps, entries added in parallel
+with atomics, misses merged through the hash; `PYSE_NO_PATTERN=1` off). Newton
+step, 8 threads: 393k 0.88 -> 0.60 s, 1.6M 4.75 -> 3.6 s, Lagrange 6 at 24k
+5.7 -> 4.15 s; 1 thread 11-14% faster. Energies identical in these runs.
+Factorization reuse: dropped for now (small gain, algorithm change).
 
 ### 2026-10-07, before a session restart
 

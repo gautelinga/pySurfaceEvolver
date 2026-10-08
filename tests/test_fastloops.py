@@ -221,3 +221,40 @@ def test_threads_argument_for_one_call(load):
     ev.hessian(threads=1)
     from pysurfaceevolver import _core
     assert _core.thread_setting() == 0
+
+
+# The Newton-step matrix pattern kept across steps (src/fasthess.c): the same
+# steps with and without it. symtest.fe adds entries the kept pattern lacks
+# (the merge path); the others reuse it.
+PATTERN_SAMPLES = {
+    "cube.fe": "g 5; r; g 5; r; g 5; hessian; hessian; lagrange 3; g 2; hessian; hessian",
+    "mound.fe": "g 5; r; g 5; hessian; hessian; hessian",
+    "twointor.fe": "g 5; r; g 5; hessian; hessian; hessian",
+    "quadm.fe": "g 5; r; g 5; hessian; hessian; hessian",
+    "symtest.fe": "g 5; r; g 5; hessian; hessian; hessian; hessian",
+    "100grain.fe": "g 5; hessian; hessian; hessian",
+}
+
+NEWTON = r"""
+import json, sys, warnings
+warnings.simplefilter("ignore")
+from pysurfaceevolver import Evolver
+out = {}
+for name, commands in zip(*[iter(sys.argv[1:])]*2):
+    ev = Evolver(name)
+    ev.command(commands)
+    out[name] = dict(energy=ev.eval("total_energy"),
+                     volume=[float(v) for v in ev.bodies().volume])
+print(json.dumps(out))
+"""
+
+
+@pytest.mark.parametrize("threads", ["1", "8"])
+def test_kept_pattern_matches_hash_assembly(threads):
+    args = [x for item in PATTERN_SAMPLES.items() for x in item]
+    kept = run(NEWTON, args, {"OMP_NUM_THREADS": threads})
+    hashed = run(NEWTON, args, {"OMP_NUM_THREADS": threads, "PYSE_NO_PATTERN": "1"})
+    for name in PATTERN_SAMPLES:
+        assert rel(kept[name]["energy"], hashed[name]["energy"]) < 1e-12, name
+        for v, w in zip(kept[name]["volume"], hashed[name]["volume"]):
+            assert rel(v, w) < 1e-12, name

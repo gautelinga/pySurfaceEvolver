@@ -2119,6 +2119,7 @@ void hessian_init(
 
   /* initialize hash table */
   sp_hash_init(S,0);
+  fl_pattern_begin(S);   /* the last step's pattern, if still valid */
 
   /* tell solvers element data is appropriate */
   S->flags |= S_USE_ELEMENTS;

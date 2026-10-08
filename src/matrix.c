@@ -18,6 +18,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 #ifdef BLAS
 /* prototypes */
@@ -2078,6 +2079,7 @@ void sp_hash_search (
 
 
   if ( value == 0.0 ) return;   
+  if ( fl_pattern_add(S,row,col,value) ) return;  /* kept pattern */
 
   if ( S->hashcount >= S->max_fill ) 
      sp_hash_expand(S);
@@ -2125,6 +2127,9 @@ int sp_hash_end (
   int *starts;
   int *spots; 
   int sum,oldsum;
+
+  i = fl_pattern_end(S,rows,cols,index_start);   /* kept pattern */
+  if ( i >= 0 ) return i;
 
   S->N = rows;
   S->maxN = rows > cols ? rows : cols;
@@ -2217,6 +2222,8 @@ int sp_hash_end (
  
   temp_free((char*)S->hashtable);
   S->hashtable = NULL;
+
+  fl_pattern_store(S,rows,cols,index_start);   /* keep it for the next step */
 
   return S->IA[S->N] + S->IA[S->N]/3;  /* estimate for next time */
 }
