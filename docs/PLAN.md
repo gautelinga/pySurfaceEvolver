@@ -276,6 +276,19 @@ and plain iterative refinement stalls (residual 8e-4 at 393k, 2e-2 at 1.6M after
 30 solves: too ill-conditioned for single). **Dropped.** Useful number: a double
 solve with existing factors is ~10x cheaper than a factor (393k 0.03 s, 1.6M
 0.15 s, Lagrange 6 0.07 s), which makes "old factors as preconditioner" plausible.
+Experiment (scratch build, not committed), 8 threads:
+- Chord Newton (old factors reused, PYSE_CHORD prototype): a reused step costs
+  393k 0.59 -> 0.40 s, 1.6M 3.7 -> 1.7 s, Lagrange 6 4.2 -> 3.5 s. Converges like
+  full Newton for the cube (also from a rough start) and mound.fe; on the double
+  bubble (triple junctions, two volume constraints) it does not settle: energy
+  stays 1e-11..4e-8 above full Newton's and one step goes up. Needs a safeguard.
+- Old factors as GMRES preconditioner (consistent right sides, steps 1->2, 2->3,
+  1->3): cube 393k 3-6 iterations to 1e-12, bubble 10-17. A solve with old
+  factors is only ~6-10x cheaper than a factor, and each step needs 1 + (number
+  of constraints) solves: no gain at 393k, perhaps ~20% at 1.6M; much work
+  (inertia, null pivots, several right sides).
+Not built; options for later: opt-in chord Newton with a refactor-on-stall
+safeguard for big smooth problems.
 
 ### 2026-10-07, before a session restart
 
