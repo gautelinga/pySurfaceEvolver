@@ -344,8 +344,12 @@ fl_vertex_averages / fl_calc_edges / fl_edge_marks; PYSE_NO_FAST_MESH=1 off): u
 0.11 s, `g 10; u; V` 2.2 -> 1.3-1.5 s; meshes and swap counts bit-identical to the
 serial code (test, also with perturbed vertices). Swaps stay serial in the original
 order; after a swap, edges in facets around its four vertices are tested again.
-Left: mixed_entry specialised and done once per element (~10% of Lagrange steps);
-r has no single hotspot (left alone). Observed: `g 1` at 98k not faster on 8
+Done: mixed_entry's projection as direct loops (same arithmetic) and the element's
+methods summed before projecting, so each block is entered once. Lagrange 6 at 24k:
+1 thread 4.35-4.78 -> 4.09-4.13 s, 8 threads 1.53-1.71 -> 1.44-1.56 s; linear
+unchanged (bit-identical Hessians); Lagrange Hessians within 2e-16. Most of what is
+left in the fill is recording entries (put_entry) and the BLAS kernel.
+Left: r has no single hotspot (left alone). Observed: `g 1` at 98k not faster on 8
 threads than 1 (0.036 vs 0.032 s), at 393k 1.8x.
 
 ### 2026-10-07, before a session restart

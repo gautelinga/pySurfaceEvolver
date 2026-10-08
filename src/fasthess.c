@@ -60,52 +60,69 @@ static void put_entry(struct hbuf *b, int r, int c, REAL val)
   put(b,&op);
 }
 
+/* v1's projection transposed, times m, times v2's projection (either may be
+   NULL: the identity): fill_mixed_entry()'s tr_mat_mul() and mat_mult(),
+   the same arithmetic in the same order, without their generic overhead */
+static void project_block(struct hess_verlist *v1, struct hess_verlist *v2, REAL **m,
+                          REAL o[MAXCOORD][MAXCOORD])
+{ REAL t[MAXCOORD][MAXCOORD];
+  int f1 = v1->freedom, f2 = v2->freedom, a, bb, i, n, sd = SDIM;
+  if ( v1->proj )
+  { REAL **p = v1->proj;
+    for ( a = 0 ; a < f1 ; a++ )
+      for ( n = 0 ; n < sd ; n++ )
+      { REAL sum = 0.0;
+        for ( i = 0 ; i < sd ; i++ ) sum += p[i][a]*m[i][n];
+        t[a][n] = sum;
+      }
+  }
+  else
+    for ( a = 0 ; a < f1 ; a++ )
+      for ( n = 0 ; n < sd ; n++ ) t[a][n] = m[a][n];
+  if ( v2->proj )
+  { REAL **p = v2->proj;
+    for ( a = 0 ; a < f1 ; a++ )
+    { for ( bb = 0 ; bb < f2 ; bb++ ) o[a][bb] = 0.0;
+      for ( n = 0 ; n < sd ; n++ )
+      { REAL ta = t[a][n];
+        if ( ta == 0.0 ) continue;
+        for ( bb = 0 ; bb < f2 ; bb++ ) o[a][bb] += ta*p[n][bb];
+      }
+    }
+  }
+  else
+    for ( a = 0 ; a < f1 ; a++ )
+      for ( bb = 0 ; bb < f2 ; bb++ ) o[a][bb] = t[a][bb];
+}
+
 /* the sp_hash_search() calls of fill_self_entry() */
 static void self_entry(struct hbuf *b, vertex_id v_id, REAL **self)
 { struct hess_verlist *v = get_vertex_vhead(v_id);
+  REAL o[MAXCOORD][MAXCOORD];
   int j, k;
-  if ( v->proj )
-  { MAT2D(temp_mat,MAXCOORD,MAXCOORD);
-    MAT2D(temp_mat2,MAXCOORD,MAXCOORD);
-    tr_mat_mul(v->proj,self,temp_mat,SDIM,v->freedom,SDIM);
-    mat_mult(temp_mat,v->proj,temp_mat2,v->freedom,SDIM,v->freedom);
-    for ( j = 0 ; j < v->freedom ; j++ )
-      for ( k = 0 ; k <= j ; k++ )
-        put_entry(b,v->rownum+k,v->rownum+j,temp_mat2[j][k]);
-  }
-  else
-    for ( j = 0 ; j < v->freedom ; j++ )
-      for ( k = 0 ; k <= j ; k++ )
-        put_entry(b,v->rownum+k,v->rownum+j,self[j][k]);
+  project_block(v,v,self,o);
+  for ( j = 0 ; j < v->freedom ; j++ )
+    for ( k = 0 ; k <= j ; k++ )
+      put_entry(b,v->rownum+k,v->rownum+j,o[j][k]);
 }
 
 /* the sp_hash_search() calls of fill_mixed_entry() */
 static void mixed_entry(struct hbuf *b, vertex_id v_id1, vertex_id v_id2, REAL **mixed)
 { struct hess_verlist *v1, *v2;
-  REAL **oo;
+  REAL o[MAXCOORD][MAXCOORD];
   int j, k;
-  MAT2D(temp_mat,MAXCOORD,MAXCOORD);
-  MAT2D(temp_mat2,MAXCOORD,MAXCOORD);
   if ( equal_id(v_id1,v_id2) ) { self_entry(b,v_id1,mixed); return; }
   v1 = get_vertex_vhead(v_id1);
   v2 = get_vertex_vhead(v_id2);
-  if ( v1->proj )
-  { tr_mat_mul(v1->proj,mixed,temp_mat,SDIM,v1->freedom,SDIM);
-    oo = temp_mat;
-  }
-  else oo = mixed;
-  if ( v2->proj )
-  { mat_mult(oo,v2->proj,temp_mat2,v1->freedom,SDIM,v2->freedom);
-    oo = temp_mat2;
-  }
+  project_block(v1,v2,mixed,o);
   if ( v1->rownum < v2->rownum )
     for ( j = 0 ; j < v1->freedom ; j++ )
       for ( k = 0 ; k < v2->freedom ; k++ )
-        put_entry(b,v1->rownum+j,v2->rownum+k,oo[j][k]);
+        put_entry(b,v1->rownum+j,v2->rownum+k,o[j][k]);
   else
     for ( j = 0 ; j < v1->freedom ; j++ )
       for ( k = 0 ; k < v2->freedom ; k++ )
-        put_entry(b,v2->rownum+k,v1->rownum+j,oo[j][k]);
+        put_entry(b,v2->rownum+k,v1->rownum+j,o[j][k]);
 }
 
 
@@ -241,6 +258,22 @@ static int element_needs(int type, struct element *e_ptr, int global_needs, int 
 
 struct quant_ctx { struct qinfo *qi; int type, global_needs, meth_offset, mode; };
 
+/* per thread: an element's summed Hessian blocks, [vcount][vcount] blocks of
+   MAXCOORD x MAXCOORD */
+static __thread REAL *acc_buf = NULL;
+static __thread size_t acc_size = 0;
+
+static REAL *hess_acc(int vcount)
+{ size_t need = (size_t)vcount*vcount*MAXCOORD*MAXCOORD;
+  if ( need > acc_size )
+  { REAL *buf = (REAL *)realloc(acc_buf,need*sizeof(REAL));
+    if ( !buf ) return NULL;
+    acc_buf = buf;
+    acc_size = need;
+  }
+  return acc_buf;
+}
+
 /* calc_quant_hess()'s element loop body (hess_mode 1) */
 static void quant_hess_element(struct linsys *S, element_id id, vertex_id *c, int me,
                                struct hbuf *b, void *ctx)
@@ -251,7 +284,8 @@ static void quant_hess_element(struct linsys *S, element_id id, vertex_id *c, in
   int setup_flag = 0, needs, flag, inum, k, i, ii, j, jj, m, n, mm, sign;
   struct gen_quant *gq;
   struct hess_verlist *va, *vb;
-  REAL g[MAXCOORD], *ggg;
+  REAL g[MAXCOORD], *ggg, *acc = NULL;
+  int have_hess = 0;
   struct hop op;
   (void)c;
 
@@ -297,23 +331,19 @@ static void quant_hess_element(struct linsys *S, element_id id, vertex_id *c, in
     }
 
     if ( !(q->mode & (Q_FIXED|Q_ENERGY|Q_CONSERVED)) ) continue;
+    if ( !acc && !(acc = hess_acc(q_info->vcount)) ) { b->failed = 1; return; }
     for ( i = 0 ; i < q_info->vcount ; i++ )
     { va = get_vertex_vhead(q_info->v[i]);
       if ( va->freedom == 0 ) continue;
       for ( j = i ; j < q_info->vcount ; j++ )
-      { vb = get_vertex_vhead(q_info->v[j]);
+      { REAL *a = acc + ((size_t)i*q_info->vcount + j)*MAXCOORD*MAXCOORD;
+        vb = get_vertex_vhead(q_info->v[j]);
         if ( vb->freedom == 0 ) continue;
-        for ( n = 0 ; n < SDIM ; n++ )
-          for ( m = 0 ; m < SDIM ; m++ )
-            q_info->hess[i][j][m][n] *= coeff;
-        mixed_entry(b,q_info->v[i],q_info->v[j],q_info->hess[i][j]);
-        if ( (i != j) && (q_info->v[i] == q_info->v[j]) )
-        { MAT2D(transpose,MAXCOORD,MAXCOORD);
+        /* the methods' coeff*hess summed; projected and entered below */
+        for ( m = 0 ; m < SDIM ; m++ )
           for ( n = 0 ; n < SDIM ; n++ )
-            for ( m = 0 ; m < SDIM ; m++ )
-              transpose[m][n] = q_info->hess[i][j][n][m];
-          mixed_entry(b,q_info->v[i],q_info->v[j],transpose);
-        }
+            if ( have_hess ) a[m*MAXCOORD+n] += coeff*q_info->hess[i][j][m][n];
+            else a[m*MAXCOORD+n] = coeff*q_info->hess[i][j][m][n];
       }
       /* fixed quantity gradients for left side */
       for ( j = 0 ; j < MMAXQUANTS ; j++ )
@@ -332,7 +362,30 @@ static void quant_hess_element(struct linsys *S, element_id id, vertex_id *c, in
         }
       }
     }
+    have_hess = 1;
   }
+
+  /* the element's Hessian blocks, all methods together, as fill_mixed_entry() */
+  if ( have_hess )
+    for ( i = 0 ; i < q_info->vcount ; i++ )
+    { va = get_vertex_vhead(q_info->v[i]);
+      if ( va->freedom == 0 ) continue;
+      for ( j = i ; j < q_info->vcount ; j++ )
+      { REAL *a = acc + ((size_t)i*q_info->vcount + j)*MAXCOORD*MAXCOORD;
+        REAL *rows[MAXCOORD];
+        vb = get_vertex_vhead(q_info->v[j]);
+        if ( vb->freedom == 0 ) continue;
+        for ( m = 0 ; m < SDIM ; m++ ) rows[m] = a + m*MAXCOORD;
+        mixed_entry(b,q_info->v[i],q_info->v[j],rows);
+        if ( (i != j) && (q_info->v[i] == q_info->v[j]) )
+        { MAT2D(transpose,MAXCOORD,MAXCOORD);
+          for ( n = 0 ; n < SDIM ; n++ )
+            for ( m = 0 ; m < SDIM ; m++ )
+              transpose[m][n] = rows[n][m];
+          mixed_entry(b,q_info->v[i],q_info->v[j],transpose);
+        }
+      }
+    }
 }
 
 /* calc_quants()'s element loop body */
