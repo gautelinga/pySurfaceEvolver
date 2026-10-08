@@ -349,8 +349,21 @@ methods summed before projecting, so each block is entered once. Lagrange 6 at 2
 1 thread 4.35-4.78 -> 4.09-4.13 s, 8 threads 1.53-1.71 -> 1.44-1.56 s; linear
 unchanged (bit-identical Hessians); Lagrange Hessians within 2e-16. Most of what is
 left in the fill is recording entries (put_entry) and the BLAS kernel.
-Left: r has no single hotspot (left alone). Observed: `g 1` at 98k not faster on 8
-threads than 1 (0.036 vs 0.032 s), at 393k 1.8x.
+Left: r has no single hotspot (left alone).
+`g 1` threading (2026-10-08; this laptop: Ryzen AI 7 350, 4 Zen 5 + 4 Zen 5c cores):
+quiet machine, 98k 1/2/4/8 threads 27.5/20.0/21.3/28.5 ms, 393k 252/156/133/146 ms.
+Causes: false sharing (fl_facet_volumes' per-thread body sums and fl_calc_leftside's
+per-thread matrices were adjacent, one cache line for all threads with few bodies;
+now padded), and fl_sel_begin rescanning all edges/vertices for attribute bits at
+every selected loop (12-20% of g). Selections are now kept per site until the
+topology, the element counts or fl_attr_stamp change (bumped by set_attr/unset_attr,
+element allocation/freeing, modify.c's NEGBOUNDARY flips; PYSE_CHECK_FACET_CACHE=1
+verifies every reuse; stress over all samples with fix/density/constraint/tension
+changes between g steps: no stale selection). After (load ~5): 98k 21.2/15.2/12.0/
+12.7 ms, 393k 219/127/88/68 ms.
+Found on the way, pre-existing, not fixed: quadm.fe + `set edge density 2 where id % 5
+== 0` overflows a stack buffer (edge_energy_l -> simplex_energy_metric -> vec_mat_mul,
+metric.c:291), also in the stock program.
 
 ### 2026-10-07, before a session restart
 

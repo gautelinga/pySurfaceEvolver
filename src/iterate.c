@@ -398,7 +398,7 @@ void fix_vertices()
     /* check for vertices that can't move because adjacent
        vertices are not on same constraint when they could be */
     FOR_ALL_VERTICES(v_id) /* clear pinning flag */
-      vptr(v_id)->attr &= ~PINNED_V;
+      vptr(v_id)->attr &= ~PINNED_V; FL_ATTR_CHANGED();  /* pySE */
     FOR_ALL_EDGES(e_id)
     { 
       vertex_id headv = get_edge_headv(e_id);
@@ -2308,7 +2308,7 @@ void check_pinning()
   int i,j;
 
   FOR_ALL_VERTICES(v_id) /* clear pinning flag */
-     vptr(v_id)->attr &= ~PINNED_V;
+     vptr(v_id)->attr &= ~PINNED_V; FL_ATTR_CHANGED();  /* pySE */
   FOR_ALL_EDGES(e_id)
   { 
     vertex_id headv = get_edge_headv(e_id);

@@ -483,6 +483,7 @@ element_id new_element(
   }
 
   newptr->attr = ALLOCATED | NEWELEMENT;
+  FL_ATTR_CHANGED();  /* pySE */
 
   newptr->self_id = newid;
   #ifdef MPI_EVOLVER
@@ -611,6 +612,7 @@ void free_element(element_id id)
     return;
   }
   ptr->attr &= ~ALLOCATED;
+  FL_ATTR_CHANGED();  /* pySE */
 
   #ifdef MPI_EVOLVER
   if ( id_task(id) != this_task )
@@ -688,6 +690,7 @@ void unfree_element(element_id id)
     kb_error(1315,errmsg,RECOVERABLE);
   }
   ptr->attr |= ALLOCATED;
+  FL_ATTR_CHANGED();  /* pySE */
 
   #ifdef MPI_EVOLVER
   if ( id_task(id) != this_task )

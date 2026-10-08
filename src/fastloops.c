@@ -278,6 +278,17 @@ static int loop_threads(long n)
 #define THREAD_COUNT() 1
 #endif
 
+/* Per-thread blocks of `count` items in one array: the stride, rounded up to
+   whole cache lines plus one, so no two threads' items share a line (with a
+   handful of bodies, unpadded blocks put all threads' sums on one line and
+   every addition bounced it between cores) */
+#define FL_CACHE_LINE 64
+static long padded(long count, size_t item)
+{ long per_line = FL_CACHE_LINE/(long)item;
+  if ( per_line < 1 ) per_line = 1;
+  return (count + per_line - 1)/per_line*per_line + per_line;
+}
+
 /* Compensated (Neumaier) sum: each thread's partial sum is accurate to
    about one rounding however many facets it adds. */
 typedef struct { double s, c; } csum;
@@ -299,7 +310,7 @@ static double *vol_abs = NULL;     /* per thread, per body ordinal */
 static long vol_abs_size = 0;
 
 static int fl_facet_volumes_impl(void)
-{ long n, nb;
+{ long n, nb, ns, na;
   facet_id *list;
   vertex_id *corners;
   body_id b_id;
@@ -319,18 +330,20 @@ static int fl_facet_volumes_impl(void)
   if ( !bodies ) return 0;
   threads = loop_threads(n);
   nb = (long)web.skel[BODY].max_ord + 1;
-  if ( !ensure_size((void**)&vol_sums,&vol_sums_size,threads*nb,sizeof(csum))
-       || !ensure_size((void**)&vol_abs,&vol_abs_size,threads*nb,sizeof(double)) )
+  ns = padded(nb,sizeof(csum));
+  na = padded(nb,sizeof(double));
+  if ( !ensure_size((void**)&vol_sums,&vol_sums_size,threads*ns,sizeof(csum))
+       || !ensure_size((void**)&vol_abs,&vol_abs_size,threads*na,sizeof(double)) )
     return 0;
-  memset(vol_sums,0,threads*nb*sizeof(csum));
-  memset(vol_abs,0,threads*nb*sizeof(double));
+  memset(vol_sums,0,threads*ns*sizeof(csum));
+  memset(vol_abs,0,threads*na*sizeof(double));
 
   /* each thread sums the signed volumes of its facets per body */
 #ifdef _OPENMP
   #pragma omp parallel num_threads(threads)
 #endif
-  { csum *sums = vol_sums + THREAD_NUM()*nb;
-    double *abss = vol_abs + THREAD_NUM()*nb;
+  { csum *sums = vol_sums + THREAD_NUM()*ns;
+    double *abss = vol_abs + THREAD_NUM()*na;
     long k;
 #ifdef _OPENMP
     #pragma omp for schedule(static)
@@ -361,9 +374,9 @@ static int fl_facet_volumes_impl(void)
   { struct body *b = bptr(b_id);
     long ord = ordinal(b_id);
     for ( t = 0 ; t < threads ; t++ )
-    { REAL v = vol_sums[t*nb+ord].s + vol_sums[t*nb+ord].c;
+    { REAL v = vol_sums[t*ns+ord].s + vol_sums[t*ns+ord].c;
       if ( v != 0.0 ) binary_tree_add(b->volume_addends,v);
-      b->abstotal += vol_abs[t*nb+ord];
+      b->abstotal += vol_abs[t*na+ord];
     }
   }
   return 1;
@@ -894,9 +907,16 @@ static long sel_buf_size[FL_SELECT_SITES];
 static unsigned char *sel_mark = NULL;
 static long sel_mark_size = 0;
 
+long fl_attr_stamp = 0;   /* bumped by set_attr() and the like (inline.h) */
+
+/* per site: what its selection was made from */
+static struct { int type; ATTR bits; long top, attr, count, maxord, n; } sel_key[FL_SELECT_SITES];
+static int sel_key_valid[FL_SELECT_SITES];
+
 static void fl_sel_begin_impl(fl_sel *s, int type, ATTR bits, int site)
 { element_id *list;
   long n, k, hits = 0;
+  int cached;
   s->type = type;
   s->bits = bits;
   s->list = NULL;
@@ -907,6 +927,12 @@ static void fl_sel_begin_impl(fl_sel *s, int type, ATTR bits, int site)
   list = type_list(type,&n);
   if ( !list ) return;
   if ( bits == 0 ) { s->list = list; s->n = n; return; }
+  /* the same elements and attributes as last time: the same selection */
+  cached = sel_key_valid[site] && sel_key[site].type == type && sel_key[site].bits == bits
+           && sel_key[site].top == top_timestamp && sel_key[site].attr == fl_attr_stamp
+           && sel_key[site].count == n && sel_key[site].maxord == (long)web.skel[type].max_ord;
+  if ( cached && !fl_check() )
+  { s->list = sel_buf[site]; s->n = sel_key[site].n; return; }
   if ( !ensure_size((void**)&sel_mark,&sel_mark_size,n,1) ) return;
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) num_threads(loop_threads(n)) reduction(+:hits)
@@ -917,10 +943,32 @@ static void fl_sel_begin_impl(fl_sel *s, int type, ATTR bits, int site)
   }
   if ( !ensure_size((void**)&sel_buf[site],&sel_buf_size[site],hits+1,sizeof(element_id)) )
     return;
+  if ( cached )   /* fl_check(): the cached selection must be this one */
+  { long m = 0;
+    for ( k = 0 ; k < n ; k++ )
+      if ( sel_mark[k] && (m >= sel_key[site].n || !equal_id(sel_buf[site][m++],list[k])) )
+      { fprintf(stderr,"stale %s selection at site %d\n",typenames[type],site);
+        abort();
+      }
+    if ( m != sel_key[site].n || hits != m )
+    { fprintf(stderr,"stale %s selection at site %d (%ld, now %ld)\n",typenames[type],
+              site,sel_key[site].n,hits);
+      abort();
+    }
+  }
+  sel_key_valid[site] = 0;
   s->n = 0;
   for ( k = 0 ; s->n < hits ; k++ )
     if ( sel_mark[k] ) sel_buf[site][s->n++] = list[k];
   s->list = sel_buf[site];
+  sel_key[site].type = type;
+  sel_key[site].bits = bits;
+  sel_key[site].top = top_timestamp;
+  sel_key[site].attr = fl_attr_stamp;
+  sel_key[site].count = n;
+  sel_key[site].maxord = (long)web.skel[type].max_ord;
+  sel_key[site].n = s->n;
+  sel_key_valid[site] = 1;
 }
 
 int fl_sel_next(fl_sel *s, element_id *id)
@@ -1053,18 +1101,18 @@ static long ls_buf_size = 0;
 
 static int fl_calc_leftside_impl(REAL **rleftside, struct linsys *S, int fixcount, int *degfree)
 { vertex_id *list;
-  long n, k, m = (long)fixcount*fixcount;
+  long n, k, m = (long)fixcount*fixcount, ms = padded(m,sizeof(double));
   int threads, t, deg = 0;
   if ( approx_curve_flag || fixcount > FL_LEFTSIDE_MAX ) return 0;
   if ( !(list = vertex_list(&n)) ) return 0;
   threads = loop_threads(n);
-  if ( !ensure_size((void**)&ls_buf,&ls_buf_size,threads*m,sizeof(double)) )
+  if ( !ensure_size((void**)&ls_buf,&ls_buf_size,threads*ms,sizeof(double)) )
     return 0;
-  memset(ls_buf,0,threads*m*sizeof(double));
+  memset(ls_buf,0,threads*ms*sizeof(double));
 #ifdef _OPENMP
   #pragma omp parallel num_threads(threads) reduction(+:deg)
 #endif
-  { double *a = ls_buf + THREAD_NUM()*m;
+  { double *a = ls_buf + THREAD_NUM()*ms;
     long kk;
 #ifdef _OPENMP
     #pragma omp for schedule(static)
@@ -1090,7 +1138,7 @@ static int fl_calc_leftside_impl(REAL **rleftside, struct linsys *S, int fixcoun
   }
   for ( t = 1 ; t < threads ; t++ )
     for ( k = 0 ; k < m ; k++ )
-      ls_buf[k] += ls_buf[t*m + k];
+      ls_buf[k] += ls_buf[t*ms + k];
   if ( S )   /* sparse: upper triangle */
   { int i, j;
     for ( i = 0 ; i < fixcount ; i++ )

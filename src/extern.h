@@ -1898,6 +1898,12 @@ struct gauss_lag { int lagrange_order;  /* computed for */
                    REAL ***lpolypart;   /* partials at lagrange pts */
                };
 extern struct gauss_lag *gauss_lagrange[MAXCOORD];
+
+/* pySE: bumped on every element attribute change (fastloops.c keeps
+   selections of elements by attribute until it changes) */
+extern long fl_attr_stamp;
+#define FL_ATTR_CHANGED() __atomic_add_fetch(&fl_attr_stamp,1,__ATOMIC_RELAXED)
+
 extern int maxgaussorder[MAXCOORD]; /* allocated for each dimension */
 
 extern int bezier_flag; /* whether to do Bezier basis polynomials in Lagrange */

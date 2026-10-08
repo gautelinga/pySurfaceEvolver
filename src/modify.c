@@ -3363,6 +3363,7 @@ void reverse_orientation_edge(edge_id e_id)
   /* reverse "orientation" for methods and constraint integrals */
   e_ptr = eptr(e_id);
   e_ptr->attr ^= NEGBOUNDARY;
+  FL_ATTR_CHANGED();  /* pySE */
   
 } /* end reverse_orientation_edge(() */
 
@@ -3415,5 +3416,6 @@ void reverse_orientation_facet(facet_id f_id)
   /* reverse method orientations */
   e_ptr = fptr(f_id);
   e_ptr->attr ^= NEGBOUNDARY;
+  FL_ATTR_CHANGED();  /* pySE */
 } // end reverse_orientation_facet()
 

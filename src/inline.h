@@ -20,6 +20,7 @@ element_id id;
 ATTR attrib;
 {
   elptr(id)->attr |= attrib;
+  FL_ATTR_CHANGED();
 }
 
 INLINE void unset_attr(id,attrib)
@@ -27,6 +28,7 @@ element_id id;
 ATTR attrib;
 {
   elptr(id)->attr &= ~attrib;
+  FL_ATTR_CHANGED();
 }
 
 INLINE void set_fe_edge(fe_id,e_id)
