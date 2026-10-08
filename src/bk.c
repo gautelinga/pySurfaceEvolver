@@ -627,6 +627,9 @@ void BK_hess_project_setup(struct linsys *S)
     /* HinvC */
     if ( S->HinvC ) free_matrix(S->HinvC);
     S->HinvC = dmatrix(0,S->CN-1,0,S->N-1);
+    if ( S->low_rank == 0 && sp_solve_multi_func )   /* pySE: all at once */
+      (*sp_solve_multi_func)(S,S->C,S->HinvC,S->CN,MKL_INDEF);
+    else
     for ( i = 0 ; i < S->CN ; i++ )
        sp_solution(S,S->C[i],S->HinvC[i],MKL_INDEF);
   }
@@ -1869,6 +1872,40 @@ void sp_CHinvC(struct linsys *S /* factored system */)
   if ( S->P == NULL )
    kb_error(2530,"Internal error: Must call sp_factor before sp_CHinvC.\n",
      RECOVERABLE);
+
+  if ( S->low_rank == 0 && sp_solve_multi_func && S->CN > 1 )
+  { /* pySE: solve for the constraints in blocks, several right sides at once */
+    int block = S->CN < 32 ? S->CN : 32;
+    REAL **BBs = dmatrix(0,block-1,0,S->N-1);
+    REAL **Ys = dmatrix(0,block-1,0,S->N-1);
+    int first;
+    for ( first = 0 ; first < S->CN ; first += block )
+    { int m = S->CN - first < block ? S->CN - first : block;
+      for ( k = 0 ; k < m ; k++ )
+      { memset(BBs[k],0,S->N*sizeof(REAL));
+        for ( n = S->CIA[first+k] ; n < S->CIA[first+k+1] ; n++ )
+          BBs[k][S->CJA[n]] = S->CA[n];
+      }
+      (*sp_solve_multi_func)(S,BBs,Ys,m,MKL_INDEF);
+      for ( k = 0 ; k < m ; k++ )
+      { i = first + k;
+        Y = Ys[k];
+        /* multiply by rows of C */
+        for ( j = 0 ; j <= i ; j++ )
+        { REAL sum;
+          int kk;
+          for ( kk = S->CIA[j] , sum = 0.0 ; kk < S->CIA[j+1] ; kk++ )
+            sum += S->CA[kk]*Y[S->CJA[kk]];
+          S->CHinvCinv[i][j] = sum;
+          if ( ! blas_flag )
+            S->CHinvCinv[j][i] = sum; /* symmetric */
+        }
+      }
+    }
+    free_matrix(BBs);
+    free_matrix(Ys);
+    return;
+  }
 
   BB = (REAL*)temp_calloc(S->N,sizeof(REAL));  /* expanded rhs */
   Y = (REAL*)temp_calloc(S->N,sizeof(REAL));  /* solution */

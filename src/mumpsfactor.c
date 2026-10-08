@@ -186,10 +186,45 @@ void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype)
   mumps_check(m,"solve");
 }
 
+/* Several right sides in one MUMPS solve (it reuses its traversal of the
+   factors for all of them), up to MULTI_RHS at a time to bound the memory. */
+#define MULTI_RHS 32
+
 void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype)
-{ int k;
-  for ( k = 0 ; k < nrhs ; k++ )
-    mumps_solve(S,b[k],x[k],mtype);
+{ struct mumps_sys *m = shared;
+  double *block;
+  int k, first, count;
+  if ( S->N == 0 || nrhs <= 0 ) return;
+  if ( nrhs == 1 ) { mumps_solve(S,b[0],x[0],mtype); return; }
+  if ( !m || !S->mumps )
+    kb_error(6363,"Internal error: MUMPS solve before factoring.\n",RECOVERABLE);
+  if ( m->owner != S )
+    mumps_factor(S,mtype);
+  count = nrhs < MULTI_RHS ? nrhs : MULTI_RHS;
+  block = (double *)malloc((size_t)S->N*count*sizeof(double));
+  if ( !block )
+  { for ( k = 0 ; k < nrhs ; k++ )    /* no room: one at a time */
+      mumps_solve(S,b[k],x[k],mtype);
+    return;
+  }
+  for ( first = 0 ; first < nrhs ; first += count )
+  { int n = nrhs - first < count ? nrhs - first : count;
+    for ( k = 0 ; k < n ; k++ )
+      memcpy(block + (size_t)k*S->N,b[first + k],S->N*sizeof(REAL));
+    m->id.rhs = block;
+    m->id.nrhs = n;
+    m->id.lrhs = S->N;
+    m->id.ICNTL(20) = 0;    /* dense right sides */
+    m->id.ICNTL(21) = 0;    /* centralized solutions, in rhs */
+    m->id.job = 3;
+    fl_enter(); dmumps_c(&m->id); fl_leave();
+    if ( m->id.INFOG(1) < 0 ) free(block);
+    mumps_check(m,"solve");
+    for ( k = 0 ; k < n ; k++ )
+      memcpy(x[first + k],block + (size_t)k*S->N,S->N*sizeof(REAL));
+  }
+  m->id.nrhs = 1;
+  free(block);
 }
 
 /* The system is going away: free the factors, keep the analysis. */
