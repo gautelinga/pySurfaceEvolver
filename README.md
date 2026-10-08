@@ -119,16 +119,18 @@ projecting its points (any constraint formula). `volume_mesh` needs `pip install
 ## Performance
 
 Against Brakke's original Evolver 2.70a (its own `gcc -O3` build and sparse solver),
-on the sample cube refined to N facets, seconds (rough: one run each, lightly loaded
-16-core machine; pySE with the OpenMP OpenBLAS; details in the docs' performance page):
+on the sample cube refined to N facets, seconds (rough: best of two runs, quiet
+laptop with 4 full and 4 compact cores; pySE with the OpenMP OpenBLAS; details and
+more rows in the docs' performance page):
 
 | | original | pySE, 1 thread | 4 threads | 8 threads |
 |---|---|---|---|---|
-| `g 1`, 98k facets | 0.32 | 0.035 | 0.035 | 0.039 |
-| `g 1`, 1.6M facets | 7.1 | 1.14 | 0.49 | 0.65 |
-| Newton step, 393k facets | 3.9 | 1.42 | 0.62 | 0.55 |
-| Newton step, 1.6M facets | 28.7 | 7.2 | 3.3 | 2.8 |
-| Newton step, Lagrange 6, 24k facets | 22.9 | 13.8 | 6.2 | 4.5 |
+| `g 1`, 98k facets | 0.32 | 0.026 | 0.012 | 0.010 |
+| `g 1`, 1.6M facets | 7.1 | 0.94 | 0.46 | 0.40 |
+| Newton step, 393k facets | 3.9 | 1.42 | 0.70 | 0.46 |
+| Newton step, 1.6M facets | 28.7 | 7.1 | 3.2 | 2.8 |
+| Newton step, Lagrange 6, 24k facets | 22.9 | 4.2 | 1.8 | 1.42 |
+| `u` + `V`, 393k facets | 1.23 | 0.73 | 0.24 | 0.14 |
 
 For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature
 energies), the facet volume, energy and force loops and the body volume

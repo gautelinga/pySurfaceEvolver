@@ -24,10 +24,10 @@ it when a step is finished or a decision changes.
   `OMP_NUM_THREADS`, `PYSE_THREADS`; `pse.map` workers 1 thread each. Evolver's
   old pthread mode (`-p`, `thread_launch`, `THREADS` blocks) stays in the source
   but is compiled out and unsupported (user's choice: keep `src/` close to
-  upstream); per-thread data (`GET_THREAD_DATA`) is per OpenMP thread. **Don't expect
-  scaling above about 4 threads** on the development machine (4 fast + 4 compact
-  cores, 2-way SMT, laptop memory bandwidth): 8 threads gain 0-10% over 4 or lose,
-  and the facet loops are memory-bound. The default thread count is decided in C2
+  upstream); per-thread data (`GET_THREAD_DATA`) is per OpenMP thread. Scaling beyond 4 threads is modest on the
+  development machine (4 fast + 4 compact cores, 2-way SMT, laptop memory
+  bandwidth); after the false-sharing fix (2026-10-08) 8 threads beat 4 by 10-40%
+  at 393k+ facets, less for small surfaces. The default thread count is decided in C2
   step 6 from measurements.
 - **User's workload:** linear soapfilm *and* quadratic/Lagrange (as a final
   high-precision stage: `lagrange n; g 5; hessian` ladders), Newton steps at
