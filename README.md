@@ -10,8 +10,9 @@ pip install ".[all]"     # + PyVista (visualization, also in Jupyter) and meshio
 pip install ".[jupyter]" # PyVista with its notebook backend only
 ```
 
-Documentation: an API reference and a tutorial (a double bubble, from arrays to a
-FEM-ready mesh) are built from `docs/` with Sphinx (see Development).
+Documentation: <https://gautelinga.github.io/pySurfaceEvolver/>, with an API
+reference, a tutorial (a double bubble, from arrays to a FEM-ready mesh), worked
+examples and performance numbers; built from `docs/` with Sphinx (see Development).
 
 ## Scripting
 

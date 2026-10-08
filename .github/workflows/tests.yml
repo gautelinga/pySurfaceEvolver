@@ -27,10 +27,15 @@ jobs:
 
       - name: Build and install
         run: |
+          # gfortran and the OpenMP OpenBLAS: MUMPS (Newton-step factoring);
+          # the GL/X libraries: Gmsh's Python module loads them at import
+          sudo apt-get update
+          sudo apt-get install -y gfortran libopenblas-openmp-dev \
+            libglu1-mesa libxcursor1 libxft2 libxinerama1
           python -m pip install --upgrade pip
           python -m pip install -v ".[test]"
-          # optional: lets test_export.py check native cells with Gmsh itself
-          python -m pip install gmsh || echo "gmsh not available; that test will skip"
+          # optional: Gmsh checks in test_export.py, pyse.map with closures
+          python -m pip install gmsh cloudpickle || echo "gmsh/cloudpickle not available; those tests will skip"
 
       - name: Run tests
         run: python -m pytest -v
