@@ -293,6 +293,14 @@ factorization reuse; Newton steps stay exact.
 Comparison with Brakke's original 2.70a (2026-10-08): table in README and
 docs/performance.md (8 threads: `g 1` 10-13x, linear Newton 5-8x, Lagrange 6
 Newton 4.5-5.6x; 1 thread: 4-8x / 2-4x / 1.4-1.7x).
+MUMPS ordering re-checked now that the analysis is reused (2026-10-08, 8 threads,
+analysis + factor): 393k AMD 0.06+0.157 s, AMF 0.05+0.159, PORD 0.45+0.124;
+Lagrange 6 24k AMD 0.23+0.546, AMF 0.24+0.613, PORD 0.39+0.535; 1.6M AMD
+0.43+1.31, AMF 0.47+1.07, PORD 2.07+0.86 (PORD = MUMPS's automatic choice; QAMD
+worse). PORD's serial analysis needs ~4 steps per pattern to pay off at 1.6M
+(~12 at 393k); typical ladders do 2-4. AMF: -18% factor at 1.6M linear only,
++12% for Lagrange 6. **No change** (AMD stays); possible later: PORD after the
+2nd step on one pattern, for long Newton runs on big fixed meshes.
 
 ### 2026-10-07, before a session restart
 
