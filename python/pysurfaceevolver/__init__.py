@@ -29,7 +29,7 @@ from ._evolver import (
 from ._mesh import Bodies, BodySurface, LargeTessellationWarning, Mesh, Quantity, is_watertight
 from ._viz import LiveView
 from . import examples
-from ._parallel import JobError, WorkerCrashed, WorkerStartError, map  # noqa: A004 (pse.map)
+from ._parallel import JobError, WorkerCrashed, WorkerStartError, map  # noqa: A004 (pyse.map)
 
 #: Tessellations (plots, live views, export of curved surfaces) with more
 #: triangles than this give a LargeTessellationWarning; None: no check.
@@ -59,7 +59,7 @@ def threads_limit(n: int) -> Generator[None, None, None]:
     """Use ``n`` threads inside the ``with`` block, then restore the previous
     setting (including "the default")::
 
-        with pse.threads_limit(4):
+        with pyse.threads_limit(4):
             ev.relax(hessian=True)
     """
     from . import _core

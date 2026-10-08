@@ -83,7 +83,7 @@ struct Lock {
     if (!(timeout > 0))
       throw BusyError(
           "Surface Evolver is busy with a call from another thread (set "
-          "pse.busy_timeout to wait for it)");
+          "pyse.busy_timeout to wait for it)");
     auto start = std::chrono::steady_clock::now();
     for (;;) {
       bool locked;
@@ -98,7 +98,7 @@ struct Lock {
         char msg[200];
         std::snprintf(msg, sizeof msg,
                       "Surface Evolver is busy with a call from another thread "
-                      "(waited %g s, pse.busy_timeout)", timeout);
+                      "(waited %g s, pyse.busy_timeout)", timeout);
         throw BusyError(msg);
       }
     }

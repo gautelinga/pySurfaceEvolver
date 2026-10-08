@@ -85,7 +85,7 @@ class InvalidSurfaceError(EvolverError):
 EvolverBusyError = _core.EvolverBusyError
 EvolverBusyError.__module__ = "pysurfaceevolver"
 EvolverBusyError.__doc__ = """Evolver is running another call: from another thread (and
-``pse.busy_timeout`` is None, or ran out), or the running call itself (a
+``pyse.busy_timeout`` is None, or ran out), or the running call itself (a
 re-entrant call from a callback). A subclass of RuntimeError."""
 
 

@@ -5,7 +5,7 @@ import warnings
 import numpy as np
 import pytest
 
-import pysurfaceevolver as pse
+import pysurfaceevolver as pyse
 
 
 def triangle_area(points, triangles):
@@ -145,11 +145,11 @@ def test_tessellate_rejects_bad_n(cube):
 def test_large_tessellation_warns(cube, monkeypatch):
     cube.command("lagrange 2")
     m = cube.mesh()                       # 24 facets: default n=4 gives 384 triangles
-    monkeypatch.setattr(pse, "tessellation_limit", 100)
-    with pytest.warns(pse.LargeTessellationWarning, match="384 triangles"):
+    monkeypatch.setattr(pyse, "tessellation_limit", 100)
+    with pytest.warns(pyse.LargeTessellationWarning, match="384 triangles"):
         m.tessellate()
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         m.tessellate(2)                   # 96 triangles: under the limit
-        monkeypatch.setattr(pse, "tessellation_limit", None)
+        monkeypatch.setattr(pyse, "tessellation_limit", None)
         m.tessellate()

@@ -185,34 +185,34 @@ def test_reproducible_for_a_thread_count(dumps):
 
 
 def test_thread_setting():
-    import pysurfaceevolver as pse
-    default = pse.threads()
+    import pysurfaceevolver as pyse
+    default = pyse.threads()
     assert default >= 1
-    pse.set_threads(2)
-    assert pse.threads() == 2
-    pse.set_threads(0)
-    assert pse.threads() == default
+    pyse.set_threads(2)
+    assert pyse.threads() == 2
+    pyse.set_threads(0)
+    assert pyse.threads() == default
 
 
 def test_threads_limit_restores_the_setting():
-    import pysurfaceevolver as pse
+    import pysurfaceevolver as pyse
     from pysurfaceevolver import _core
-    pse.set_threads(0)
-    default = pse.threads()
-    with pse.threads_limit(2):
-        assert pse.threads() == 2
-        with pse.threads_limit(3):
-            assert pse.threads() == 3
-        assert pse.threads() == 2
-    assert pse.threads() == default and _core.thread_setting() == 0
-    pse.set_threads(5)
+    pyse.set_threads(0)
+    default = pyse.threads()
+    with pyse.threads_limit(2):
+        assert pyse.threads() == 2
+        with pyse.threads_limit(3):
+            assert pyse.threads() == 3
+        assert pyse.threads() == 2
+    assert pyse.threads() == default and _core.thread_setting() == 0
+    pyse.set_threads(5)
     try:
         with pytest.raises(RuntimeError):
-            with pse.threads_limit(1):
+            with pyse.threads_limit(1):
                 raise RuntimeError
-        assert pse.threads() == 5
+        assert pyse.threads() == 5
     finally:
-        pse.set_threads(0)
+        pyse.set_threads(0)
 
 
 def test_threads_argument_for_one_call(load):

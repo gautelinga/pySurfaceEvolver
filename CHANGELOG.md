@@ -25,8 +25,8 @@ Cube sample, 8 threads, against 0.5.0 (`bench/benchmark.py`): `g 1` at 98k facet
 
 ### Threads
 
-- Default thread count: physical cores; `pse.set_threads()`, `pse.threads_limit()`
-  and `threads=` per call; `pse.map` workers run single-threaded.
+- Default thread count: physical cores; `pyse.set_threads()`, `pyse.threads_limit()`
+  and `threads=` per call; `pyse.map` workers run single-threaded.
 - Safe Ctrl-C with threads: aborts wait until the parallel region or MUMPS call ends.
 - Results agree with Evolver's serial loops to round-off and are reproducible to
   round-off from run to run.
@@ -41,7 +41,7 @@ Cube sample, 8 threads, against 0.5.0 (`bench/benchmark.py`): `g 1` at 98k facet
   (`jupyter` extra); faster live view; a warning before very large tessellations.
 - `busy_timeout` / `EvolverBusyError`: optionally wait for a running call from
   another thread instead of failing at once.
-- `pse.map` fails fast with `WorkerStartError` when workers can't start.
+- `pyse.map` fails fast with `WorkerStartError` when workers can't start.
 
 ### Breaking changes
 

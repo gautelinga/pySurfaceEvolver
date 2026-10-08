@@ -8,38 +8,38 @@ import sys
 
 import pytest
 
-import pysurfaceevolver as pse
+import pysurfaceevolver as pyse
 from conftest import FE_DIR
 
 
 def has_mumps():
-    current = pse.solver()
+    current = pyse.solver()
     try:
-        pse.set_solver("mumps")
+        pyse.set_solver("mumps")
         return True
     except ValueError:
         return False
     finally:
-        pse.set_solver(current)
+        pyse.set_solver(current)
 
 
 def test_solver_setting():
-    current = pse.solver()
+    current = pyse.solver()
     assert current in ("mumps", "evolver")
-    pse.set_solver("evolver")
-    assert pse.solver() == "evolver"
+    pyse.set_solver("evolver")
+    assert pyse.solver() == "evolver"
     with pytest.raises(ValueError):
-        pse.set_solver("nonsense")
-    pse.set_solver(current)
-    assert pse.solver() == current
+        pyse.set_solver("nonsense")
+    pyse.set_solver(current)
+    assert pyse.solver() == current
 
 
 NEWTON = r"""
 import json, warnings
 warnings.simplefilter("ignore")
-import pysurfaceevolver as pse
+import pysurfaceevolver as pyse
 from pysurfaceevolver import Evolver
-out = {"solver": pse.solver()}
+out = {"solver": pyse.solver()}
 for name, commands in [
     ("cube.fe", "g 10; r; g 10; r; g 10; hessian; hessian"),
     ("mound.fe", "g 10; r; g 10; hessian; lagrange 3; g 3; hessian; hessian"),

@@ -52,16 +52,16 @@ command scripts are in `pysurfaceevolver.examples`.
 ## Parameter sweeps
 
 ```python
-import pysurfaceevolver as pse
+import pysurfaceevolver as pyse
 
 def run(volume):
-    ev = pse.Evolver("cube.fe")
+    ev = pyse.Evolver("cube.fe")
     ev.set_values("body", "target", volume)
     ev.relax(tol=1e-10)
     return ev.eval("total_area")
 
 if __name__ == "__main__":   # needed in scripts: workers re-import them
-    areas = pse.map(run, [0.5, 1, 2, 4], processes=4)   # one engine per worker process
+    areas = pyse.map(run, [0.5, 1, 2, 4], processes=4)   # one engine per worker process
 ```
 
 Each worker process runs jobs one after another. A job that raises, or even crashes
@@ -69,7 +69,7 @@ its worker, comes back as a `JobError` (`errors="raise"` or `"return"`) without
 affecting the other jobs. With `cloudpickle` installed, functions defined in a
 notebook work too. Workers are started with `spawn`, which re-imports the main
 script: run scripts from a file, with the guard above; if workers die while
-starting, `pse.map` raises `WorkerStartError` right away.
+starting, `pyse.map` raises `WorkerStartError` right away.
 
 ## Building surfaces in Python
 
@@ -145,10 +145,10 @@ on facets, edges and vertices) run in parallel too, for methods known to be
 thread-safe; integrands that use only arithmetic, math functions, parameters and
 coordinates qualify, others (user procedures, assignments, ...) run serially.
 
-Threads default to the number of physical cores. `pse.set_threads(n)` /
-`pse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`);
-`with pse.threads_limit(n):` sets them for a block, and `ev.relax(...,
-threads=n)` / `ev.hessian(threads=n)` for one call; `pse.map`
+Threads default to the number of physical cores. `pyse.set_threads(n)` /
+`pyse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`);
+`with pyse.threads_limit(n):` sets them for a block, and `ev.relax(...,
+threads=n)` / `ev.hessian(threads=n)` for one call; `pyse.map`
 workers run single-threaded by default, since for sweeps more processes beat more
 threads. With several threads, results can differ from run to run at round-off
 level; with one thread they are reproducible bit for bit. Newton steps keep the
@@ -168,9 +168,9 @@ MUMPS's threads, and large Newton steps are up to 2x slower (1.6M facets: 3.8 s 
 `openblas-openmp`, with `openblas-static`) and links its static library into pySE with
 private symbols, so it is used whatever BLAS NumPy loads; without one it warns at build
 time and at the first Newton step. Wheels bundle their own.
-`pse.set_solver("evolver")`
+`pyse.set_solver("evolver")`
 (or `PYSE_SOLVER=evolver`) switches back to Evolver's minimal-degree factoring;
-`pse.solver()` tells which is in use. For the Lagrange model, the Hessian is also
+`pyse.solver()` tells which is in use. For the Lagrange model, the Hessian is also
 assembled in parallel.
 
 ## Errors and interrupts
@@ -182,7 +182,7 @@ Pass `echo=True` to see output live, and `input=` to answer interactive prompts.
 
 There is one engine per process, so calls from several threads are serialized: a call
 made while another thread's call runs raises `EvolverBusyError` (a `RuntimeError`),
-or with `pse.busy_timeout = seconds` (`float("inf")`: no limit) waits for it first.
+or with `pyse.busy_timeout = seconds` (`float("inf")`: no limit) waits for it first.
 A call from inside a running call, such as from a callback, always raises.
 
 Limitations: loading a datafile resets Evolver's settings (tested: results of every

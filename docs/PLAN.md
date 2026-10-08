@@ -17,11 +17,11 @@ it when a step is finished or a decision changes.
   and verify with tolerances (below). Identical results are only a free check when
   a change keeps the summation order anyway.
 - **Engine model:** one engine per process; every `Evolver` object is a handle to
-  it. `save()`/`restore()` for exact snapshots; `pse.map` (worker processes,
+  it. `save()`/`restore()` for exact snapshots; `pyse.map` (worker processes,
   crash-isolated) for sweeps. Long term: move Evolver's globals into one state
   struct (phase E).
-- **Threads:** OpenMP; default = physical cores; `pse.set_threads(n)`,
-  `OMP_NUM_THREADS`, `PYSE_THREADS`; `pse.map` workers 1 thread each. Evolver's
+- **Threads:** OpenMP; default = physical cores; `pyse.set_threads(n)`,
+  `OMP_NUM_THREADS`, `PYSE_THREADS`; `pyse.map` workers 1 thread each. Evolver's
   old pthread mode (`-p`, `thread_launch`, `THREADS` blocks) stays in the source
   but is compiled out and unsupported (user's choice: keep `src/` close to
   upstream); per-thread data (`GET_THREAD_DATA`) is per OpenMP thread. Scaling beyond 4 threads is modest on the
@@ -43,8 +43,8 @@ Version 0.5.0 + C2 work; 231 tests; mypy clean; manylinux wheel builds and passe
 | Phase | What | Result |
 |---|---|---|
 | A | LTO; memory/UB fixes (path_open, kb_error strncat, delete_facet, string facet area, MAXINT, sdrv offsets, body-x crash); C23 fixes; sanitizer sweep; exact dumps; `save`/`restore`; handle engine; `relax()`; bundled samples | -23% instructions per iteration |
-| B | `bench/benchmark.py`; direct C element writes; `mesh()`; vectorized tessellation and watertight checks; `pse.map` | |
-| C | facet corner cache; parallel facet volume/energy/force loops (`src/fastloops.c`); `pse.set_threads` | 1.6M facets: 11.1 -> 2.3 s per iteration |
+| B | `bench/benchmark.py`; direct C element writes; `mesh()`; vectorized tessellation and watertight checks; `pyse.map` | |
+| C | facet corner cache; parallel facet volume/energy/force loops (`src/fastloops.c`); `pyse.set_threads` | 1.6M facets: 11.1 -> 2.3 s per iteration |
 | C2.1 | per-thread accumulation in the facet loops (compensated sums, per-thread force arrays) | loops faster, iteration unchanged: serial code dominated |
 | C2.5 | parallel volume gradients (`fl_film_grad`); per-facet body table; cached vertex list for per-vertex work (forces, move, save/restore, volume restoration, DV^T DV); `FL_FOR_SELECTED` for constraint/boundary vertices and edge integrals; `sp_hash` overflow fix | see below |
 
@@ -102,7 +102,7 @@ linear surface):
 - Profile before optimizing, set a target, drop the item if the profile doesn't
   support it (one-call `mesh()` and the live-view fast path gave nothing).
 - Before timing, check the machine: `uptime` and `ps --sort=-pcpu`. An orphaned
-  `pse.map` sweep once ran 4 h on 3-4 cores and skewed a whole session.
+  `pyse.map` sweep once ran 4 h on 3-4 cores and skewed a whole session.
 - A/B against a reference build (`git worktree` + venv), interleaved, best of N.
   Take one careful measurement; if a small change (a few %) shows mixed or
   unexplained results, drop it or note it and move on (the parallel edge-content
@@ -222,7 +222,7 @@ linear surface):
       Follow-up option: build a recent OpenBLAS from source for the wheels.
 4. **Done.** Thread defaults (user's choices, 2026-10-07): physical cores (at most
    the available processors; OMP_NUM_THREADS / PYSE_THREADS / set_threads
-   override; also given to OpenMP so MUMPS follows); `pse.map` workers 1 thread
+   override; also given to OpenMP so MUMPS follows); `pyse.map` workers 1 thread
    each. A pthreads OpenBLAS is made single-threaded at run time (its threads
    inside MUMPS's oversubscribe: 393k-facet Newton step at 8 threads 3.0 -> 1.2 s).
    Measured 1/4/8 threads, Newton step 393k: 1.65 / 1.23 / 1.21 s; Lagrange 4
@@ -375,7 +375,7 @@ Unverified, not changed: metric.c edge_force_l_metric()'s conformal branch lacks
 
 Phase C2 is complete (see the table in Status). After it, at the user's request:
 
-- Done: thread control from Python (`pse.threads_limit(n)`, `threads=` on
+- Done: thread control from Python (`pyse.threads_limit(n)`, `threads=` on
   `relax()`/`hessian()`; commit 4af2a9d). Wheels build a pinned OpenBLAS 0.3.34
   (OpenMP build, DYNAMIC_ARCH; `tools/build_openblas.sh`) and ship
   `THIRD_PARTY_LICENSES.txt` (66420bd). Decisions: wheels for Linux x86-64 only;
@@ -428,7 +428,7 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    unchanged (393k Lagrange 3: 1.5 s, 0.9 GB peak).
 2. Size warnings for curved tessellation and export (Lagrange-3 at 1.6M facets,
    6x6 tessellation = 57M triangles).
-   **Done** (user chose warn only, module setting): `pse.tessellation_limit`
+   **Done** (user chose warn only, module setting): `pyse.tessellation_limit`
    (default 10M triangles, None: off) gives a `LargeTessellationWarning` with the
    count and an estimate of the memory (393k Lagrange 3, n=6: 14M triangles,
    estimated 1.2 GB, measured peak 0.94 GB, 1.4 s).
@@ -446,7 +446,7 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    (`[jupyter]` extra). The check notebook was minimal: the item 6 tutorial should
    show a realistic case (larger surface, Lagrange stage, scalars, export).
 5. Optional wait-with-timeout instead of the immediate "busy" error.
-   **Done** (user's choices): `pse.busy_timeout` (default None: fail at once;
+   **Done** (user's choices): `pyse.busy_timeout` (default None: fail at once;
    seconds; inf). The C++ lock (`std::timed_mutex`) reads it only when the lock
    is taken, waits with the GIL released and checks Ctrl-C every 100 ms; a
    re-entrant call (same thread) always fails. New `EvolverBusyError`
@@ -467,7 +467,7 @@ pausing after each. The Python API may break (pre-1.0, no deprecation shims).
    physics. Only dumps differed: "clipped on" after 100grain.fe (torus display
    mode is sticky by design; now reset in pySE's load), and the view matrix of
    100grain/metric/slidestr after some samples (display only; left alone).
-8. `pse.map` fails fast with a clear error when workers die before taking a job
+8. `pyse.map` fails fast with a clear error when workers die before taking a job
    (e.g. a script read from stdin under the `spawn` start method), instead of
    failing every job.
    **Done**: workers report ready; a death before that raises `WorkerStartError`
@@ -497,7 +497,7 @@ the shared MUMPS instance). Feasible with a generated header and a few dozen ren
 Expected gain: no speed (one extra pointer load per global access, likely 0-3% cost);
 the value is several independent surfaces per process. Today's alternative:
 save/restore at 25k/98k/393k facets 0.21/0.51/1.93 s save, 0.15/0.43/2.08 s
-restore; pse.map for sweeps. Estimate: engines used one at a time 3-5 days,
+restore; pyse.map for sweeps. Estimate: engines used one at a time 3-5 days,
 concurrent engines 2-3 weeks; risk of silent state sharing through a missed static.
 **User decision (2026-10-08): not now** (they don't alternate between large
 surfaces in one session); if done later: engines one at a time, libc state

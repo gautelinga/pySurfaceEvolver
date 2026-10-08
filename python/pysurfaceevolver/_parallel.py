@@ -42,9 +42,9 @@ class WorkerStartError(RuntimeError):
     def __init__(self, exitcode: Optional[int]):
         super().__init__(
             f"a worker process died while starting (exit code {exitcode}); its error "
-            "output is above. pse.map starts workers with the 'spawn' method, which "
+            "output is above. pyse.map starts workers with the 'spawn' method, which "
             "re-imports the main script: run the script from a file (not stdin or "
-            "python -c) and put the code that calls pse.map under "
+            "python -c) and put the code that calls pyse.map under "
             "'if __name__ == \"__main__\":'.")
         self.exitcode = exitcode
 

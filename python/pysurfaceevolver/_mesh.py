@@ -21,7 +21,7 @@ __all__ = ["Mesh", "Bodies", "Quantity", "BodySurface", "LargeTessellationWarnin
 
 
 class LargeTessellationWarning(UserWarning):
-    """A tessellation has more triangles than ``pse.tessellation_limit``."""
+    """A tessellation has more triangles than ``pyse.tessellation_limit``."""
 
 
 def _check_tessellation_size(facets: int, n: int, sdim: int) -> None:
@@ -36,7 +36,7 @@ def _check_tessellation_size(facets: int, n: int, sdim: int) -> None:
     warnings.warn(
         f"tessellating {facets:,} facets with n={n} gives {triangles:,} triangles "
         f"(about {gb:.1f} GB while building, more for plotting or export); pass a "
-        f"smaller n, or raise pse.tessellation_limit (now {limit:,}; None: no check)",
+        f"smaller n, or raise pyse.tessellation_limit (now {limit:,}; None: no check)",
         LargeTessellationWarning, stacklevel=4)
 
 
@@ -476,7 +476,7 @@ class Mesh:
         triangles follow the actual surface. ``n`` defaults to 1 for linear
         elements and 2*order otherwise. Triangle ``t`` belongs to facet
         ``t // n**2``, and is oriented like that facet's ``facets`` row.
-        More than ``pse.tessellation_limit`` triangles (default 10 million)
+        More than ``pyse.tessellation_limit`` triangles (default 10 million)
         gives a :class:`LargeTessellationWarning`.
 
         With ``merge=True`` (the default), points shared by neighboring

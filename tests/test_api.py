@@ -3,7 +3,7 @@ import math
 import numpy as np
 import pytest
 
-import pysurfaceevolver as pse
+import pysurfaceevolver as pyse
 
 from pysurfaceevolver import (
     Evolver,
@@ -216,7 +216,7 @@ def test_input_callback_answers_prompts(load):
 
 
 def test_reentrant_call_is_rejected(load, monkeypatch):
-    monkeypatch.setattr(pse, "busy_timeout", float("inf"))   # no waiting on itself
+    monkeypatch.setattr(pyse, "busy_timeout", float("inf"))   # no waiting on itself
     errors = []
 
     def answer(prompt):

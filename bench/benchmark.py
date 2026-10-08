@@ -34,7 +34,7 @@ import tempfile
 import time
 import warnings
 
-import pysurfaceevolver as pse
+import pysurfaceevolver as pyse
 from pysurfaceevolver import Evolver
 
 warnings.simplefilter("ignore")
@@ -56,7 +56,7 @@ def once(f):
 
 
 def progress(out: dict, name: str) -> None:
-    print(f"  [{out['facets']:,} facets, {pse.threads()} threads] {name}: "
+    print(f"  [{out['facets']:,} facets, {pyse.threads()} threads] {name}: "
           f"{out[name] * 1e3:.1f} ms", flush=True)
 
 
@@ -79,7 +79,7 @@ def run_linear(level: int, repeat: int) -> dict:
     t = time.perf_counter()
     ev = relaxed_cube(level)
     facets = ev.counts["facets"]
-    print(f"  [{facets:,} facets, {pse.threads()} threads] relaxed in "
+    print(f"  [{facets:,} facets, {pyse.threads()} threads] relaxed in "
           f"{time.perf_counter() - t:.1f} s", flush=True)
     out = {"level": level, "facets": facets, "vertices": ev.counts["vertices"]}
 
@@ -160,7 +160,7 @@ def main():
                    help="refinement levels for the Lagrange section")
     p.add_argument("--orders", type=int, nargs="+", default=[2, 4, 6],
                    help="Lagrange orders, run in turn")
-    p.add_argument("--threads", type=int, nargs="+", default=[pse.threads()])
+    p.add_argument("--threads", type=int, nargs="+", default=[pyse.threads()])
     p.add_argument("--repeat", type=int, default=3)
     p.add_argument("--json")
     args = p.parse_args()
@@ -170,12 +170,12 @@ def main():
         print(f"warning: load average {load:.1f}; timings will be noisy")
     linear, lagrange = [], []
     for threads in args.threads:
-        pse.set_threads(threads)
+        pyse.set_threads(threads)
         for level in args.levels:
             linear.append(dict(run_linear(level, args.repeat), threads=threads))
         for level in args.lagrange_levels:
             lagrange.append(dict(run_lagrange(level, args.orders), threads=threads))
-    pse.set_threads(0)
+    pyse.set_threads(0)
     if linear:
         table("linear", linear)
     if lagrange:
