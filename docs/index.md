@@ -13,10 +13,11 @@ pip install ".[all]"     # + PyVista (also in Jupyter) and meshio
 :maxdepth: 2
 
 tutorial
+liquid_bridge
 api
 performance
 ```
 
 The README has a
 compact overview of the API; the tutorial works through one problem from datafile to
-FEM mesh; the API reference documents every public class and function.
+FEM mesh; the liquid-bridge example adds contact angles on curved solids; the API reference documents every public class and function.
