@@ -1411,10 +1411,13 @@ void fl_trap_error(void)
  * vertex_average() finds every vertex's new position before moving any, so
  * the search runs in parallel for vertices without constraints or
  * boundaries (those keep the serial path: constraint formulas). The search
- * computes missing facet areas and stores them (facet_energy_l(AREA_ONLY));
- * here the areas are computed alike, the facets marked, and the areas stored
- * after the loop. Positions don't change in between, so the results are
- * those of the serial loop.
+ * weighs neighbours by facet areas, and get_facet_area() recomputes and
+ * stores the area at every call (facet_energy_l(AREA_ONLY); in quantity
+ * mode through a shared qinfo, so that mode stays serial): the parallel
+ * search computes the same area for the same (oriented) facet id without
+ * storing it. vertex_average()'s recalc() recomputes the stored areas anyway.
+ * Positions don't change in between, so the results are those of the serial
+ * loop, bit for bit.
  */
 
 int find_vertex_average(vertex_id v_id, REAL *vx, int mode);   /* veravg.c */
@@ -1425,12 +1428,10 @@ static int fast_mesh_disabled(void)   /* PYSE_NO_FAST_MESH=1: these two off */
   return disabled;
 }
 
-static unsigned char *va_mark = NULL;    /* per facet ordinal */
-static long va_mark_size = 0;
 static __thread int va_active = 0;
 
-/* facet_energy_l(f_id,AREA_ONLY)'s area, not stored */
-static REAL linear_facet_area(facet_id f_id)
+/* facet_energy_l(f_id,AREA_ONLY)'s area (corners in f_id's orientation), not stored */
+REAL fl_facet_area(facet_id f_id)
 { REAL unwrap_x[FACET_VERTS][MAXCOORD];
   REAL *x[FACET_VERTS];
   REAL side[2][MAXCOORD];
@@ -1450,29 +1451,16 @@ static REAL linear_facet_area(facet_id f_id)
 
 int fl_vertex_average_active(void) { return va_active; }
 
-REAL fl_lazy_facet_area(facet_id f_id)
-{ long o = loc_ordinal(f_id);
-#ifdef _OPENMP
-  #pragma omp atomic write
-#endif
-  va_mark[o] = 1;
-  return linear_facet_area(f_id);
-}
-
 static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t stride)
 { vertex_id *list;
   facet_id *facets;
   long n, nf, k;
   int failed = 0;
   if ( fast_mesh_disabled() || web.modeltype != LINEAR || web.representation != SOAPFILM
-       || web.metric_flag || calc_facet_energy != facet_energy_l || hessian_special_normal_flag
-       || (web.symmetry_flag && !web.torus_flag) )
+       || web.metric_flag || everything_quantities_flag || calc_facet_energy != facet_energy_l
+       || hessian_special_normal_flag || (web.symmetry_flag && !web.torus_flag) )
     return 0;
   if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return 0;
-  if ( !(facets = fl_facet_list(&nf)) ) return 0;
-  if ( !ensure_size((void**)&va_mark,&va_mark_size,web.skel[FACET].max_ord+1,1) )
-    return 0;
-  memset(va_mark,0,web.skel[FACET].max_ord+1);
 #ifdef _OPENMP
   #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
 #endif
@@ -1496,19 +1484,13 @@ static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t st
       failed = 1;
     }
   }
-  if ( failed ) return 0;   /* nothing stored yet: the serial loop redoes it */
+  if ( failed ) return 0;   /* nothing moved yet: the serial loop redoes it */
   for ( k = 0 ; k < n ; k++ )
   { vertex_id v_id = list[k];
     long o = loc_ordinal(v_id);
     if ( get_vattr(v_id) & (CONSTRAINT|BOUNDARY) )
       *(int*)(sbase + o*stride) = find_vertex_average(v_id,(REAL*)(xbase + o*stride),mode);
   }
-#ifdef _OPENMP
-  #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
-#endif
-  for ( k = 0 ; k < nf ; k++ )
-    if ( va_mark[loc_ordinal(facets[k])] && get_facet_area(facets[k]) == 0.0 )
-      set_facet_area(facets[k],linear_facet_area(facets[k]));
   return 1;
 }
 

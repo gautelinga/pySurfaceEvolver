@@ -701,10 +701,11 @@ int find_vertex_average(
         weight = 0.0;
         if ( valid_id(fe) )
           do { facet_id f_id = get_fe_facet(fe);
-		       REAL a = get_facet_area(f_id);
-		       if ( a == 0.0 && fl_vertex_average_active() )
-			     a = fl_lazy_facet_area(f_id);   /* pySE: stored after */
-		       else if ( a == 0.0 ) 
+		       /* pySE: in the parallel search, the area as get_facet_area()
+		          computes it, but not stored (it stores, and threads share facets) */
+		       int par = fl_vertex_average_active();
+		       REAL a = par ? fl_facet_area(f_id) : get_facet_area(f_id);
+		       if ( a == 0.0 && !par ) 
 			   { (*calc_facet_energy)(f_id,AREA_ONLY);
 			      a = get_facet_area(f_id);
 			   }

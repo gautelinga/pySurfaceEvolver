@@ -163,10 +163,10 @@ extern long fl_body_stamp;
    parallel; stride: bytes between consecutive vertex ordinals' x and status.
    Returns 0, doing nothing, when the case isn't covered (or PYSE_NO_FAST_MESH
    is set, for both functions here). Inside it,
-   find_vertex_average() takes missing facet areas from fl_lazy_facet_area(). */
+   find_vertex_average() takes facet areas from fl_facet_area() (not stored). */
 int fl_vertex_averages(int mode, REAL *x0, int *status0, size_t stride);
 int fl_vertex_average_active(void);
-REAL fl_lazy_facet_area(facet_id f_id);
+REAL fl_facet_area(facet_id f_id);
 /* calc_edge() for all edges in parallel (equiangulate()); 0 when not covered */
 int fl_calc_edges(void);
 /* test(e) for all edges in parallel, as 0/1 by edge ordinal (shared buffer,

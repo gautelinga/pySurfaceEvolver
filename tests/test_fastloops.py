@@ -312,6 +312,9 @@ MESH_OPS_SAMPLES = {
                "set vertex y y+0.004*(random-0.5); u; u; g 3; V; V; u",
     "addload_example.fe": "g 5; r; r; r; set vertex x x+0.01*(random-0.5); u; g 3; V; u",
     "mound.fe": "g 5; r; r; r; r; u; g 5; V; u",
+    # quantity mode (as after hessian_seek with constraint integrals): areas
+    # go through a shared qinfo, so V stays serial there (it crashed)
+    "catbody.fe": "g 5; r; r; r; r; r; convert_to_quantities; g 3; V; u; V",
 }
 
 
