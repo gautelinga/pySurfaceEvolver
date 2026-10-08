@@ -1015,3 +1015,200 @@ void fl_hessian_after_factor(struct linsys *S)
           S->N,S->IA[S->N]-A_OFF,omp_get_wtime()-fh_t0,S->neg,S->zero,S->pos);
 #endif
 }
+
+/* ---- Lagrange facet area Hessian as matrix products ----------------------
+ *
+ * lagrange_facet_tension_hess() for 2D facets, regrouped. At each Gauss point
+ * the Hessian of fudge*sqrt(det) over (node, coordinate) pairs is
+ *     fudge [ -s s^T/det + (a+b)(a+b)^T - (a-b)(a-b)^T - (c+d)(c+d)^T ]
+ *   + I (x) fudge G^T adj G,
+ * with a = A (x) t0, b = B (x) t1, c = B (x) t0, d = A (x) t1 (A, B: the basis
+ * polynomials' partials at the point, t0, t1: the tangents, adj: the adjugate
+ * of the metric, s: the gradient vector). Summed over the Gauss points that is
+ * two symmetric rank-k updates (BLAS dsyrk) instead of loops over node pairs;
+ * the same arithmetic up to rounding order. PYSE_NO_FAST_LAGRANGE=1 turns it off.
+ */
+#ifdef PYSE_MUMPS          /* builds with MUMPS link a BLAS */
+extern void dsyrk_(const char *uplo, const char *trans, const int *n, const int *k,
+                   const double *alpha, const double *a, const int *lda,
+                   const double *beta, double *c, const int *ldc);
+
+static __thread double *lt_buf = NULL;
+static __thread size_t lt_size = 0;
+
+static int fast_lagrange_disabled(void)
+{ static int disabled = -1;
+  if ( disabled < 0 ) disabled = getenv("PYSE_NO_FAST_LAGRANGE") != NULL;
+  return disabled;
+}
+
+int fl_lagrange_tension_hess(struct qinfo *f_info, REAL density, REAL *energy)
+{ struct gauss_lag *gl;
+  int n, G, S = SDIM, N3, m, k, kk, j, jj, np = 0, nn = 0;
+  double *P, *Q, *C, *M;
+  size_t need;
+  REAL value = 0.0;
+  const double one = 1.0, minus = -1.0, zero = 0.0;
+
+  if ( fast_lagrange_disabled() || web.dimension != 2 || sizeof(REAL) != sizeof(double) )
+    return 0;
+  gl = &gauss_lagrange[2][web.gauss2D_order];
+  n = gl->lagpts;
+  G = gl->gnumpts;
+  N3 = n*S;
+  need = (size_t)N3*G + (size_t)N3*3*G + (size_t)N3*N3 + (size_t)n*n;
+  if ( need > lt_size )
+  { double *buf = (double *)realloc(lt_buf,need*sizeof(double));
+    if ( !buf ) return 0;
+    lt_buf = buf;
+    lt_size = need;
+  }
+  P = lt_buf;                 /* positive columns: (a+b) */
+  Q = P + (size_t)N3*G;       /* negative columns: s/sqrt(det), (a-b), (c+d) */
+  C = Q + (size_t)N3*3*G;     /* the sum, column-major, lower triangle */
+  M = C + (size_t)N3*N3;      /* sum of fudge G^T adj G, lower triangle */
+  memset(M,0,(size_t)n*n*sizeof(double));
+
+  for ( m = 0 ; m < G ; m++ )
+  { REAL **t = f_info->sides[m];
+    REAL **gp = gl->gpolypart[m];
+    REAL g00 = SDIM_dot(t[0],t[0]), g01 = SDIM_dot(t[0],t[1]), g11 = SDIM_dot(t[1],t[1]);
+    REAL det = g00*g11 - g01*g01;
+    REAL adj00 = g11, adj01 = -g01, adj11 = g00;
+    REAL fudge, rf, rs;
+    double *ab, *s, *am, *cd;
+    if ( det <= 0.0 ) continue;
+    value += gl->gausswt[m]*sqrt(det);
+    fudge = density*gl->gausswt[m]/sqrt(det)/factorial[2];
+    rf = sqrt(fudge);
+    rs = sqrt(fudge/det);
+    ab = P + (size_t)np*N3;
+    s = Q + (size_t)nn*N3;
+    am = s + N3;
+    cd = am + N3;
+    np += 1;
+    nn += 3;
+    for ( k = 0 ; k < n ; k++ )
+    { REAL A = gp[0][k], B = gp[1][k];
+      REAL w0 = A*adj00 + B*adj01, w1 = A*adj01 + B*adj11;
+      for ( j = 0 ; j < S ; j++ )
+      { REAL t0 = t[0][j], t1 = t[1][j];
+        REAL sum = t0*w0 + t1*w1;               /* the gradient part */
+        f_info->grad[k][j] += fudge*sum;
+        s[k*S + j] = rs*sum;
+        ab[k*S + j] = rf*(A*t0 + B*t1);
+        am[k*S + j] = rf*(A*t0 - B*t1);
+        cd[k*S + j] = rf*(B*t0 + A*t1);
+      }
+      for ( kk = 0 ; kk <= k ; kk++ )
+      { REAL Ak = gp[0][kk], Bk = gp[1][kk];
+        M[k*n + kk] += fudge*(A*(Ak*adj00 + Bk*adj01) + B*(Ak*adj01 + Bk*adj11));
+      }
+    }
+  }
+  if ( np )
+  { dsyrk_("L","N",&N3,&np,&one,P,&N3,&zero,C,&N3);
+    dsyrk_("L","N",&N3,&nn,&minus,Q,&N3,&one,C,&N3);
+  }
+  else memset(C,0,(size_t)N3*N3*sizeof(double));
+
+  for ( k = 0 ; k < n ; k++ )
+    for ( kk = 0 ; kk <= k ; kk++ )
+      for ( j = 0 ; j < S ; j++ )
+      { int jjend = (k == kk) ? j + 1 : S;
+        for ( jj = 0 ; jj < jjend ; jj++ )
+        { REAL h = C[(size_t)(kk*S + jj)*N3 + k*S + j];
+          if ( j == jj ) h += M[k*n + kk];
+          f_info->hess[k][kk][j][jj] += h;
+          if ( kk != k || jj != j )
+            f_info->hess[kk][k][jj][j] += h;
+        }
+      }
+  *energy = density*value/factorial[2];
+  return 1;
+}
+
+/* lagrange_facet_volume_all() in METHOD_HESSIAN mode for 2D facets, regrouped:
+   over (node, node) pairs its Hessian blocks are sums over the Gauss points of
+   outer products, so (x,y) = sum w z (A B^T - B A^T), (j,z) = sum w R_j p^T
+   (R_j: the j-th row of adj(sides) times the partials, p: the basis
+   polynomials) and their transposes: four small BLAS dgemm calls. */
+extern void dgemm_(const char *transa, const char *transb, const int *m, const int *n,
+                   const int *k, const double *alpha, const double *a, const int *lda,
+                   const double *b, const int *ldb, const double *beta, double *c,
+                   const int *ldc);
+
+static __thread double *lv_buf = NULL;
+static __thread size_t lv_size = 0;
+
+int fl_lagrange_volume_hess(struct qinfo *f_info, REAL *volume)
+{ struct gauss_lag *gl;
+  int n, G, m, k, kk, used = 0;
+  double *Aw, *Bw, *A, *B, *R0, *R1, *Pg, *X, *Y0, *Y1;
+  size_t need;
+  REAL value = 0.0;
+  const double one = 1.0, minus = -1.0, zero = 0.0;
+
+  if ( fast_lagrange_disabled() || web.dimension != 2 || SDIM != 3
+       || sizeof(REAL) != sizeof(double) )
+    return 0;
+  gl = &gauss_lagrange[2][web.gauss2D_order];
+  n = gl->lagpts;
+  G = gl->gnumpts;
+  need = (size_t)7*n*G + (size_t)3*n*n;
+  if ( need > lv_size )
+  { double *buf = (double *)realloc(lv_buf,need*sizeof(double));
+    if ( !buf ) return 0;
+    lv_buf = buf;
+    lv_size = need;
+  }
+  Aw = lv_buf; Bw = Aw + n*G; A = Bw + n*G; B = A + n*G;     /* n x G, column-major */
+  R0 = B + n*G; R1 = R0 + n*G; Pg = R1 + n*G;
+  X = Pg + n*G; Y0 = X + n*n; Y1 = Y0 + n*n;                /* n x n */
+
+  for ( m = 0 ; m < G ; m++ )
+  { REAL **sd = f_info->sides[m];
+    REAL **gp = gl->gpolypart[m];
+    REAL z = f_info->gauss_pt[m][2];
+    REAL w = gl->gausswt[m]/factorial[2];
+    /* adjugate of the 2x2 x,y part of the tangents */
+    REAL a00 = sd[1][1], a01 = -sd[0][1], a10 = -sd[1][0], a11 = sd[0][0];
+    REAL det = sd[0][0]*sd[1][1] - sd[0][1]*sd[1][0];
+    value += w*det*z;
+    for ( k = 0 ; k < n ; k++ )
+    { REAL g0 = gp[0][k], g1 = gp[1][k];
+      REAL r0 = g0*a00 + g1*a01, r1 = g0*a10 + g1*a11;   /* sum_i gp[i][k] mat[j][i] */
+      f_info->grad[k][0] += w*z*r0;
+      f_info->grad[k][1] += w*z*r1;
+      f_info->grad[k][2] += w*gl->gpoly[m][k]*det;
+      Aw[used*n + k] = w*z*g0;  Bw[used*n + k] = w*z*g1;
+      A[used*n + k] = g0;       B[used*n + k] = g1;
+      R0[used*n + k] = w*r0;    R1[used*n + k] = w*r1;
+      Pg[used*n + k] = gl->gpoly[m][k];
+    }
+    used++;
+  }
+  dgemm_("N","T",&n,&n,&used,&one,Aw,&n,B,&n,&zero,X,&n);
+  dgemm_("N","T",&n,&n,&used,&minus,Bw,&n,A,&n,&one,X,&n);
+  dgemm_("N","T",&n,&n,&used,&one,R0,&n,Pg,&n,&zero,Y0,&n);
+  dgemm_("N","T",&n,&n,&used,&one,R1,&n,Pg,&n,&zero,Y1,&n);
+  for ( k = 0 ; k < n ; k++ )
+    for ( kk = 0 ; kk < n ; kk++ )
+    { REAL **h = f_info->hess[k][kk];
+      REAL x = X[kk*n + k];
+      h[0][1] += x;
+      h[1][0] -= x;
+      h[0][2] += Y0[kk*n + k];
+      h[1][2] += Y1[kk*n + k];
+      h[2][0] += Y0[k*n + kk];
+      h[2][1] += Y1[k*n + kk];
+    }
+  *volume = value;
+  return 1;
+}
+#else
+int fl_lagrange_tension_hess(struct qinfo *f_info, REAL density, REAL *energy)
+{ (void)f_info; (void)density; (void)energy; return 0; }
+int fl_lagrange_volume_hess(struct qinfo *f_info, REAL *volume)
+{ (void)f_info; (void)volume; return 0; }
+#endif

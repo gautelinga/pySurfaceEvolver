@@ -257,3 +257,28 @@ def test_kept_pattern_matches_hash_assembly(threads):
         assert rel(kept[name]["energy"], hashed[name]["energy"]) < 1e-12, name
         for v, w in zip(kept[name]["volume"], hashed[name]["volume"]):
             assert rel(v, w) < 1e-12, name
+
+
+# The Lagrange facet area and volume Hessians as BLAS products (fasthess.c)
+# against the original loops; and the Lagrange setup's cached basis tables,
+# which switching bezier_basis rebuilds in place.
+LAGRANGE_SAMPLES = {
+    "cube.fe": "g 10; r; g 10; r; g 10; hessian; lagrange 4; g 5; hessian; hessian",
+    "addload_example.fe": "g 10; r; g 10; hessian; lagrange 3; g 5; hessian; hessian",
+    "mound.fe": "g 10; r; g 10; lagrange 3; g 5; hessian; hessian",
+}
+
+
+def test_fast_lagrange_hessians_match_the_loops():
+    args = [x for item in LAGRANGE_SAMPLES.items() for x in item]
+    fast = run(NEWTON, args, {"OMP_NUM_THREADS": "4"})
+    loops = run(NEWTON, args, {"OMP_NUM_THREADS": "4", "PYSE_NO_FAST_LAGRANGE": "1"})
+    for name in LAGRANGE_SAMPLES:
+        assert rel(fast[name]["energy"], loops[name]["energy"]) < 1e-12, name
+
+
+def test_bezier_switch_refreshes_the_lagrange_tables():
+    args = ["cube.fe", "g 10; r; g 10; lagrange 3; bezier_basis on; g 5; hessian"]
+    fast = run(NEWTON, args, {"OMP_NUM_THREADS": "1"})
+    original = run(NEWTON, args, {"OMP_NUM_THREADS": "1", "PYSE_NO_FAST_LOOPS": "1"})
+    assert rel(fast["cube.fe"]["energy"], original["cube.fe"]["energy"]) < 1e-10

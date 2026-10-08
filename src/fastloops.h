@@ -57,6 +57,13 @@ int fl_area_hessian(struct linsys *S, REAL *rhs);
 int fl_body_hessian_linear(struct linsys *S, REAL *rhs, REAL *Z);
 int fl_body_hessian_quadratic(struct linsys *S, REAL *Z);
 
+/* lagrange_facet_tension_hess() for 2D facets with BLAS (fasthess.c): adds
+   the gradient and Hessian, sets *energy; returns 0 (nothing done) when not
+   covered. */
+int fl_lagrange_tension_hess(struct qinfo *f_info, REAL density, REAL *energy);
+/* the same for lagrange_facet_volume_all() in METHOD_HESSIAN mode */
+int fl_lagrange_volume_hess(struct qinfo *f_info, REAL *volume);
+
 /* MUMPS factoring (mumpsfactor.c), the MUMPS_FACTORING mode */
 void mumps_factor(struct linsys *S, int mtype);
 void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype);
@@ -143,6 +150,8 @@ int fl_sel_next(fl_sel *s, element_id *id);
    points of a Lagrange facet from its control points x, as the mat_mult()
    calls of q_facet_setup_lagrange(). Returns 0, doing nothing, when the
    case isn't covered. */
+/* bumped whenever gauss_lagrange_setup() rebuilds the Lagrange tables */
+extern long fl_lagrange_tables_version;
 int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
                             REAL **x, REAL **gauss_pt, REAL ***sides, int need_side);
 

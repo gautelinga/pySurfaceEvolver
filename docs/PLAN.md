@@ -317,6 +317,20 @@ worse). PORD's serial analysis needs ~4 steps per pattern to pay off at 1.6M
 (~12 at 393k); typical ladders do 2-4. AMF: -18% factor at 1.6M linear only,
 +12% for Lagrange 6. **No change** (AMD stays); possible later: PORD after the
 2nd step on one pattern, for long Newton runs on big fixed meshes.
+Speed items the user picked next (2026-10-08, "do 2, then 1"):
+- Batched constraint solves (a35335f): sp_CHinvC / BK_hess_project_setup solve all
+  constraint columns in one multi-right-side MUMPS call (blocks of 32). 9-body foam,
+  8 threads: 46k 0.057 -> 0.050 s, 184k 0.288 -> 0.245 s per step; 2-49 constraints
+  only (50+ go into the matrix).
+- Lagrange element Hessians as BLAS products (fasthess.c `fl_lagrange_tension_hess`,
+  dsyrk; `fl_lagrange_volume_hess`, dgemm; 2D facets; `PYSE_NO_FAST_LAGRANGE=1` off).
+  Newton step, 8 threads, cube: Lagrange 6 at 24k 4.3 -> 1.7 s, at 6k 1.2 -> 0.38 s,
+  Lagrange 4 0.24 -> 0.14 s; assembled Hessians match the loops to ~1e-15 relative.
+  Found on the way: the Lagrange basis tables cached in fastloops.c went stale when
+  `bezier_basis` rebuilt them in place (wrong energies); fixed with a version counter
+  bumped by gauss_lagrange_setup().
+  Valgrind shows 85 "uninitialised value" reports in an OpenMP loop of the stripped
+  module, the same with the new kernels off: pre-existing, not yet located.
 
 ### 2026-10-07, before a session restart
 

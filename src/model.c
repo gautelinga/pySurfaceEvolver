@@ -13,6 +13,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 /*************************************************************************
 *
@@ -1903,6 +1904,8 @@ void gauss_lagrange_setup(
 )
 { struct gauss_lag *gl;
   int i,j,k,n;
+
+  fl_lagrange_tables_version++;   /* pySE: the tables below may change in place */
   REAL *temp;
   int linx[MAXCOORD+1];
 

@@ -1155,6 +1155,10 @@ static double *lg_packed = NULL;    /* [ctrl][rows] */
 static long lg_packed_size = 0;
 static REAL **lg_gpoly = NULL;      /* what the packing was made from */
 static int lg_ctrl = -1, lg_gnumpts = -1, lg_dim = -1;
+static long lg_version = -1;
+/* bumped by gauss_lagrange_setup() (model.c), which can rebuild the tables in
+   place (same arrays, same sizes: switching bezier_basis, say) */
+long fl_lagrange_tables_version = 0;
 
 #define LG_MAXROWS 1024
 #define LG_MAXCTRL 64
@@ -1192,7 +1196,7 @@ int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
   if ( rows > LG_MAXROWS || ctrl > LG_MAXCTRL || ctrl != gl->lagpts ) return 0;
 
   if ( lg_gpoly != gl->gpoly || lg_ctrl != ctrl || lg_gnumpts != gl->gnumpts
-       || lg_dim != dim )
+       || lg_dim != dim || lg_version != fl_lagrange_tables_version )
   { if ( !ensure_size((void**)&lg_packed,&lg_packed_size,(long)ctrl*rows,
                       sizeof(double)) )
       return 0;
@@ -1205,6 +1209,7 @@ int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
       }
     }
     lg_gpoly = gl->gpoly;
+    lg_version = fl_lagrange_tables_version;
     lg_ctrl = ctrl;
     lg_gnumpts = gl->gnumpts;
     lg_dim = dim;

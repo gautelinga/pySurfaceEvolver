@@ -348,6 +348,9 @@ REAL lagrange_facet_tension_hess(struct qinfo *f_info)
       density = get_facet_density(f_info->id);
   else density = 1.0;
 
+  if ( fl_lagrange_tension_hess(f_info,density,&value) )  /* pySE: BLAS */
+    return value;
+
   if ( dim > 2 ) dethess = dmatrix4(dim,dim,dim,dim);
 
   for ( m = 0 ; m < gl->gnumpts ; m++ )  /*  integration point number */
@@ -1092,6 +1095,9 @@ REAL lagrange_facet_volume_all(
   REAL sign = (dim&1) ? -1.0 : 1.0;
   struct gauss_lag *gl = &gauss_lagrange[dim][web.gauss2D_order];
   MAT4D(dethess,MAXCOORD,MAXCOORD,MAXCOORD,MAXCOORD);
+
+  if ( mode == METHOD_HESSIAN && fl_lagrange_volume_hess(f_info,&value) )  /* pySE: BLAS */
+    return value;
 
   for ( m = 0 ; m < gl->gnumpts ; m++ )
   { REAL det;
