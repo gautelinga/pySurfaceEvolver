@@ -78,8 +78,20 @@ option(PYSE_MUMPS "Build with MUMPS for Hessian factoring" ON)
 function(pyse_openblas_parallel libs out)
   set(src ${CMAKE_BINARY_DIR}/pyse_blas_parallel.c)
   file(WRITE ${src} "int openblas_get_parallel(void);\nint main(void) { return openblas_get_parallel(); }\n")
+  # run against the very files given (not whatever the loader would pick by
+  # soname): real paths, with an rpath to their directories
+  set(real_libs "")
+  set(rpaths "")
+  foreach(lib IN LISTS libs)
+    if(lib MATCHES "\\.so" AND EXISTS ${lib})
+      file(REAL_PATH ${lib} lib)
+      get_filename_component(dir ${lib} DIRECTORY)
+      list(APPEND rpaths "-Wl,-rpath,${dir}")
+    endif()
+    list(APPEND real_libs ${lib})
+  endforeach()
   try_run(run_result compile_result ${CMAKE_BINARY_DIR}/pyse_blas_parallel ${src}
-          LINK_LIBRARIES ${libs})
+          LINK_LIBRARIES ${real_libs} LINK_OPTIONS ${rpaths})
   if(compile_result AND run_result MATCHES "^[0-2]$")
     set(${out} ${run_result} PARENT_SCOPE)
   else()
@@ -89,39 +101,83 @@ endfunction()
 
 # MUMPS runs OpenMP threads; inside them a pthreads OpenBLAS has to run
 # single-threaded (src/mumpsfactor.c), while an OpenMP OpenBLAS also threads
-# the big fronts: large factorizations up to 2x faster. If the OpenBLAS found
-# isn't an OpenMP build, use the system's OpenMP variant when it is installed
-# (Debian/Ubuntu: libopenblas-openmp-dev; Fedora: openblas-openmp), with an
-# rpath to it (both variants have the same soname).
+# the big fronts: large factorizations up to 2x faster. So use an OpenMP
+# OpenBLAS: the one found if it is one, else the system's OpenMP variant
+# (Debian/Ubuntu: libopenblas-openmp-dev; Fedora: openblas-openmp). Link its
+# static library when there is one, with private symbols: both variants have
+# the soname libopenblas.so.0, and whichever is loaded first (by NumPy, say)
+# would otherwise be used. A shared one gets an rpath (enough when nothing
+# loads the other variant first).
 function(pyse_prefer_openmp_openblas libs)
   pyse_openblas_parallel("${libs}" parallel)
-  if(parallel EQUAL 2 OR parallel EQUAL -1)
+  if(parallel EQUAL -1)
     return()
   endif()
-  find_library(PYSE_OPENBLAS_OPENMP NAMES openblas
-    PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/openblas-openmp /usr/lib64/openblas-openmp
-    NO_DEFAULT_PATH)
-  if(NOT PYSE_OPENBLAS_OPENMP)
-    find_library(PYSE_OPENBLAS_OPENMP NAMES openblaso)
-  endif()
-  if(PYSE_OPENBLAS_OPENMP)
-    pyse_openblas_parallel("${PYSE_OPENBLAS_OPENMP}" parallel)
-  endif()
-  if(PYSE_OPENBLAS_OPENMP AND parallel EQUAL 2)
-    message(STATUS "pySE: using the OpenMP build of OpenBLAS: ${PYSE_OPENBLAS_OPENMP}")
-    set(LAPACK_LIBRARY ${PYSE_OPENBLAS_OPENMP} CACHE FILEPATH "OpenBLAS (OpenMP build) for MUMPS" FORCE)
-    find_path(PYSE_OPENBLAS_OPENMP_INCLUDE_DIR NAMES openblas_config.h
-      PATH_SUFFIXES openblas-openmp NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH)
-    if(PYSE_OPENBLAS_OPENMP_INCLUDE_DIR)
-      set(LAPACK_INCLUDE_DIR ${PYSE_OPENBLAS_OPENMP_INCLUDE_DIR} CACHE PATH "OpenBLAS headers" FORCE)
-    endif()
-    get_filename_component(dir ${PYSE_OPENBLAS_OPENMP} DIRECTORY)
-    set(PYSE_BLAS_RPATH ${dir} CACHE INTERNAL "")
+  set(omp "")
+  if(parallel EQUAL 2)
+    list(GET libs 0 omp)
   else()
+    find_library(PYSE_OPENBLAS_OPENMP NAMES openblas
+      PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/openblas-openmp /usr/lib64/openblas-openmp
+      NO_DEFAULT_PATH)
+    if(NOT PYSE_OPENBLAS_OPENMP)
+      find_library(PYSE_OPENBLAS_OPENMP NAMES openblaso)
+    endif()
+    if(PYSE_OPENBLAS_OPENMP)
+      pyse_openblas_parallel("${PYSE_OPENBLAS_OPENMP}" parallel)
+      if(parallel EQUAL 2)
+        set(omp ${PYSE_OPENBLAS_OPENMP})
+      endif()
+    endif()
+  endif()
+  if(NOT omp)
     message(WARNING "pySE: OpenBLAS is not an OpenMP build, so it runs single-threaded "
       "inside MUMPS and large Newton steps are up to 2x slower. Install the OpenMP "
-      "variant (Debian/Ubuntu: libopenblas-openmp-dev; Fedora: openblas-openmp) "
-      "and rebuild, or use the wheels.")
+      "variant (Debian/Ubuntu: libopenblas-openmp-dev; Fedora: openblas-openmp, "
+      "openblas-static) and rebuild, or use the wheels.")
+    return()
+  endif()
+  # its static library, if it is an OpenMP build too
+  file(REAL_PATH ${omp} real)
+  get_filename_component(dir ${real} DIRECTORY)
+  get_filename_component(name ${real} NAME_WE)
+  find_library(PYSE_OPENBLAS_STATIC NAMES ${name}.a libopenblas.a libopenblaso.a
+    PATHS ${dir} NO_DEFAULT_PATH)
+  set(static_ok FALSE)
+  if(PYSE_OPENBLAS_STATIC)
+    find_package(OpenMP COMPONENTS C)
+    set(static_libs ${PYSE_OPENBLAS_STATIC} gfortran)
+    if(OpenMP_C_FOUND)
+      list(APPEND static_libs OpenMP::OpenMP_C)
+    endif()
+    list(APPEND static_libs pthread m)
+    pyse_openblas_parallel("${static_libs}" parallel)
+    if(parallel EQUAL 2)
+      set(static_ok TRUE)
+    endif()
+  endif()
+  if(static_ok)
+    message(STATUS "pySE: linking the OpenMP OpenBLAS statically: ${PYSE_OPENBLAS_STATIC}")
+    set(LAPACK_LIBRARY ${PYSE_OPENBLAS_STATIC} CACHE FILEPATH "OpenBLAS (OpenMP build) for MUMPS" FORCE)
+    set(PYSE_BLAS_STATIC ON CACHE INTERNAL "")
+    set(PYSE_BLAS_RPATH "" CACHE INTERNAL "")
+  else()
+    message(STATUS "pySE: using the OpenMP build of OpenBLAS: ${omp}")
+    set(LAPACK_LIBRARY ${omp} CACHE FILEPATH "OpenBLAS (OpenMP build) for MUMPS" FORCE)
+    set(PYSE_BLAS_STATIC OFF CACHE INTERNAL "")
+    set(PYSE_BLAS_RPATH ${dir} CACHE INTERNAL "")
+  endif()
+  # the LAPACK::LAPACK and BLAS::BLAS targets of the find_package(LAPACK)
+  # above are what MUMPS links: point them at the chosen library
+  foreach(target LAPACK::LAPACK BLAS::BLAS)
+    if(TARGET ${target})
+      set_property(TARGET ${target} PROPERTY INTERFACE_LINK_LIBRARIES ${LAPACK_LIBRARY})
+    endif()
+  endforeach()
+  find_path(PYSE_OPENBLAS_OPENMP_INCLUDE_DIR NAMES openblas_config.h
+    PATH_SUFFIXES openblas-openmp NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH)
+  if(PYSE_OPENBLAS_OPENMP_INCLUDE_DIR)
+    set(LAPACK_INCLUDE_DIR ${PYSE_OPENBLAS_OPENMP_INCLUDE_DIR} CACHE PATH "OpenBLAS headers" FORCE)
   endif()
 endfunction()
 set(PYSE_MUMPS_FOUND OFF)
@@ -151,7 +207,7 @@ if(PYSE_MUMPS)
     if(NOT LAPACK_FOUND)
       find_package(LAPACK)
     endif()
-    if(LAPACK_FOUND AND PYSE_BLAS_RPATH)
+    if(LAPACK_FOUND AND (PYSE_BLAS_RPATH OR PYSE_BLAS_STATIC))
       message(STATUS "pySE: LAPACK/BLAS for MUMPS: ${LAPACK_LIBRARY}")
     elseif(LAPACK_FOUND)
       message(STATUS "pySE: LAPACK/BLAS for MUMPS: ${LAPACK_LIBRARIES}")
@@ -217,6 +273,10 @@ set_target_properties(_core PROPERTIES INTERPROCEDURAL_OPTIMIZATION ${PYSE_LTO})
 if(PYSE_BLAS_RPATH)   # the OpenMP OpenBLAS, ahead of the system default
   set_property(TARGET _core APPEND PROPERTY BUILD_RPATH ${PYSE_BLAS_RPATH})
   set_property(TARGET _core APPEND PROPERTY INSTALL_RPATH ${PYSE_BLAS_RPATH})
+endif()
+if(PYSE_BLAS_STATIC)  # keep the static OpenBLAS (and MUMPS) symbols private
+  target_link_options(_core PRIVATE "LINKER:--exclude-libs,ALL")
+  target_compile_definitions(evolver_core PRIVATE PYSE_BLAS_STATIC)
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(_core PRIVATE -Wall -Wextra)

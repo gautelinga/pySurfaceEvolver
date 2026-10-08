@@ -158,14 +158,10 @@ and LAPACK/BLAS are found (use an optimized BLAS such as OpenBLAS: the reference
 makes MUMPS several times slower), and otherwise uses Evolver's own factoring.
 Use the OpenMP build of OpenBLAS: a pthreads OpenBLAS runs single-threaded inside
 MUMPS's threads, and large Newton steps are up to 2x slower (1.6M facets: 3.8 s against
-2.7 s). The build prefers the system's OpenMP variant when installed (Debian/Ubuntu:
-`libopenblas-openmp-dev`; Fedora: `openblas-openmp`) and warns otherwise; wheels bundle one.
-Both variants share the name `libopenblas.so.0`, so the first one loaded wins: with
-the system's NumPy, that is the system default (pthreads on Debian/Ubuntu). Make the
-OpenMP variant the default (`sudo update-alternatives --config` for
-`libblas.so.3-x86_64-linux-gnu`, `liblapack.so.3-x86_64-linux-gnu` and
-`libopenblas.so.0-x86_64-linux-gnu`), or use NumPy from pip (its own OpenBLAS).
-pySE warns at the first Newton step when a pthreads OpenBLAS is in use.
+2.7 s). The build looks for one (Debian/Ubuntu: `libopenblas-openmp-dev`; Fedora:
+`openblas-openmp`, with `openblas-static`) and links its static library into pySE with
+private symbols, so it is used whatever BLAS NumPy loads; without one it warns at build
+time and at the first Newton step. Wheels bundle their own.
 `pse.set_solver("evolver")`
 (or `PYSE_SOLVER=evolver`) switches back to Evolver's minimal-degree factoring;
 `pse.solver()` tells which is in use. For the Lagrange model, the Hessian is also

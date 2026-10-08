@@ -57,8 +57,13 @@ static void mumps_check(struct mumps_sys *m, const char *what)
    inside MUMPS's OpenMP threads (oversubscription: 1.2 s -> 2.2 s per
    Newton step at 4 threads), so make it single-threaded; an OpenMP build
    already runs serially inside parallel regions. Weak: other BLAS work. */
+#ifdef PYSE_BLAS_STATIC   /* our own copy, linked in (CMakeLists.txt) */
+extern int openblas_get_parallel(void);
+extern void openblas_set_num_threads(int);
+#else
 extern int openblas_get_parallel(void) __attribute__((weak));
 extern void openblas_set_num_threads(int) __attribute__((weak));
+#endif
 
 static void blas_threads(void)
 { static int done = 0;
