@@ -66,7 +66,12 @@ static void blas_threads(void)
   done = 1;
   if ( openblas_get_parallel && openblas_set_num_threads
        && openblas_get_parallel() == 1 )
-    openblas_set_num_threads(1);
+  { openblas_set_num_threads(1);
+    kb_error(6365,"The OpenBLAS in use is a pthreads build, so it runs "
+      "single-threaded inside MUMPS and large Newton steps are up to 2x slower. "
+      "It may come from NumPy (system NumPy links the system's default BLAS); "
+      "see the README on the OpenMP build of OpenBLAS.\n",WARNING);
+  }
 }
 
 static void mumps_controls(struct mumps_sys *m)
