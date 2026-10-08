@@ -287,8 +287,9 @@ Experiment (scratch build, not committed), 8 threads:
   factors is only ~6-10x cheaper than a factor, and each step needs 1 + (number
   of constraints) solves: no gain at 393k, perhaps ~20% at 1.6M; much work
   (inertia, null pivots, several right sides).
-Not built; options for later: opt-in chord Newton with a refactor-on-stall
-safeguard for big smooth problems.
+Not built. User decision (2026-10-08): their problems are often non-smooth
+(foams, triple junctions) and need robustness, so no chord Newton or other
+factorization reuse; Newton steps stay exact.
 
 ### 2026-10-07, before a session restart
 
