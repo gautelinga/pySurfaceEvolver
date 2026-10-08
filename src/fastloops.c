@@ -1356,3 +1356,189 @@ void fl_trap_error(void)
     longjmp(*trap,1);
   }
 }
+
+/**************************************************************************
+ * Vertex averaging (V) and equiangulation's edge lengths (u)
+ *
+ * vertex_average() finds every vertex's new position before moving any, so
+ * the search runs in parallel for vertices without constraints or
+ * boundaries (those keep the serial path: constraint formulas). The search
+ * computes missing facet areas and stores them (facet_energy_l(AREA_ONLY));
+ * here the areas are computed alike, the facets marked, and the areas stored
+ * after the loop. Positions don't change in between, so the results are
+ * those of the serial loop.
+ */
+
+int find_vertex_average(vertex_id v_id, REAL *vx, int mode);   /* veravg.c */
+
+static int fast_mesh_disabled(void)   /* PYSE_NO_FAST_MESH=1: these two off */
+{ static int disabled = -1;
+  if ( disabled < 0 ) disabled = getenv("PYSE_NO_FAST_MESH") != NULL;
+  return disabled;
+}
+
+static unsigned char *va_mark = NULL;    /* per facet ordinal */
+static long va_mark_size = 0;
+static __thread int va_active = 0;
+
+/* facet_energy_l(f_id,AREA_ONLY)'s area, not stored */
+static REAL linear_facet_area(facet_id f_id)
+{ REAL unwrap_x[FACET_VERTS][MAXCOORD];
+  REAL *x[FACET_VERTS];
+  REAL side[2][MAXCOORD];
+  REAL ss, st, tt, det;
+  int i, j;
+  for ( i = 0 ; i < FACET_VERTS ; i++ ) x[i] = unwrap_x[i];
+  get_facet_verts(f_id,x,NULL);
+  for ( i = 0 ; i < 2 ; i++ )
+    for ( j = 0 ; j < SDIM ; j++ )
+      side[i][j] = x[i+1][j] - x[i][j];
+  ss = SDIM_dot(side[0],side[0]);
+  st = SDIM_dot(side[0],side[1]);
+  tt = SDIM_dot(side[1],side[1]);
+  det = ss*tt - st*st;
+  return det > 0.0 ? sqrt(det)/2 : 0.0;
+}
+
+int fl_vertex_average_active(void) { return va_active; }
+
+REAL fl_lazy_facet_area(facet_id f_id)
+{ long o = loc_ordinal(f_id);
+#ifdef _OPENMP
+  #pragma omp atomic write
+#endif
+  va_mark[o] = 1;
+  return linear_facet_area(f_id);
+}
+
+static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t stride)
+{ vertex_id *list;
+  facet_id *facets;
+  long n, nf, k;
+  int failed = 0;
+  if ( fast_mesh_disabled() || web.modeltype != LINEAR || web.representation != SOAPFILM
+       || web.metric_flag || calc_facet_energy != facet_energy_l || hessian_special_normal_flag
+       || (web.symmetry_flag && !web.torus_flag) )
+    return 0;
+  if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return 0;
+  if ( !(facets = fl_facet_list(&nf)) ) return 0;
+  if ( !ensure_size((void**)&va_mark,&va_mark_size,web.skel[FACET].max_ord+1,1) )
+    return 0;
+  memset(va_mark,0,web.skel[FACET].max_ord+1);
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    long o = loc_ordinal(v_id);
+    jmp_buf trap;
+    if ( get_vattr(v_id) & (CONSTRAINT|BOUNDARY) ) continue;
+    if ( setjmp(trap) == 0 )
+    { fl_trap = &trap;   /* kb_error() comes back here */
+      va_active = 1;
+      *(int*)(sbase + o*stride) = find_vertex_average(v_id,(REAL*)(xbase + o*stride),mode);
+      va_active = 0;
+      fl_trap = NULL;
+    }
+    else
+    { va_active = 0;
+#ifdef _OPENMP
+      #pragma omp atomic write
+#endif
+      failed = 1;
+    }
+  }
+  if ( failed ) return 0;   /* nothing stored yet: the serial loop redoes it */
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    long o = loc_ordinal(v_id);
+    if ( get_vattr(v_id) & (CONSTRAINT|BOUNDARY) )
+      *(int*)(sbase + o*stride) = find_vertex_average(v_id,(REAL*)(xbase + o*stride),mode);
+  }
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
+#endif
+  for ( k = 0 ; k < nf ; k++ )
+    if ( va_mark[loc_ordinal(facets[k])] && get_facet_area(facets[k]) == 0.0 )
+      set_facet_area(facets[k],linear_facet_area(facets[k]));
+  return 1;
+}
+
+/* calc_edge() over all edges, for linear models whose edge length is the
+   plain one (no metric; with everything_quantities, the default
+   edge_length instance, which sets the same length). Its total-area
+   addends (quantity mode) are reset by the next energy calculation unused. */
+static int fl_calc_edges_impl(void)
+{ edge_id *list;
+  long n, k;
+  if ( fl_disabled() || threadflag || fast_mesh_disabled() ) return 0;
+  if ( web.modeltype != LINEAR || web.metric_flag || klein_metric_flag ) return 0;
+  if ( everything_quantities_flag )
+  { struct method_instance *mi;
+    int found = 0;
+    if ( length_method_number <= 0 ) return 0;
+    mi = METH_INSTANCE(length_method_number);
+    if ( mi->type != EDGE || !(mi->flags & DEFAULT_INSTANCE)
+         || basic_gen_methods[mi->gen_method].value != q_edge_tension_value )
+      return 0;
+    for ( k = 0 ; k < global_meth_inst_count[EDGE] ; k++ )
+      if ( global_meth_inst[EDGE][k] == length_method_number ) found = 1;
+    if ( !found ) return 0;
+  }
+  if ( !(list = type_list(EDGE,&n)) || n < FL_PARALLEL_MIN ) return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { REAL s[MAXCOORD];
+    get_edge_side(list[k],s);
+    set_edge_length(list[k],sqrt(SDIM_dot(s,s)));
+  }
+  return 1;
+}
+
+/* test(e) for every edge in parallel, as marks by edge ordinal; NULL when
+   not run (or on an error in a test) */
+static unsigned char *em_marks = NULL;
+static long em_marks_size = 0;
+
+static unsigned char *fl_edge_marks_impl(int (*test)(edge_id))
+{ edge_id *list;
+  long n, k;
+  int failed = 0;
+  if ( fl_disabled() || threadflag || fast_mesh_disabled() ) return NULL;
+  if ( !(list = type_list(EDGE,&n)) || n < FL_PARALLEL_MIN ) return NULL;
+  if ( !ensure_size((void**)&em_marks,&em_marks_size,web.skel[EDGE].max_ord+1,1) )
+    return NULL;
+  memset(em_marks,0,web.skel[EDGE].max_ord+1);
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(dynamic,1024) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { jmp_buf trap;
+    if ( setjmp(trap) == 0 )
+    { fl_trap = &trap;
+      em_marks[loc_ordinal(list[k])] = (unsigned char)((*test)(list[k]) != 0);
+      fl_trap = NULL;
+    }
+    else
+    {
+#ifdef _OPENMP
+      #pragma omp atomic write
+#endif
+      failed = 1;
+    }
+  }
+  return failed ? NULL : em_marks;
+}
+
+unsigned char *fl_edge_marks(int (*test)(edge_id))
+{ unsigned char *r; fl_enter(); r = fl_edge_marks_impl(test); fl_leave(); return r; }
+
+int fl_vertex_averages(int mode, REAL *x0, int *status0, size_t stride)
+{ int r; fl_enter();
+  r = fl_vertex_averages_impl(mode,(char*)x0,(char*)status0,stride);
+  fl_leave(); return r; }
+
+int fl_calc_edges(void)
+{ int r; fl_enter(); r = fl_calc_edges_impl(); fl_leave(); return r; }

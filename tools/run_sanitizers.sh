@@ -52,7 +52,7 @@ for i in "${!scripts[@]}"; do
 done
 
 # OpenMP: refined five times, Newton steps in the linear and Lagrange models
-omp_script='g 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nhessian\nhessian\nlagrange 2\ng 2\nhessian\nq\n'
+omp_script='g 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nu\nV\nu\ng 5\nhessian\nhessian\nlagrange 2\ng 2\nhessian\nq\n'
 build_evolver "$build/openmp" "-fopenmp"
 OMP_NUM_THREADS=8 run "$build/openmp" "$omp_script" "openmp" \
   cube.fe mound.fe catbody.fe column.fe sphere.fe twointor.fe phelanc.fe

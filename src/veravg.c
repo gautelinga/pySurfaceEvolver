@@ -5,6 +5,7 @@
 
 
 #include "include.h"
+#include "fastloops.h"
 
 int find_vertex_average ( vertex_id , REAL *, int);
 void old_vertex_average (int);
@@ -52,6 +53,8 @@ int mode     /* VOLKEEP to keep volumes on both sides same */
   if ( web.representation == SIMPLEX ) 
     { old_vertex_average(mode); return; }
 
+  if ( !fl_vertex_averages(mode,average[0].x,&average[0].status,
+                           sizeof(struct averages)) )   /* pySE: parallel */
   FOR_ALL_VERTICES(v_id)
      average[loc_ordinal(v_id)].status = 
               find_vertex_average(v_id,average[loc_ordinal(v_id)].x,mode);
@@ -699,7 +702,9 @@ int find_vertex_average(
         if ( valid_id(fe) )
           do { facet_id f_id = get_fe_facet(fe);
 		       REAL a = get_facet_area(f_id);
-		       if ( a == 0.0 ) 
+		       if ( a == 0.0 && fl_vertex_average_active() )
+			     a = fl_lazy_facet_area(f_id);   /* pySE: stored after */
+		       else if ( a == 0.0 ) 
 			   { (*calc_facet_energy)(f_id,AREA_ONLY);
 			      a = get_facet_area(f_id);
 			   }

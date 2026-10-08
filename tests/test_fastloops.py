@@ -282,3 +282,42 @@ def test_bezier_switch_refreshes_the_lagrange_tables():
     fast = run(NEWTON, args, {"OMP_NUM_THREADS": "1"})
     original = run(NEWTON, args, {"OMP_NUM_THREADS": "1", "PYSE_NO_FAST_LOOPS": "1"})
     assert rel(fast["cube.fe"]["energy"], original["cube.fe"]["energy"]) < 1e-10
+
+
+# V's parallel search and u's parallel swap tests (fastloops.c, veravg.c,
+# trirevis.c) against the serial code: the same mesh, bit for bit, and the
+# same swap counts. Perturbed vertices give many interacting swaps.
+MESH_OPS = r"""
+import hashlib, json, re, sys, warnings
+warnings.simplefilter("ignore")
+import numpy as np
+from pysurfaceevolver import Evolver
+out = {}
+for name, commands in zip(sys.argv[1::2], sys.argv[2::2]):
+    ev = Evolver(name)
+    swaps = []
+    for c in commands.split(";"):
+        m = re.search(r"equiangulation: (\d+)", ev.command(c))
+        if m:
+            swaps.append(int(m.group(1)))
+    mesh = ev.mesh()
+    digest = hashlib.sha1(np.ascontiguousarray(mesh.vertices).tobytes()
+                          + np.ascontiguousarray(mesh.facets).tobytes()).hexdigest()
+    out[name] = {"mesh": digest, "swaps": swaps, "energy": ev.total_energy}
+print(json.dumps(out))
+"""
+
+MESH_OPS_SAMPLES = {
+    "cube.fe": "g 5; r; r; r; r; r; set vertex x x+0.004*(random-0.5); "
+               "set vertex y y+0.004*(random-0.5); u; u; g 3; V; V; u",
+    "addload_example.fe": "g 5; r; r; r; set vertex x x+0.01*(random-0.5); u; g 3; V; u",
+    "mound.fe": "g 5; r; r; r; r; u; g 5; V; u",
+}
+
+
+def test_parallel_vertex_average_and_equiangulation_match_serial():
+    args = [x for item in MESH_OPS_SAMPLES.items() for x in item]
+    fast = run(MESH_OPS, args, {"OMP_NUM_THREADS": "4"})
+    serial = run(MESH_OPS, args, {"OMP_NUM_THREADS": "4", "PYSE_NO_FAST_MESH": "1"})
+    assert fast == serial
+    assert sum(fast["cube.fe"]["swaps"]) > 0

@@ -159,6 +159,20 @@ int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
    (the loops cache facet bodies; set_facet_body() bumps top_timestamp). */
 extern long fl_body_stamp;
 
+/* vertex_average()'s search (find_vertex_average() for every vertex) in
+   parallel; stride: bytes between consecutive vertex ordinals' x and status.
+   Returns 0, doing nothing, when the case isn't covered (or PYSE_NO_FAST_MESH
+   is set, for both functions here). Inside it,
+   find_vertex_average() takes missing facet areas from fl_lazy_facet_area(). */
+int fl_vertex_averages(int mode, REAL *x0, int *status0, size_t stride);
+int fl_vertex_average_active(void);
+REAL fl_lazy_facet_area(facet_id f_id);
+/* calc_edge() for all edges in parallel (equiangulate()); 0 when not covered */
+int fl_calc_edges(void);
+/* test(e) for all edges in parallel, as 0/1 by edge ordinal (shared buffer,
+   valid until the next call); NULL when not covered or a test failed */
+unsigned char *fl_edge_marks(int (*test)(edge_id));
+
 /* Number of threads for the parallel loops (1 without OpenMP). */
 int fl_threads(void);
 int fl_thread_setting(void);   /* as set: 0 for the default */

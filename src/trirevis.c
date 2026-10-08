@@ -13,6 +13,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 /************************************************************************
 *
@@ -1940,7 +1941,11 @@ edge_id edge_refine(edge_id e_id)
 */
 int did_global_edge_calc = 0;  /* efficiency measure */
 
-int equiangulate_edge(edge_id e_id)
+/* pySE: equiangulate_edge()'s test, without the swap. stored: take edge
+   lengths as stored (set for all edges by fl_calc_edges()) instead of
+   recomputing them, so the test only reads and may run in parallel. */
+#define EQ_LENGTH(e) (stored ? eptr(e)->length : get_edge_length(e))
+static int equiangulate_test(edge_id e_id, int stored)
 { facetedge_id fe_a; /* for edge under test */
   facetedge_id fe_ai; /* other facetedge of e_id */
   REAL a;  /* length of e_id */
@@ -1981,28 +1986,28 @@ int equiangulate_edge(edge_id e_id)
     return 0;
 
   /* test equiangularity */
-  if ( !did_global_edge_calc ) 
+  if ( !did_global_edge_calc && !stored ) 
     calc_edge(e_id);
-  a = get_edge_length(e_id);
+  a = EQ_LENGTH(e_id);
   fe_b = get_next_edge(fe_a);
-  if ( !did_global_edge_calc ) 
+  if ( !did_global_edge_calc && !stored ) 
     calc_edge(get_fe_edge(fe_b));
-  b = get_edge_length(get_fe_edge(fe_b));
+  b = EQ_LENGTH(get_fe_edge(fe_b));
   fe_c = get_prev_edge(fe_a);
-  if ( !did_global_edge_calc ) 
+  if ( !did_global_edge_calc && !stored ) 
     calc_edge(get_fe_edge(fe_c));
-  c = get_edge_length(get_fe_edge(fe_c));
+  c = EQ_LENGTH(get_fe_edge(fe_c));
   if ( b*c == 0.0 ) 
     return 0;
   fe_ai = fe_inverse(get_next_facet(fe_a));
   fe_d = get_next_edge(fe_ai); 
-  if ( !did_global_edge_calc ) 
+  if ( !did_global_edge_calc && !stored ) 
     calc_edge(get_fe_edge(fe_d));
-  d = get_edge_length(get_fe_edge(fe_d));
+  d = EQ_LENGTH(get_fe_edge(fe_d));
   fe_e = get_prev_edge(fe_ai); 
-  if ( !did_global_edge_calc ) 
+  if ( !did_global_edge_calc && !stored ) 
     calc_edge(get_fe_edge(fe_e));
-  e = get_edge_length(get_fe_edge(fe_e));
+  e = EQ_LENGTH(get_fe_edge(fe_e));
   if ( e*d == 0.0 ) 
     return 0;
   if ( (b*b + c*c - a*a)/b/c + (d*d + e*e - a*a)/d/e > -0.001 )
@@ -2027,8 +2032,17 @@ int equiangulate_edge(edge_id e_id)
   }
 
   /* if we are here, we want to switch diagonals */
-  return do_edgeswap(e_id);
+  return 1;
 
+} /* end equiangulate_test() */
+
+static int equiangulate_test_stored(edge_id e_id)
+{ return equiangulate_test(e_id,1);
+}
+
+int equiangulate_edge(edge_id e_id)
+{ if ( !equiangulate_test(e_id,0) ) return 0;
+  return do_edgeswap(e_id);
 } /* end equiangulate_edge() */ 
 
 /*************************************************************
@@ -2052,11 +2066,41 @@ int equiangulate_edge(edge_id e_id)
 *  Return value: Number of edges switched.
 */
 
+/* pySE: after swapping e_id, mark for the serial test every edge whose test
+   may read what changed: the edges of the facets around the four vertices
+   of the swapped quadrilateral (and those vertices' bare edges). */
+static void mark_near_swap(edge_id e_id, unsigned char *marks)
+{ vertex_id v[4];
+  facetedge_id fe = get_edge_fe(e_id);
+  int i;
+  v[0] = get_edge_tailv(e_id);
+  v[1] = get_edge_headv(e_id);
+  v[2] = get_fe_headv(get_next_edge(fe));
+  v[3] = get_fe_headv(get_next_edge(get_next_facet(fe)));
+  for ( i = 0 ; i < 4 ; i++ )
+  { edge_id ee, start;
+    ee = start = get_vertex_edge(v[i]);
+    if ( !valid_id(ee) ) continue;
+    do
+    { facetedge_id f0 = get_edge_fe(ee), ff = f0;
+      marks[loc_ordinal(ee)] = 1;
+      if ( valid_id(f0) )
+        do
+        { marks[loc_ordinal(get_fe_edge(get_next_edge(ff)))] = 1;
+          marks[loc_ordinal(get_fe_edge(get_prev_edge(ff)))] = 1;
+          ff = get_next_facet(ff);
+        } while ( !equal_id(ff,f0) );
+      ee = get_next_tail_edge(ee);
+    } while ( !equal_id(ee,start) );
+  }
+}
+
 int equiangulate()
 {
   int switchcount = 0;
   edge_id e_id;  /* edge being examined */
   edge_id sentinel;
+  unsigned char *candidates = NULL;  /* pySE: by edge ordinal */
 
   if ( web.modeltype == LAGRANGE )
      kb_error(1348,"Cannot equiangulate LAGRANGE model.\n",RECOVERABLE);
@@ -2071,8 +2115,12 @@ int equiangulate()
   if ( threadflag )
     thread_launch(TH_CALC_EDGES,EDGE);
   else
-  { MFOR_ALL_EDGES(e_id)
-      calc_edge(e_id);
+  { /* pySE: edge lengths and the swap tests in parallel; then only
+       candidates and edges near a swap get the serial test */
+    if ( fl_calc_edges() ) candidates = fl_edge_marks(equiangulate_test_stored);
+    if ( !candidates )
+      MFOR_ALL_EDGES(e_id)
+        calc_edge(e_id);
   }
   did_global_edge_calc = 1;
 
@@ -2087,7 +2135,11 @@ int equiangulate()
   else
   { e_id = NULLEDGE;
     while ( generate_all(EDGE,&e_id,&sentinel) )
-      switchcount += equiangulate_edge(e_id);
+    { int n;
+      if ( candidates && !candidates[loc_ordinal(e_id)] ) continue;
+      switchcount += n = equiangulate_edge(e_id);
+      if ( candidates && n ) mark_near_swap(e_id,candidates);
+    }
   }
   LEAVE_GRAPH_MUTEX;
 

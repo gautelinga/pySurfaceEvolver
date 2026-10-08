@@ -333,6 +333,20 @@ Speed items the user picked next (2026-10-08, "do 2, then 1"):
   traced to MUMPS's mumps_build_sort_index: at -O3 gfortran tests an absent optional
   argument's stride before present(); harmless, none at -O2. Suppressed in
   tools/valgrind.supp; nothing in our code.
+Profile after these (2026-10-08, cube): Lagrange 6 at 24k, 8 threads: fill 0.72 s
+(calc_quant_hess 0.69), factor 0.45, 3 solves 0.11, move 0.14, init 0.07 (1.55 s);
+1 thread 4.5 s, of which the BLAS kernel 15%, its scatter 9%, mixed_entry (normal
+projection of every node-pair block, generic mat_mult, once per quantity) 12.6%.
+Mesh commands at 393k, 8 threads: g 10 1.46 s, r 1.28, V 0.60, u 0.28, all three
+serial. Done: V's search and u's swap tests in parallel (fastloops.c
+fl_vertex_averages / fl_calc_edges / fl_edge_marks; PYSE_NO_FAST_MESH=1 off): u
+0.30 -> 0.022 s (1 thread 0.11: lengths no longer recomputed five times), V 0.60 ->
+0.11 s, `g 10; u; V` 2.2 -> 1.3-1.5 s; meshes and swap counts bit-identical to the
+serial code (test, also with perturbed vertices). Swaps stay serial in the original
+order; after a swap, edges in facets around its four vertices are tested again.
+Left: mixed_entry specialised and done once per element (~10% of Lagrange steps);
+r has no single hotspot (left alone). Observed: `g 1` at 98k not faster on 8
+threads than 1 (0.036 vs 0.032 s), at 393k 1.8x.
 
 ### 2026-10-07, before a session restart
 
