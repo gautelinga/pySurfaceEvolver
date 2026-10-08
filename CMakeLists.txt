@@ -72,6 +72,58 @@ endif()
 # needs a Fortran compiler, LAPACK/BLAS and the network at build time;
 # without them Evolver's own factoring is used.
 option(PYSE_MUMPS "Build with MUMPS for Hessian factoring" ON)
+
+# openblas_get_parallel() of an OpenBLAS: 0 serial, 1 pthreads, 2 OpenMP
+# (-1 if it can't be checked)
+function(pyse_openblas_parallel libs out)
+  set(src ${CMAKE_BINARY_DIR}/pyse_blas_parallel.c)
+  file(WRITE ${src} "int openblas_get_parallel(void);\nint main(void) { return openblas_get_parallel(); }\n")
+  try_run(run_result compile_result ${CMAKE_BINARY_DIR}/pyse_blas_parallel ${src}
+          LINK_LIBRARIES ${libs})
+  if(compile_result AND run_result MATCHES "^[0-2]$")
+    set(${out} ${run_result} PARENT_SCOPE)
+  else()
+    set(${out} -1 PARENT_SCOPE)
+  endif()
+endfunction()
+
+# MUMPS runs OpenMP threads; inside them a pthreads OpenBLAS has to run
+# single-threaded (src/mumpsfactor.c), while an OpenMP OpenBLAS also threads
+# the big fronts: large factorizations up to 2x faster. If the OpenBLAS found
+# isn't an OpenMP build, use the system's OpenMP variant when it is installed
+# (Debian/Ubuntu: libopenblas-openmp-dev; Fedora: openblas-openmp), with an
+# rpath to it (both variants have the same soname).
+function(pyse_prefer_openmp_openblas libs)
+  pyse_openblas_parallel("${libs}" parallel)
+  if(parallel EQUAL 2 OR parallel EQUAL -1)
+    return()
+  endif()
+  find_library(PYSE_OPENBLAS_OPENMP NAMES openblas
+    PATHS /usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/openblas-openmp /usr/lib64/openblas-openmp
+    NO_DEFAULT_PATH)
+  if(NOT PYSE_OPENBLAS_OPENMP)
+    find_library(PYSE_OPENBLAS_OPENMP NAMES openblaso)
+  endif()
+  if(PYSE_OPENBLAS_OPENMP)
+    pyse_openblas_parallel("${PYSE_OPENBLAS_OPENMP}" parallel)
+  endif()
+  if(PYSE_OPENBLAS_OPENMP AND parallel EQUAL 2)
+    message(STATUS "pySE: using the OpenMP build of OpenBLAS: ${PYSE_OPENBLAS_OPENMP}")
+    set(LAPACK_LIBRARY ${PYSE_OPENBLAS_OPENMP} CACHE FILEPATH "OpenBLAS (OpenMP build) for MUMPS" FORCE)
+    find_path(PYSE_OPENBLAS_OPENMP_INCLUDE_DIR NAMES openblas_config.h
+      PATH_SUFFIXES openblas-openmp NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH)
+    if(PYSE_OPENBLAS_OPENMP_INCLUDE_DIR)
+      set(LAPACK_INCLUDE_DIR ${PYSE_OPENBLAS_OPENMP_INCLUDE_DIR} CACHE PATH "OpenBLAS headers" FORCE)
+    endif()
+    get_filename_component(dir ${PYSE_OPENBLAS_OPENMP} DIRECTORY)
+    set(PYSE_BLAS_RPATH ${dir} CACHE INTERNAL "")
+  else()
+    message(WARNING "pySE: OpenBLAS is not an OpenMP build, so it runs single-threaded "
+      "inside MUMPS and large Newton steps are up to 2x slower. Install the OpenMP "
+      "variant (Debian/Ubuntu: libopenblas-openmp-dev; Fedora: openblas-openmp) "
+      "and rebuild, or use the wheels.")
+  endif()
+endfunction()
 set(PYSE_MUMPS_FOUND OFF)
 if(PYSE_MUMPS)
   include(CheckLanguage)
@@ -90,6 +142,7 @@ if(PYSE_MUMPS)
       if(LAPACK_FOUND AND PYSE_OPENBLAS_INCLUDE_DIR)
         set(LAPACK_VENDOR OpenBLAS CACHE STRING "LAPACK vendor for MUMPS")
         set(LAPACK_INCLUDE_DIR ${PYSE_OPENBLAS_INCLUDE_DIR} CACHE PATH "OpenBLAS headers")
+        pyse_prefer_openmp_openblas("${LAPACK_LIBRARIES}")
       else()
         unset(BLA_VENDOR)
         set(LAPACK_FOUND FALSE)
@@ -98,7 +151,9 @@ if(PYSE_MUMPS)
     if(NOT LAPACK_FOUND)
       find_package(LAPACK)
     endif()
-    if(LAPACK_FOUND)
+    if(LAPACK_FOUND AND PYSE_BLAS_RPATH)
+      message(STATUS "pySE: LAPACK/BLAS for MUMPS: ${LAPACK_LIBRARY}")
+    elseif(LAPACK_FOUND)
       message(STATUS "pySE: LAPACK/BLAS for MUMPS: ${LAPACK_LIBRARIES}")
     endif()
   endif()
@@ -159,6 +214,10 @@ else()
 endif()
 target_link_libraries(_core PRIVATE pyse_glue evolver_core)
 set_target_properties(_core PROPERTIES INTERPROCEDURAL_OPTIMIZATION ${PYSE_LTO})
+if(PYSE_BLAS_RPATH)   # the OpenMP OpenBLAS, ahead of the system default
+  set_property(TARGET _core APPEND PROPERTY BUILD_RPATH ${PYSE_BLAS_RPATH})
+  set_property(TARGET _core APPEND PROPERTY INSTALL_RPATH ${PYSE_BLAS_RPATH})
+endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(_core PRIVATE -Wall -Wextra)
 endif()

@@ -156,6 +156,10 @@ Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.or
 with it: wheels are; a source build downloads and builds MUMPS if a Fortran compiler
 and LAPACK/BLAS are found (use an optimized BLAS such as OpenBLAS: the reference BLAS
 makes MUMPS several times slower), and otherwise uses Evolver's own factoring.
+Use the OpenMP build of OpenBLAS: a pthreads OpenBLAS runs single-threaded inside
+MUMPS's threads, and large Newton steps are up to 2x slower (1.6M facets: 3.8 s against
+2.7 s). The build prefers the system's OpenMP variant when installed (Debian/Ubuntu:
+`libopenblas-openmp-dev`; Fedora: `openblas-openmp`) and warns otherwise; wheels bundle one.
 `pse.set_solver("evolver")`
 (or `PYSE_SOLVER=evolver`) switches back to Evolver's minimal-degree factoring;
 `pse.solver()` tells which is in use. For the Lagrange model, the Hessian is also
