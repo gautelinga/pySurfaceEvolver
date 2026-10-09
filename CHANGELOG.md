@@ -13,6 +13,10 @@
 - `ev.remesh(target=h)` (or `max_edge=`, `min_edge=`): deletes short edges, splits
   long ones and equiangulates; `protect=` keeps an edge mask whole. Splitting honours
   `no_refine` (Evolver's `l` ignores it).
+- Diagnostics as values: `ev.eigen_counts(shift)` (negative/zero/positive Hessian
+  eigenvalues: an unstable equilibrium shows as `negative > 0`), `ev.check()` (topology
+  problems, empty when sound), `Mesh.quality()` / `ev.mesh_quality()` (edge lengths,
+  smallest angles, skinny and degenerate facets).
 - `ev.body(i)`: a live handle on one body (`.volume`, `.target` and `.volconst`
   settable, `.pressure`, `.fixed`); `target = None` frees the volume.
 - `Bodies.target_volume` is now `Bodies.target` (breaking).

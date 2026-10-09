@@ -404,6 +404,20 @@ class _Tessellation:
         return out
 
 
+@dataclass(frozen=True)
+class MeshQuality:
+    """Shape statistics of a mesh's facets and edges (see :meth:`Mesh.quality`)."""
+
+    edge_min: float
+    edge_median: float
+    edge_max: float
+    angle_min: float          # smallest facet angle, degrees
+    angle_median: float       # median of each facet's smallest angle, degrees
+    skinny: int               # facets with an angle below the threshold
+    degenerate: int           # facets with (nearly) zero area
+    skinny_angle: float       # the threshold used, degrees
+
+
 @dataclass
 class Mesh:
     """A snapshot of the surface geometry.
@@ -452,6 +466,35 @@ class Mesh:
             rows.append(("bounds", " × ".join(f"[{_html.number(a)}, {_html.number(b)}]"
                                                for a, b in zip(lo, hi))))
         return _html.fields(f"Mesh ({self.vertices.shape[1]}D)", rows)
+
+    # ---- quality ------------------------------------------------------------
+
+    def quality(self, skinny_angle: float = 15.0) -> MeshQuality:
+        """Edge lengths and facet shapes, from the corner vertices.
+
+        ``skinny`` counts facets with an angle below ``skinny_angle`` degrees,
+        ``degenerate`` those whose area is below 1e-12 of the median.
+        """
+        lengths = np.linalg.norm(self.vertices[self.edges[:, 0]]
+                                 - self.vertices[self.edges[:, 1]], axis=1)
+        if self.facets is None or len(self.facets) == 0:
+            nan = float("nan")
+            return MeshQuality(float(lengths.min()), float(np.median(lengths)),
+                               float(lengths.max()), nan, nan, 0, 0, skinny_angle)
+        p = [_as_3d(self.vertices)[self.facets[:, i]] for i in range(3)]
+        sides = [p[(i + 1) % 3] - p[i] for i in range(3)]
+        angles = []
+        for i in range(3):
+            a, b = sides[i], -sides[(i + 2) % 3]
+            cos = np.einsum("ij,ij->i", a, b) / np.maximum(
+                np.linalg.norm(a, axis=1)*np.linalg.norm(b, axis=1), 1e-300)
+            angles.append(np.degrees(np.arccos(np.clip(cos, -1, 1))))
+        smallest = np.min(angles, axis=0)
+        area = 0.5*np.linalg.norm(np.cross(sides[0], -sides[2]), axis=1)
+        return MeshQuality(float(lengths.min()), float(np.median(lengths)),
+                           float(lengths.max()), float(smallest.min()),
+                           float(np.median(smallest)), int((smallest < skinny_angle).sum()),
+                           int((area < 1e-12*np.median(area)).sum()), skinny_angle)
 
     # ---- selections -------------------------------------------------------
 

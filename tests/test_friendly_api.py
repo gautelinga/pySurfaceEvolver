@@ -209,3 +209,27 @@ def test_remesh_needs_the_linear_model(cube):
     cube.set_model("linear")
     with pytest.raises(ValueError, match="2\\*min_edge"):
         cube.remesh(max_edge=0.3, min_edge=0.2)
+
+
+# ---- F6: diagnostics -----------------------------------------------------------
+
+def test_eigen_counts(cube):
+    cube.relax(tol=1e-9)
+    counts = cube.eigen_counts()
+    assert counts.negative == 0 and counts.positive > 0
+    assert cube.eigen_counts(shift=1e3).negative == sum(counts)    # all below a huge shift
+
+
+def test_check_is_clean_for_a_sound_surface(cube):
+    assert cube.check() == []
+
+
+def test_mesh_quality():
+    v = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [10, 0.05, 0]]
+    f = [[0, 1, 2], [1, 3, 2]]           # a right triangle and a sliver
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(v, f))
+    q = ev.mesh_quality()
+    assert q.edge_min == pytest.approx(1.0) and q.edge_max == pytest.approx(np.hypot(10, 0.95))
+    assert 5 < q.angle_min < 6 and q.skinny == 1 and q.degenerate == 0
+    assert ev.mesh().quality(skinny_angle=1).skinny == 0

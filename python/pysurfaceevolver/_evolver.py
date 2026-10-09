@@ -11,13 +11,14 @@ import threading
 import warnings
 from collections.abc import MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Generator, List, Optional, Union
+from typing import (TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Generator, List,
+                    NamedTuple, Optional, Union)
 
 import numpy as np
 
 from . import _core, _html
 from ._build import Body, make_datafile
-from ._mesh import Bodies, BodySurface, Mesh, Quantity, is_watertight
+from ._mesh import Bodies, BodySurface, Mesh, MeshQuality, Quantity, is_watertight
 
 if TYPE_CHECKING:
     from ._viz import LiveView
@@ -48,6 +49,14 @@ def _threads_for_call(threads: Optional[int]) -> Generator[None, None, None]:
         yield
     finally:
         _core.set_threads(previous)
+
+
+class EigenCounts(NamedTuple):
+    """Hessian eigenvalues below, at and above a shift; see :meth:`Evolver.eigen_counts`."""
+
+    negative: int
+    zero: int
+    positive: int
 
 
 class EvolverError(RuntimeError):
@@ -624,6 +633,29 @@ class Evolver:
         if average:
             self.command("V")
         return counts
+
+    def eigen_counts(self, shift: float = 0.0) -> "EigenCounts":
+        """How many Hessian eigenvalues lie below, at and above ``shift``
+        (Evolver's ``eigenprobe``; costs one factorization).
+
+        At an equilibrium, ``negative > 0`` means it is unstable (a saddle):
+        some motion lowers the energy. With constraints, only motions that
+        keep them count.
+        """
+        text = self.command(f"eigenprobe {_num(shift, 'shift')}")
+        found = re.search(r"Eigencounts:\s*(\d+)\s*<,\s*(\d+)\s*==,\s*(\d+)\s*>", text)
+        if not found:
+            raise EvolverError(f"unexpected eigenprobe output: {text.strip()!r}")
+        return EigenCounts(*(int(g) for g in found.groups()))
+
+    def check(self) -> List[str]:
+        """Evolver's consistency check of the surface's topology (``check``):
+        the problems found, one per line; empty when it is sound."""
+        return [line for line in self.command("check").splitlines() if line.strip()]
+
+    def mesh_quality(self, skinny_angle: float = 15.0) -> "MeshQuality":
+        """Edge lengths and facet shapes; see :meth:`Mesh.quality`."""
+        return self.mesh().quality(skinny_angle)
 
     def refine(self, times: int = 1) -> None:
         """Refine the surface: split every edge and facet (Evolver's ``r``)."""

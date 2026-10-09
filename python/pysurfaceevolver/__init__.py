@@ -24,10 +24,12 @@ from ._evolver import (
     InvalidSurfaceError,
     IterationResult,
     BodyView,
+    EigenCounts,
     Parameters,
     Snapshot,
 )
-from ._mesh import Bodies, BodySurface, LargeTessellationWarning, Mesh, Quantity, is_watertight
+from ._mesh import (Bodies, BodySurface, LargeTessellationWarning, Mesh, MeshQuality, Quantity,
+                    is_watertight)
 from ._viz import LiveView
 from . import examples
 from ._parallel import JobError, WorkerCrashed, WorkerStartError, map  # noqa: A004 (pyse.map)
@@ -105,6 +107,7 @@ __all__ = [
     "Body",
     "BodySurface",
     "BodyView",
+    "EigenCounts",
     "Evolver",
     "EvolverBusyError",
     "EvolverError",
@@ -117,6 +120,7 @@ __all__ = [
     "LargeTessellationWarning",
     "LiveView",
     "Mesh",
+    "MeshQuality",
     "Parameters",
     "Quantity",
     "Snapshot",
