@@ -12,6 +12,9 @@ handle to it.
 ```{eval-rst}
 .. autoclass:: Evolver
 .. autoclass:: IterationResult
+.. autoclass:: BodyView
+.. autoclass:: EigenCounts
+   :no-members:
 .. autoclass:: Snapshot
 .. autoclass:: Parameters
    :members: optimizing
@@ -21,6 +24,8 @@ handle to it.
 
 ```{eval-rst}
 .. autoclass:: Mesh
+.. autoclass:: MeshQuality
+   :no-members:
 .. autoclass:: Bodies
    :no-members:
 .. autoclass:: Quantity
@@ -37,10 +42,26 @@ handle to it.
    :no-members:
 ```
 
+### Walls and mirrors
+
+```{eval-rst}
+.. automodule:: pysurfaceevolver.constraints
+   :members: plane, mirror, sphere, cylinder, Constraint
+.. currentmodule:: pysurfaceevolver
+```
+
 ## Visualization
 
 ```{eval-rst}
 .. autoclass:: LiveView
+```
+
+## Recipes
+
+```{eval-rst}
+.. automodule:: pysurfaceevolver.recipes
+   :members: continuation, Step, body_target, parameter, load_steps
+.. currentmodule:: pysurfaceevolver
 ```
 
 ## Parameter sweeps

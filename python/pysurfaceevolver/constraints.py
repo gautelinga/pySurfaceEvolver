@@ -172,7 +172,7 @@ def plane(normal, offset: float = 0.0, contact_angle: Optional[float] = None, *,
         s = _lin(u, -np.dot(u, o))
         p = f"({_n(n[2])}*({_n(o[2])}*{t} + {_n(u[2])}*{s}*{t} + {_n(v[2]/2)}*{t}^2))"
         content = [f"{_n(ui)}*{p}" if ui != 0 else "0" for ui in u]
-    return Constraint(f"{_lin(n)[1:-1]} = {d!r}", energy, content)
+    return Constraint(f"{_lin(n)[1:-1]} = {float(d)!r}", energy, content)
 
 
 def mirror(axis, at: float = 0.0) -> Constraint:
@@ -222,7 +222,7 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     Q = lambda h: c[2]*h*h/2 + h**3/3
     volconst = -span*((Q(R) if north else 0.0) - (Q(-R) if south else 0.0))
     area = R*R*span*((1.0 if north else 0.0) + (1.0 if south else 0.0))
-    formula = f"{X}^2 + {Y}^2 + {Z}^2 = {R*R!r}"
+    formula = f"{X}^2 + {Y}^2 + {Z}^2 = {float(R*R)!r}"
     return Constraint(formula, energy, content, volconst, k.energy(area), nonnegative, area)
 
 
@@ -286,5 +286,5 @@ def cylinder(point, direction, radius: float, contact_angle: Optional[float] = N
         pp = f"({_n(-R)}*(({_n(p[2])} + {_n(d[2])}*{ell})*{w1} + {_n(R)}*{w2}))"
         content = ([f"{_n(d[i])}*{pp}" if d[i] != 0 else "0" for i in range(3)]
                    if has_content else None)
-    formula = f"{a}^2 + {b}^2 = {R*R!r}"
+    formula = f"{a}^2 + {b}^2 = {float(R*R)!r}"
     return Constraint(formula, energy, content, 0.0, 0.0, nonnegative)

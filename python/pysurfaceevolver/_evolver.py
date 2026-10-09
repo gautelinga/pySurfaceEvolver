@@ -466,11 +466,12 @@ class Evolver:
         ``|E[i] - E[i-1]| / max(1, |E[i]|)`` stays below ``tol`` for ``window``
         consecutive steps, or ``max_iter`` steps.
 
-        ``tidy=n``: then up to n tidying cycles: equiangulate and average the
-        vertices (``u; V``), and relax again; stops when a cycle changes the
-        relaxed energy by less than ``tol``. (Vertex averaging is mesh
-        smoothing, not energy descent, so it runs between relaxations, not
-        within them.)
+        ``tidy=k``: equiangulate and average the vertices (``u; V``) after every
+        k gradient steps, so facets stay well shaped while the surface moves
+        (contact lines especially). Vertex averaging is smoothing, not descent,
+        so convergence is then measured round to round: the energy after a
+        round (k steps and the tidying) against the one before, below ``tol``
+        for ``window`` consecutive rounds.
         ``levels=n``: refine and relax again, n times (``max_iter`` per level).
         ``newton=n``: then up to n Newton steps (``seek=True``: with a line
         search, ``hessian_seek``), stopping when one changes the energy by less
@@ -499,16 +500,8 @@ class Evolver:
                 if lev:
                     self.refine()
                 n0 = len(energy)
-                converged = self._relax_level(tol, max_iter, window, callback, every,
+                converged = self._relax_level(tol, max_iter, window, tidy, callback, every,
                                               energy, area, scale, output)
-                for _ in range(tidy):
-                    settled = _core.total_energy()
-                    output.append(self.command("u; V"))
-                    converged = self._relax_level(tol, max_iter, window, callback, every,
-                                                  energy, area, scale, output)
-                    after = _core.total_energy()
-                    if abs(after - settled) / max(1.0, abs(after)) < tol:
-                        break
                 level += [lev]*(len(energy) - n0)
             steps = 0
             if newton:
@@ -516,19 +509,26 @@ class Evolver:
         return IterationResult(np.array(energy), np.array(area), np.array(scale),
                                "".join(output), converged, steps, np.array(level, dtype=int))
 
-    def _relax_level(self, tol: float, max_iter: int, window: int,
+    def _relax_level(self, tol: float, max_iter: int, window: int, tidy: int,
                      callback: Optional[Callable[["Evolver", int], Any]], every: int,
                      energy: List[float], area: List[float], scale: List[float],
                      output: List[str]) -> bool:
-        """Gradient steps until the energy settles; True if it did."""
+        """Gradient steps until the energy settles; True if it did. With tidy=k,
+        'u; V' every k steps, and the energy compared round to round."""
         previous = _core.total_energy()
         quiet = 0
         first = len(energy)
         for i in range(1, max_iter + 1):
             self._step(energy, area, scale, output)
-            change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
             if callback is not None and i % every == 0:
                 callback(self, i)
+            if tidy and i % tidy:
+                continue                  # mid-round: no convergence check
+            if tidy:
+                output.append(self.command("u; V"))
+                energy[-1] = _core.total_energy()
+                area[-1] = _core.total_area()
+            change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
             previous = energy[-1]
             quiet = quiet + 1 if change < tol else 0
             if quiet >= window:

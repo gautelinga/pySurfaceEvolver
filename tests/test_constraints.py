@@ -10,7 +10,7 @@ import pysurfaceevolver as pyse
 from pysurfaceevolver import constraints as C
 
 THETA = 50.0
-K = np.cos(np.radians(THETA))
+K = float(np.cos(np.radians(THETA)))
 
 
 def _load(vertices, faces, cons, on, volconst=None):
@@ -313,3 +313,17 @@ def test_contact_angle_as_a_parameter():
     assert ev.total_energy == pytest.approx(_area(v, f), rel=1e-12)
     s = C.sphere((0, 0, 0), 1.0, contact_angle="theta", wet_poles=("north",), span=np.pi)
     assert np.isnan(s.energy_constant) and s.area_constant == pytest.approx(np.pi)
+
+
+def test_texts_hold_plain_numbers():
+    # numpy >= 2 formats numpy floats as np.float64(...): none may reach a datafile,
+    # whichever numpy runs the tests
+    f64 = np.float64
+    for con in (C.plane(np.array([0, 0, -1.0]), point=np.array([0, 0, 0.5]), contact_angle=f64(60)),
+                C.mirror("z"), C.mirror("x", f64(0.55)),
+                C.sphere(np.zeros(3), f64(0.48), contact_angle=f64(40), wet_poles=("north",),
+                         span=f64(np.pi/2)),
+                C.cylinder(np.zeros(3), np.array([1.0, 0, 0]), f64(0.4), contact_angle=f64(50),
+                           gauge="axial", ref=np.array([0, 1.0, 0])),
+                C.cylinder(np.zeros(3), np.array([0, 0, 1.0]), f64(0.4), contact_angle=f64(50))):
+        assert "np." not in con.text() and "float64" not in con.text()

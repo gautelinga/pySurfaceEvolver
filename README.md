@@ -23,6 +23,10 @@ ev = Evolver("cube.fe")              # bundled samples are found from anywhere
 result = ev.iterate(10)              # energy, area, scale per iteration
 ev.refine()
 ev.relax(tol=1e-10, newton=10)       # iterate until the energy settles, then Newton
+ev.relax(levels=2, tidy=10, newton=3)   # refine twice, equiangulate + average every 10
+ev.remesh(target=0.05)               # even out edge lengths (split long, delete short)
+ev.body(1).target = 1.2              # a body's volume; ev.body(1).pressure
+ev.eigen_counts().negative           # > 0: an unstable equilibrium
 ev.set_model("lagrange", 3)
 
 snapshot = ev.save()                 # exact snapshot of the surface
@@ -38,11 +42,28 @@ ev.set_values("vertex", "temperature", temps)      # write per-element data (fas
                                                    # for coordinates and attributes)
 ev.fix("vertex", where=ev.values("vertex", "z") > 0.9)
 ev.set_constraint("vertex", 1, where=mask)
+ev.set_flag("edge", "no_refine", where=ev.mesh().edges_touching(ev.on_constraint(1), "one"))
 ev.parameters["angle"] = 60          # parameters declared in the datafile
 ev.quantities()                      # named quantities: value, target, modulus, ...
 
 ev.command("g 5; r; u")              # anything else: plain Evolver commands
 ```
+
+Walls with contact angles, written as constraint integrals for you:
+
+```python
+from pysurfaceevolver import constraints as C
+
+bead = C.sphere((0, 0, 0), 0.48, contact_angle=40, wet_poles=("north",), span=np.pi/2)
+datafile = pyse.make_datafile(vertices, faces, constraints={
+    1: C.plane((0, 0, -1), point=(0, 0, 0.5), contact_angle="theta"),   # a parameter
+    2: bead, 3: C.mirror("x"), 4: C.mirror("y")},
+    bodies=[pyse.Body(faces=range(len(faces)), volume=0.1, volconst=bead.volconst)],
+    parameters={"theta": 60}, vertex_constraints=...)
+```
+
+`pyse.recipes.continuation` steps a volume or parameter through a family of
+equilibria, with checkpoints a stopped run resumes from.
 
 There is one Evolver engine per process: every `Evolver` object is a handle to
 it, so all handles see the same surface. Use `save()`/`restore()` to keep surfaces
@@ -57,7 +78,7 @@ import pysurfaceevolver as pyse
 
 def run(volume):
     ev = pyse.Evolver("cube.fe")
-    ev.set_values("body", "target", volume)
+    ev.body(1).target = volume
     ev.relax(tol=1e-10)
     return ev.eval("total_area")
 

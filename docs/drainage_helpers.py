@@ -10,6 +10,7 @@ Constraints: 1 the mid-plane z = 0, 2 the wall z = 1/2, 3 the bead, 4 x = 0,
 """
 import numpy as np
 import pysurfaceevolver as pyse
+from pysurfaceevolver import constraints as C
 
 
 class Cell:
@@ -28,28 +29,27 @@ class Cell:
 
     # ---- the model ------------------------------------------------------------
     def constraints(self):
-        def dphi(f, n):      # a line integral of f dphi around the z axis
-            return f"{n}1: (-y*({f}))/(x^2 + y^2)\n{n}2: (x*({f}))/(x^2 + y^2)\n{n}3: 0\n"
-        wall = ("formula: z = 0.5\n"
-                "energy:\ne1: -cos(theta_wall*pi/180)*y\ne2: 0\ne3: 0\n"
-                "content:\nc1: 0.5*y\nc2: 0\nc3: 0\n")
-        bead = ("formula: x^2 + y^2 + z^2 = radius^2\n"
-                "energy:\n" + dphi("cos(theta_bead*pi/180)*radius*z", "e")
-                + "content:\n" + dphi("z^3/3", "c"))
-        return {1: "formula: z = 0", 2: wall, 3: bead, 4: "formula: x = 0",
-                5: "formula: x = ell/2", 6: "formula: y = 0"}
+        # walls and the bead wet with the contact angles in the datafile's
+        # parameters; the eighth bead's integrals leave out its wet north pole
+        # (pyse.constraints gives the volume constant; the energy constant is
+        # self.energy_constant)
+        return {1: C.mirror("z"),
+                2: C.plane((0, 0, -1), point=(0, 0, 0.5), contact_angle="theta_wall"),
+                3: C.sphere((0, 0, 0), self.radius, contact_angle="theta_bead",
+                            wet_poles=("north",), span=np.pi/2),
+                4: C.mirror("x"), 5: C.mirror("x", self.half), 6: C.mirror("y")}
 
     def load(self, vertices, faces, on, volume):
+        cons = self.constraints()
         ev = pyse.Evolver()
         ev.load_string(pyse.make_datafile(
             np.asarray(vertices, float), faces,
-            bodies=[pyse.Body(faces=range(len(faces)), volume=volume)],
+            bodies=[pyse.Body(faces=range(len(faces)), volume=volume,
+                              volconst=cons[3].volconst)],
             parameters={"radius": self.radius, "ell": self.ell,
                         "theta_bead": self.theta_bead, "theta_wall": self.theta_wall},
-            constraints=self.constraints(),
+            constraints=cons,
             vertex_constraints={k: [i for i, c in enumerate(on) if k in c] for k in range(1, 7)}))
-        # the liquid volume excludes the bead's eighth
-        ev.command(f"set body[1] volconst {float(-np.pi/6*self.radius**3)!r}")
         return ev
 
     # ---- starting shapes ------------------------------------------------------
@@ -124,7 +124,7 @@ class Cell:
         vertices not on that constraint, leaving out those within `hops` edges of
         one on it (next to a contact line they are close by nature)."""
         m = ev.mesh()
-        near = ev.values("vertex", f"on_constraint {k}") > 0
+        near = ev.on_constraint(k)
         a, b = m.edges[:, 0], m.edges[:, 1]
         for _ in range(hops):
             grow = near.copy()
@@ -136,31 +136,20 @@ class Cell:
         return d[~near].min() if (~near).any() else np.inf
 
     # ---- relaxation -----------------------------------------------------------
-    def relax(self, ev, remesh=False, maxit=80):
+    def relax(self, ev, remesh=False):
         if remesh:
-            # length-based remeshing, once per step: split edges longer than 1.6 h,
-            # delete edges shorter than 0.5 h (h: the band's first median edge). As
-            # the dry patch on the bead grows, its contact line stretches and the
-            # surface next to it is squeezed; without this, thin triangles pile up
-            # where the contact line meets the mid-plane and the pressure gets noisy.
+            # remeshing by edge length, once per step (h: the band's first median
+            # edge). As the dry patch on the bead grows, its contact line stretches
+            # and the surface next to it is squeezed; without this, thin triangles
+            # pile up where the contact line meets the mid-plane and the pressure
+            # gets noisy.
             if self.edge_h is None:
-                m = ev.mesh()
-                self.edge_h = float(np.median(np.linalg.norm(
-                    m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)))
-            ev.command(f"l {1.6*self.edge_h:.6g}; t {0.5*self.edge_h:.6g}")
-        last = None
-        for _ in range(maxit):
-            ev.command("g 10; u; V")
-            e = ev.total_energy
-            if last is not None and abs(e - last) < 1e-9:
-                break
-            last = e
-        for _ in range(3):     # Newton steps, undone if one crosses the mirror y = 0
-            snapshot = ev.save()
-            ev.command("hessian_seek")
-            if self.gap(ev, 6) < -1e-4:
-                ev.restore(snapshot)
-                break
+                self.edge_h = ev.mesh_quality().edge_median
+            ev.remesh(target=self.edge_h)
+        # rounds of 10 gradient steps with equiangulation and vertex averaging,
+        # then Newton steps (with a line search), undone if one crosses y = 0
+        ev.relax(tol=1e-9, window=1, max_iter=800, tidy=10, newton=3, seek=True,
+                 undo_if=lambda ev: self.gap(ev, 6) < -1e-4)
 
 
 def _solve(f, target, lo, hi):
@@ -204,7 +193,7 @@ def drain(cell, v_start, v_end, levels=2, log=None):
         else:
             near = cell.gap(ev, 6, hops=2) < 4*cell.delta
             volume = max(v_end, (0.995 if near else 1 - cell.band_step)*volume)
-        ev.command(f"set body[1] target {float(volume)!r}")
+        ev.body(1).target = volume
         cell.relax(ev, remesh=stage == 1)
         if stage == 0 and volume <= v_emerge:
             # the bead breaks through the meniscus: restart from a sheet with a dry
