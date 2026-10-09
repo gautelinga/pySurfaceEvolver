@@ -77,6 +77,19 @@ def _scalar_values(ev: "Evolver", mesh: "Mesh", scalars: Scalars, element: Optio
     return point_values, cell_values, name
 
 
+def add_images(plotter: "pyvista.Plotter", dataset: "pyvista.PolyData", mirror,
+               name: str, **kwargs: Any) -> None:
+    """Add a dataset and its mirror images (one actor each, same data)."""
+    from ._mesh import mirror_matrices
+    mats = mirror_matrices(mirror or [])
+    for k, m in enumerate(mats):
+        extra = {} if k == 0 else {"show_scalar_bar": False}
+        actor = plotter.add_mesh(dataset, name=name if k == 0 else f"{name}-{k}",
+                                 **{**kwargs, **extra})
+        if k:
+            actor.user_matrix = m
+
+
 def _same_cells(a: "pyvista.PolyData", b: "pyvista.PolyData") -> bool:
     """Whether two PolyData have identical connectivity."""
     if a.n_points != b.n_points or a.n_cells != b.n_cells:
@@ -104,15 +117,18 @@ class LiveView:
         An existing ``pyvista.Plotter``; by default a new one is made.
     off_screen:
         Render without a window (for tests and image files).
+    mirror:
+        Planes to show mirror images in (see :meth:`Evolver.plot`).
     **mesh_kwargs:
         Passed to ``Plotter.add_mesh`` (``cmap``, ``show_edges``, ...).
     """
 
     def __init__(self, ev: "Evolver", scalars: Scalars = None, element: Optional[str] = None,
                  n: Optional[int] = None, plotter: Optional["pyvista.Plotter"] = None,
-                 off_screen: bool = False, **mesh_kwargs: Any):
+                 off_screen: bool = False, mirror=None, **mesh_kwargs: Any):
         pv = _import_pyvista()
         self.ev = ev
+        self.mirror = mirror
         self.scalars = scalars
         self.element = element
         self.n = n
@@ -144,8 +160,8 @@ class LiveView:
             self._mesh = mesh
             self.dataset = mesh._facets_to_pyvista(self._tess, self._n, point_values,
                                                    cell_values)
-            self.plotter.add_mesh(self.dataset, name="evolver-surface", scalars=name,
-                                  reset_camera=reset_camera, **self.mesh_kwargs)
+            add_images(self.plotter, self.dataset, self.mirror, "evolver-surface",
+                       scalars=name, reset_camera=reset_camera, **self.mesh_kwargs)
             return
         self._mesh = self._tess = None
         dataset, name = surface_dataset(self.ev, self.scalars, self.element, self.n)
@@ -161,8 +177,8 @@ class LiveView:
             self.fast_updates += 1
             return
         self.dataset = dataset
-        self.plotter.add_mesh(dataset, name="evolver-surface", scalars=name,
-                              reset_camera=reset_camera, **self.mesh_kwargs)
+        add_images(self.plotter, dataset, self.mirror, "evolver-surface",
+                   scalars=name, reset_camera=reset_camera, **self.mesh_kwargs)
 
     def _move_points(self, mesh: "Mesh") -> bool:
         """Update the dataset in place if the facets are unchanged."""

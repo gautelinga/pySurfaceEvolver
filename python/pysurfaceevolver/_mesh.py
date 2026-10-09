@@ -404,6 +404,36 @@ class _Tessellation:
         return out
 
 
+def mirror_matrices(planes) -> List[np.ndarray]:
+    """4x4 matrices for every image under repeated reflection in ``planes``.
+
+    Each plane is ``"x"`` (the plane x = 0; also ``"y"``, ``"z"``),
+    ``("x", c)`` (x = c), or ``(normal, point)``. Reflections apply in order,
+    each doubling what is there; the identity comes first.
+    """
+    mats = [np.eye(4)]
+    for plane in planes:
+        if isinstance(plane, str):
+            plane = (plane, 0.0)
+        a, b = plane
+        if isinstance(a, str):
+            if a not in ("x", "y", "z"):
+                raise ValueError(f"plane axis must be 'x', 'y' or 'z', not {a!r}")
+            normal = np.eye(3)["xyz".index(a)]
+            point = normal*float(b)
+        else:
+            normal = np.asarray(a, dtype=float)
+            point = np.asarray(b, dtype=float)
+            if normal.shape != (3,) or point.shape != (3,) or not np.linalg.norm(normal):
+                raise ValueError("a plane is (normal, point), two 3-vectors, normal nonzero")
+            normal = normal/np.linalg.norm(normal)
+        r = np.eye(4)
+        r[:3, :3] -= 2*np.outer(normal, normal)
+        r[:3, 3] = 2*normal*np.dot(normal, point)
+        mats += [r @ m for m in mats]
+    return mats
+
+
 @dataclass(frozen=True)
 class MeshQuality:
     """Shape statistics of a mesh's facets and edges (see :meth:`Mesh.quality`)."""
@@ -466,6 +496,36 @@ class Mesh:
             rows.append(("bounds", " × ".join(f"[{_html.number(a)}, {_html.number(b)}]"
                                                for a, b in zip(lo, hi))))
         return _html.fields(f"Mesh ({self.vertices.shape[1]}D)", rows)
+
+    # ---- symmetry -----------------------------------------------------------
+
+    def mirrored(self, planes) -> "Mesh":
+        """The mesh with its mirror images (see :func:`mirror_matrices` for
+        ``planes``), as one mesh: for showing or exporting a full cell from a
+        symmetric piece. Facets of odd images are reversed, so normals keep
+        pointing the same way relative to the surface. Element ids repeat (one
+        copy per image). Linear meshes only; plots mirror curved ones too
+        (``ev.plot(mirror=...)``).
+        """
+        if self.order != 1:
+            raise ValueError("mirrored() needs a linear mesh; plot(mirror=...) works for any")
+        mats = mirror_matrices(planes)
+        xyz = _as_3d(self.vertices)
+        n = len(xyz)
+        parts = [(m, np.linalg.det(m[:3, :3]) < 0) for m in mats]
+        vertices = np.vstack([xyz @ m[:3, :3].T + m[:3, 3] for m, _ in parts])
+        if self.vertices.shape[1] == 2:
+            vertices = vertices[:, :2]
+        edges = np.vstack([self.edges + k*n for k in range(len(parts))])
+        facets = None if self.facets is None else np.vstack(
+            [(self.facets[:, ::-1] if flip else self.facets) + k*n
+             for k, (_, flip) in enumerate(parts)])
+        rep = len(parts)
+        return Mesh(vertices, edges, facets, np.tile(self.vertex_ids, rep),
+                    np.tile(self.edge_ids, rep),
+                    None if self.facet_ids is None else np.tile(self.facet_ids, rep),
+                    None if self.facet_bodies is None else np.tile(self.facet_bodies, (rep, 1)),
+                    np.tile(self.fixed, rep))
 
     # ---- quality ------------------------------------------------------------
 

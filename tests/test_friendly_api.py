@@ -233,3 +233,63 @@ def test_mesh_quality():
     assert q.edge_min == pytest.approx(1.0) and q.edge_max == pytest.approx(np.hypot(10, 0.95))
     assert 5 < q.angle_min < 6 and q.skinny == 1 and q.degenerate == 0
     assert ev.mesh().quality(skinny_angle=1).skinny == 0
+
+
+# ---- F7: mirror images ----------------------------------------------------------
+
+def _quadrant_film():
+    # a unit square in the first quadrant of the plane z = 0, normals +z
+    v = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]]
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(v, [[0, 1, 2], [0, 2, 3]]))
+    return ev
+
+
+def test_mirror_matrices():
+    from pysurfaceevolver._mesh import mirror_matrices
+    mats = mirror_matrices(["z", ("x", 0.5), ((0, 1, 1), (0, 0, 0))])
+    assert len(mats) == 8 and np.allclose(mats[0], np.eye(4))
+    m = mirror_matrices([("x", 0.5)])[1]
+    assert np.allclose(m @ [0, 2, 3, 1], [1, 2, 3, 1])
+    with pytest.raises(ValueError):
+        mirror_matrices(["w"])
+
+
+def test_mesh_mirrored_keeps_orientation():
+    ev = _quadrant_film()
+    full = ev.mesh().mirrored(["x", "y"])
+    assert len(full.facets) == 8 and len(full.vertices) == 16
+    p = [full.vertices[full.facets[:, i]] for i in range(3)]
+    normals = np.cross(p[1] - p[0], p[2] - p[0])
+    assert (normals[:, 2] > 0).all()                     # all still +z
+    lo, hi = full.vertices.min(axis=0), full.vertices.max(axis=0)
+    assert np.allclose(lo[:2], -1) and np.allclose(hi[:2], 1)
+
+
+def test_plot_and_live_view_mirror(can_render):
+    pv = pytest.importorskip("pyvista")
+    ev = _quadrant_film()
+    view = ev.live_view(off_screen=True, mirror=["x", "y"])
+    actors = [a for name, a in view.plotter.actors.items() if name.startswith("evolver-surface")]
+    assert len(actors) == 4
+    xyz = ev.vertices.copy()
+    xyz[:, 2] = 0.1*xyz[:, 0]          # move the points; the images share the data
+    ev.vertices = xyz
+    view.update()
+    assert view.fast_updates == 1
+    bounds = np.array(view.plotter.bounds)
+    assert bounds[0] == pytest.approx(-1) and bounds[1] == pytest.approx(1)
+    view.close()
+    ev.plot(off_screen=True, mirror=["x"], screenshot=None)
+
+
+@pytest.fixture(scope="module")
+def can_render():
+    pv = pytest.importorskip("pyvista")
+    try:
+        plotter = pv.Plotter(off_screen=True)
+        plotter.add_mesh(pv.Sphere())
+        plotter.screenshot(return_img=True)
+        plotter.close()
+    except Exception as e:  # no display / no OpenGL
+        pytest.skip(f"off-screen rendering unavailable: {e}")

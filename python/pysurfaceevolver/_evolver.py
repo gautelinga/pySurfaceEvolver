@@ -1052,19 +1052,24 @@ class Evolver:
 
     def plot(self, scalars: Union[None, str, np.ndarray] = None, *, element: Optional[str] = None,
              n: Optional[int] = None, off_screen: bool = False,
-             screenshot: Optional[str] = None, **kwargs: Any) -> Any:
+             screenshot: Optional[str] = None, mirror=None, **kwargs: Any) -> Any:
         """Show the surface with PyVista.
 
         ``scalars`` colors it: an Evolver expression evaluated per facet
         (or per vertex with ``element="vertex"``), or an array with one value
         per facet or vertex row. Curved elements are tessellated with ``n``
-        subdivisions. Other keyword arguments go to ``Plotter.add_mesh``.
+        subdivisions. ``mirror`` adds mirror images, for a symmetric piece of
+        a surface: a list of planes, each ``"x"`` (x = 0), ``("x", c)`` (x = c)
+        or ``(normal, point)``, applied in order, each doubling what is there
+        (an eighth of a cell: ``["z", "y", "x"]``). Other keyword arguments go
+        to ``Plotter.add_mesh``.
         """
-        from ._viz import _import_pyvista, surface_dataset
+        from ._viz import _import_pyvista, add_images, surface_dataset
         pv = _import_pyvista()
         dataset, name = surface_dataset(self, scalars, element, n)
         plotter = pv.Plotter(off_screen=off_screen)
-        plotter.add_mesh(dataset, scalars=name, **{"show_edges": True, **kwargs})
+        add_images(plotter, dataset, mirror, "evolver-surface", scalars=name,
+                   **{"show_edges": True, **kwargs})
         return plotter.show(screenshot=screenshot)
 
     def live_view(self, scalars: Union[None, str, np.ndarray] = None, **kwargs: Any) -> "LiveView":

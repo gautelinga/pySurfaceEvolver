@@ -17,6 +17,9 @@
   eigenvalues: an unstable equilibrium shows as `negative > 0`), `ev.check()` (topology
   problems, empty when sound), `Mesh.quality()` / `ev.mesh_quality()` (edge lengths,
   smallest angles, skinny and degenerate facets).
+- Mirror images for symmetric pieces: `ev.plot(mirror=["z", "y", ("x", c)])`,
+  `ev.live_view(mirror=...)` (the images share the data, so updates stay fast), and
+  `Mesh.mirrored(planes)` for one combined linear mesh.
 - `ev.body(i)`: a live handle on one body (`.volume`, `.target` and `.volconst`
   settable, `.pressure`, `.fixed`); `target = None` frees the volume.
 - `Bodies.target_volume` is now `Bodies.target` (breaking).
