@@ -1151,6 +1151,61 @@ void edge_histogram()
 
 /*******************************************************************
 *
+*  Function: collapse_keeps_manifold()
+*
+*  Purpose: Tell whether merging the ends of an edge keeps the surface a
+*           manifold (the link condition): the ends may share no neighbours
+*           other than the third vertices of the facets on the edge, and no
+*           other edge may join them. Otherwise the merge makes parallel and
+*           then loop edges, and later deletions free elements twice.
+*
+*  Input:    edge id
+*
+*  Output:  1 if safe, 0 if not
+*/
+
+static int collapse_keeps_manifold(edge_id short_edge)
+{ vertex_id v1 = get_edge_tailv(short_edge);
+  vertex_id v2 = get_edge_headv(short_edge);
+  vertex_id third[64];
+  int nthird = 0;
+  facetedge_id fe,first;
+  edge_id e1,e2;
+  int guard1 = 0;
+
+  first = fe = get_edge_fe(short_edge);
+  if ( valid_id(fe) )
+    do
+    { if ( nthird < 64 ) third[nthird++] = get_fe_headv(get_next_edge(fe));
+      fe = get_next_facet(fe);
+    } while ( valid_id(fe) && !equal_id(fe,first) );
+
+  e1 = get_vertex_edge(v1);
+  if ( !valid_id(e1) ) return 1;
+  do
+  { vertex_id n1 = get_edge_headv(e1);
+    int k, guard2 = 0;
+    if ( equal_id(n1,v2) && !equal_element(e1,short_edge) )
+      return 0;   /* another edge between the ends */
+    if ( !equal_id(n1,v2) && !equal_id(n1,v1) )
+    { e2 = get_vertex_edge(v2);
+      if ( valid_id(e2) )
+        do
+        { if ( equal_id(get_edge_headv(e2),n1) )
+          { for ( k = 0 ; k < nthird ; k++ )
+              if ( equal_id(third[k],n1) ) break;
+            if ( k == nthird ) return 0;   /* a common neighbour off the edge */
+          }
+          e2 = get_next_tail_edge(e2);
+        } while ( !equal_id(e2,get_vertex_edge(v2)) && ++guard2 < 100000 );
+    }
+    e1 = get_next_tail_edge(e1);
+  } while ( !equal_id(e1,get_vertex_edge(v1)) && ++guard1 < 100000 );
+  return 1;
+} // end collapse_keeps_manifold()
+
+/*******************************************************************
+*
 *  Function: delete_edge()
 *
 *  Purpose: delete an edge and adjacent facets (if triangles in STRING);
@@ -1282,6 +1337,15 @@ int delete_edge(edge_id short_edge)
   /*    kb_error(2197,errmsg,WARNING);  john doesn't like warning */
      if ( verbose_flag ) outstring(errmsg);
      return 0;
+  }
+
+  if ( (web.representation == SOAPFILM) && !collapse_keeps_manifold(short_edge) )
+  { if ( verbose_flag )
+    { sprintf(msg,"Not deleting edge %s: its ends have other neighbours in common.\n",
+        ELNAME(short_edge));
+      outstring(msg);
+    }
+    return 0;
   }
 
   /* check for multiple edges between endpoints */

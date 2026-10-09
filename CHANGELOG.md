@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixes
+
+- Tiny-edge deletion (`t`, also used by `w` and `delete`) no longer merges the ends of an
+  edge when they share neighbours other than the third vertices of its facets (the link
+  condition). Evolver 2.70a merged them, making parallel and loop edges; later deletions
+  then freed elements twice, hung in `edge_valence()`, or lost the surface.
+
 ### Docs
 
 - New example, `slit_drainage`: liquid drained from a bead chain in a slit, from immersed
