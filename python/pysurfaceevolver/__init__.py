@@ -31,7 +31,7 @@ from ._evolver import (
 from ._mesh import (Bodies, BodySurface, LargeTessellationWarning, Mesh, MeshQuality, Quantity,
                     is_watertight)
 from ._viz import LiveView
-from . import constraints, examples
+from . import constraints, examples, recipes
 from ._parallel import JobError, WorkerCrashed, WorkerStartError, map  # noqa: A004 (pyse.map)
 
 #: Tessellations (plots, live views, export of curved surfaces) with more
@@ -129,6 +129,7 @@ __all__ = [
     "is_watertight",
     "constraints",
     "examples",
+    "recipes",
     "make_datafile",
     "set_solver",
     "set_threads",

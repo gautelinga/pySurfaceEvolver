@@ -293,3 +293,50 @@ def can_render():
         plotter.close()
     except Exception as e:  # no display / no OpenGL
         pytest.skip(f"off-screen rendering unavailable: {e}")
+
+
+# ---- F8: continuation ------------------------------------------------------------
+
+def test_continuation_steps_and_records(cube):
+    from pysurfaceevolver import recipes
+    values = [1.0, 0.9, 0.8]
+    steps = list(recipes.continuation(cube, recipes.body_target(1), values,
+                                      relax=dict(tol=1e-8, max_iter=400)))
+    assert [s.value for s in steps] == values and [s.index for s in steps] == [0, 1, 2]
+    for s in steps:
+        assert s.volumes[0] == pytest.approx(s.value, rel=1e-6)
+    # a cube relaxing to a sphere: pressure ~ 2/r rises as the volume shrinks
+    assert steps[0].pressures[0] < steps[1].pressures[0] < steps[2].pressures[0]
+
+
+def test_continuation_checkpoint_and_resume(cube, tmp_path):
+    from pysurfaceevolver import recipes
+    values = [1.0, 0.95, 0.9, 0.85]
+    prefix = str(tmp_path / "run" / "cube")
+    full = [s.energy for s in recipes.continuation(cube, recipes.body_target(1), values,
+                                                   relax=dict(tol=1e-9, max_iter=500))]
+    cube.load("cube.fe")
+    for step in recipes.continuation(cube, recipes.body_target(1), values,
+                                     relax=dict(tol=1e-9, max_iter=500), checkpoint=prefix):
+        step.extra["note"] = step.index
+        if step.index == 1:
+            break                      # stopped after two steps (the second unsaved)
+    assert [s.index for s in recipes.load_steps(prefix)] == [0]
+    cube.load("cube.fe")               # whatever the engine holds: resume replaces it
+    resumed = list(recipes.continuation(cube, recipes.body_target(1), values,
+                                        relax=dict(tol=1e-9, max_iter=500), resume=prefix,
+                                        checkpoint=prefix))
+    assert [s.index for s in resumed] == [1, 2, 3]
+    steps = recipes.load_steps(prefix)
+    assert [s.index for s in steps] == [0, 1, 2, 3] and steps[0].extra == {"note": 0}
+    assert [s.energy for s in steps] == pytest.approx(full, rel=1e-7)
+
+
+def test_continuation_parameter_and_relax_callable(cube):
+    from pysurfaceevolver import recipes
+    calls = []
+    steps = list(recipes.continuation(cube, lambda ev, v: calls.append(v), [1, 2],
+                                      relax=lambda ev: ev.iterate(2)))
+    assert calls == [1, 2] and len(steps[0].result.energy) == 2
+    with pytest.raises(TypeError):
+        next(recipes.continuation(cube, recipes.parameter("x"), [1], relax=5))

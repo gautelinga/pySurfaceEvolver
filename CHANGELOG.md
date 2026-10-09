@@ -24,6 +24,9 @@
   `make_datafile(constraints=)`: they write the wetting-energy and volume line
   integrals (and give the sphere's `volconst` and energy constant for wet poles);
   `Body(volconst=)`.
+- `pyse.recipes.continuation(ev, set_value, values, relax=, checkpoint=, resume=)`:
+  follows a family of equilibria (a body's volume, a parameter), with checkpoints that
+  a stopped run resumes from; setters `recipes.body_target(i)`, `recipes.parameter(name)`.
 - `ev.body(i)`: a live handle on one body (`.volume`, `.target` and `.volconst`
   settable, `.pressure`, `.fixed`); `target = None` frees the volume.
 - `Bodies.target_volume` is now `Bodies.target` (breaking).
