@@ -295,3 +295,21 @@ def test_builders_check_their_input():
     with pytest.raises(ValueError):
         C.mirror("w")
     assert "formula" in str(C.mirror("x", 0.5))
+
+
+def test_contact_angle_as_a_parameter():
+    # the same cap with the angle as a datafile parameter: same energy, and
+    # changing the parameter changes the wetting energy
+    v, f, rim = _cap()
+    on = [{1} if i in rim else set() for i in range(len(v))]
+    numeric = _load(v, f, {1: C.plane((0, 0, 1), contact_angle=THETA)}, on).total_energy
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(
+        v, f, constraints={1: C.plane((0, 0, 1), contact_angle="theta")},
+        vertex_constraints={1: rim}, bodies=[pyse.Body(faces=range(len(f)))],
+        parameters={"theta": THETA}))
+    assert ev.total_energy == pytest.approx(numeric, rel=1e-13)
+    ev.parameters["theta"] = 90.0
+    assert ev.total_energy == pytest.approx(_area(v, f), rel=1e-12)
+    s = C.sphere((0, 0, 0), 1.0, contact_angle="theta", wet_poles=("north",), span=np.pi)
+    assert np.isnan(s.energy_constant) and s.area_constant == pytest.approx(np.pi)
