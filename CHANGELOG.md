@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Speed
+
+- Quantity mode: the value and gradient passes of the fast element loop sum into
+  per-thread buffers merged in thread order, instead of recording every entry for a
+  serial replay (`g 10` in quantity mode at 98k facets, 8 threads: 0.83 -> 0.61 s;
+  results unchanged and deterministic).
+
 ## 0.6.0 (2026-10-08)
 
 ### Speed

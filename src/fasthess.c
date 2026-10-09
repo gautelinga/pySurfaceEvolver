@@ -656,9 +656,142 @@ void fl_pattern_store(struct linsys *S, int rows, int cols, int index_start)
    whose work raises an error or warning (kb_error()) is redone serially
    then, so Evolver reports it as usual. Returns 0 (nothing done) if it
    can't start. */
+/* Quantity value and gradient passes: each thread adds its elements' values,
+   area and forces into its own sums right after the element (in place of the
+   serial replay in element order), merged in thread order at the end. The
+   elements go to threads statically, so the sums are the same for a given
+   number of threads. */
+struct qsum { double s, c, a; };    /* compensated sum, absolute total */
+
+static int fh_ensure(void **p, long *size, long want, size_t item)
+{ void *q;
+  if ( want <= *size ) return 1;
+  q = realloc(*p,want*item);
+  if ( !q ) return 0;
+  *p = q;
+  *size = want;
+  return 1;
+}
+static struct qsum *acc_q = NULL, *acc_v = NULL;   /* [thread][method instance] */
+static long acc_q_size = 0, acc_v_size = 0;
+static struct qsum acc_area[FH_MAXTHREADS];
+static double *acc_force = NULL;                   /* [thread][vertex ordinal][SDIM] */
+static long acc_force_size = 0;
+static int acc_force_used[FH_MAXTHREADS];
+static long acc_nm = 0, acc_nv = 0;
+
+static void qsum_add(struct qsum *a, double x)
+{ double t = a->s + x;
+  if ( fabs(a->s) >= fabs(x) ) a->c += (a->s - t) + x;
+  else a->c += (x - t) + a->s;
+  a->s = t;
+  a->a += fabs(x);
+}
+
+static int acc_begin(int threads)
+{ acc_nm = meth_inst_count;
+  acc_nv = (long)web.skel[VERTEX].max_ord + 1;
+  if ( !fh_ensure((void**)&acc_q,&acc_q_size,threads*acc_nm,sizeof(struct qsum))
+       || !fh_ensure((void**)&acc_v,&acc_v_size,threads*acc_nm,sizeof(struct qsum)) )
+    return 0;
+  memset(acc_q,0,threads*acc_nm*sizeof(struct qsum));
+  memset(acc_v,0,threads*acc_nm*sizeof(struct qsum));
+  memset(acc_area,0,sizeof(acc_area));
+  memset(acc_force_used,0,sizeof(acc_force_used));
+  return 1;
+}
+
+/* the element's values, area and forces from b's records [e0, end) into
+   thread me's sums; those records are then done */
+static int acc_element(struct hbuf *b, long e0, int me)
+{ long e;
+  int j;
+  for ( e = e0 ; e < b->n ; e++ )
+  { struct hop *op = b->ops + e;
+    switch ( op->kind )
+    { case OP_QVALUE:
+        qsum_add(acc_q + me*acc_nm + op->r,op->x[0]);
+        op->kind = OP_DONE;
+        break;
+      case OP_VALUE:
+      { struct qsum *a = acc_v + me*acc_nm + op->r;
+        double t = a->s + op->x[0];     /* as qsum_add(), absolute total given */
+        if ( fabs(a->s) >= fabs(op->x[0]) ) a->c += (a->s - t) + op->x[0];
+        else a->c += (op->x[0] - t) + a->s;
+        a->s = t;
+        a->a += op->x[1];
+        op->kind = OP_DONE;
+        break;
+      }
+      case OP_AREA:
+        qsum_add(acc_area + me,op->x[0]);
+        op->kind = OP_DONE;
+        break;
+      case OP_FORCE:
+      { double *f;
+        if ( !acc_force_used[me] )
+        { if ( !acc_force ) return 0;
+          memset(acc_force + (size_t)me*acc_nv*SDIM,0,acc_nv*SDIM*sizeof(double));
+          acc_force_used[me] = 1;
+        }
+        f = acc_force + ((size_t)me*acc_nv + ordinal(op->v))*SDIM;
+        for ( j = 0 ; j < SDIM ; j++ ) f[j] += op->s*op->x[j];
+        op->kind = OP_DONE;
+        break;
+      }
+    }
+  }
+  return 1;
+}
+
+/* the sums, in thread order */
+static void acc_end(int threads)
+{ long m, k, n;
+  int t, j;
+  vertex_id *list;
+  for ( m = 0 ; m < acc_nm ; m++ )
+  { struct method_instance *mi = NULL;
+    for ( t = 0 ; t < threads ; t++ )
+    { struct qsum *q = acc_q + t*acc_nm + m, *v = acc_v + t*acc_nm + m;
+      if ( q->a != 0.0 || q->s != 0.0 )
+      { if ( !mi ) mi = METH_INSTANCE(m);
+        binary_tree_add(mi->value_addends,q->s + q->c);
+        mi->abstotal += q->a;
+      }
+      if ( v->a != 0.0 || v->s != 0.0 )
+      { if ( !mi ) mi = METH_INSTANCE(m);
+        mi->newvalue += v->s + v->c;
+        mi->abstotal += v->a;
+      }
+    }
+  }
+  for ( t = 0 ; t < threads ; t++ )
+    if ( acc_area[t].a != 0.0 )
+      binary_tree_add(web.total_area_addends,acc_area[t].s + acc_area[t].c);
+  for ( t = 0 ; t < threads && !acc_force_used[t] ; t++ ) ;
+  if ( t == threads ) return;
+  list = fl_element_list(VERTEX,&n);
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(threads) private(t,j)
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { REAL *force = get_force(list[k]);
+    long o = ordinal(list[k]);
+    for ( t = 0 ; t < threads ; t++ )
+      if ( acc_force_used[t] )
+        for ( j = 0 ; j < SDIM ; j++ )
+          force[j] += acc_force[((size_t)t*acc_nv + o)*SDIM + j];
+  }
+}
+
+static void quant_value_element(struct linsys *S, element_id id, vertex_id *c, int me,
+                                struct hbuf *b, void *ctx);
+static void quant_grad_element(struct linsys *S, element_id id, vertex_id *c, int me,
+                               struct hbuf *b, void *ctx);
+
 static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
                         void *ctx, int threads)
-{ static struct hbuf buf[FH_MAXTHREADS];
+{ int direct = (fn == quant_value_element || fn == quant_grad_element); static struct hbuf buf[FH_MAXTHREADS];
   static struct hbuf serial;   /* elements redone serially */
   element_id *list;
   vertex_id *corners = NULL;
@@ -683,6 +816,12 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   { free(fstart); free(fthread); free(ftrapped); return 0; }
   fl_prepare_threads(threads);
   live = S && S == pc_S && pc_live;
+  if ( direct )
+  { if ( !acc_begin(threads)
+         || !fh_ensure((void**)&acc_force,&acc_force_size,
+                       (long)threads*acc_nv*SDIM,sizeof(double)) )
+      direct = 0;
+  }
 
 #define CORNERS(id) (corners ? corners + 3*ordinal(id) : NULL)
   for ( start = 0 ; start < n && ok ; start += chunk )
@@ -691,7 +830,8 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
 
     fl_enter();
 #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic,4) num_threads(threads)
+    omp_set_schedule(direct ? omp_sched_static : omp_sched_dynamic, direct ? 0 : 4);
+    #pragma omp parallel for schedule(runtime) num_threads(threads)
 #endif
     for ( k = start ; k < end ; k++ )
     { int me = 0;
@@ -708,6 +848,8 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
         (*fn)(S,list[k],CORNERS(list[k]),me,&buf[me],ctx);
         fl_trap = NULL;
         if ( live ) pattern_add_entries(&buf[me],fstart[2*(k-start)]);
+        if ( direct && !acc_element(&buf[me],fstart[2*(k-start)],me) )
+          buf[me].failed = 1;
       }
       else   /* error or warning: drop this element's records, redo it below */
       { buf[me].n = fstart[2*(k-start)];
@@ -772,6 +914,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
     }
   }
 #undef CORNERS
+  if ( direct && ok ) acc_end(threads);
   free(fstart);
   free(fthread);
   free(ftrapped);
