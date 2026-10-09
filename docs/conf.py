@@ -34,6 +34,7 @@ intersphinx_mapping = {
 nb_execution_mode = "force"
 nb_execution_timeout = 600
 nb_execution_raise_on_error = True
+nb_execution_show_tb = True       # a failing cell's traceback in the build log
 myst_enable_extensions = ["colon_fence", "dollarmath"]
 
 html_theme = "furo"
