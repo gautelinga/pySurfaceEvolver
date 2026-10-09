@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Docs
+
+- New example, `slit_drainage`: liquid drained from a bead chain in a slit, from immersed
+  beads through bead emergence and the band to the snap. Runs a coarse case live and shows
+  stored full runs and movies for three bead spacings.
+
 ### Speed
 
 - Quantity mode: the value and gradient passes of the fast element loop sum into

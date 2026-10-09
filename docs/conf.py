@@ -37,4 +37,5 @@ nb_execution_raise_on_error = True
 myst_enable_extensions = ["colon_fence", "dollarmath"]
 
 html_theme = "furo"
+html_static_path = ["_static"]     # the drainage movies and stored runs
 html_title = f"pySurfaceEvolver {release}"

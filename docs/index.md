@@ -15,6 +15,7 @@ pip install ".[all]"     # + PyVista (also in Jupyter) and meshio
 tutorial
 liquid_bridge
 slit_droplet
+slit_drainage
 api
 performance
 ```
