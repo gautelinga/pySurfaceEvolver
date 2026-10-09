@@ -49,7 +49,7 @@ class Cell:
             constraints=self.constraints(),
             vertex_constraints={k: [i for i, c in enumerate(on) if k in c] for k in range(1, 7)}))
         # the liquid volume excludes the bead's eighth
-        ev.command(f"set body[1] volconst {-np.pi/6*self.radius**3!r}")
+        ev.command(f"set body[1] volconst {float(-np.pi/6*self.radius**3)!r}")
         return ev
 
     # ---- starting shapes ------------------------------------------------------
@@ -209,7 +209,7 @@ def drain(cell, v_start, v_end, levels=2, log=None):
         else:
             near = cell.gap(ev, 6, hops=2) < 4*cell.delta
             volume = max(v_end, (0.995 if near else 1 - cell.band_step)*volume)
-        ev.command(f"set body[1] target {volume!r}")
+        ev.command(f"set body[1] target {float(volume)!r}")
         cell.relax(ev, remesh=stage == 1)
         if stage == 0 and volume <= v_emerge:
             # the bead breaks through the meniscus: restart from a sheet with a dry
@@ -221,12 +221,13 @@ def drain(cell, v_start, v_end, levels=2, log=None):
             for _ in range(levels):
                 ev.refine()
                 cell.relax(ev)
-            events.append(dict(kind="bead emerges", volume=volume, before=before,
-                               after=ev.bodies().pressure[0]))
+            events.append(dict(kind="bead emerges", volume=float(volume), before=float(before),
+                               after=float(ev.bodies().pressure[0])))
         elif stage == 1 and cell.gap(ev, 6) < cell.snap_gap:
             # the band reaches the mirror y = 0: it snaps there, and the liquid
             # around each bead is no longer connected to the next row's
-            events.append(dict(kind="snap", volume=volume, before=ev.bodies().pressure[0]))
+            events.append(dict(kind="snap", volume=float(volume),
+                               before=float(ev.bodies().pressure[0])))
             record()
             break
         record()
