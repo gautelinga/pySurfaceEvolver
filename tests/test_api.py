@@ -384,7 +384,7 @@ def test_bodies_fixed_volume(cube):
     b = cube.bodies()
     assert b.ids.tolist() == [1]
     assert b.fixed.tolist() == [True]
-    assert b.target_volume[0] == 1.0
+    assert b.target[0] == 1.0
     assert b.volume[0] == pytest.approx(1.0, rel=1e-9)
     assert b.pressure[0] > 0  # surface tension pushes inward
 
@@ -394,7 +394,7 @@ def test_bodies_free_volume():
     ev.load_string(TETRA_NO_VOLUME)
     b = ev.bodies()
     assert b.fixed.tolist() == [False]
-    assert math.isnan(b.target_volume[0])
+    assert math.isnan(b.target[0])
     assert b.volume[0] == pytest.approx(1 / 6)
 
 

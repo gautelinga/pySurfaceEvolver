@@ -127,7 +127,7 @@ def test_set_coordinates_through_set_values(cube):
 def test_set_body_target(cube):
     cube.set_values("body", "target", 1.5)
     cube.iterate(10)
-    assert cube.bodies().target_volume[0] == 1.5
+    assert cube.bodies().target[0] == 1.5
     assert cube.eval("body[1].volume") == pytest.approx(1.5, rel=1e-6)
 
 
@@ -348,7 +348,7 @@ def test_load_mesh_file(tmp_path):
     ev = Evolver()
     ev.load_mesh_file(path, volume="current")
     assert ev.counts["vertices"] == 8        # STL duplicates merged
-    assert ev.bodies().target_volume[0] == pytest.approx(1.0)
+    assert ev.bodies().target[0] == pytest.approx(1.0)
     ev.iterate(10)
     assert ev.eval("body[1].volume") == pytest.approx(1.0, rel=1e-6)
 

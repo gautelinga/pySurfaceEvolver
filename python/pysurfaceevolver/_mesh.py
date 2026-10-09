@@ -453,6 +453,29 @@ class Mesh:
                                                for a, b in zip(lo, hi))))
         return _html.fields(f"Mesh ({self.vertices.shape[1]}D)", rows)
 
+    # ---- selections -------------------------------------------------------
+
+    def edges_touching(self, vertex_mask, how: str = "any") -> np.ndarray:
+        """Edges by their end vertices, as a mask over :attr:`edges` rows.
+
+        ``vertex_mask`` is one bool per vertex row (for example from
+        :meth:`Evolver.on_constraint`). ``how``: ``"any"`` (at least one end
+        selected), ``"all"`` (both ends) or ``"one"`` (exactly one end: the
+        edges leading off a contact line into the surface).
+        """
+        mask = np.asarray(vertex_mask, dtype=bool)
+        if mask.shape != (len(self.vertices),):
+            raise ValueError(f"vertex_mask needs one entry per vertex row "
+                             f"({len(self.vertices)}), got {mask.shape}")
+        ends = mask[self.edges]
+        if how == "any":
+            return ends.any(axis=1)
+        if how == "all":
+            return ends.all(axis=1)
+        if how == "one":
+            return ends[:, 0] != ends[:, 1]
+        raise ValueError(f"how must be 'any', 'all' or 'one', not {how!r}")
+
     # ---- tessellation -----------------------------------------------------
 
     def _default_n(self, n: Optional[int]) -> int:
@@ -925,7 +948,7 @@ class Bodies:
 
     ids: np.ndarray            # (b,) 1-based body numbers
     volume: np.ndarray         # (b,) current volume
-    target_volume: np.ndarray  # (b,) prescribed volume, NaN if not fixed
+    target: np.ndarray         # (b,) prescribed volume, NaN if not fixed
     pressure: np.ndarray       # (b,) Lagrange multiplier for the volume
     fixed: np.ndarray          # (b,) bool, volume constraint active
 
@@ -933,7 +956,7 @@ class Bodies:
         rows = [(_html.number(i), _html.number(v), _html.number(t), _html.number(p),
                  "fixed" if f else "")
                 for i, v, t, p, f in zip(self.ids[:_html.MAX_ROWS], self.volume,
-                                         self.target_volume, self.pressure, self.fixed)]
+                                         self.target, self.pressure, self.fixed)]
         return _html.table(rows, ["body", "volume", "target", "pressure", ""],
                            title="Bodies", total=len(self.ids))
 

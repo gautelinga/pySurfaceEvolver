@@ -23,6 +23,7 @@ from ._evolver import (
     EvolverWarning,
     InvalidSurfaceError,
     IterationResult,
+    BodyView,
     Parameters,
     Snapshot,
 )
@@ -103,6 +104,7 @@ __all__ = [
     "Bodies",
     "Body",
     "BodySurface",
+    "BodyView",
     "Evolver",
     "EvolverBusyError",
     "EvolverError",

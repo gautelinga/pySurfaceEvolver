@@ -51,12 +51,39 @@ def _threads_for_call(threads: Optional[int]) -> Generator[None, None, None]:
 
 
 class EvolverError(RuntimeError):
-    """An error reported by Surface Evolver. The surface is still usable."""
+    """An error reported by Surface Evolver. The surface is still usable.
+
+    ``command`` is the command text that failed (set by :meth:`Evolver.command`).
+    """
 
     def __init__(self, message: str, errnum: int = 0, output: str = ""):
         super().__init__(message)
         self.errnum = errnum
         self.output = output
+        self.command: Optional[str] = None
+
+
+# Mistakes that show up as Evolver syntax errors, with what to do instead
+_COMMAND_HINTS = [
+    (re.compile(r"\bnp\.\w+\("),
+     "the command contains a numpy number's repr (e.g. 'np.float64(0.5)'): format "
+     "float(x) instead, or set the value through the API (ev.body(i).target = x, "
+     "ev.parameters[name] = x)"),
+    (re.compile(r"(?<![\w.])(nan|inf)(?![\w(])", re.IGNORECASE),
+     "the command contains nan or inf: a value was not finite"),
+]
+
+
+def _num(value: Any, what: str = "value") -> str:
+    """A number for an Evolver command: exact, and plain for numpy scalars."""
+    x = float(value)
+    if not np.isfinite(x):
+        raise ValueError(f"{what} must be finite, got {x}")
+    return repr(x)
+
+
+def _command_hints(text: str) -> List[str]:
+    return [hint for pattern, hint in _COMMAND_HINTS if pattern.search(text)]
 
 
 class EvolverExit(EvolverError):
@@ -333,7 +360,16 @@ class Evolver:
         Returns everything Evolver printed to standard output. Raises
         :class:`EvolverError` if Evolver reports an error.
         """
-        output, _ = self._call(_core.command, text)
+        try:
+            output, _ = self._call(_core.command, text)
+        except EvolverError as error:
+            if isinstance(error, (EvolverExit, InvalidSurfaceError)):
+                raise
+            error.command = text
+            hints = _command_hints(text)
+            if hints:
+                error.args = (error.args[0] + "".join(f"\nHint: {h}" for h in hints),)
+            raise
         return output
 
     __call__ = command
@@ -622,15 +658,39 @@ class Evolver:
         self._run_statements(f"set {name}[{i}] {attribute} {float(v)!r}"
                              for i, v in zip(ids[mask], vals[mask]))
 
+    def set_flag(self, element: str, flag: str, where=None, on: bool = True) -> None:
+        """Set (or with ``on=False`` clear) a yes/no attribute such as ``fixed``
+        or ``no_refine`` on all elements of a type, or those selected by
+        ``where`` (a boolean mask or rows, aligned with :meth:`mesh` rows).
+
+        Prefer this over Evolver's ``foreach ... where ...`` in commands: there,
+        a bare element type inside an aggregate (``max(vertex, ...)``) means all
+        elements of the surface, and ``vertex[2]`` means global vertex 2, not an
+        edge's second vertex (that is ``ee.vertex[2]`` with a named element).
+        """
+        if not re.fullmatch(r"[A-Za-z_]\w*", flag):
+            raise ValueError(f"not an attribute name: {flag!r}")
+        name, ids, mask = self._selected(element, where)
+        verb = "set" if on else "unset"
+        self._run_statements(f"{verb} {name}[{i}] {flag}" for i in ids[mask])
+
     def fix(self, element: str, where=None) -> None:
         """Fix vertices, edges or facets (all, or those selected by ``where``)."""
-        name, ids, mask = self._selected(element, where)
-        self._run_statements(f"set {name}[{i}] fixed" for i in ids[mask])
+        self.set_flag(element, "fixed", where)
 
     def unfix(self, element: str, where=None) -> None:
         """Unfix vertices, edges or facets (all, or those selected by ``where``)."""
-        name, ids, mask = self._selected(element, where)
-        self._run_statements(f"unset {name}[{i}] fixed" for i in ids[mask])
+        self.set_flag(element, "fixed", where, on=False)
+
+    def on_constraint(self, constraint: Union[int, str], element: str = "vertex") -> np.ndarray:
+        """Which elements are on a constraint (number or name): one bool per
+        :meth:`mesh` row of that element type."""
+        if isinstance(constraint, str) and not re.fullmatch(r"[A-Za-z_]\w*", constraint):
+            raise ValueError(f"not a constraint name: {constraint!r}")
+        name = _ELEMENT_NAMES[_element_type(element)]
+        if _core.count(_element_type(element)) == 0:
+            return np.zeros(0, dtype=bool)
+        return self.values(name, f"on_constraint {constraint}") != 0
 
     def set_constraint(self, element: str, constraint: Union[int, str], where=None,
                        on: bool = True) -> None:
@@ -969,8 +1029,21 @@ class Evolver:
         return Mesh(xyz, edges, faces, vids, eids, fids, fbodies, fixed,
                     order, bezier, edge_nodes, edge_index, facet_nodes, facet_index)
 
+    def body(self, number: int) -> "BodyView":
+        """A live handle on one body (1-based, as in the datafile).
+
+        ``ev.body(1).target = 0.05`` sets the prescribed volume, and
+        ``ev.body(1).pressure`` reads the current pressure. For all bodies at
+        once, as arrays, use :meth:`bodies`.
+        """
+        number = int(number)
+        if not 1 <= number <= _core.count(_core.BODY):
+            raise IndexError(f"no body {number}: the surface has "
+                             f"{_core.count(_core.BODY)} bodies")
+        return BodyView(self, number)
+
     def bodies(self) -> Bodies:
-        """Return volumes, target volumes and pressures of all bodies."""
+        """Return volumes, target volumes and pressures of all bodies (a snapshot)."""
         _, result = self._call(_core.bodies)
         ids, volume, target, pressure, fixed = result.data
         return Bodies(ids, volume, target, pressure, fixed.astype(bool))
@@ -1070,6 +1143,65 @@ def _boundary_vertices(faces: np.ndarray) -> np.ndarray:
                     axis=1)
     unique, counts = np.unique(edges, axis=0, return_counts=True)
     return np.unique(unique[counts == 1])
+
+
+class BodyView:
+    """A live handle on one body; see :meth:`Evolver.body`.
+
+    Reading an attribute asks Evolver now; setting one changes the surface.
+    """
+
+    def __init__(self, ev: Evolver, number: int):
+        self._ev = ev
+        self.number = number
+
+    def _get(self, attribute: str) -> float:
+        return self._ev.eval(f"body[{self.number}].{attribute}")
+
+    @property
+    def volume(self) -> float:
+        """The current volume."""
+        return self._get("volume")
+
+    @property
+    def target(self) -> Optional[float]:
+        """The prescribed volume, or None if the volume is free. Setting a
+        number fixes the volume; setting None frees it."""
+        return self._get("target") if self.fixed else None
+
+    @target.setter
+    def target(self, value: Optional[float]) -> None:
+        if value is None:
+            self._ev.command(f"unset body[{self.number}] target")
+        else:
+            self._ev.command(f"set body[{self.number}] target {_num(value, 'target')}")
+
+    @property
+    def volconst(self) -> float:
+        """A constant added to the computed volume (for parts of the body the
+        surface doesn't enclose, such as a solid inside it)."""
+        return self._get("volconst")
+
+    @volconst.setter
+    def volconst(self, value: float) -> None:
+        self._ev.command(f"set body[{self.number}] volconst {_num(value, 'volconst')}")
+
+    @property
+    def pressure(self) -> float:
+        """The pressure: the Lagrange multiplier of the volume constraint."""
+        return self._get("pressure")
+
+    @property
+    def fixed(self) -> bool:
+        """Whether the volume is prescribed."""
+        b = self._ev.bodies()
+        return bool(b.fixed[list(b.ids).index(self.number)])
+
+    def __repr__(self) -> str:
+        target = self.target
+        return (f"<body {self.number}: volume {self.volume:.6g}, "
+                f"target {'free' if target is None else format(target, '.6g')}, "
+                f"pressure {self.pressure:.6g}>")
 
 
 class Parameters(MutableMapping):

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### API (phase F: a friendlier API)
+
+- `ev.body(i)`: a live handle on one body (`.volume`, `.target` and `.volconst`
+  settable, `.pressure`, `.fixed`); `target = None` frees the volume.
+- `Bodies.target_volume` is now `Bodies.target` (breaking).
+- `ev.on_constraint(k, element="vertex")`, `Mesh.edges_touching(mask, how=)` and
+  `ev.set_flag(element, flag, where=, on=)` select elements with numpy masks instead
+  of Evolver `where` clauses.
+- `EvolverError.command` holds the failing command; errors hint at numpy reprs
+  (`np.float64(...)`) and non-finite numbers in the command text.
+
 ### Fixes
 
 - Tiny-edge deletion (`t`, also used by `w` and `delete`) no longer merges the ends of an
