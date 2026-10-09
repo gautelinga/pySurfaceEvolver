@@ -503,6 +503,95 @@ concurrent engines 2-3 weeks; risk of silent state sharing through a missed stat
 surfaces in one session); if done later: engines one at a time, libc state
 (random, cwd) per engine.
 
+## Phase F: a friendlier API (design for review, 2026-10-10)
+
+Goal: the examples and the typical workflows without Evolver command strings.
+Today all four notebooks and the drainage helper use `ev.command(...)` for
+relaxation recipes (`"g 10; u; V"`, `"g 5; hessian; hessian; hessian"`), element
+selection (`foreach ... where ... do set ...`), body settings (`set body[1] target
+...`) and diagnostics (`eigenprobe`). The Python API may break (pre-1.0, no shims).
+
+Checked against the code: `relax()` exists (gradient steps until the energy
+settles, optional `hessian=True` Newton steps) but has no mesh tidying, refinement
+or rollback, so nobody uses it. `set_values("body", "target", v)` works already,
+and it formats `float(v)!r`, which is numpy-safe. `ev.bodies()` is a snapshot
+dataclass (23 uses in tests); `ev.parameters` is a live view. `Mesh` has no
+constraint membership (it is built in C); `ev.values("vertex", "on_constraint 3")`
+gives it.
+
+F1. **One relaxation call.**
+    `ev.relax(tol=1e-10, max_iter=1000, *, window=5, tidy=0, levels=0, newton=0,
+    seek=False, undo_if=None, callback=None, every=1, threads=None)`.
+    `tidy=k`: `u` and `V` after every k gradient steps (`k=10` is the examples'
+    `"g 10; u; V"`). `levels=n`: relax, refine, relax, ... n refinements. `newton=n`:
+    up to n Newton steps after the last level (`seek=True`: `hessian_seek`), until
+    one changes the energy by less than `tol`. `undo_if(ev) -> bool`: a snapshot
+    before each Newton step, restored (and Newton stopped) when it returns True;
+    the drainage needed this for steps that crossed a mirror. Replaces
+    `hessian=`/`max_hessian=` (breaking; decided). Also `ev.newton(steps=1, *, seek=False,
+    tol=None, undo_if=None) -> int` (steps taken); `ev.hessian()` stays as the
+    single step. The result's history gains a per-iteration `level`.
+F2. **Remeshing by edge length.**
+    `ev.remesh(target=None, *, max_edge=None, min_edge=None, equiangulate=True,
+    average=False, protect=None) -> dict` (edges split, deleted). `target=h` means
+    `max_edge=1.6h, min_edge=0.5h`, the ratios that fixed the drainage band. Runs
+    `l`, `t`, `u` (and `V`). `protect`: an edge mask not to split; sets
+    `no_refine` for the `l` and restores each edge's previous flag after. Raises
+    for Lagrange/quadratic models (Evolver's `t` doesn't support them).
+F3. **Selections as masks.** `ev.on_constraint(k, element="vertex") -> bool array`
+    aligned with `mesh()` rows; `Mesh.edges_touching(vertex_mask, how="any"|"all"|
+    "one")` (`"one"`: exactly one end, the contact-line spokes of F2);
+    `ev.set_flag(element, flag, where=None, on=True)` for boolean attributes
+    (`fixed`, `no_refine`, ...; `fix`/`unfix` become one-liners on it). The API docs
+    explain the two Evolver quirks the masks avoid (a bare element type in an
+    aggregate means all elements; `vertex[2]` in a `where` is global vertex 2).
+F4. **Bodies.** A live handle `ev.body(i)` with `.volume`, `.target` (settable),
+    `.volconst` (settable), `.pressure`, `.fixed`; `ev.bodies()` stays the snapshot
+    for arrays and plots. One internal number formatter (`repr(float(x))`) for every
+    command the API builds. Also the pending rename `Bodies.target_volume` ->
+    `target`. **Decided:** the live handle `ev.body(i)`; `ev.bodies()` stays.
+F5. **Constraint builders with contact angles.** A `pyse.constraints` module:
+    `plane(normal, offset, contact_angle=None)`, `mirror(axis, at=0)` (no
+    wetting energy), `sphere(center, radius, contact_angle=None, axis="z")`.
+    Each renders the constraint text with the energy and content integrals and
+    tells `make_datafile` the body's `volconst` correction; `make_datafile(constraints=)`
+    takes them besides strings. Risks found while doing it by hand for the slit
+    bead: signs depend on the facet orientation relative to the body and on which
+    side the liquid is (an explicit `liquid=` side argument), and the sphere's
+    dphi line integrals need the axis through the centre to stay in the wetted
+    region (document, and check at load). Acceptance: exact cases to 1e-6 relative
+    on refined meshes: sessile drops (spherical caps) on planes at several angles,
+    the immersed slit meniscus, the pendular ring, and the slit bead (against the
+    hand-written integrals in `docs/drainage_helpers.py`, verified against exact
+    sheets and rings). **Decided:** planes, mirrors, spheres and cylinders
+    (`cylinder(axis_point, direction, radius, contact_angle=None)`, exact checks:
+    a liquid ring on a fibre, a drop between two parallel fibres if feasible).
+F6. **Diagnostics as values.** `ev.eigen_counts(shift=0.0) -> (negative, zero,
+    positive)` from `eigenprobe` (costs one factorization); `ev.check() -> list of
+    problems` (Evolver's `check`; empty when the topology is sound);
+    `ev.mesh_quality()` -> edge lengths (min, median, max), smallest facet angles,
+    skinny-facet count (< 15 degrees), zero-area facets. "Vertices inside solids"
+    stays the user's (constraints are formulas); the docs show it with F3 masks.
+F7. **Mirrored display.** `Mesh.mirrored(planes)` and `plot(..., mirror=...)` /
+    `live_view(..., mirror=...)`: each plane is `"x"` (x = 0), `("x", c)`, or
+    `(normal, point)`; reflections apply in order, each doubling what is there (the
+    slit's eighth cell: `["z", "y", "x", ("x", ell/2)]`).
+F8. **Continuation.** `pyse.continuation(ev, set_value, values, *, relax=None,
+    checkpoint=None, resume=None)`: a generator; per value it calls `set_value(ev,
+    v)` (helpers for a body's target and for a parameter), relaxes (`relax`: kwargs
+    for F1 or a callable), checkpoints (dump + state, written atomically), and
+    yields a record (value, energy, pressures, `ev`). Events stay in user code: the
+    caller can rebuild and `send()` a new `Evolver` (the drainage rebuilt at the
+    bead emergence). **Decided:** in a `pyse.recipes` module.
+F9. **Better command errors.** `EvolverError` carries the command text
+    (`.command`) and adds hints for common mistakes: `np.`/`np.float64(` in the
+    text (a numpy value formatted with repr: use `float()`), `nan`/`inf`.
+
+Order: F9, F4, F3, F1, F2, F6, F7, F5, F8; then convert the four notebooks and the
+drainage helper to the new API (they are the integration test: same numbers as
+now), update the tutorial and API docs. Each item: tests first where the behaviour
+is exact, full suite, quick sanitizers for C changes (none planned), one commit.
+
 ## Tools and conventions
 
 - Tests: `pytest`; with `PYSE_CHECK_FACET_CACHE=1` for cache verification.
