@@ -505,6 +505,11 @@ surfaces in one session); if done later: engines one at a time, libc state
 
 ## Phase F: a friendlier API (design for review, 2026-10-10)
 
+**Done 2026-10-10** (ce50fc4 F4/F3/F9, 8d004de F1, 336eeda F2, 855cdc4 F6,
+ef6c100 F7, 5c953b8 + 01b5e50 F5, cf9243b F8, 06b0d50 the examples). Not pushed
+at the time of writing. The suite also passes under numpy 2.5 (CI's), which
+the local venv (1.26) can't show: run it in a fresh venv before pushing.
+
 Goal: the examples and the typical workflows without Evolver command strings.
 Today all four notebooks and the drainage helper use `ev.command(...)` for
 relaxation recipes (`"g 10; u; V"`, `"g 5; hessian; hessian; hessian"`), element
