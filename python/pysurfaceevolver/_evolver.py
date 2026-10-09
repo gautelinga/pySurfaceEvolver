@@ -182,8 +182,9 @@ def _target_format(path: str, file_format: Optional[str]) -> "tuple[Optional[str
 class IterationResult:
     """What :meth:`Evolver.iterate` or :meth:`Evolver.relax` did.
 
-    ``energy``, ``area`` and ``scale`` have one entry per gradient iteration.
-    ``converged`` and ``hessian_steps`` are set by :meth:`Evolver.relax`.
+    ``energy``, ``area``, ``scale`` and ``level`` (the refinement level, from
+    0) have one entry per gradient iteration. ``converged`` and
+    ``newton_steps`` are set by :meth:`Evolver.relax`.
     """
 
     energy: np.ndarray
@@ -191,7 +192,8 @@ class IterationResult:
     scale: np.ndarray
     output: str
     converged: Optional[bool] = None
-    hessian_steps: int = 0
+    newton_steps: int = 0
+    level: Optional[np.ndarray] = None
 
 # eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
 # (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
@@ -444,64 +446,121 @@ class Evolver:
         scale.append(self.eval("scale"))
 
     def relax(self, tol: float = 1e-10, max_iter: int = 1000, *, window: int = 5,
-              hessian: bool = False, max_hessian: int = 10,
+              tidy: int = 0, levels: int = 0, newton: int = 0, seek: bool = False,
+              undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
-        """Iterate until the energy stops changing.
+        """Relax the surface: gradient steps until the energy settles, with
+        optional mesh tidying, refinement and Newton steps.
 
-        Runs gradient iterations until the relative energy change
-        ``|E[i] - E[i-1]| / max(1, |E[i]|)`` stays below ``tol`` for
-        ``window`` consecutive iterations, or ``max_iter`` is reached.
-        With ``hessian=True``, Newton steps (``hessian``) follow, until one
-        changes the energy by less than ``tol`` (at most ``max_hessian``).
+        Gradient steps (Evolver's ``g``) run until the relative energy change
+        ``|E[i] - E[i-1]| / max(1, |E[i]|)`` stays below ``tol`` for ``window``
+        consecutive steps, or ``max_iter`` steps.
 
-        Returns the gradient iterations' :class:`IterationResult`, with
-        ``converged`` and ``hessian_steps`` set. ``callback(ev, i)`` works as
-        in :meth:`iterate`. It doesn't refine; refine and relax again for a
-        finer surface. ``threads`` sets the threads for this call only (see
-        :func:`pysurfaceevolver.threads_limit`).
+        ``tidy=n``: then up to n tidying cycles: equiangulate and average the
+        vertices (``u; V``), and relax again; stops when a cycle changes the
+        relaxed energy by less than ``tol``. (Vertex averaging is mesh
+        smoothing, not energy descent, so it runs between relaxations, not
+        within them.)
+        ``levels=n``: refine and relax again, n times (``max_iter`` per level).
+        ``newton=n``: then up to n Newton steps (``seek=True``: with a line
+        search, ``hessian_seek``), stopping when one changes the energy by less
+        than ``tol``. ``undo_if(ev)``: checked after each Newton step; if it
+        returns True the step is undone and Newton stops (for example when a
+        step pushed the surface through a wall).
+
+        Returns the gradient steps' :class:`IterationResult`, with ``level``,
+        ``converged`` (of the last level, or of Newton when it ran) and
+        ``newton_steps``. ``callback(ev, i)`` is called every ``every``-th
+        gradient step and at the end of each level. ``threads`` sets the
+        threads for this call only (see :func:`pysurfaceevolver.threads_limit`).
         """
-        with _threads_for_call(threads):
-            return self._relax(tol, max_iter, window=window, hessian=hessian,
-                               max_hessian=max_hessian, callback=callback, every=every)
-
-    def _relax(self, tol: float, max_iter: int, *, window: int, hessian: bool,
-               max_hessian: int, callback: Optional[Callable[["Evolver", int], Any]],
-               every: int) -> IterationResult:
-        """relax() without the thread setting."""
         if tol <= 0 or max_iter < 1 or window < 1:
             raise ValueError("tol must be positive; max_iter and window at least 1")
-        energy: List[float] = []
-        area: List[float] = []
-        scale: List[float] = []
-        output: List[str] = []
+        if tidy < 0 or levels < 0 or newton < 0:
+            raise ValueError("tidy, levels and newton must be non-negative")
+        with _threads_for_call(threads):
+            energy: List[float] = []
+            area: List[float] = []
+            scale: List[float] = []
+            level: List[int] = []
+            output: List[str] = []
+            converged = False
+            for lev in range(levels + 1):
+                if lev:
+                    self.refine()
+                n0 = len(energy)
+                converged = self._relax_level(tol, max_iter, window, callback, every,
+                                              energy, area, scale, output)
+                for _ in range(tidy):
+                    settled = _core.total_energy()
+                    output.append(self.command("u; V"))
+                    converged = self._relax_level(tol, max_iter, window, callback, every,
+                                                  energy, area, scale, output)
+                    after = _core.total_energy()
+                    if abs(after - settled) / max(1.0, abs(after)) < tol:
+                        break
+                level += [lev]*(len(energy) - n0)
+            steps = 0
+            if newton:
+                steps, converged = self._newton(newton, seek, tol, undo_if, output)
+        return IterationResult(np.array(energy), np.array(area), np.array(scale),
+                               "".join(output), converged, steps, np.array(level, dtype=int))
+
+    def _relax_level(self, tol: float, max_iter: int, window: int,
+                     callback: Optional[Callable[["Evolver", int], Any]], every: int,
+                     energy: List[float], area: List[float], scale: List[float],
+                     output: List[str]) -> bool:
+        """Gradient steps until the energy settles; True if it did."""
         previous = _core.total_energy()
         quiet = 0
-        converged = False
+        first = len(energy)
         for i in range(1, max_iter + 1):
             self._step(energy, area, scale, output)
+            change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
             if callback is not None and i % every == 0:
                 callback(self, i)
-            change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
             previous = energy[-1]
             quiet = quiet + 1 if change < tol else 0
             if quiet >= window:
-                converged = True
                 break
-        if callback is not None and len(energy) % every != 0:
-            callback(self, len(energy))
-        steps = 0
-        if hessian:
-            converged = False
-            for steps in range(1, max_hessian + 1):
-                before = _core.total_energy()
-                output.append(self.command("hessian"))
-                after = _core.total_energy()
-                if abs(after - before) / max(1.0, abs(after)) < tol:
-                    converged = True
-                    break
-        return IterationResult(np.array(energy), np.array(area), np.array(scale),
-                               "".join(output), converged, steps)
+        steps = len(energy) - first
+        if callback is not None and steps % every != 0:
+            callback(self, steps)
+        return quiet >= window
+
+    def newton(self, steps: int = 1, *, seek: bool = False, tol: Optional[float] = None,
+               undo_if: Optional[Callable[["Evolver"], bool]] = None,
+               threads: Optional[int] = None) -> int:
+        """Up to ``steps`` Newton steps (``seek=True``: with a line search).
+
+        With ``tol``, stops when a step changes the energy by less than ``tol``
+        (relative, as in :meth:`relax`). ``undo_if(ev)`` is checked after each
+        step; when it returns True the step is undone and Newton stops.
+        Returns the number of steps kept.
+        """
+        if steps < 0:
+            raise ValueError("steps must be non-negative")
+        with _threads_for_call(threads):
+            kept, _ = self._newton(steps, seek, tol, undo_if, [])
+        return kept
+
+    def _newton(self, steps: int, seek: bool, tol: Optional[float],
+                undo_if: Optional[Callable[["Evolver"], bool]],
+                output: List[str]) -> "tuple[int, bool]":
+        kept = 0
+        for _ in range(steps):
+            snapshot = self.save() if undo_if is not None else None
+            before = _core.total_energy()
+            output.append(self.command("hessian_seek" if seek else "hessian"))
+            if undo_if is not None and undo_if(self):
+                self.restore(snapshot)
+                return kept, False
+            kept += 1
+            after = _core.total_energy()
+            if tol is not None and abs(after - before) / max(1.0, abs(after)) < tol:
+                return kept, True
+        return kept, tol is None
 
     def refine(self, times: int = 1) -> None:
         """Refine the surface: split every edge and facet (Evolver's ``r``)."""

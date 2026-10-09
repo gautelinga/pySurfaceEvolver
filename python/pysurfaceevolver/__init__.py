@@ -61,7 +61,7 @@ def threads_limit(n: int) -> Generator[None, None, None]:
     setting (including "the default")::
 
         with pyse.threads_limit(4):
-            ev.relax(hessian=True)
+            ev.relax(newton=10)
     """
     from . import _core
     previous = _core.thread_setting()

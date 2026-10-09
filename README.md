@@ -22,7 +22,7 @@ from pysurfaceevolver import Evolver
 ev = Evolver("cube.fe")              # bundled samples are found from anywhere
 result = ev.iterate(10)              # energy, area, scale per iteration
 ev.refine()
-ev.relax(tol=1e-10, hessian=True)    # iterate until the energy settles, then Newton
+ev.relax(tol=1e-10, newton=10)       # iterate until the energy settles, then Newton
 ev.set_model("lagrange", 3)
 
 snapshot = ev.save()                 # exact snapshot of the surface

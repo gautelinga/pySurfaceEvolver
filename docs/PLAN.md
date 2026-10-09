@@ -522,8 +522,11 @@ gives it.
 F1. **One relaxation call.**
     `ev.relax(tol=1e-10, max_iter=1000, *, window=5, tidy=0, levels=0, newton=0,
     seek=False, undo_if=None, callback=None, every=1, threads=None)`.
-    `tidy=k`: `u` and `V` after every k gradient steps (`k=10` is the examples'
-    `"g 10; u; V"`). `levels=n`: relax, refine, relax, ... n refinements. `newton=n`:
+    `tidy=n`: up to n cycles of `u; V` then relax again, stopping when a cycle
+    changes the relaxed energy by less than `tol` (built so after measuring: `V`
+    inside the relaxation, every k steps, kept the energy from ever settling, since
+    vertex averaging is smoothing, not descent; between equilibria the cube settles
+    in 2-3 cycles). `levels=n`: relax, refine, relax, ... n refinements. `newton=n`:
     up to n Newton steps after the last level (`seek=True`: `hessian_seek`), until
     one changes the energy by less than `tol`. `undo_if(ev) -> bool`: a snapshot
     before each Newton step, restored (and Newton stopped) when it returns True;

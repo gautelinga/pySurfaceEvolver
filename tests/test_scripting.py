@@ -46,14 +46,14 @@ def test_relax_reports_no_convergence(cube):
     assert result.converged is False and len(result.energy) == 3
 
 
-def test_relax_with_hessian(cube):
+def test_relax_with_newton(cube):
     cube.iterate(5)
     cube.refine()
     gradient_only = cube.save()
     plain = cube.relax(tol=1e-9)
     cube.restore(gradient_only)
-    polished = cube.relax(tol=1e-9, hessian=True)
-    assert polished.converged and polished.hessian_steps >= 1
+    polished = cube.relax(tol=1e-9, newton=10)
+    assert polished.converged and polished.newton_steps >= 1
     assert cube.total_energy <= plain.energy[-1] + 1e-12
 
 

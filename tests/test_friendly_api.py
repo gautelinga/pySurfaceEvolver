@@ -118,3 +118,46 @@ def test_fix_and_unfix_use_set_flag(cube):
     assert not cube.mesh().fixed.any()
     with pytest.raises(ValueError):
         cube.set_flag("vertex", "fixed; quit")
+
+
+# ---- F1: relaxation -----------------------------------------------------------
+
+def test_relax_levels_refine_and_record_the_level(cube):
+    facets = cube.counts["facets"]
+    result = cube.relax(tol=1e-8, max_iter=300, levels=2)
+    assert cube.counts["facets"] == 16*facets
+    assert result.level[0] == 0 and result.level[-1] == 2
+    assert (np.diff(result.level) >= 0).all() and len(result.level) == len(result.energy)
+
+
+def test_relax_tidy_reaches_the_same_energy(cube):
+    start = cube.save()
+    cube.refine()
+    plain = cube.relax(tol=1e-9, max_iter=2000)
+    cube.restore(start)
+    cube.refine()
+    tidy = cube.relax(tol=1e-9, max_iter=2000, tidy=5)
+    assert plain.converged and tidy.converged
+    assert tidy.energy[-1] == pytest.approx(plain.energy[-1], rel=1e-8)
+    assert len(tidy.energy) > len(plain.energy)      # it did relax again after tidying
+
+
+def test_relax_newton_with_undo(cube):
+    cube.relax(tol=1e-8, max_iter=300)
+    e = cube.total_energy
+    result = cube.relax(tol=1e-8, max_iter=5, newton=3, undo_if=lambda ev: True)
+    assert result.newton_steps == 0 and result.converged is False
+    assert cube.total_energy == pytest.approx(cube.relax(tol=1e-8, max_iter=5).energy[-1])
+    assert abs(cube.total_energy - e) < 1e-6
+
+
+def test_newton_steps(cube):
+    cube.refine()
+    cube.relax(tol=1e-6, max_iter=300)
+    before = cube.total_energy
+    kept = cube.newton(5, tol=1e-12, seek=True)
+    assert 1 <= kept <= 5 and cube.total_energy <= before + 1e-12
+    calls = []
+    assert cube.newton(2, undo_if=lambda ev: calls.append(1) or len(calls) == 2) == 1
+    with pytest.raises(ValueError):
+        cube.relax(tidy=-1)

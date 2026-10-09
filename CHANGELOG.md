@@ -4,6 +4,12 @@
 
 ### API (phase F: a friendlier API)
 
+- `ev.relax(...)` does the whole recipe: `levels=n` (refine and relax again),
+  `tidy=n` (cycles of equiangulation and vertex averaging between relaxations),
+  `newton=n` with `seek=` and `undo_if=` (a Newton step is undone when
+  `undo_if(ev)` is true). Replaces `hessian=`/`max_hessian=`, and
+  `IterationResult.hessian_steps` is now `newton_steps` (breaking); the result has a
+  per-iteration `level`. New `ev.newton(steps, seek=, tol=, undo_if=)`.
 - `ev.body(i)`: a live handle on one body (`.volume`, `.target` and `.volconst`
   settable, `.pressure`, `.fixed`); `target = None` frees the volume.
 - `Bodies.target_volume` is now `Bodies.target` (breaking).
