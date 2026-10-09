@@ -569,6 +569,20 @@ F5. **Constraint builders with contact angles.** A `pyse.constraints` module:
     sheets and rings). **Decided:** planes, mirrors, spheres and cylinders
     (`cylinder(axis_point, direction, radius, contact_angle=None)`, exact checks:
     a liquid ring on a fibre, a drop between two parallel fibres if feasible).
+    **Built** (`pyse.constraints`), with what testing taught: the integrands must
+    vanish wherever the wetted region's boundary runs along a mirror, so each
+    builder has a gauge: planes `t ds` in a frame set by `ref`/`origin` (an
+    arbitrary frame made the drainage wall's x = ell/2 mirror count), spheres
+    `h dphi` about z (mirrors through the axis and the equator plane; wet poles
+    give `volconst`/`energy_constant` for a `span`), cylinders `l dphi`
+    ("azimuthal") or `phi dl` ("axial", for fibres cut by mirrors across them).
+    Faces no contact line touches (a floor under the film) and tilted mirror
+    faces can't be closed by line integrals: documented (keep mirrors vertical or
+    at z = 0; add the floor's z dx dy to `volconst`). Tests: plane caps exact to
+    1e-12 (table, ceiling, tilted), the immersed slit meniscus exact (walls,
+    mirrors, a fully wetted bead), the sphere zone converging at second order
+    and identical to the drainage helper's hand-written bead integrals, fibres
+    (horizontal exact, also moved; vertical converging).
 F6. **Diagnostics as values.** `ev.eigen_counts(shift=0.0) -> (negative, zero,
     positive)` from `eigenprobe` (costs one factorization); `ev.check() -> list of
     problems` (Evolver's `check`; empty when the topology is sound);

@@ -20,6 +20,10 @@
 - Mirror images for symmetric pieces: `ev.plot(mirror=["z", "y", ("x", c)])`,
   `ev.live_view(mirror=...)` (the images share the data, so updates stay fast), and
   `Mesh.mirrored(planes)` for one combined linear mesh.
+- `pyse.constraints`: planes, mirrors, spheres and cylinders with contact angles, for
+  `make_datafile(constraints=)`: they write the wetting-energy and volume line
+  integrals (and give the sphere's `volconst` and energy constant for wet poles);
+  `Body(volconst=)`.
 - `ev.body(i)`: a live handle on one body (`.volume`, `.target` and `.volconst`
   settable, `.pressure`, `.fixed`); `target = None` frees the volume.
 - `Bodies.target_volume` is now `Bodies.target` (breaking).

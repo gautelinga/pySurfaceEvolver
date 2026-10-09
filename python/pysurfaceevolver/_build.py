@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 import numpy as np
 
@@ -18,12 +18,15 @@ class Body:
     all +1) says whether each face's normal, by its vertex order, points out
     of the body (+1) or into it (-1). ``volume`` fixes the volume; ``None``
     leaves it free. ``density`` sets the body's weight density (for gravity).
+    ``volconst`` is added to the computed volume (for example a solid inside
+    the body; see :attr:`pysurfaceevolver.constraints.Constraint.volconst`).
     """
 
     faces: Sequence[int]
     volume: Optional[float] = None
     orientation: Optional[Sequence[int]] = None
     density: Optional[float] = None
+    volconst: Optional[float] = None
 
 
 def _num(x: float) -> str:
@@ -31,7 +34,9 @@ def _num(x: float) -> str:
     return repr(float(x))
 
 
-def _constraint_text(number: int, spec: str) -> str:
+def _constraint_text(number: int, spec) -> str:
+    if hasattr(spec, "text") and callable(spec.text):      # constraints.Constraint
+        return f"constraint {number}\n{spec.text()}"
     spec = spec.strip()
     body = spec if ("formula" in spec.lower() or "function" in spec.lower()) \
         else f"formula: {spec}"
@@ -45,7 +50,7 @@ def make_datafile(
     edges=None,
     bodies: Optional[Iterable[Union[Body, Mapping]]] = None,
     fixed=None,
-    constraints: Optional[Mapping[int, str]] = None,
+    constraints: Optional[Mapping[int, Any]] = None,
     vertex_constraints: Optional[Mapping[int, Iterable]] = None,
     edge_fixed=None,
     edge_constraints: Optional[Mapping[int, Iterable]] = None,
@@ -74,7 +79,9 @@ def make_datafile(
     constraints:
         ``{number: formula}``, e.g. ``{1: "z = 0"}``. A value that already
         contains ``formula:`` (or ``function:``) is copied as is, so energy
-        and content integrals can be included.
+        and content integrals can be included. A value from
+        :mod:`pysurfaceevolver.constraints` (planes, mirrors, spheres and
+        cylinders with contact angles) writes its integrals itself.
     vertex_constraints:
         ``{number: vertex rows or mask}`` putting vertices on constraints.
     edge_fixed, edge_constraints:
@@ -205,6 +212,8 @@ def make_datafile(
                 line += f" volume {_num(b.volume)}"
             if b.density is not None:
                 line += f" density {_num(b.density)}"
+            if b.volconst is not None:
+                line += f" volconst {_num(b.volconst)}"
             out.append(line + "\n")
 
     if commands:
