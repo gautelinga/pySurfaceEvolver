@@ -161,3 +161,51 @@ def test_newton_steps(cube):
     assert cube.newton(2, undo_if=lambda ev: calls.append(1) or len(calls) == 2) == 1
     with pytest.raises(ValueError):
         cube.relax(tidy=-1)
+
+
+# ---- F2: remeshing --------------------------------------------------------------
+
+def _edge_lengths(ev):
+    m = ev.mesh()
+    return np.linalg.norm(m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)
+
+
+def test_remesh_evens_out_edges(cube):
+    cube.refine(2)
+    xyz = cube.vertices.copy()
+    xyz[:, 0] *= 3                      # stretch: long edges along x
+    cube.vertices = xyz
+    lengths = _edge_lengths(cube)
+    h = float(np.median(lengths))
+    lo, hi = 0.5*h, 1.6*h
+    counts = cube.remesh(target=h)
+    assert counts["split"] > 0
+    after = _edge_lengths(cube)
+    assert (after > hi).sum() < (lengths > hi).sum()
+    assert counts["deleted"] > 0
+    assert cube.relax(tol=1e-6, max_iter=500).energy[-1] > 0
+
+
+def test_remesh_protect_keeps_edges_whole_and_restores_flags():
+    v = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0.5, 0.5, 0]]
+    f = [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]]
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(v, f))
+    m = ev.mesh()
+    spokes = m.edges_touching(np.arange(5) == 4, "any")      # the 4 diagonals
+    ev.set_flag("edge", "no_refine", where=[0])               # one edge flagged already
+    flagged_before = ev.values("edge", "no_refine") != 0
+    ev.remesh(max_edge=0.6, min_edge=None, equiangulate=False, protect=spokes)
+    # the sides split, except edge 0, flagged no_refine before (flags are honoured)
+    assert ev.counts["vertices"] == 5 + int((~spokes & ~flagged_before).sum())
+    flags = ev.values("edge", "no_refine")[:len(spokes)] != 0
+    assert (flags == flagged_before).all()                     # flags as before
+
+
+def test_remesh_needs_the_linear_model(cube):
+    cube.set_model("quadratic")
+    with pytest.raises(ValueError, match="linear"):
+        cube.remesh(0.1)
+    cube.set_model("linear")
+    with pytest.raises(ValueError, match="2\\*min_edge"):
+        cube.remesh(max_edge=0.3, min_edge=0.2)

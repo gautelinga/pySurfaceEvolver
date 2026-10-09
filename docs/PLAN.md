@@ -534,7 +534,7 @@ F1. **One relaxation call.**
     `hessian=`/`max_hessian=` (breaking; decided). Also `ev.newton(steps=1, *, seek=False,
     tol=None, undo_if=None) -> int` (steps taken); `ev.hessian()` stays as the
     single step. The result's history gains a per-iteration `level`.
-F2. **Remeshing by edge length.**
+F2. **Remeshing by edge length.** (built: `t` first (merging lengthens edges), then `refine edge where length > max and not no_refine`: Evolver's `l` ignores `no_refine`, so the drainage helper's protection never worked; requires max_edge >= 2 min_edge)
     `ev.remesh(target=None, *, max_edge=None, min_edge=None, equiangulate=True,
     average=False, protect=None) -> dict` (edges split, deleted). `target=h` means
     `max_edge=1.6h, min_edge=0.5h`, the ratios that fixed the drainage band. Runs

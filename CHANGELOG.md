@@ -10,6 +10,9 @@
   `undo_if(ev)` is true). Replaces `hessian=`/`max_hessian=`, and
   `IterationResult.hessian_steps` is now `newton_steps` (breaking); the result has a
   per-iteration `level`. New `ev.newton(steps, seek=, tol=, undo_if=)`.
+- `ev.remesh(target=h)` (or `max_edge=`, `min_edge=`): deletes short edges, splits
+  long ones and equiangulates; `protect=` keeps an edge mask whole. Splitting honours
+  `no_refine` (Evolver's `l` ignores it).
 - `ev.body(i)`: a live handle on one body (`.volume`, `.target` and `.volconst`
   settable, `.pressure`, `.fixed`); `target = None` frees the volume.
 - `Bodies.target_volume` is now `Bodies.target` (breaking).

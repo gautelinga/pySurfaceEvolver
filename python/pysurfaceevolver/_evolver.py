@@ -562,6 +562,69 @@ class Evolver:
                 return kept, True
         return kept, tol is None
 
+    def remesh(self, target: Optional[float] = None, *, max_edge: Optional[float] = None,
+               min_edge: Optional[float] = None, equiangulate: bool = True,
+               average: bool = False, protect=None) -> Dict[str, int]:
+        """Even out edge lengths: delete edges shorter than ``min_edge``
+        (Evolver's ``t``), split edges longer than ``max_edge`` (``refine edge
+        where length > max_edge``), then equiangulate (``u``) and, with
+        ``average=True``, average the vertices (``V``). Deleting first: merging
+        vertices lengthens the edges around them. One call splits each long
+        edge once and doesn't delete every short edge (Evolver refuses unsafe
+        merges); call it every few steps rather than expecting one call to
+        finish the job.
+
+        ``target=h`` sets ``max_edge=1.6*h`` and ``min_edge=0.5*h`` (explicit
+        values win). Call it every few steps when the surface stretches or
+        shrinks a lot, for example while a contact line moves.
+
+        ``protect`` (an edge mask, aligned with :meth:`mesh` rows) keeps edges
+        from being split, by setting ``no_refine`` on them for the split; their
+        own flags are restored after. Edges flagged ``no_refine`` already are
+        never split (unlike Evolver's ``l``, which ignores the flag). Edges leading from a contact line on a
+        curved constraint into the surface are good candidates: their midpoint
+        would land off the constraint, e.g. inside a solid sphere
+        (``mesh.edges_touching(ev.on_constraint(k), "one")``).
+
+        Linear model only (Evolver deletes edges only there). Returns the
+        numbers of edges ``deleted``, ``split`` and ``switched``.
+        """
+        if self.model != "linear":
+            raise ValueError("remesh() needs the linear model (Evolver's 't' doesn't "
+                             "delete edges in the quadratic or Lagrange model)")
+        if target is not None:
+            max_edge = 1.6*float(target) if max_edge is None else max_edge
+            min_edge = 0.5*float(target) if min_edge is None else min_edge
+        if max_edge is not None and min_edge is not None and not 2*min_edge <= max_edge:
+            raise ValueError("max_edge must be at least 2*min_edge: split halves "
+                             "shorter than min_edge would be deleted again")
+        counts = {"deleted": 0, "split": 0, "switched": 0}
+
+        def number(text: str) -> int:
+            found = re.findall(r"(\d+)\s*$", text.strip())
+            return int(found[-1]) if found else 0
+
+        if min_edge is not None:
+            counts["deleted"] = number(self.command(f"t {_num(min_edge, 'min_edge')}"))
+        if max_edge is not None:
+            newly: np.ndarray = np.zeros(0, dtype=np.int64)
+            if protect is not None:
+                ids = self._ids(_core.EDGE)
+                mask = self._mask(_core.EDGE, protect, len(ids))
+                already = self.values("edge", "no_refine") != 0
+                newly = ids[mask & ~already]
+                self._run_statements(f"set edge[{i}] no_refine" for i in newly)
+            try:
+                counts["split"] = number(self.command(
+                    f"refine edge where length > {_num(max_edge, 'max_edge')} and not no_refine"))
+            finally:
+                self._run_statements(f"unset edge[{i}] no_refine" for i in newly)
+        if equiangulate:
+            counts["switched"] = number(self.command("u"))
+        if average:
+            self.command("V")
+        return counts
+
     def refine(self, times: int = 1) -> None:
         """Refine the surface: split every edge and facet (Evolver's ``r``)."""
         for _ in range(times):

@@ -147,12 +147,7 @@ class Cell:
                 m = ev.mesh()
                 self.edge_h = float(np.median(np.linalg.norm(
                     m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)))
-            # edges from the contact line into the surface are not split: their
-            # midpoints (on a chord of the sphere) would land inside the bead
-            ev.command("foreach edge ee where (ee.vertex[1].on_constraint 3) != "
-                       "(ee.vertex[2].on_constraint 3) do set ee no_refine")
             ev.command(f"l {1.6*self.edge_h:.6g}; t {0.5*self.edge_h:.6g}")
-            ev.command("unset edge no_refine")
         last = None
         for _ in range(maxit):
             ev.command("g 10; u; V")
