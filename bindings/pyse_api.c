@@ -684,6 +684,43 @@ int pyse_set_values(int type, const char *attribute, const double *values,
 }
 
 /**************************************************************************
+ * The residual: the vertex velocities a gradient step would use (forces
+ * projected on the constraints and adjusted by the volume and quantity
+ * multipliers), without moving anything. Zero at an equilibrium.
+ */
+
+struct residual_args { double *out; long n; };
+
+static void residual_body(void *arg)
+{ struct residual_args *a = (struct residual_args *)arg;
+  vertex_id v_id;
+  long row = 0;
+  int k;
+  calc_all_grads(CALC_FORCE|CALC_VOLGRADS);
+  FOR_ALL_VERTICES(v_id)
+  { REAL *vel = get_velocity(v_id);
+    if ( row >= a->n ) inconsistent("vertex count changed");
+    for ( k = 0 ; k < 3 ; k++ )
+      a->out[3*row + k] = k < SDIM ? (double)vel[k] : 0.0;
+    row++;
+  }
+  vgrad_end();
+  expect_rows(row,a->n);
+}
+
+/* The vertex velocities (3 per vertex, in vertex order). */
+int pyse_residual(double *out, long n)
+{ struct residual_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( n != web.skel[VERTEX].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Output array does not match the vertex count.");
+  a.out = out; a.n = n;
+  return surface_call(residual_body,&a);
+}
+
+/**************************************************************************
  * Surface snapshots.  These run inside the guard too, so an inconsistency
  * becomes an Evolver error instead of a bad memory read.
  */

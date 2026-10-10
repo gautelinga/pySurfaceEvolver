@@ -145,6 +145,8 @@ int pyse_modeltype(void);       /* 1 linear, 2 quadratic, 3 lagrange */
 int pyse_lagrange_order(void);
 int pyse_torus(void);
 double pyse_total_energy(void);
+/* the vertex velocities (projected forces), 3 per vertex in vertex order */
+int pyse_residual(double *out, long n);
 double pyse_total_area(void);
 const char *pyse_datafilename(void);
 /* Set the name reported as the current datafile (e.g. after restoring a

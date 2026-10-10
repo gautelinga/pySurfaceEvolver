@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Robust by default (phase G, in progress)
+
+- `ev.residual()`: how far the surface is from equilibrium (the normal part of the
+  projected vertex forces, dimensionless; 0 at an equilibrium). New C binding.
+- `relax()` defaults: rounds of 10 gradient steps with equiangulation and vertex
+  averaging, then up to 20 safeguarded Newton steps, converged when the residual is
+  below `tol` (now a residual tolerance, default 1e-8; `energy_tol` ends the gradient
+  phase). A NaN surface is restored and raised, not reported as converged.
+- Newton steps (`relax`, `ev.newton()`) are safeguarded: plain Newton first, a line
+  search if that is rejected; a step that makes things non-finite, or raises both the
+  energy and the residual, is undone.
+- `bench/stress/`: nine hard cases with exact or axisymmetric references, run with
+  default settings.
+
 ### API (phase F: a friendlier API)
 
 - `ev.relax(...)` does the whole recipe: `levels=n` (refine and relax again),

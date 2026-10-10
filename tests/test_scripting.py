@@ -49,12 +49,14 @@ def test_relax_reports_no_convergence(cube):
 def test_relax_with_newton(cube):
     cube.iterate(5)
     cube.refine()
-    gradient_only = cube.save()
-    plain = cube.relax(tol=1e-9)
-    cube.restore(gradient_only)
-    polished = cube.relax(tol=1e-9, newton=10)
+    start = cube.save()
+    gradient = cube.relax(tol=1e-9, newton=0)
+    cube.restore(start)
+    polished = cube.relax(tol=1e-9)              # Newton steps by default
     assert polished.converged and polished.newton_steps >= 1
-    assert cube.total_energy <= plain.energy[-1] + 1e-12
+    assert polished.residual < 1e-9 < gradient.residual
+    # restoring the volume exactly can cost energy: compare the volumes too
+    assert cube.body(1).volume == pytest.approx(1.0, abs=1e-12)
 
 
 def test_relax_callback(cube):

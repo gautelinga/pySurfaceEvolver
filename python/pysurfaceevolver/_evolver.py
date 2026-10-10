@@ -203,6 +203,7 @@ class IterationResult:
     converged: Optional[bool] = None
     newton_steps: int = 0
     level: Optional[np.ndarray] = None
+    residual: float = float("nan")    # Evolver.residual() at the end (relax)
 
 # eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
 # (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
@@ -454,62 +455,67 @@ class Evolver:
         area.append(_core.total_area())
         scale.append(self.eval("scale"))
 
-    def relax(self, tol: float = 1e-10, max_iter: int = 1000, *, window: int = 5,
-              tidy: int = 0, levels: int = 0, newton: int = 0, seek: bool = False,
-              undo_if: Optional[Callable[["Evolver"], bool]] = None,
+    def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: float = 1e-9,
+              window: int = 3, tidy: int = 10, levels: int = 0, newton: int = 20,
+              seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
-        """Relax the surface: gradient steps until the energy settles, with
-        optional mesh tidying, refinement and Newton steps.
+        """Relax the surface to an equilibrium: gradient steps that keep the
+        mesh in shape, then safeguarded Newton steps, until :meth:`residual`
+        is below ``tol``.
 
-        Gradient steps (Evolver's ``g``) run until the relative energy change
-        ``|E[i] - E[i-1]| / max(1, |E[i]|)`` stays below ``tol`` for ``window``
-        consecutive steps, or ``max_iter`` steps.
+        Gradient steps (Evolver's ``g``) come in rounds of ``tidy`` steps, each
+        followed by equiangulation and vertex averaging (``u; V``), which keep
+        facets from degenerating where the surface stretches or vertices drift
+        (``tidy=0``: no tidying). The gradient phase ends when the energy
+        changes by less than ``energy_tol`` (relative) over ``window``
+        consecutive rounds, or after ``max_iter`` steps. ``levels=n`` refines
+        and repeats it n times.
 
-        ``tidy=k``: equiangulate and average the vertices (``u; V``) after every
-        k gradient steps, so facets stay well shaped while the surface moves
-        (contact lines especially). Vertex averaging is smoothing, not descent,
-        so convergence is then measured round to round: the energy after a
-        round (k steps and the tidying) against the one before, below ``tol``
-        for ``window`` consecutive rounds.
-        ``levels=n``: refine and relax again, n times (``max_iter`` per level).
-        ``newton=n``: then up to n Newton steps (``seek=True``: with a line
-        search, ``hessian_seek``), stopping when one changes the energy by less
-        than ``tol``. ``undo_if(ev)``: checked after each Newton step; if it
-        returns True the step is undone and Newton stops (for example when a
-        step pushed the surface through a wall).
+        Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
+        ``seek`` and ``undo_if`` as there), until the residual is below ``tol``
+        or stops falling. ``newton=0``: gradient steps only.
+
+        If the energy becomes non-finite during the gradient steps, the surface
+        is restored to its state before the call and :class:`EvolverError` is
+        raised.
 
         Returns the gradient steps' :class:`IterationResult`, with ``level``,
-        ``converged`` (of the last level, or of Newton when it ran) and
-        ``newton_steps``. ``callback(ev, i)`` is called every ``every``-th
-        gradient step and at the end of each level. ``threads`` sets the
-        threads for this call only (see :func:`pysurfaceevolver.threads_limit`).
+        ``newton_steps``, ``residual`` and ``converged`` (residual below
+        ``tol``). ``callback(ev, i)`` runs every ``every``-th gradient step and
+        at the end of each level; ``threads`` sets the threads for this call
+        only (see :func:`pysurfaceevolver.threads_limit`).
         """
-        if tol <= 0 or max_iter < 1 or window < 1:
-            raise ValueError("tol must be positive; max_iter and window at least 1")
+        if tol <= 0 or energy_tol <= 0 or max_iter < 1 or window < 1:
+            raise ValueError("tol and energy_tol must be positive; max_iter and window at least 1")
         if tidy < 0 or levels < 0 or newton < 0:
             raise ValueError("tidy, levels and newton must be non-negative")
         with _threads_for_call(threads):
+            start = self.save()
             energy: List[float] = []
             area: List[float] = []
             scale: List[float] = []
             level: List[int] = []
             output: List[str] = []
-            converged = False
             for lev in range(levels + 1):
                 if lev:
                     self.refine()
                 n0 = len(energy)
-                converged = self._relax_level(tol, max_iter, window, tidy, callback, every,
-                                              energy, area, scale, output)
+                self._relax_level(energy_tol, max_iter, window, tidy, callback, every,
+                                  energy, area, scale, output)
                 level += [lev]*(len(energy) - n0)
-            steps = 0
-            if newton:
-                steps, converged = self._newton(newton, seek, tol, undo_if, output)
+                if not np.isfinite(_core.total_energy()):
+                    bad = _core.total_energy()
+                    self.restore(start)
+                    raise EvolverError(f"relax(): the energy became {bad} during gradient "
+                                       "steps; the surface is back to its state before the call")
+            steps = self._newton(newton, seek, tol, undo_if, output) if newton else 0
+            residual = self.residual()
         return IterationResult(np.array(energy), np.array(area), np.array(scale),
-                               "".join(output), converged, steps, np.array(level, dtype=int))
+                               "".join(output), bool(residual < tol), steps,
+                               np.array(level, dtype=int), residual)
 
-    def _relax_level(self, tol: float, max_iter: int, window: int, tidy: int,
+    def _relax_level(self, energy_tol: float, max_iter: int, window: int, tidy: int,
                      callback: Optional[Callable[["Evolver", int], Any]], every: int,
                      energy: List[float], area: List[float], scale: List[float],
                      output: List[str]) -> bool:
@@ -522,6 +528,8 @@ class Evolver:
             self._step(energy, area, scale, output)
             if callback is not None and i % every == 0:
                 callback(self, i)
+            if not np.isfinite(energy[-1]):
+                break
             if tidy and i % tidy:
                 continue                  # mid-round: no convergence check
             if tidy:
@@ -530,7 +538,7 @@ class Evolver:
                 area[-1] = _core.total_area()
             change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
             previous = energy[-1]
-            quiet = quiet + 1 if change < tol else 0
+            quiet = quiet + 1 if change < energy_tol else 0
             if quiet >= window:
                 break
         steps = len(energy) - first
@@ -538,39 +546,67 @@ class Evolver:
             callback(self, steps)
         return quiet >= window
 
-    def newton(self, steps: int = 1, *, seek: bool = False, tol: Optional[float] = None,
+    def newton(self, steps: int = 1, *, seek: Optional[bool] = None, tol: Optional[float] = None,
                undo_if: Optional[Callable[["Evolver"], bool]] = None,
                threads: Optional[int] = None) -> int:
-        """Up to ``steps`` Newton steps (``seek=True``: with a line search).
+        """Up to ``steps`` safeguarded Newton steps.
 
-        With ``tol``, stops when a step changes the energy by less than ``tol``
-        (relative, as in :meth:`relax`). ``undo_if(ev)`` is checked after each
-        step; when it returns True the step is undone and Newton stops.
-        Returns the number of steps kept.
+        Each step is a plain Newton step (``hessian``), or, if that one is
+        rejected, one with a line search (``hessian_seek``); ``seek=True`` or
+        ``False`` uses only the one kind. A step is rejected (undone) if it
+        makes the energy or the :meth:`residual` non-finite, raises both the
+        energy and the residual, or makes ``undo_if(ev)`` true; with no step
+        accepted, Newton stops. It also stops when the residual stops falling,
+        or, with ``tol``, once it is below ``tol``.
+        Returns the number of steps kept. (:meth:`hessian` takes one step with
+        no checks.)
         """
         if steps < 0:
             raise ValueError("steps must be non-negative")
         with _threads_for_call(threads):
-            kept, _ = self._newton(steps, seek, tol, undo_if, [])
-        return kept
+            return self._newton(steps, seek, tol, undo_if, [])
 
-    def _newton(self, steps: int, seek: bool, tol: Optional[float],
-                undo_if: Optional[Callable[["Evolver"], bool]],
-                output: List[str]) -> "tuple[int, bool]":
+    def _newton(self, steps: int, seek: Optional[bool], tol: Optional[float],
+                undo_if: Optional[Callable[["Evolver"], bool]], output: List[str]) -> int:
+        """Safeguarded Newton steps; see newton()."""
         kept = 0
+        res0 = self.residual()
+        if tol is not None and res0 < tol:
+            return 0
+        kinds = ["hessian_seek"] if seek is True else ["hessian"] if seek is False \
+            else ["hessian", "hessian_seek"]
         for _ in range(steps):
-            snapshot = self.save() if undo_if is not None else None
-            before = _core.total_energy()
-            output.append(self.command("hessian_seek" if seek else "hessian"))
-            if undo_if is not None and undo_if(self):
-                assert snapshot is not None
-                self.restore(snapshot)
-                return kept, False
+            accepted = False
+            for kind in kinds:
+                snapshot = self.save()
+                e0 = _core.total_energy()
+                try:
+                    output.append(self.command(kind))
+                except EvolverError:
+                    self.restore(snapshot)
+                    continue
+                e1 = _core.total_energy()
+                res1 = self.residual()
+                # with constraints the energy alone is no merit (restoring a
+                # volume can cost energy): reject only what got worse on both
+                bad = (not np.isfinite(e1) or not np.isfinite(res1)
+                       or (e1 > e0 + 1e-12*max(1.0, abs(e0)) and res1 > 1.1*res0)
+                       or (undo_if is not None and undo_if(self)))
+                if bad:
+                    self.restore(snapshot)
+                    continue
+                accepted = True
+                break
+            if not accepted:
+                break
             kept += 1
-            after = _core.total_energy()
-            if tol is not None and abs(after - before) / max(1.0, abs(after)) < tol:
-                return kept, True
-        return kept, tol is None
+            progress = res1 < 0.9*res0
+            res0 = res1
+            if tol is not None and res1 < tol:
+                break
+            if not progress:
+                break
+        return kept
 
     def remesh(self, target: Optional[float] = None, *, max_edge: Optional[float] = None,
                min_edge: Optional[float] = None, equiangulate: bool = True,
@@ -634,6 +670,52 @@ class Evolver:
         if average:
             self.command("V")
         return counts
+
+    def residual(self) -> float:
+        """How far the surface is from equilibrium, as a dimensionless number
+        (0 at an equilibrium; nothing moves).
+
+        From the vertex velocities a gradient step would use (forces projected
+        on the constraints, with the volume and quantity multipliers applied),
+        the part along each vertex's normal: tangential parts only slide
+        vertices within the surface (mesh motion, not shape), and Newton steps
+        don't remove them. At a contact line the velocity already lies in the
+        wall, so the normal part is the imbalance of the contact angle. Where
+        a vertex has no single normal (where films meet) the whole velocity
+        counts. Each velocity is about the vertex's share of the area times the
+        local pressure imbalance, so the root mean square times N/sqrt(area)
+        measures that imbalance relative to the surface's size: comparable
+        across meshes and scales. Curved (quadratic, Lagrange) models: the
+        facet corners only.
+        """
+        _, result = self._call(_core.residual)
+        vel = np.asarray(result.data, dtype=float)
+        if len(vel) == 0:
+            return 0.0
+        m = self.mesh()
+        if m.facets is None or len(m.facets) == 0:
+            r2 = (vel**2).sum(axis=1)
+        else:
+            p = m.vertices if m.vertices.shape[1] == 3 else np.column_stack(
+                [m.vertices, np.zeros(len(m.vertices))])
+            f = m.facets
+            fn = np.cross(p[f[:, 1]] - p[f[:, 0]], p[f[:, 2]] - p[f[:, 0]])
+            vn = np.zeros_like(p)
+            spread = np.zeros(len(p))
+            for k in range(3):
+                np.add.at(vn, f[:, k], fn)
+                np.add.at(spread, f[:, k], np.linalg.norm(fn, axis=1))
+            corners = np.unique(f)
+            vn, spread, vel = vn[corners], spread[corners], vel[corners]
+            mag = np.linalg.norm(vn, axis=1)
+            smooth = mag > 0.5*spread
+            along = np.einsum("ij,ij->i", vel, vn)/np.where(mag > 0, mag, 1.0)
+            r2 = np.where(smooth, along**2, (vel**2).sum(axis=1))
+        area = _core.total_area()
+        n = len(r2)
+        if area <= 0:
+            return float(np.sqrt(r2.sum()))
+        return float(np.sqrt(r2.sum()*n/area))
 
     def eigen_counts(self, shift: float = 0.0) -> "EigenCounts":
         """How many Hessian eigenvalues lie below, at and above ``shift``
