@@ -559,8 +559,10 @@ class Evolver:
         How it works:
 
         * In the quadratic and Lagrange models (a final stage from a mesh
-          settled in the linear model) with ``levels=0``, up to 5 safeguarded
-          Newton steps come first; if they converge, that is all. If not, the
+          settled in the linear model) with ``levels=0``, five gradient steps
+          and then safeguarded Newton steps come first (as the manual's
+          ``g 5; hessian``), Newton as long as each step cuts the residual by
+          10%; if that converges, that is all. If not, the
           surface goes back and the steps below follow; right after such a
           miss, the next call skips the attempt.
         * Gradient steps (Evolver's ``g``) come in rounds of ``tidy`` steps,
@@ -665,8 +667,10 @@ class Evolver:
 
     def _newton_first(self, trace: "_Trace", tol: float, newton: int, seek: Optional[bool],
                       undo_if: Optional[Callable[["Evolver"], bool]]) -> "tuple[int, float] | None":
-        """Up to 5 safeguarded Newton steps before any gradient step (relax()
-        in the quadratic and Lagrange models): the Newton steps and residual
+        """Five gradient steps, then safeguarded Newton steps as long as each
+        cuts the residual by at least 10% (up to ``newton``), before the usual
+        gradient rounds (relax() in the quadratic and Lagrange models; the
+        manual's 'lagrange n; g 5; hessian'): the Newton steps and residual
         if they converge, else None with the coordinates put back. Skipped
         (None) right after a failed attempt on this surface, so a run where
         Newton rarely wins pays for every other attempt only. (Not in the
@@ -678,12 +682,14 @@ class Evolver:
             _newton_first_failed = False
             return None
         coords = self.vertices
+        for _ in range(_NEWTON_FIRST_SETTLE):   # as the manual's 'g 5; hessian':
+            trace.step(self)                     # new high-order nodes settle first
+        trace.level += [0]*_NEWTON_FIRST_SETTLE
         # no early stop on the residual: it doesn't see an unmet volume (a new
         # target), which the Newton steps restore
         with warnings.catch_warnings():     # an attempt; far from equilibrium the
             warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)  # Hessian is indefinite
-            steps = self._newton(min(newton, _NEWTON_FIRST_STEPS), seek, None, undo_if,
-                                 trace.output)
+            steps = self._newton(newton, seek, None, undo_if, trace.output)
         residual = self.residual()
         if residual < tol and self._volumes_met():
             return steps, residual
@@ -2000,7 +2006,7 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
 # less is the chord of a curved wall next to a contact line
 _CROSS_TOL = 0.01
 _ADAPT_PASSES = 3
-_NEWTON_FIRST_STEPS = 5
+_NEWTON_FIRST_SETTLE = 5   # gradient steps before relax()'s Newton-first attempt
 _SPOKE_RATIO = 1.5       # relax() splits edges leaving a contact line longer than this many contact-line edges
 _FALLBACK_STEPS = 200    # gradient steps for relax()'s conjugate-gradient pass, at most
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with

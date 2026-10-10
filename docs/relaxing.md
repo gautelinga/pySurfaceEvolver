@@ -50,8 +50,8 @@ run with default settings) and are from October 2026.
    symmetries (a drop that could slide on a plane) don't count.
 
 In the quadratic and Lagrange models (a final stage, from a mesh settled in the linear
-model) `relax()` first tries up to five Newton steps alone and keeps them if they
-converge. Switching a relaxed 24k-facet cube to `lagrange 2` and relaxing takes about
+model) `relax()` first does what the manual recommends there, five gradient steps and
+then Newton steps (`g 5; hessian`), and keeps the result if it converges. Switching a relaxed 24k-facet cube to `lagrange 2` and relaxing takes about
 a second.
 
 ## Reading the result
