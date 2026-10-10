@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
 #include <cstring>
 #include <atomic>
 #include <chrono>
@@ -254,11 +255,11 @@ NB_MODULE(_core, m) {
     return r;
   }, "expr"_a, CALLBACK_NAMES);
 
-  m.def("residual", [](CALLBACK_ARGS) {
+  m.def("residual", [](bool full, CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(PYSE_VERTEX);
     std::vector<double> v(n > 0 ? size_t(n) : 0);
-    CallResult r = run_guarded([&] { return pyse_residual(v.data(), n); });
+    CallResult r = run_guarded([&] { return pyse_residual(v.data(), n, full ? 1 : 0); });
     if (r.status == PYSE_OK) {
       double *buf = new double[v.size() ? v.size() : 1];
       std::copy(v.begin(), v.end(), buf);
@@ -266,7 +267,21 @@ NB_MODULE(_core, m) {
       r.data = nb::cast(nb::ndarray<nb::numpy, double, nb::ndim<1>>(buf, {size_t(n)}, owner));
     }
     return r;
-  }, CALLBACK_NAMES);
+  }, "full"_a, CALLBACK_NAMES);
+
+  m.def("vertex_attached", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long n = pyse_count(PYSE_VERTEX);
+    std::vector<unsigned char> v(n > 0 ? size_t(n) : 0);
+    CallResult r = run_guarded([&] { return pyse_vertex_attached(v.data(), n); });
+    if (r.status == PYSE_OK) {
+      bool *buf = new bool[v.size() ? v.size() : 1];
+      for (size_t i = 0; i < v.size(); i++) buf[i] = v[i] != 0;
+      nb::capsule owner(buf, [](void *p) noexcept { delete[] (bool *)p; });
+      r.data = nb::cast(nb::ndarray<nb::numpy, bool, nb::ndim<1>>(buf, {size_t(n)}, owner));
+    }
+    return r;
+  }, CALLBACK_NAMES, "data: per vertex, fixed or on a constraint or boundary");
 
   m.def("constraint_gaps", [](CALLBACK_ARGS) {
     CALL_SCOPE;
@@ -446,6 +461,23 @@ NB_MODULE(_core, m) {
     return r;
   }, CALLBACK_NAMES, "data: [(name, value, optimizing)] for datafile parameters");
 
+  m.def("energy_methods", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    const int max = 256;
+    std::vector<char> names(size_t(max) * PYSE_NAME_SIZE);
+    int count = 0;
+    CallResult r = run_guarded([&] {
+      return pyse_energy_methods(reinterpret_cast<char(*)[PYSE_NAME_SIZE]>(names.data()),
+                                 max, &count);
+    });
+    if (r.status == PYSE_OK) {
+      nb::list out;
+      for (int i = 0; i < std::min(count, max); i++)
+        out.append(std::string(&names[size_t(i) * PYSE_NAME_SIZE]));
+      r.data = out;
+    }
+    return r;
+  }, CALLBACK_NAMES, "data: the energy quantities' method names");
   m.def("quantities", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_quantity_count();
@@ -487,6 +519,7 @@ NB_MODULE(_core, m) {
   m.def("modeltype", []() { Lock lock; return pyse_modeltype(); });
   m.def("lagrange_order", []() { Lock lock; return pyse_lagrange_order(); });
   m.def("torus", []() { Lock lock; return bool(pyse_torus()); });
+  m.def("topology_stamp", []() { Lock lock; return pyse_topology_stamp(); });
   m.def("total_energy", []() { Lock lock; return pyse_total_energy(); });
   m.def("total_area", []() { Lock lock; return pyse_total_area(); });
   m.def("datafile", []() { Lock lock; return std::string(pyse_datafilename()); });

@@ -107,6 +107,9 @@ long pyse_parameter_count(void);
 int pyse_get_parameters(char (*names)[PYSE_NAME_SIZE], double *values,
                         unsigned char *optimizing, long n);
 long pyse_quantity_count(void);
+/* the Evolver method names of the energy quantities' method instances (at
+   most max rows; count: all of them) */
+int pyse_energy_methods(char (*names)[PYSE_NAME_SIZE], int max, int *count);
 int pyse_get_quantities(char (*names)[PYSE_NAME_SIZE], double *value,
                         double *target, double *modulus, double *pressure,
                         int *kind /* 0 energy, 1 fixed, 2 info, 3 conserved */,
@@ -144,10 +147,16 @@ int pyse_representation(void);  /* 1 string, 2 soapfilm, 3 simplex */
 int pyse_modeltype(void);       /* 1 linear, 2 quadratic, 3 lagrange */
 int pyse_lagrange_order(void);
 int pyse_torus(void);
+/* goes up with every topology change (Evolver's top_timestamp) */
+long pyse_topology_stamp(void);
 double pyse_total_energy(void);
 /* per vertex, the shape part of its velocity (projected force): along its
    normal(s), projected into its constraints; one per vertex in vertex order */
-int pyse_residual(double *out, long n);
+/* full: all directions instead (for energies with in-plane forces, such
+   as elastic membranes) */
+int pyse_residual(double *out, long n, int full);
+/* per vertex, 1 if fixed, on a constraint or on a boundary */
+int pyse_vertex_attached(unsigned char *out, long n);
 /* the constraints in use: how many (*count), and up to max of their numbers,
    attribute bits and names ("" if unnamed; Evolver's own strings); the
    arrays may be NULL to only count */

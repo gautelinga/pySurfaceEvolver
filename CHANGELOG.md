@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+### relax() on all of Brakke's samples
+
+Each of the 25 sample datafiles was relaxed with defaults and compared with its own
+`gogo` recipe; what that showed is fixed:
+
+- Fixed: `relax()` crashed on strings ("Cannot equiangulate string model") and in the
+  simplex representation ("V not implemented"): its tidying uses only the commands the
+  model has. Bodies in the simplex representation (outside the Lagrange model) get no
+  Newton steps: Evolver has no Hessian for them, and a failed attempt left the
+  surface unusable.
+- `relax()` on surfaces without a Hessian (gap energies on curved walls, crystalline
+  integrands): plain gradient rounds settled to 1e-9 instead of stopping when the
+  residual watch fired (tankex: energy 1.75 -> 1.50).
+- Newton steps that raise the energy by more than 10% are undone, whatever the residual
+  does: on a 100-cell foam a step ran off to a tangled surface (energy 19 -> 8e17) with
+  a smaller residual, and `relax()` reported it converged.
+- Fixed: undoing a gradient round or Newton step by the vertex coordinates when Evolver
+  had changed the topology meanwhile (`autopop`, `autochop`) wrecked the surface. Such
+  undos are now skipped (new binding: the topology stamp).
+- Elastic energies (Evolver's elastic methods, such as `relaxed_elastic_A` in
+  `mylarcube.fe`): no mesh tidying (it corrupted the facets' reference shapes), a
+  residual over all force directions, Newton by `hessian_seek`.
+- `ev.residual()`: plain forces under `area_normalization` (it divided each by its
+  vertex's area), and dimensionless for strings and simplices too.
+- `ev.health()`: `junctions` counts junctions that break Plateau's laws (`octa.fe`: 6,
+  popped by `o`). No more false alarms from fixed vertices drawing a wall (mound's table
+  top) or from contact lines on a constraint drawn twice (slidestr); facet angles in a
+  torus from Evolver's edge lengths (wrapped coordinates made the foams' facets look
+  degenerate); planar and simplex surfaces handled.
+- Fixed: stress case 3 counted only its second sweep's time and steps.
+
+### Docs
+
+- Stress cases: figures for each case (result against its reference, error per step,
+  what `relax()` did, and the surface at a few steps), drawn by
+  `bench/stress/figures.py`.
+
 ## 0.7.0 (2026-10-10)
 
 `ev.relax()` now takes a surface to a verified equilibrium with its defaults: it

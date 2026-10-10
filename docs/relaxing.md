@@ -49,6 +49,18 @@ run with default settings) and are from October 2026.
    then `False` and an `UnstableEquilibriumWarning` is raised. Exact zero modes of
    symmetries (a drop that could slide on a plane) don't count.
 
+Other models change some of this. Strings are only vertex-averaged, the simplex
+representation only equiangulated. Surfaces without a Hessian get plain gradient
+rounds, settled to 1e-9, in place of Newton steps: Evolver has no Hessian for gap
+energies on curved walls, crystalline integrands, or bodies in the simplex
+representation outside the Lagrange model. With an elastic energy (Evolver's
+`linear_elastic`, `relaxed_elastic`, `neo_hookean`, `SVK_elastic` and the like) the
+in-plane forces are physical, so `relax()` doesn't tidy the mesh, counts every force
+direction in the residual, and takes Newton steps by line search (`hessian_seek`).
+A Newton step that raises the energy by more than 10% is always undone. Where
+Evolver changes the topology during gradient steps (`autopop`, `autochop`), a round
+can't be undone, and `relax()` goes on from where it is.
+
 In the quadratic and Lagrange models (a final stage, from a mesh settled in the linear
 model) `relax()` first does what the manual recommends there, five gradient steps and
 then Newton steps (`g 5; hessian`), and keeps the result if it converges. Switching a relaxed 24k-facet cube to `lagrange 2` and relaxing takes about
@@ -73,6 +85,7 @@ r.health.issues          # what looks wrong, in words; empty when all is well
 | `wall_gap`, `wall` | nearest approach of a vertex to a constraint it isn't on (in median edge lengths), leaving out vertices within two edges of the constraint's own vertices |
 | `crossed` | vertices on the far side of a constraint |
 | `self_gap` | nearest approach of the surface to itself, between vertices more than two edges apart |
+| `junctions` | junctions that break Plateau's laws: edges where four or more films meet, vertices where more than four triple edges (or, in a string network, four or more strings) meet |
 
 It raises no warnings; a broken surface shows in `issues` (`"degenerate facets
 (smallest angle 0.21 degrees, 6 below 5)"`, `"3 vertices on the far side of
@@ -121,6 +134,15 @@ Other things to know:
 
 * **Saddles.** `relax()` converges to saddles as readily as to minima. Check
   `r.stable`, or watch for `UnstableEquilibriumWarning`.
+* **Topology.** `relax()` never changes the topology. A film or string network whose
+  junctions break Plateau's laws (Brakke's `octa.fe` and `popstr.fe` start that way)
+  is in equilibrium for its topology; `r.health.junctions` counts them, and Evolver's
+  `o` pops them (`ev.command("o")`), after which relax again.
+* **No Hessian.** Gap energies, crystalline integrands and simplex bodies get
+  gradient steps only, and gradient steps converge slowly: such results often end
+  unconverged by the residual, with the energy settled.
+* **Elastic energies.** The residual assumes a surface tension of about 1; with an
+  elastic modulus it scales with the modulus, so `tol` may need to scale too.
 * **Unconverged results.** `r.converged` is `False` when the residual didn't reach
   `tol`; the surface is the best `relax()` found. `r.health.issues` tells whether it
   is merely unfinished or broken.

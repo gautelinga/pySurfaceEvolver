@@ -689,7 +689,7 @@ int pyse_set_values(int type, const char *attribute, const double *values,
  * multipliers), without moving anything. Zero at an equilibrium.
  */
 
-struct residual_args { double *out; long n; };
+struct residual_args { double *out; long n; int full; };
 
 /* A vertex's shape directions: its surface normal(s), projected into its
    constraints, leaving out those almost perpendicular to the normal (sliding
@@ -742,7 +742,7 @@ static void residual_body(void *arg)
   pressure_forces();
   partner_shift_grads(mode);
   convert_forms_to_vectors(mode);
-  if ( a->n >= 4096 )
+  if ( a->n >= 4096 && !a->full )
   { pre_normal = temp_dmatrix3(a->n,MAXCOORD,MAXCOORD);
     pre_dims = fl_shape_normals(pre_normal,&pre_list,&pre_n);
     if ( pre_dims && pre_n != a->n ) { free(pre_dims); pre_dims = NULL; }
@@ -769,8 +769,8 @@ static void residual_body(void *arg)
       for ( k = 0 ; k < (nd > 0 ? nd : 0) ; k++ )
         for ( i = 0 ; i < SDIM ; i++ ) dirs[k][i] = pre_normal[row][k][i];
     }
-    else nd = shape_directions(v_id,dirs);
-    if ( nd < 0 )                         /* no normal: the velocity's axes */
+    else nd = a->full ? -1 : shape_directions(v_id,dirs);
+    if ( nd < 0 )              /* no normal, or all directions: the axes */
     { nd = SDIM;
       for ( i = 0 ; i < SDIM ; i++ )
         for ( j = 0 ; j < SDIM ; j++ ) dirs[i][j] = (i == j);
@@ -835,15 +835,47 @@ static void residual_body(void *arg)
 }
 
 /* The shape part of each vertex's velocity (one per vertex, in vertex order). */
-int pyse_residual(double *out, long n)
+int pyse_residual(double *out, long n, int full)
 { struct residual_args a;
   if ( in_protected ) return PYSE_BUSY;
   if ( !initialized || !surface_valid ) return invalid_surface();
   if ( n != web.skel[VERTEX].count )
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
                       "Output array does not match the vertex count.");
+  a.out = out; a.n = n; a.full = full;
+  { /* plain forces: area normalization would divide each by its vertex's
+       area (and in a string model can delete dangling edges) */
+    int area_norm = web.area_norm_flag, status;
+    web.area_norm_flag = 0;
+    status = surface_call(residual_body,&a);
+    web.area_norm_flag = area_norm;
+    return status;
+  }
+}
+
+/* Per vertex: 1 if it is fixed, on a constraint or on a boundary. */
+struct attached_args { unsigned char *out; long n; };
+
+static void attached_body(void *arg)
+{ struct attached_args *a = (struct attached_args *)arg;
+  vertex_id v_id;
+  long row = 0;
+  FOR_ALL_VERTICES(v_id)
+  { if ( row >= a->n ) inconsistent("too many vertices");
+    a->out[row++] = (get_vattr(v_id) & (FIXED|CONSTRAINT|BOUNDARY)) ? 1 : 0;
+  }
+  expect_rows(row,a->n);
+}
+
+int pyse_vertex_attached(unsigned char *out, long n)
+{ struct attached_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( n != web.skel[VERTEX].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Output array does not match the vertex count.");
   a.out = out; a.n = n;
-  return surface_call(residual_body,&a);
+  return surface_call(attached_body,&a);
 }
 
 /* Constraints in use and each vertex's signed distance to the ones it isn't on. */
@@ -1323,6 +1355,38 @@ static void quantities_body(void *arg)
   expect_rows(row,a->n);
 }
 
+/* The methods (by their Evolver names) of the energy quantities, one row per
+   method instance, at most max; count gets the total. */
+struct energy_methods_args { char (*names)[PYSE_NAME_SIZE]; int max; int count; };
+
+static void energy_methods_body(void *arg)
+{ struct energy_methods_args *a = (struct energy_methods_args *)arg;
+  int i,j;
+  a->count = 0;
+  for ( i = 0 ; i < gen_quant_count ; i++ )
+  { struct gen_quant *q = GEN_QUANT(i);
+    if ( (q->flags & Q_DELETED) || !(q->flags & Q_ENERGY) ) continue;
+    for ( j = 0 ; j < q->method_count ; j++ )
+    { struct method_instance *mi = METH_INSTANCE(q->meth_inst[j]);
+      if ( a->count < a->max )
+        snprintf(a->names[a->count],PYSE_NAME_SIZE,"%s",
+                 basic_gen_methods[mi->gen_method].name);
+      a->count++;
+    }
+  }
+}
+
+int pyse_energy_methods(char (*names)[PYSE_NAME_SIZE], int max, int *count)
+{ struct energy_methods_args a;
+  int status;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  a.names = names; a.max = max; a.count = 0;
+  status = surface_call(energy_methods_body,&a);
+  if ( count ) *count = a.count;
+  return status;
+}
+
 int pyse_get_quantities(char (*names)[PYSE_NAME_SIZE], double *value,
                         double *target, double *modulus, double *pressure,
                         int *kind, long n)
@@ -1400,6 +1464,7 @@ int pyse_representation(void) { return web.representation; }
 int pyse_modeltype(void) { return web.modeltype; }
 int pyse_lagrange_order(void) { return web.lagrange_order; }
 int pyse_torus(void) { return web.torus_flag; }
+long pyse_topology_stamp(void) { return top_timestamp; }
 double pyse_total_energy(void) { return (double)web.total_energy; }
 double pyse_total_area(void) { return (double)web.total_area; }
 const char *pyse_datafilename(void) { return datafilename; }

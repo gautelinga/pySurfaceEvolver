@@ -535,10 +535,12 @@ class Mesh:
         ``skinny`` counts facets with an angle below ``skinny_angle`` degrees,
         ``degenerate`` those whose area is below 1e-12 of the median.
         """
+        nan = float("nan")
+        if len(self.edges) == 0:          # the simplex representation lists none
+            return MeshQuality(nan, nan, nan, nan, nan, 0, 0, skinny_angle)
         lengths = np.linalg.norm(self.vertices[self.edges[:, 0]]
                                  - self.vertices[self.edges[:, 1]], axis=1)
         if self.facets is None or len(self.facets) == 0:
-            nan = float("nan")
             return MeshQuality(float(lengths.min()), float(np.median(lengths)),
                                float(lengths.max()), nan, nan, 0, 0, skinny_angle)
         p = [_as_3d(self.vertices)[self.facets[:, i]] for i in range(3)]

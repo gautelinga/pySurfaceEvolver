@@ -13,7 +13,7 @@ import warnings
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from typing import (TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, Generator, List,
-                    NamedTuple, Optional, Union)
+                    NamedTuple, Optional, Tuple, Union)
 
 import numpy as np
 
@@ -50,6 +50,11 @@ def _threads_for_call(threads: Optional[int]) -> Generator[None, None, None]:
         yield
     finally:
         _core.set_threads(previous)
+
+
+class _Coords(NamedTuple):
+    coords: np.ndarray
+    stamp: int                    # Evolver's topology stamp when taken
 
 
 class EigenCounts(NamedTuple):
@@ -158,6 +163,7 @@ class Health:
     wall: Optional[int]             # that constraint's number
     crossed: Dict[int, int]         # constraint -> vertices on its far side
     self_gap: float                 # nearest approach of the surface to itself (inf: none under 1/2)
+    junctions: int                  # junctions that break Plateau's laws (see Evolver.health)
     issues: List[str]               # what looks wrong, in words (empty: nothing)
 
     @property
@@ -359,6 +365,8 @@ class Evolver:
     iteration or statement; pressing it again aborts the operation. Both
     raise ``KeyboardInterrupt``.
     """
+
+    _no_hessian: bool = False      # set by _newton(): no Hessian for this surface
 
     def __init__(
         self,
@@ -567,7 +575,8 @@ class Evolver:
           miss, the next call skips the attempt.
         * Gradient steps (Evolver's ``g``) come in rounds of ``tidy`` steps,
           each followed by equiangulation and vertex averaging (``u; V``;
-          ``tidy=0``: none), until the energy changes by less than
+          only ``V`` for strings and the Lagrange model, only ``u`` in the
+          simplex representation; ``tidy=0``: none), until the energy changes by less than
           ``energy_tol`` (relative) over ``window`` rounds, or ``max_iter``
           steps. ``energy_tol`` is 1e-5 when Newton follows (it finishes faster
           and more reliably, and long gradient runs let slow mesh drift grow),
@@ -604,8 +613,19 @@ class Evolver:
         further levels), plus ``newton_steps``, ``residual``, ``converged``,
         ``stable``, ``negative_modes`` and ``health``.
         """
+        elastic = self._elastic()
+        if elastic:
+            # a membrane: no mesh tidying (it would change the physics), and
+            # Newton by line search, which keeps the surface from running off
+            tidy = 0
+            if seek is None:
+                seek = True
+        if _core.representation() == 3 and self.model != "lagrange":
+            # Evolver has no Hessian for simplex bodies outside the Lagrange
+            # model, and a failed attempt leaves the surface unusable
+            newton, stability = 0, False
         if energy_tol is None:
-            energy_tol = 1e-5 if newton else 1e-9
+            energy_tol = 1e-5 if newton else _GRADIENT_ONLY_TOL
         if tol <= 0 or energy_tol <= 0 or max_iter < 1 or window < 1:
             raise ValueError("tol and energy_tol must be positive; max_iter and window at least 1")
         if tidy < 0 or levels < 0 or newton < 0:
@@ -628,11 +648,11 @@ class Evolver:
                     run(lev, max_iter, tidy, watch=newton > 0)
                 steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol,
                                                newton, seek, undo_if, fallback=cg == "auto")
-            if self.model == "linear" and residual < tol:
+            if self.model == "linear" and residual < tol and not elastic:
                 more, residual = self._contact_pass(trace, levels + 1, run, max_iter, tidy, tol,
                                                     newton, seek, undo_if, cg == "auto", residual)
                 steps += more
-            if adapt and self.model == "linear":
+            if adapt and self.model == "linear" and not elastic:
                 turn = 15.0 if adapt is True else float(adapt)
                 first_lev = max(trace.level, default=levels) + 1
                 for lev in range(first_lev, first_lev + _ADAPT_PASSES):
@@ -681,7 +701,7 @@ class Evolver:
         if _newton_first_failed:
             _newton_first_failed = False
             return None
-        coords = self.vertices
+        coords = self._coords()
         for _ in range(_NEWTON_FIRST_SETTLE):   # as the manual's 'g 5; hessian':
             trace.step(self)                     # new high-order nodes settle first
         trace.level += [0]*_NEWTON_FIRST_SETTLE
@@ -724,6 +744,20 @@ class Evolver:
         self.restore(before)
         return 0, residual
 
+    def _elastic(self) -> bool:
+        """Whether an energy quantity uses one of Evolver's elastic methods
+        (in-plane forces are physical, and the facets remember a reference
+        shape that retriangulating would corrupt)."""
+        _, result = self._call(_core.energy_methods)
+        return not _ELASTIC_METHODS.isdisjoint(result.data)
+
+    def _tidy_kinds(self) -> Tuple[bool, bool]:
+        """Whether Evolver can equiangulate ('u') and vertex-average ('V') this
+        surface: 'u' only for linear or quadratic facets (not strings, simplices
+        or the Lagrange model), 'V' for all but the simplex representation."""
+        rep = _core.representation()            # 1 string, 2 soapfilm, 3 simplex
+        return rep == 2 and self.model != "lagrange", rep != 3
+
     def _split_marked(self, mark: np.ndarray) -> int:
         """Split the marked edges (aligned with mesh() rows; not no_refine ones),
         equiangulate. Returns the edges split."""
@@ -732,7 +766,8 @@ class Evolver:
         self.set_values("edge", "pyse_mark", mark.astype(float))
         before = self.counts["vertices"]
         self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
-        self.command("u")
+        if self._tidy_kinds()[0]:
+            self.command("u")
         return self.counts["vertices"] - before
 
     def _volumes_met(self, rel: float = 1e-6) -> bool:
@@ -752,20 +787,26 @@ class Evolver:
         taken before it can undo it. Returns the Newton steps kept and the
         residual."""
         steps = self._newton(newton, seek, tol, undo_if, trace.output) if newton else 0
+        if newton and self._no_hessian:
+            # no Newton for this surface: plain gradient rounds instead, settled
+            # as with newton=0 (the residual watch, there for Newton, is off)
+            budget = max_iter - trace.level.count(lev)
+            if budget > 0:
+                run(lev, budget, tidy, energy_tol=_GRADIENT_ONLY_TOL)
+            return 0, self.residual()
         residual = self.residual()
         budget = min(max_iter - trace.level.count(lev), _FALLBACK_STEPS)
         if not (fallback and newton and budget > 0 and np.isfinite(residual)
                 and not residual < tol):
             return steps, residual
-        before = self.vertices
+        before = self._coords()
         with self._conj_grad(True):
             run(lev, budget, tidy, watch=True, average_only=True)
         more = self._newton(newton, seek, tol, undo_if, trace.output) \
             if np.isfinite(_core.total_energy()) else 0
         second = self.residual()
-        if second < tol:
+        if second < tol or not self._put_back(before):   # (not: the topology changed)
             return steps + more, second
-        self._put_back(before)
         return steps, residual
 
     @contextlib.contextmanager
@@ -803,33 +844,35 @@ class Evolver:
         best = np.inf
         first = len(trace.energy)
         watch = watch and tidy > 0
-        start = self.vertices
+        start = self._coords()
         for i in range(1, max_iter + 1):
             trace.step(self)
             if callback is not None and i % every == 0:
                 callback(self, i)
             if not np.isfinite(trace.energy[-1]):
                 bad = trace.energy[-1]
-                self._put_back(start)
+                where = ("the surface is back where that round began" if self._put_back(start)
+                         else "its topology changed during the round, so it stays as it is")
                 raise EvolverError(f"relax(): the energy became {bad} during gradient steps; "
-                                   "the surface is back where that round began")
+                                   + where)
             if tidy and i % tidy:
                 continue                  # mid-round: no convergence check
             if watch:
                 res = self.residual()
                 if res > 2*best:            # the round went wrong: undo it, hand over
-                    self._put_back(start)
+                    self._put_back(start)       # (unless autopop etc. changed the topology)
                     trace.energy[-1] = _core.total_energy()
                     trace.area[-1] = _core.total_area()
                     break
                 best = min(best, res)
             if tidy:
-                # Evolver can't equiangulate the Lagrange model
-                equi = not average_only and self.model != "lagrange"
-                trace.output.append(self.command("u; V" if equi else "V"))
+                equi, avg = self._tidy_kinds()
+                cmd = "; ".join(c for c, on in (("u", equi and not average_only), ("V", avg)) if on)
+                if cmd:
+                    trace.output.append(self.command(cmd))
                 trace.energy[-1] = _core.total_energy()
                 trace.area[-1] = _core.total_area()
-                start = self.vertices
+                start = self._coords()
             change = abs(trace.energy[-1] - previous) / max(1.0, abs(trace.energy[-1]))
             previous = trace.energy[-1]
             quiet = quiet + 1 if change < energy_tol else 0
@@ -869,24 +912,31 @@ class Evolver:
             return 0
         kinds = ["hessian_seek"] if seek is True else ["hessian"] if seek is False \
             else ["hessian", "hessian_seek"]
-        for _ in range(steps):
+        self._no_hessian = False
+        for step in range(steps):
             accepted = False
+            failed = 0
             for kind in kinds:
                 # a Newton step moves vertices only: their coordinates undo it
                 # (a dump would cost several Newton steps on a large surface)
-                snapshot = self.vertices
+                snapshot = self._coords()
                 e0 = _core.total_energy()
                 try:
                     output.append(self.command(kind))
                 except EvolverError:
                     self._put_back(snapshot)
+                    failed += 1
                     continue
                 e1 = _core.total_energy()
                 res1 = self.residual()
                 # with constraints the energy alone is no merit (restoring a
-                # volume can cost energy): reject only what got worse on both
+                # volume can cost energy): reject what got worse on both, or
+                # raised the energy by more than a volume correction could (far
+                # from equilibrium a step can run off to a tangled surface
+                # whose residual is small)
                 bad = (not np.isfinite(e1) or not np.isfinite(res1)
                        or (e1 > e0 + 1e-12*max(1.0, abs(e0)) and res1 > 1.1*res0)
+                       or e1 > e0 + _NEWTON_MAX_RISE*abs(e0)
                        or (undo_if is not None and undo_if(self)))
                 if bad:
                     self._put_back(snapshot)
@@ -894,6 +944,9 @@ class Evolver:
                 accepted = True
                 break
             if not accepted:
+                # no step at all: this surface has no Hessian (gap energies,
+                # simplex volumes outside the Lagrange model, ...)
+                self._no_hessian = step == 0 and failed == len(kinds)
                 break
             kept += 1
             progress = res1 < 0.9*res0
@@ -904,11 +957,19 @@ class Evolver:
                 break
         return kept
 
-    def _put_back(self, coords: np.ndarray) -> None:
-        """Restore vertex coordinates taken before a step that only moves them."""
-        if len(coords) != _core.count(_core.VERTEX):
-            raise EvolverError("a step changed the number of vertices; it can't be undone")
-        self.vertices = coords
+    def _coords(self) -> "_Coords":
+        """The vertex coordinates, to undo steps that only move vertices."""
+        return _Coords(self.vertices, _core.topology_stamp())
+
+    def _put_back(self, snapshot: "_Coords") -> bool:
+        """Restore coordinates from :meth:`_coords`; False (and nothing done)
+        if the topology changed since, as Evolver's autopop and autochop do
+        during gradient steps."""
+        if snapshot.stamp != _core.topology_stamp() \
+                or len(snapshot.coords) != _core.count(_core.VERTEX):
+            return False
+        self.vertices = snapshot.coords
+        return True
 
     def remesh(self, target: Optional[float] = None, *, max_edge: Optional[float] = None,
                min_edge: Optional[float] = None, equiangulate: bool = True,
@@ -1053,7 +1114,7 @@ class Evolver:
         if split_above is not None:
             mark |= _edge_lengths(m) > split_above
         split = self._split_marked(mark) if mark.any() else 0
-        if merged and not split:
+        if merged and not split and self._tidy_kinds()[0]:
             self.command("u")
         return merged + split
 
@@ -1070,16 +1131,22 @@ class Evolver:
         and so does the residual. Each velocity is about the vertex's share of
         the area times the local pressure imbalance, so the root mean square
         times N/sqrt(area) measures that imbalance relative to the surface's
-        size: comparable across meshes and scales.
+        size: comparable across meshes and scales. With an elastic energy
+        (Evolver's elastic methods: in-plane forces are physical there) all
+        directions count, not only the normal. (For a string: the root
+        mean square times N, the imbalance times the length; in general the
+        imbalance times the surface measure to the power 1/dimension.)
         """
-        _, result = self._call(_core.residual)
+        _, result = self._call(_core.residual, self._elastic())
         r = np.asarray(result.data, dtype=float)
         if len(r) == 0:
             return 0.0
-        area = _core.total_area()
+        area = _core.total_area()           # a string's length, a simplex's volume
         if area <= 0:
             return float(np.sqrt((r**2).sum()))
-        return float(np.sqrt((r**2).sum()*len(r)/area))
+        rep = _core.representation()
+        dim = 1 if rep == 1 else 2 if rep == 2 else int(self.eval("surface_dimension"))
+        return float(np.sqrt((r**2).sum()*len(r))/area**((dim - 1)/dim))
 
     def health(self, tol: float = 1e-8, stability: bool = False) -> Health:
         """A check-up of the surface: is it in equilibrium (:meth:`residual`
@@ -1091,7 +1158,11 @@ class Evolver:
         out the vertices within two edges of a constraint's own vertices (next
         to a contact line the surface is close to its wall by design);
         ``self_gap`` measures between vertices more than two edges apart.
-        ``crossed`` counts vertices on the far side of a constraint: the
+        ``junctions`` counts free junctions that break Plateau's laws (edges
+        where four or more films meet, vertices where more than four triple
+        edges or, in a string network, four or more strings do): the surface
+        is in equilibrium for its topology, but popping them (Evolver's
+        ``o``) lowers the energy. ``crossed`` counts vertices on the far side of a constraint: the
         forbidden side of a one-sided one, or a few vertices (at most 5%)
         against all the others for an equality constraint. ``issues`` puts
         what looks wrong in words: unconverged, unstable, facets below 1
@@ -1109,20 +1180,27 @@ class Evolver:
     def _health(self, residual: float, stable: Optional[bool], modes: Optional[int],
                 tol: float) -> Health:
         m = self.mesh()
-        quality = m.quality(5.0)
+        quality = self.mesh_quality(5.0)
         e = m.edges
         n = len(m.vertices)
         h = quality.edge_median if np.isfinite(quality.edge_median) and quality.edge_median > 0 \
             else 1.0
         used = np.zeros(n, dtype=bool)
         used[e.ravel()] = True
+        # fixed vertices can't approach anything (and often draw a wall, such
+        # as a table top lying in the plane of a constraint)
+        moving = used & (self.values("vertex", "fixed") == 0)
         wall_gap, wall = np.inf, None
         nums, attrs, dist, names = self._constraint_gaps()
+        # a contact line on one wall may meet another (a corner, or a second
+        # constraint drawn on the same wall): gaps count only for vertices free
+        # of every constraint
+        free = moving & ~np.isnan(dist).any(axis=1) if dist.size else moving
         label = {int(c): f"constraint {nm or c}" for c, nm in zip(nums, names)}
         for c in range(len(nums)):
             d = dist[:, c]
             on = np.isnan(d) & used
-            off = ~np.isnan(d) & used
+            off = ~np.isnan(d) & free
             if not off.any():
                 continue
             far = off & ~_grow(on, e, 2)
@@ -1131,7 +1209,7 @@ class Evolver:
                 if g < wall_gap:
                     wall_gap, wall = g, int(nums[c])
         crossed = _crossed(nums, attrs, dist, used, _CROSS_TOL*h)
-        self_gap = _self_gap(m.vertices, e, used, h)
+        self_gap = _self_gap(m.vertices, e, moving, h)
         issues = []
         if not residual < tol:
             issues.append(f"not in equilibrium (residual {residual:.2g})")
@@ -1147,9 +1225,37 @@ class Evolver:
                           f"({wall_gap:.2g} edge lengths away)")
         if self_gap < 0.1:
             issues.append(f"the surface nearly touches itself ({self_gap:.2g} edge lengths)")
+        junctions = self._bad_junctions()
+        if junctions:
+            issues.append(f"{junctions} {'junction breaks' if junctions == 1 else 'junctions break'} "
+                          "Plateau's laws (Evolver's 'o' pops them)")
         return Health(float(residual), stable, modes, float(quality.angle_min),
                       int(quality.skinny), float(wall_gap), wall, crossed, float(self_gap),
-                      issues)
+                      junctions, issues)
+
+    def _bad_junctions(self) -> int:
+        """Junctions a minimal surface can't have, away from walls, wires and
+        fixed elements: in a film, edges where four or more facets meet (not
+        fixed, at least one end free) and free vertices where more than four
+        triple edges do; in a string network, free vertices where four or
+        more strings meet."""
+        rep = _core.representation()
+        if rep == 3 or self.model == "lagrange":
+            return 0
+        _, attached = self._call(_core.vertex_attached)
+        free = ~np.asarray(attached.data, dtype=bool)
+        if rep == 1:
+            return int(((self.values("vertex", "valence") >= 4) & free).sum())
+        m = self.mesh()
+        if len(m.edges) == 0:
+            return 0
+        valence = self.values("edge", "valence")
+        # along a wire or wall (both ends attached) more films may meet
+        loose = (free[m.edges[:, 0]] | free[m.edges[:, 1]]) & (self.values("edge", "fixed") == 0)
+        bad = int(((valence >= 4) & loose).sum())
+        triple = valence == 3
+        count = np.bincount(m.edges[triple].ravel(), minlength=len(free))
+        return bad + int(((count > 4) & free).sum())
 
     def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
         """Constraint numbers, attribute bits, per vertex the signed distance
@@ -1203,8 +1309,27 @@ class Evolver:
         return [line for line in self.command("check").splitlines() if line.strip()]
 
     def mesh_quality(self, skinny_angle: float = 15.0) -> "MeshQuality":
-        """Edge lengths and facet shapes; see :meth:`Mesh.quality`."""
-        return self.mesh().quality(skinny_angle)
+        """Edge lengths and facet shapes; see :meth:`Mesh.quality`. In a torus
+        model, from Evolver's own edge lengths (vertex coordinates are wrapped
+        into the unit cell, so facets across its sides would look torn)."""
+        if not self.eval("torus"):
+            return self.mesh().quality(skinny_angle)
+        lengths = self.values("edge", "length")
+        nan = float("nan")
+        if len(lengths) == 0:
+            return MeshQuality(nan, nan, nan, nan, nan, 0, 0, skinny_angle)
+        edges = (float(lengths.min()), float(np.median(lengths)), float(lengths.max()))
+        if self.counts["facets"] == 0 or self.eval("surface_dimension") != 2:
+            return MeshQuality(*edges, nan, nan, 0, 0, skinny_angle)
+        a, b, c = (self.values("facet", f"edge[{k}].length") for k in (1, 2, 3))
+        angles = [np.degrees(np.arccos(np.clip((y*y + z*z - x*x)/np.maximum(2*y*z, 1e-300),
+                                               -1, 1))) for x, y, z in ((a, b, c), (b, c, a), (c, a, b))]
+        smallest = np.min(angles, axis=0)
+        p = (a + b + c)/2
+        area = np.sqrt(np.maximum(p*(p - a)*(p - b)*(p - c), 0))
+        return MeshQuality(*edges, float(smallest.min()), float(np.median(smallest)),
+                           int((smallest < skinny_angle).sum()),
+                           int((area < 1e-12*np.median(area)).sum()), skinny_angle)
 
     def refine(self, times: int = 1) -> None:
         """Refine the surface: split every edge and facet (Evolver's ``r``)."""
@@ -1955,7 +2080,11 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
         return float("inf")
     r = h/2
     p = x[idx]
-    cell = np.floor(p/r).astype(np.int64)
+    # cells on the first three coordinates (zero-padded in the plane): pairs
+    # closer than r in the full space are closer in those too
+    grid = np.zeros((len(p), 3))
+    grid[:, :min(3, p.shape[1])] = p[:, :3]
+    cell = np.floor(grid/r).astype(np.int64)
     cell -= cell.min(axis=0) - 1                 # a margin: neighbours never wrap
     dims = cell.max(axis=0) + 2
     k = (cell[:, 0]*dims[1] + cell[:, 1])*dims[2] + cell[:, 2]
@@ -2008,7 +2137,15 @@ _CROSS_TOL = 0.01
 _ADAPT_PASSES = 3
 _NEWTON_FIRST_SETTLE = 5   # gradient steps before relax()'s Newton-first attempt
 _SPOKE_RATIO = 1.5       # relax() splits edges leaving a contact line longer than this many contact-line edges
-_FALLBACK_STEPS = 200    # gradient steps for relax()'s conjugate-gradient pass, at most
+_FALLBACK_STEPS = 200
+# Evolver's methods whose in-plane forces are physical (membranes)
+_ELASTIC_METHODS = frozenset({
+    "linear_elastic", "general_linear_elastic", "linear_elastic_B", "relaxed_elastic",
+    "relaxed_elastic1", "relaxed_elastic2", "relaxed_elastic_A", "relaxed_elastic1_A",
+    "relaxed_elastic2_A", "dirichlet_elastic", "SVK_elastic", "neo_hookean",
+    "stress_integral"})
+_NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative) is undone
+_GRADIENT_ONLY_TOL = 1e-9      # energy_tol when no Newton follows    # gradient steps for relax()'s conjugate-gradient pass, at most
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 
