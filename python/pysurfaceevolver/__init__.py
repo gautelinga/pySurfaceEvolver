@@ -28,6 +28,7 @@ from ._evolver import (
     Parameters,
     Snapshot,
     Stability,
+    Health,
     UnstableEquilibriumWarning,
 )
 from ._mesh import (Bodies, BodySurface, LargeTessellationWarning, Mesh, MeshQuality, Quantity,
@@ -127,6 +128,7 @@ __all__ = [
     "Quantity",
     "Snapshot",
     "Stability",
+    "Health",
     "UnstableEquilibriumWarning",
     "WorkerCrashed",
     "WorkerStartError",

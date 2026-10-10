@@ -12,6 +12,8 @@ handle to it.
 ```{eval-rst}
 .. autoclass:: Evolver
 .. autoclass:: IterationResult
+.. autoclass:: Health
+   :members: ok
 .. autoclass:: BodyView
 .. autoclass:: EigenCounts
    :no-members:

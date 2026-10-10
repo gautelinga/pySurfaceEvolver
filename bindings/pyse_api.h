@@ -148,6 +148,13 @@ double pyse_total_energy(void);
 /* per vertex, the shape part of its velocity (projected force): along its
    normal(s), projected into its constraints; one per vertex in vertex order */
 int pyse_residual(double *out, long n);
+/* the constraints in use: their numbers and attribute bits; returns how many
+   (at most max are written; nums may be NULL to count) */
+int pyse_constraint_list(int *nums, int *attrs, int max);
+/* per vertex (rows) and listed constraint (columns): the constraint's value
+   over its gradient's length, a signed distance to first order; NaN where the
+   vertex is on that constraint or the gradient vanishes */
+int pyse_constraint_gaps(const int *nums, int ncon, double *out, long n);
 double pyse_total_area(void);
 const char *pyse_datafilename(void);
 /* Set the name reported as the current datafile (e.g. after restoring a

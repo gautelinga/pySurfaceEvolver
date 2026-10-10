@@ -144,6 +144,26 @@ class Stability:
     threshold: float          # eigenvalues below this counted as negative
 
 
+@dataclass(frozen=True)
+class Health:
+    """See :meth:`Evolver.health`. Gaps are in units of the median edge length."""
+
+    residual: float
+    stable: Optional[bool]          # None: not checked
+    negative_modes: Optional[int]
+    angle_min: float                # smallest facet angle, degrees
+    skinny: int                     # facets with an angle below 5 degrees
+    wall_gap: float                 # nearest approach to a constraint a vertex isn't on
+    wall: Optional[int]             # that constraint's number
+    crossed: Dict[int, int]         # constraint -> vertices on its far side
+    self_gap: float                 # nearest approach of the surface to itself (inf: none under 1/2)
+    issues: List[str]               # what looks wrong, in words (empty: nothing)
+
+    @property
+    def ok(self) -> bool:
+        return not self.issues
+
+
 _REPRESENTATIONS = {1: "string", 2: "soapfilm", 3: "simplex"}
 _MODELS = {1: "linear", 2: "quadratic", 3: "lagrange"}
 _ELEMENT_TYPES = {
@@ -222,6 +242,7 @@ class IterationResult:
     remeshes: int = 0                  # automatic remeshings (relax)
     stable: Optional[bool] = None      # relax(): checked once converged (None: not checked)
     negative_modes: Optional[int] = None   # relax(): directions that lower the energy
+    health: Optional["Health"] = None  # relax(): Evolver.health() at the end
 
 # eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
 # (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
@@ -539,8 +560,9 @@ class Evolver:
         only sign.
 
         Returns the gradient steps' :class:`IterationResult`, with ``level``,
-        ``newton_steps``, ``residual`` and ``converged`` (residual below
-        ``tol``). ``callback(ev, i)`` runs every ``every``-th gradient step and
+        ``newton_steps``, ``residual``, ``converged`` (residual below
+        ``tol``) and ``health`` (:meth:`health` of the result, with the
+        stability found here). ``callback(ev, i)`` runs every ``every``-th gradient step and
         at the end of each level; ``threads`` sets the threads for this call
         only (see :func:`pysurfaceevolver.threads_limit`).
         """
@@ -619,9 +641,14 @@ class Evolver:
                         f"relax() converged to an unstable equilibrium: {modes} "
                         f"direction(s) lower the energy (lowest eigenvalue {lowest:.3g})",
                         UnstableEquilibriumWarning, stacklevel=2)
+            try:
+                health: Optional[Health] = self._health(residual, stable, modes, tol)
+            except EvolverError:
+                health = None
         return IterationResult(np.array(energy), np.array(area), np.array(scale),
                                "".join(output), bool(residual < tol), steps,
-                               np.array(level, dtype=int), residual, remeshes, stable, modes)
+                               np.array(level, dtype=int), residual, remeshes, stable, modes,
+                               health)
 
     def _check_finite(self, start: Snapshot) -> None:
         if not np.isfinite(_core.total_energy()):
@@ -972,6 +999,87 @@ class Evolver:
         if area <= 0:
             return float(np.sqrt((r**2).sum()))
         return float(np.sqrt((r**2).sum()*len(r)/area))
+
+    def health(self, tol: float = 1e-8, stability: bool = False) -> Health:
+        """A check-up of the surface: is it in equilibrium (:meth:`residual`
+        below ``tol``), stable (with ``stability=True``, :meth:`stability`),
+        are its facets in shape, does it come close to (or through) a wall or
+        mirror it isn't attached to, or to itself?
+
+        The gaps are in units of the median edge length. ``wall_gap`` leaves
+        out the vertices within two edges of a constraint's own vertices (next
+        to a contact line the surface is close to its wall by design);
+        ``self_gap`` measures between vertices more than two edges apart.
+        ``crossed`` counts vertices on the far side of a constraint: the
+        forbidden side of a one-sided one, or a few vertices (at most 5%)
+        against all the others for an equality constraint. ``issues`` puts
+        what looks wrong in words: unconverged, unstable, facets below 1
+        degree, crossings, gaps under 0.1. :meth:`relax` attaches one to its
+        result. Cost: about a gradient step (the stability check: two
+        factorizations).
+        """
+        stable: Optional[bool] = None
+        modes: Optional[int] = None
+        if stability:
+            check = self.stability()
+            stable, modes = check.stable, check.negative
+        return self._health(self.residual(), stable, modes, tol)
+
+    def _health(self, residual: float, stable: Optional[bool], modes: Optional[int],
+                tol: float) -> Health:
+        m = self.mesh()
+        quality = m.quality(5.0)
+        e = m.edges
+        n = len(m.vertices)
+        h = quality.edge_median if np.isfinite(quality.edge_median) and quality.edge_median > 0 \
+            else 1.0
+        used = np.zeros(n, dtype=bool)
+        used[e.ravel()] = True
+        wall_gap, wall = np.inf, None
+        crossed: Dict[int, int] = {}
+        _, gaps = self._call(_core.constraint_gaps)
+        nums, attrs, dist = gaps.data
+        for c in range(len(nums)):
+            d = dist[:, c]
+            on = np.isnan(d) & used
+            off = ~np.isnan(d) & used
+            if not off.any():
+                continue
+            near = _grow(on, e, 2)
+            far = off & ~near
+            if far.any():
+                g = float(np.abs(d[far]).min())/h
+                if g < wall_gap:
+                    wall_gap, wall = g, int(nums[c])
+            eps = 1e-6*h
+            if attrs[c] & 2:            # NONNEGATIVE
+                bad = int((d[off] < -eps).sum())
+            elif attrs[c] & 1:          # NONPOSITIVE
+                bad = int((d[off] > eps).sum())
+            else:
+                pos, neg = int((d[off] > eps).sum()), int((d[off] < -eps).sum())
+                bad = min(pos, neg) if min(pos, neg) <= 0.05*(pos + neg) else 0
+            if bad:
+                crossed[int(nums[c])] = bad
+        self_gap = _self_gap(m.vertices, e, used, h)
+        issues = []
+        if not residual < tol:
+            issues.append(f"not in equilibrium (residual {residual:.2g})")
+        if stable is False:
+            issues.append(f"unstable: {modes} direction(s) lower the energy")
+        if quality.angle_min < 1.0:
+            issues.append(f"degenerate facets (smallest angle {quality.angle_min:.2g} degrees, "
+                          f"{quality.skinny} below 5)")
+        for c, k in crossed.items():
+            issues.append(f"{k} vertices on the far side of constraint {c}")
+        if wall_gap < 0.1:
+            issues.append(f"the surface nearly touches constraint {wall} "
+                          f"({wall_gap:.2g} edge lengths away)")
+        if self_gap < 0.1:
+            issues.append(f"the surface nearly touches itself ({self_gap:.2g} edge lengths)")
+        return Health(float(residual), stable, modes, float(quality.angle_min),
+                      int(quality.skinny), float(wall_gap), wall, crossed, float(self_gap),
+                      issues)
 
     def stability(self, nearest: int = 6) -> Stability:
         """Whether the surface sits at a stable equilibrium (a minimum, as far as
@@ -1728,6 +1836,72 @@ class BodyView:
 _GRADE = 1.0
 # at most this many automatic remeshings per relax() call
 _MAX_REMESHES = 10
+
+
+def _grow(mask: np.ndarray, edges: np.ndarray, rings: int) -> np.ndarray:
+    """The vertices within ``rings`` edges of the masked ones."""
+    out = mask.copy()
+    for _ in range(rings):
+        nxt = out.copy()
+        nxt[edges[out[edges[:, 1]], 0]] = True
+        nxt[edges[out[edges[:, 0]], 1]] = True
+        out = nxt
+    return out
+
+
+def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> float:
+    """The smallest distance, in units of h, between used vertices more than
+    two edges apart (inf if none are closer than h/2)."""
+    idx = np.flatnonzero(used)
+    if len(idx) < 2 or len(edges) == 0:
+        return float("inf")
+    r = h/2
+    p = x[idx]
+    cell = np.floor(p/r).astype(np.int64)
+    cell -= cell.min(axis=0) - 1                 # a margin: neighbours never wrap
+    dims = cell.max(axis=0) + 2
+    k = (cell[:, 0]*dims[1] + cell[:, 1])*dims[2] + cell[:, 2]
+    order = np.argsort(k, kind="stable")
+    sk = k[order]
+    found_i, found_j, found_d = [], [], []
+    offsets = np.array(np.meshgrid([-1, 0, 1], [-1, 0, 1], [-1, 0, 1])).T.reshape(-1, 3)
+    offsets = offsets[[tuple(o) >= (0, 0, 0) for o in offsets]]   # each pair of cells once
+    for off in offsets:
+        same = not off.any()
+        nk = sk + (off[0]*dims[1] + off[1])*dims[2] + off[2]       # sorted, like sk
+        lo = np.searchsorted(sk, nk, "left")
+        cnt = np.searchsorted(sk, nk, "right") - lo
+        if not cnt.any():
+            continue
+        i = np.repeat(order, cnt)
+        within = np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        j = order[np.repeat(lo, cnt) + within]
+        keep = i < j if same else i != j
+        i, j = i[keep], j[keep]
+        d = np.linalg.norm(p[i] - p[j], axis=1)
+        close = d < r
+        found_i.append(i[close])
+        found_j.append(j[close])
+        found_d.append(d[close])
+    d = np.concatenate(found_d)
+    if len(d) == 0:
+        return float("inf")
+    i = idx[np.concatenate(found_i)]
+    j = idx[np.concatenate(found_j)]
+    # the nearest pair more than two edges apart (close pairs are few)
+    a = np.concatenate([edges[:, 0], edges[:, 1]])
+    b = np.concatenate([edges[:, 1], edges[:, 0]])
+    order = np.argsort(a, kind="stable")
+    a, b = a[order], b[order]
+    start = np.searchsorted(a, np.arange(len(x)), "left")
+    stop = np.searchsorted(a, np.arange(len(x)), "right")
+    for k in np.argsort(d)[:5000]:
+        ni = b[start[i[k]]:stop[i[k]]]
+        nj = b[start[j[k]]:stop[j[k]]]
+        if j[k] in ni or np.intersect1d(ni, nj).size:
+            continue
+        return float(d[k]/h)
+    return float("inf")
 
 
 _ADAPT_PASSES = 3

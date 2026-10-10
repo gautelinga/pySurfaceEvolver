@@ -284,8 +284,10 @@ degrees (one level more fixes 150-160), 8 drainage band (worst 8-15% at level
 (2026-10-10, see there; the liquid-bridge notebook is on `relax(levels=3)`;
 relax() falls back to conjugate gradients), G2.7 in part (`ev.adapt()`, opt-in
 `relax(adapt=...)`), G2.8 coarsening (guarded collapse in C; adapt still
-opt-in: with it on everywhere the suite passes but runs several times longer).
-Open: case 3 at 160-170 and case 8 (parked). Ask the user before each step.
+opt-in: with it on everywhere the suite passes but runs several times longer),
+G2.9 health report. Deferred by the user: adapt by default, case 8, case 3 at
+160-170. Next: G2.10 examples on defaults (the drainage helper without its
+crutches). Ask the user before each step.
 
 **Engine changes this round** (src/, CRLF): edge deletion keeps the link condition
 (trirevis.c, upstream bug); hessian_normal's slant measured against the raw normal
@@ -885,6 +887,19 @@ G2.8 *Done* (2026-10-10; user's choices: goal adapt safe by default, the guard
      simply asks for more facets than the suite's coarse meshes (and gains
      accuracy: cube 0.02% vs 0.34%). The target "adapt on at today's times" is
      not met; adapt stays opt-in. Case 3 still fails at 160-170 with it.
+G2.9 *Done* (2026-10-10; user's choices: everything incl. gaps, fields only
+     and no warnings, cheap parts on every relax). `ev.health()` /
+     `result.health` (`pyse.Health`): residual, stable/negative_modes (from
+     relax), angle_min, skinny (< 5 deg), wall_gap (vertices beyond two edges of
+     a constraint's own vertices, in median edge lengths) and wall, crossed
+     (one-sided: the forbidden side; equality: at most 5% against the rest),
+     self_gap (pairs more than two edges apart, searched within h/2 by a cell
+     grid), issues in words. C binding `constraint_gaps` (f/|grad f| per vertex
+     and constraint in use, NaN on it). 0.18 s at 98k facets (residual 0.08 of
+     it). Suite: no issue on any converged and stable relax except one in case 8
+     at the snap (a vertex past the y = 0 mirror, plausibly real); unconverged
+     steps of cases 1, 2 and 8 all flagged (degenerate facets, crossings,
+     near-contacts).
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

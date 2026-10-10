@@ -830,6 +830,74 @@ int pyse_residual(double *out, long n)
   return surface_call(residual_body,&a);
 }
 
+/* Constraints in use and each vertex's signed distance to the ones it isn't on. */
+struct conlist_args { int *nums; int *attrs; int max; int count; };
+
+static void conlist_body(void *arg)
+{ struct conlist_args *a = (struct conlist_args *)arg;
+  int i;
+  a->count = 0;
+  for ( i = 0 ; i < web.maxcon ; i++ )
+  { struct constraint *con = get_constraint(i);
+    if ( !(con->attr & IN_USE) ) continue;
+    if ( a->nums && a->count < a->max )
+    { a->nums[a->count] = i;
+      if ( a->attrs ) a->attrs[a->count] = (int)con->attr;
+    }
+    a->count++;
+  }
+}
+
+int pyse_constraint_list(int *nums, int *attrs, int max)
+{ struct conlist_args a;
+  int status;
+  if ( in_protected ) return -1;
+  if ( !initialized || !surface_valid ) return -1;
+  a.nums = nums; a.attrs = attrs; a.max = max; a.count = 0;
+  status = surface_call(conlist_body,&a);
+  return status == PYSE_OK ? a.count : -1;
+}
+
+struct gaps_args { const int *nums; int ncon; double *out; long n; };
+
+static void gaps_body(void *arg)
+{ struct gaps_args *a = (struct gaps_args *)arg;
+  vertex_id v_id;
+  long row = 0;
+  int c,i;
+  for ( c = 0 ; c < a->ncon ; c++ )
+    if ( a->nums[c] < 0 || a->nums[c] >= web.maxcon
+         || !(get_constraint(a->nums[c])->attr & IN_USE) )
+      inconsistent("constraint list changed");
+  FOR_ALL_VERTICES(v_id)
+  { REAL *x = get_coord(v_id);
+    if ( row >= a->n ) inconsistent("too many vertices");
+    for ( c = 0 ; c < a->ncon ; c++ )
+    { double *o = a->out + (size_t)row*a->ncon + c;
+      if ( v_on_constraint(v_id,a->nums[c]) ) *o = NAN;
+      else
+      { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
+        eval_all(get_constraint(a->nums[c])->formula,x,SDIM,&f,grad,v_id);
+        for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
+        *o = g > 0.0 ? (double)(f/sqrt(g)) : NAN;
+      }
+    }
+    row++;
+  }
+  if ( row != a->n ) inconsistent("element count changed");
+}
+
+int pyse_constraint_gaps(const int *nums, int ncon, double *out, long n)
+{ struct gaps_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( n != web.skel[VERTEX].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Output array does not match the vertex count.");
+  a.nums = nums; a.ncon = ncon; a.out = out; a.n = n;
+  return surface_call(gaps_body,&a);
+}
+
 /**************************************************************************
  * Surface snapshots.  These run inside the guard too, so an inconsistency
  * becomes an Evolver error instead of a bad memory read.

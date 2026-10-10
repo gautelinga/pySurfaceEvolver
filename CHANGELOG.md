@@ -30,6 +30,12 @@
   length. Engine: Evolver's edge deletion checks this when the new variables
   `collapse_max_tilt` (degrees) and `collapse_max_edge` are set (both 0 by default:
   no change for Evolver scripts).
+- `ev.health()` and `relax()`'s `result.health` (`pyse.Health`): residual, stability,
+  smallest facet angle and skinny facets, the nearest approach to a wall or mirror a vertex
+  isn't on (beyond two edges of its contact line) and of the surface to itself (in edge
+  lengths), vertices on the far side of a constraint, and `issues` in words (empty: `ok`).
+  No warnings. About 0.2 s at 98k facets. New C binding: per-vertex signed distances to
+  the constraints.
 - Newton and eigenvalue counts no longer see spurious modes from vertices on wires
   (curves where two constraints meet): their only freedom, sliding along the wire, is
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the

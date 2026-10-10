@@ -490,3 +490,47 @@ def test_adapt_needs_the_linear_model(cube):
     cube.command("lagrange 2")
     with pytest.raises(ValueError, match="linear"):
         cube.adapt()
+
+
+def test_relax_reports_a_healthy_surface(cube):
+    r = cube.relax()
+    assert r.health is not None and r.health.ok and r.health.stable is True
+    assert r.health.residual == r.residual and r.health.angle_min > 20
+
+
+def test_health_names_a_broken_surface():
+    # gradient steps only, long enough for the coarse bridge to fall apart
+    ev, _ = _coarse_bridge()
+    ev.relax(newton=0, energy_tol=1e-9)
+    h = ev.health()
+    assert not h.ok and any("degenerate" in s for s in h.issues)
+
+
+def test_health_sees_a_vertex_through_a_wall():
+    ev = _hemisphere_drop()
+    ev.relax()
+    assert ev.health().crossed == {}
+    x = ev.vertices
+    top = int(np.argmax(x[:, 2]))
+    x[top, 2] = -0.05                       # the apex pushed through the plane z = 0
+    ev.vertices = x
+    h = ev.health()
+    assert h.crossed == {1: 1} and not h.ok
+
+
+def test_health_sees_the_surface_close_to_itself():
+    # two separate square films 0.01 apart, edges about 0.25 long
+    g = np.linspace(0, 1, 5)
+    v, f = [], []
+    for z in (0.0, 0.01):
+        base = len(v)
+        v += [[a, b, z] for b in g for a in g]
+        for r in range(4):
+            for c in range(4):
+                p = base + 5*r + c
+                f += [[p, p + 1, p + 6], [p, p + 6, p + 5]]
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(np.array(v), f))
+    h = ev.health()
+    assert h.self_gap == pytest.approx(0.04, rel=0.01)
+    assert any("touches itself" in s for s in h.issues)
