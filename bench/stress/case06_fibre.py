@@ -45,7 +45,8 @@ def run(quick=False):
         eq = float(np.hypot(m.vertices[:, 0], m.vertices[:, 1]).max())
         counts = ev.eigen_counts()
         row = dict(theta=step.value, energy=ev.total_energy, pressure=ev.body(1).pressure,
-                   equator=eq, negative=counts.negative, zero=counts.zero)
+                   equator=eq, negative=counts.negative, zero=counts.zero,
+                   stable=step.result.stable, unstable_modes=step.result.negative_modes)
         if ref is not None:
             err = max(rel(ev.total_energy, ref["energy"]), rel(ev.body(1).pressure, ref["pressure"]),
                       rel(eq, ref["equator"]))
@@ -56,7 +57,8 @@ def run(quick=False):
     track.finish(ev, res)
     res.error = max(errs) if errs else float("nan")
     res.passed = bool(errs) and max(errs) < 0.01
-    neg = [(r["theta"], r["negative"]) for r in res.rows]
+    unstable = [r["theta"] for r in res.rows if r["stable"] is False]
     res.summary = (f"energy, pressure and equator radius against the barrel: worst "
-                   f"{res.error:.2%} over {len(errs)} angles; negative eigenvalues per angle {neg}")
+                   f"{res.error:.2%} over {len(errs)} angles; relax() reports the barrel unstable "
+                   f"(roll-up toward a clam shell) at {unstable}")
     return res

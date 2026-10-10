@@ -129,6 +129,21 @@ class EvolverWarning(UserWarning):
     """A warning printed by Surface Evolver."""
 
 
+class UnstableEquilibriumWarning(UserWarning):
+    """relax() converged to an equilibrium that some motion makes lower in energy
+    (a saddle): see :meth:`Evolver.stability`."""
+
+
+@dataclass(frozen=True)
+class Stability:
+    """See :meth:`Evolver.stability`."""
+
+    stable: bool
+    negative: int             # directions that lower the energy
+    lowest: np.ndarray        # the eigenvalues nearest zero, ascending
+    threshold: float          # eigenvalues below this counted as negative
+
+
 _REPRESENTATIONS = {1: "string", 2: "soapfilm", 3: "simplex"}
 _MODELS = {1: "linear", 2: "quadratic", 3: "lagrange"}
 _ELEMENT_TYPES = {
@@ -205,6 +220,8 @@ class IterationResult:
     level: Optional[np.ndarray] = None
     residual: float = float("nan")    # Evolver.residual() at the end (relax)
     remeshes: int = 0                  # automatic remeshings (relax)
+    stable: Optional[bool] = None      # relax(): checked once converged (None: not checked)
+    negative_modes: Optional[int] = None   # relax(): directions that lower the energy
 
 # eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
 # (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
@@ -458,7 +475,7 @@ class Evolver:
 
     def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: float = 1e-9,
               window: int = 3, tidy: int = 10, remesh: bool = False, cg: bool = False,
-              levels: int = 0,
+              levels: int = 0, stability: bool = True,
               newton: int = 20, seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
@@ -490,6 +507,14 @@ class Evolver:
         If the energy becomes non-finite during the gradient steps, the surface
         is restored to its state before the call and :class:`EvolverError` is
         raised.
+
+        Once converged, with ``stability=True``, checks that the equilibrium is
+        stable (:meth:`stability`; about two factorizations), sets ``stable`` and
+        ``negative_modes`` in the result, and warns
+        (:class:`UnstableEquilibriumWarning`) if it isn't: a saddle that some
+        motion would leave, such as a liquid column past its Rayleigh-Plateau
+        limit. The symmetric solver keeps finding it, so the warning is the
+        only sign.
 
         Returns the gradient steps' :class:`IterationResult`, with ``level``,
         ``newton_steps``, ``residual`` and ``converged`` (residual below
@@ -524,9 +549,23 @@ class Evolver:
                                        "steps; the surface is back to its state before the call")
             steps = self._newton(newton, seek, tol, undo_if, output) if newton else 0
             residual = self.residual()
+            stable: Optional[bool] = None
+            modes: Optional[int] = None
+            if stability and residual < tol:
+                try:
+                    check = self.stability()
+                    stable, modes = check.stable, check.negative
+                except EvolverError:
+                    pass                    # no Hessian for this surface
+                if stable is False:
+                    lowest = check.lowest[0] if len(check.lowest) else float("nan")
+                    warnings.warn(
+                        f"relax() converged to an unstable equilibrium: {modes} "
+                        f"direction(s) lower the energy (lowest eigenvalue {lowest:.3g})",
+                        UnstableEquilibriumWarning, stacklevel=2)
         return IterationResult(np.array(energy), np.array(area), np.array(scale),
                                "".join(output), bool(residual < tol), steps,
-                               np.array(level, dtype=int), residual, remeshes)
+                               np.array(level, dtype=int), residual, remeshes, stable, modes)
 
     @contextlib.contextmanager
     def _conj_grad(self, on: bool) -> Iterator[None]:
@@ -791,6 +830,28 @@ class Evolver:
         if area <= 0:
             return float(np.sqrt((r**2).sum()))
         return float(np.sqrt((r**2).sum()*len(r)/area))
+
+    def stability(self, nearest: int = 6) -> Stability:
+        """Whether the surface sits at a stable equilibrium (a minimum, as far as
+        second order tells; call it once converged, see :meth:`residual`).
+
+        Counts the Hessian eigenvalues below a small negative threshold: -1% of
+        the scale of the lowest ones (the median magnitude of the positive
+        ones among the ``nearest`` to zero, from Evolver's ``ritz``). Exact zero
+        modes from symmetries (a drop sliding on a plane, a barrel along its
+        fibre) come out slightly above or below zero numerically; the threshold
+        keeps them from reading as instabilities, at the price of noticing a
+        real one slightly past its onset. Costs about two factorizations.
+        """
+        first = self.eigen_counts(0.0).negative
+        text = self.command(f"ritz(0, {max(int(nearest), first + 4)})")
+        values = np.array(sorted(float(x) for x in re.findall(
+            r"^\s*\d+\.\s+([-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)\s*$", text, re.MULTILINE)))
+        positive = np.abs(values[values > 0])
+        scale = float(np.median(positive)) if len(positive) else float(np.abs(values).max(initial=1.0))
+        threshold = -0.01*scale
+        negative = self.eigen_counts(threshold).negative if first else 0
+        return Stability(negative == 0, negative, values, threshold)
 
     def eigen_counts(self, shift: float = 0.0) -> "EigenCounts":
         """How many Hessian eigenvalues lie below, at and above ``shift``

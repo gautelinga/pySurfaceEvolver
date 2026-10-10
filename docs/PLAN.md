@@ -732,7 +732,13 @@ G2.2 *Done*: hessian_normal's slant test is now measured against the raw surface
      keep their one physical direction (normal projected into the wall).
      Target: the catenoid shows 0 negative eigenvalues while stable; the
      cylinder's count turns negative at r = 1/pi.
-G2.3 **Stability in every relax() result**: an eigenvalue count after
+G2.3 *Done*: `ev.stability()` counts eigenvalues below -1% of the scale of the
+     lowest positive ones (from `ritz`): symmetry zero modes (a drop sliding on a
+     plane, a barrel along its fibre: +-1e-5..1e-4) don't read as instabilities,
+     real ones (the barrel's roll-up pair, -1e-3) do. relax() checks once
+     converged (`stable`, `negative_modes`, UnstableEquilibriumWarning). Suite:
+     6 of 9 (the cylinder: reported at r = 0.3125, 1.8% past 1/pi). Plan was:
+     **Stability in every relax() result**: an eigenvalue count after
      convergence (one factorization; skippable), `stable` in the result and a
      warning when not. Target: case 1 passes; case 2 reports the fold.
 G2.4 **Isotropic remeshing in C toward a size field** (the standard algorithm,

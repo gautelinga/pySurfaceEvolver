@@ -344,3 +344,41 @@ def test_continuation_parameter_and_relax_callable(cube):
     assert calls == [1, 2] and len(steps[0].result.energy) == 2
     with pytest.raises(TypeError):
         next(recipes.continuation(cube, recipes.parameter("x"), [1], relax=5))
+
+
+# ---- G2.3: stability ----------------------------------------------------------
+
+def _column(radius, nz=12, nt=24):
+    # a liquid column between plates z = 0 and z = 1 at 90 degrees: stable while
+    # its height is below pi*radius (Rayleigh-Plateau with sliding contact lines)
+    from pysurfaceevolver import constraints as C
+    v = [[radius*np.cos(p), radius*np.sin(p), z] for z in np.linspace(0, 1, nz + 1)
+         for p in 2*np.pi*np.arange(nt)/nt]
+    f = []
+    for i in range(nz):
+        for j in range(nt):
+            a, b = i*nt + j, i*nt + (j + 1) % nt
+            f += [[a, b, b + nt], [a, b + nt, a + nt]]
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(
+        v, f, constraints={1: C.plane((0, 0, 1), 0.0), 2: C.plane((0, 0, -1), point=(0, 0, 1))},
+        vertex_constraints={1: list(range(nt)), 2: list(range(nz*nt, (nz + 1)*nt))},
+        bodies=[pyse.Body(faces=range(len(f)), volume=np.pi*radius**2)]))
+    return ev
+
+
+def test_relax_reports_stable_equilibria(cube):
+    r = cube.relax()
+    assert r.converged and r.stable is True and r.negative_modes == 0
+    s = cube.stability()
+    assert s.stable and s.lowest[0] > s.threshold     # the translations aren't instabilities
+
+
+def test_relax_warns_about_unstable_equilibria():
+    ev = _column(0.45)                    # height 1 < pi*0.45: stable
+    assert ev.relax().stable is True
+    ev = _column(0.25)                    # height 1 > pi*0.25: unstable
+    with pytest.warns(pyse.UnstableEquilibriumWarning):
+        r = ev.relax()
+    assert r.converged and r.stable is False and r.negative_modes >= 1
+    assert ev.relax(stability=False).stable is None

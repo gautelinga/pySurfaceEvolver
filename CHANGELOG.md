@@ -9,6 +9,10 @@
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the
   raw surface normal and the freedom's magnitude). A stable catenoid counts 0 negative
   eigenvalues (was about one per wire vertex).
+- `ev.stability()` and, once `relax()` converges, `result.stable` /
+  `result.negative_modes` with an `UnstableEquilibriumWarning`: unstable equilibria
+  (a liquid column past Rayleigh-Plateau, a barrel drop rolling up) are reported
+  instead of silently returned; symmetry zero modes are not mistaken for them.
 - `ev.residual()`: how far the surface is from equilibrium (the normal part of the
   projected vertex forces, dimensionless; 0 at an equilibrium). New C binding.
 - `relax()` defaults: rounds of 10 gradient steps with equiangulation and vertex

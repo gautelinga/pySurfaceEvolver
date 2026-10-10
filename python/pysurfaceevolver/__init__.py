@@ -27,6 +27,8 @@ from ._evolver import (
     EigenCounts,
     Parameters,
     Snapshot,
+    Stability,
+    UnstableEquilibriumWarning,
 )
 from ._mesh import (Bodies, BodySurface, LargeTessellationWarning, Mesh, MeshQuality, Quantity,
                     is_watertight)
@@ -124,6 +126,8 @@ __all__ = [
     "Parameters",
     "Quantity",
     "Snapshot",
+    "Stability",
+    "UnstableEquilibriumWarning",
     "WorkerCrashed",
     "WorkerStartError",
     "is_watertight",
