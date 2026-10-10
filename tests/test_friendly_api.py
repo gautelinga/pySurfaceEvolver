@@ -382,3 +382,35 @@ def test_relax_warns_about_unstable_equilibria():
         r = ev.relax()
     assert r.converged and r.stable is False and r.negative_modes >= 1
     assert ev.relax(stability=False).stable is None
+
+
+def _coarse_bridge():
+    """A liquid bridge (volume 0.05, contact angle 40) between unit spheres at
+    gap 0.2, started from a 16 x 4 tube: on this coarse mesh, long gradient
+    runs let the contact-line vertices slide together until the surface breaks."""
+    from pysurfaceevolver import constraints as C
+    c, a, nz, nt = 1.1, 0.2606013422804717, 4, 16
+    zb = c - np.sqrt(1 - a*a)
+    v = [[a*np.cos(p), a*np.sin(p), z]
+         for z in np.linspace(-zb, zb, nz + 1) for p in 2*np.pi*np.arange(nt)/nt]
+    f = []
+    for i in range(nz):
+        for j in range(nt):
+            p, q = i*nt + j, i*nt + (j + 1) % nt
+            f += [[p, q, q + nt], [p, q + nt, p + nt]]
+    s1 = C.sphere((0, 0, -c), 1.0, contact_angle=40.0, wet_poles=("north",))
+    s2 = C.sphere((0, 0, c), 1.0, contact_angle=40.0, wet_poles=("south",))
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(
+        np.array(v), f, constraints={1: s1, 2: s2},
+        vertex_constraints={1: list(range(nt)), 2: list(range(nz*nt, (nz + 1)*nt))},
+        bodies=[pyse.Body(faces=range(len(f)), volume=0.05, volconst=s1.volconst + s2.volconst)]))
+    return ev, s1.energy_constant + s2.energy_constant
+
+
+def test_relax_hands_over_to_newton_before_the_mesh_drifts():
+    ev, const = _coarse_bridge()
+    r = ev.relax()
+    assert r.converged and len(r.energy) < 200
+    assert abs(ev.total_energy + const - 0.0806) < 1e-3      # the axisymmetric 0.0839 when refined
+

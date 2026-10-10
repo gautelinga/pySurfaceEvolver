@@ -96,6 +96,7 @@ handle to it.
 .. autoexception:: EvolverBusyError
 .. autoexception:: EvolverWarning
 .. autoexception:: LargeTessellationWarning
+.. autoexception:: UnstableEquilibriumWarning
 ```
 
 ## Sample files

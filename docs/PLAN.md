@@ -269,18 +269,19 @@ everything since is under "Unreleased" in CHANGELOG.md.
 safeguarded Newton steps (plain first, line search if rejected; a step is undone
 if anything turns non-finite or both energy and residual rise), converged when
 `ev.residual()` < tol (1e-8; tol is a residual tolerance now, `energy_tol` ends
-the gradient phase), then `ev.stability()` (`result.stable`,
+the gradient phase: 1e-5 by default when Newton follows, 1e-9 with newton=0), then `ev.stability()` (`result.stable`,
 `UnstableEquilibriumWarning`). Opt-in, not robust yet: `cg=True` (conjugate
 gradients), `remesh=True` (graded remeshing).
 
 **Stress suite** (`.venv/bin/python bench/stress/run.py [case numbers]`, defaults
-only, ~10 min for all; results in bench/stress/results.json): 6 of 9 pass (1
-cylinder past Rayleigh-Plateau, 2 catenoid to its fold, 6 barrel, 9 inflated
-cube, 11 puddle, 12 shrinking cap). Failing: 3 sessile drop at 10 and 150-170
-degrees, 5 bridge at gap 0.2 (its reference is confirmed), 8 drainage band.
+only, ~3 min for all; results in bench/stress/results.json): 7 of 9 pass (1
+cylinder past Rayleigh-Plateau, 2 catenoid to its fold, 5 bridge, 6 barrel, 9
+inflated cube, 11 puddle, 12 shrinking cap). Failing: 3 sessile drop at 10 and
+150-170 degrees (one level more fixes 150-160), 8 drainage band (8-15% at level
+2; level 3 with the old tolerance: 2.4%, snap exact).
 
-**Next** (Phase G2 below, revised): G2.4 resolution check (rerun 3, 5, 8 with
-one more refinement), G2.5 tidying around Newton (the liquid-bridge notebook keeps
+**Next** (Phase G2 below, revised): G2.4 and G2.4b done (2026-10-10, see
+there; committed locally), G2.5 tidying around Newton (the liquid-bridge notebook keeps
 explicit `newton=0, stability=False` rounds until then), G2.6 guarded descent,
 then G2.7 refine-only adaptivity. Ask the user before each step.
 
@@ -800,6 +801,26 @@ G2.4 **Resolution check** (about 15 minutes, first). Rerun the failing cases
      resolution is the cause and adaptive refinement only has to be cheaper; if
      not, the cause is elsewhere and gets its own step. Case 5's reference is
      confirmed (a converged fine run matches it to 0.5%).
+     *Done* (2026-10-10). One level more, defaults otherwise: case 3 passes at
+     150 and 160 degrees (worst energy 0.23%), still fails at 170 (implied angle
+     2.05 degrees off: a small contact circle, local refinement) and 10 (relax()
+     unconverged: G2.6). Case 5 still fails at gap 0.2 (all other gaps improve
+     to 0.08%): not resolution. Case 8 at level 3: pressure 2.4% (was 168%),
+     snap exact, 93 steps unconverged, 32 min. Cause of case 5: on the coarse
+     16 x 4 start the contact-line vertices slide together in pairs and the
+     discrete energy keeps falling along that drift (to -13.8, the volume lost);
+     plain `g` does it too, `u; V` only shifts when. The gradient phase never
+     ended (each `u; V` moves the energy ~3e-4, `energy_tol` was 1e-9), so it ran
+     1000 steps and the drift won; Newton (normal motion only) can't drift so.
+G2.4b *Done*: `energy_tol` default 1e-5 when Newton follows (1e-9 with
+     newton=0). A warning when relax() ends unconverged with a grown residual was
+     tried and dropped: the drainage helper's unconverged steps grow it up to 13x
+     with correct results, the liquid bridge's gradient-only rounds 1.02x; no
+     threshold tells the broken bridge (3.7x) apart. Detection belongs to G2.9.
+     Suite with 1e-5: 7 of 9 (case 5 passes, 0.49%
+     worst), far fewer gradient steps (cylinder 26000 -> 1060, cap 25880 -> 3040,
+     catenoid 18460 -> 5290); case 8 at level 2: 8.3% (was 168%), snap 4% off,
+     120 unconverged, smallest facet angle 0; case 3 unchanged.
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

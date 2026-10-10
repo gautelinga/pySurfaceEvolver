@@ -4,6 +4,12 @@
 
 ### Robust by default (phase G, in progress)
 
+- `relax()` hands over to Newton sooner: `energy_tol` now defaults to 1e-5 when Newton
+  steps follow (1e-9 with `newton=0`). The tidying in every round keeps the energy from
+  settling to 1e-9, so the gradient phase used to run its full 1000 steps, long enough
+  for slow mesh drift to wreck a surface (contact-line vertices sliding together on a
+  coarse liquid bridge). Stress suite: 7 of 9 (the bridge passes), far fewer gradient
+  steps (cylinder 26000 -> 1060, shrinking cap 25880 -> 3040).
 - Newton and eigenvalue counts no longer see spurious modes from vertices on wires
   (curves where two constraints meet): their only freedom, sliding along the wire, is
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the

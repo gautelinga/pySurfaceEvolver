@@ -473,7 +473,7 @@ class Evolver:
         area.append(_core.total_area())
         scale.append(self.eval("scale"))
 
-    def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: float = 1e-9,
+    def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: Optional[float] = None,
               window: int = 3, tidy: int = 10, remesh: bool = False, cg: bool = False,
               levels: int = 0, stability: bool = True,
               newton: int = 20, seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
@@ -497,7 +497,10 @@ class Evolver:
         shrinks, edges are split and deleted toward the targets. The gradient
         phase ends when the energy
         changes by less than ``energy_tol`` (relative) over ``window``
-        consecutive rounds, or after ``max_iter`` steps. ``levels=n`` refines
+        consecutive rounds, or after ``max_iter`` steps. By default 1e-5 when
+        Newton steps follow (Newton finishes faster and more reliably; long
+        gradient runs let slow mesh drift grow, such as contact-line vertices
+        sliding together), 1e-9 with ``newton=0``. ``levels=n`` refines
         and repeats it n times.
 
         Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
@@ -522,6 +525,8 @@ class Evolver:
         at the end of each level; ``threads`` sets the threads for this call
         only (see :func:`pysurfaceevolver.threads_limit`).
         """
+        if energy_tol is None:
+            energy_tol = 1e-5 if newton else 1e-9
         if tol <= 0 or energy_tol <= 0 or max_iter < 1 or window < 1:
             raise ValueError("tol and energy_tol must be positive; max_iter and window at least 1")
         if tidy < 0 or levels < 0 or newton < 0:
