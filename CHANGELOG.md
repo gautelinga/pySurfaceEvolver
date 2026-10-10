@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-10-10)
 
-### Robust by default (phase G, in progress)
+`ev.relax()` now takes a surface to a verified equilibrium with its defaults: it
+reports convergence, stability and the mesh's health, and the examples use it as is.
+Of the nine hard cases in `bench/stress/`, seven pass on plain defaults. A friendlier
+API (phase F) comes with it: remeshing, live body handles, constraint helpers,
+continuations and diagnostics as values.
+
+### Robust by default (phase G)
 
 - Fixed: `relax()` failed in the Lagrange model ("Cannot equiangulate LAGRANGE model"):
   its tidying rounds now only average vertices there.
@@ -139,6 +145,11 @@
 
 ### Docs
 
+- New pages: "Relaxing a surface" (what `relax()` does, reading its result, mesh
+  resolution, limits) and "Stress cases" (eight hard problems against exact references,
+  with defaults; helpers in `docs/stress_helpers.py`). `docs/performance.md` compares
+  `relax()` with the hand-written commands at scale (1.3-1.9x their time, for the
+  convergence, stability and health checks).
 - New example, `slit_drainage`: liquid drained from a bead chain in a slit, from immersed
   beads through bead emergence and the band to the snap. Runs a coarse case live and shows
   stored full runs and movies for three bead spacings.

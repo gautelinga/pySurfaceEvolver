@@ -5,7 +5,7 @@ defaults: contact lines that travel far, surfaces that grow or shrink a
 hundredfold, wires, instabilities, gravity. They are the stress suite in
 `bench/stress/` condensed into examples (`python bench/stress/run.py` runs the full
 versions and checks them). The code below is not run when the documentation is built;
-the outputs are from running it in October 2026 (pySE 0.6+, 2 threads), and they vary in
+the outputs are from running it in October 2026 (pySE 0.7.0, 2 threads), and they vary in
 the last digits with the thread count.
 
 The examples import starting shapes and reference solutions from
