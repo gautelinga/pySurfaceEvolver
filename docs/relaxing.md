@@ -38,7 +38,12 @@ run with default settings) and are from October 2026.
 4. **A second try.** If the surface is still not in equilibrium, conjugate gradients
    (at most 200 steps) and Newton again, kept only if that converges. Plain gradients
    crawl on flat shapes, such as a drop spread to a 10 degree contact angle.
-5. **A stability check.** Once converged, the Hessian's eigenvalues are counted (one
+5. **Finer next to contact lines.** Once converged (linear model), edges leaving a
+   contact line that are longer than 1.5 times the contact-line edges there are split
+   and the surface relaxed again, kept only if that converges: a contact circle that
+   shrinks (a drop at a high contact angle) would otherwise end up smaller than the
+   facets next to it.
+6. **A stability check.** Once converged, the Hessian's eigenvalues are counted (one
    factorization). A saddle, such as a liquid column past its Rayleigh-Plateau limit,
    is an equilibrium too, and Newton finds it as readily as a minimum; `r.stable` is
    then `False` and an `UnstableEquilibriumWarning` is raised. Exact zero modes of
@@ -75,7 +80,8 @@ constraint bead"`, ...). The check costs about 0.2 s at 100k facets.
 
 ## Mesh resolution
 
-`relax()` doesn't change the number of facets (except `levels`). Three tools do:
+Apart from `levels` and the splitting next to contact lines, `relax()` doesn't change
+the number of facets. Three tools do:
 
 * `ev.refine()` or `relax(levels=n)`: uniform refinement, four times the facets each.
 * `ev.adapt()` or `relax(adapt=True)`: refines where the surface turns by more than
@@ -104,10 +110,9 @@ fold, a liquid bridge with the gap closing to 1e-3, a barrel drop on a fibre (it
 roll-up reported as an instability), a cube inflated a hundredfold, a gravity puddle,
 and a drop shrinking to 1e-4 of its volume. Two don't:
 
-* **A drop at 150 to 170 degrees** on its starting mesh: the contact circle becomes
-  smaller than the facets next to it, and the implied contact angle is several degrees
-  off. More resolution helps (one uniform refinement: 150 and 160 pass, 170 is 2
-  degrees off); so does `adapt`.
+* **A drop at 170 degrees** on a coarse starting mesh (480 facets): the implied contact
+  angle is 1.7 degrees off (the case allows 1.5; up to 160 degrees it passes). More
+  resolution helps.
 * **The drainage band** (`docs/slit_drainage.ipynb`) on plain defaults: band pressures
   up to several percent off (median 0.3%). With `ev.remesh(target=h)` each step, as in the notebook, they
   agree with a finer reference to 0.02% (median).

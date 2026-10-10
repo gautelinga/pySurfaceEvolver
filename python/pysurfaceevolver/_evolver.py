@@ -583,6 +583,11 @@ class Evolver:
           steps the level left of ``max_iter``; kept only if that converges. ``cg=True`` uses
           conjugate gradients throughout, ``cg=False`` never (your own
           ``conj_grad`` setting is restored after).
+        * Once converged (linear model), edges leaving a contact line that are
+          longer than 1.5 times the contact-line edges there are split and the
+          surface relaxed again, kept only if that converges: a shrinking
+          contact circle (a drop at a high contact angle) would otherwise end
+          up smaller than the facets next to it.
         * Once converged, with ``stability``, :meth:`stability` sets ``stable``
           and ``negative_modes`` and warns (:class:`UnstableEquilibriumWarning`)
           at a saddle, such as a liquid column past its Rayleigh-Plateau limit:
@@ -621,9 +626,14 @@ class Evolver:
                     run(lev, max_iter, tidy, watch=newton > 0)
                 steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol,
                                                newton, seek, undo_if, fallback=cg == "auto")
+            if self.model == "linear" and residual < tol:
+                more, residual = self._contact_pass(trace, levels + 1, run, max_iter, tidy, tol,
+                                                    newton, seek, undo_if, cg == "auto", residual)
+                steps += more
             if adapt and self.model == "linear":
                 turn = 15.0 if adapt is True else float(adapt)
-                for lev in range(levels + 1, levels + 1 + _ADAPT_PASSES):
+                first_lev = max(trace.level, default=levels) + 1
+                for lev in range(first_lev, first_lev + _ADAPT_PASSES):
                     if self.counts["facets"] > _ADAPT_GROWTH*facets0 or not self.adapt(turn):
                         break
                     run(lev, max_iter, tidy, watch=newton > 0)
@@ -680,6 +690,44 @@ class Evolver:
         self._put_back(coords)
         _newton_first_failed = True
         return None
+
+    def _contact_pass(self, trace: "_Trace", lev: int, run: Callable[..., None], max_iter: int,
+                      tidy: int, tol: float, newton: int, seek: Optional[bool],
+                      undo_if: Optional[Callable[["Evolver"], bool]], fallback: bool,
+                      residual: float) -> "tuple[int, float]":
+        """After convergence (linear model): split the edges leaving a contact
+        line (an edge on one facet only) that are longer than 1.5 times the
+        contact-line edges at their end, and relax again, up to twice; kept
+        only if that converges, else the converged surface comes back. A
+        contact circle that shrinks (a drop at a high contact angle) otherwise
+        ends up smaller than the facets next to it. Returns the Newton steps
+        and the residual."""
+        mark = _long_spokes(self.mesh(), _SPOKE_RATIO)
+        if not mark.any():
+            return 0, residual
+        before = self.save()
+        self._split_marked(mark)
+        steps = 0
+        for _ in range(2):
+            run(lev, max_iter, tidy, watch=newton > 0)
+            more, second = self._finish(trace, lev, run, max_iter, tidy, tol, newton, seek,
+                                        undo_if, fallback=fallback)
+            steps += more
+            if second < tol:
+                return steps, second
+        self.restore(before)
+        return 0, residual
+
+    def _split_marked(self, mark: np.ndarray) -> int:
+        """Split the marked edges (aligned with mesh() rows; not no_refine ones),
+        equiangulate. Returns the edges split."""
+        if "pyse_mark" not in self._edge_attributes():
+            self.command("define edge attribute pyse_mark integer")
+        self.set_values("edge", "pyse_mark", mark.astype(float))
+        before = self.counts["vertices"]
+        self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
+        self.command("u")
+        return self.counts["vertices"] - before
 
     def _volumes_met(self, rel: float = 1e-6) -> bool:
         """Whether every body with a fixed volume is at its target."""
@@ -998,13 +1046,8 @@ class Evolver:
             mark |= _edge_turn(m, _edge_valence(m))[0] > split_turn
         if split_above is not None:
             mark |= _edge_lengths(m) > split_above
-        split = 0
-        if mark.any():
-            self.set_values("edge", "pyse_mark", mark.astype(float))
-            before = self.counts["vertices"]
-            self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
-            split = self.counts["vertices"] - before
-        if merged or split:
+        split = self._split_marked(mark) if mark.any() else 0
+        if merged and not split:
             self.command("u")
         return merged + split
 
@@ -1958,6 +2001,7 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
 _CROSS_TOL = 0.01
 _ADAPT_PASSES = 3
 _NEWTON_FIRST_STEPS = 5
+_SPOKE_RATIO = 1.5       # relax() splits edges leaving a contact line longer than this many contact-line edges
 _FALLBACK_STEPS = 200    # gradient steps for relax()'s conjugate-gradient pass, at most
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
@@ -1990,6 +2034,26 @@ def _edge_turn(m: Mesh, valence: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
     unjudged = junction[e[:, 0]] | junction[e[:, 1]] | (norm[e[:, 0]] == 0) | (norm[e[:, 1]] == 0)
     turn[unjudged] = 0.0
     return turn, ~unjudged
+
+
+def _long_spokes(m: Mesh, ratio: float) -> np.ndarray:
+    """Edges with one end on a contact line (a vertex of an edge on one facet
+    only) and the other off it, longer than ``ratio`` times the mean length of
+    the contact-line edges at that end."""
+    if m.facets is None or len(m.facets) == 0:
+        return np.zeros(len(m.edges), dtype=bool)
+    e, n = m.edges, len(m.vertices)
+    lengths, valence = _edge_lengths(m), _edge_valence(m)
+    rim = valence == 1
+    total, count = np.zeros(n), np.zeros(n)
+    for k in (0, 1):
+        np.add.at(total, e[rim, k], lengths[rim])
+        np.add.at(count, e[rim, k], 1)
+    on = count > 0
+    mean = total/np.maximum(count, 1)
+    spoke = (valence >= 2) & (on[e[:, 0]] != on[e[:, 1]])
+    ref = np.where(on[e[:, 0]], mean[e[:, 0]], mean[e[:, 1]])
+    return spoke & (lengths > ratio*ref)
 
 
 def _edge_lengths(m: Mesh) -> np.ndarray:

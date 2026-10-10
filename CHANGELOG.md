@@ -15,6 +15,12 @@
   next call. The Lagrange stage of a 24k-facet cube: order 2 2.7 -> 0.9 s, order 4
   6.1 -> 2.7 s. Not in the linear model, where continuations with travelling contact
   lines lost accuracy without the gradient rounds' mesh upkeep.
+- `relax()` (linear model), once converged, splits the edges leaving a contact line that
+  are longer than 1.5 times the contact-line edges there and relaxes again, kept only
+  if that converges. A drop stepped to 160 degrees now comes out within 1.5 degrees of
+  its contact angle (was 3.8 off; 170: 1.7, was 7.6), the barrel on a fibre gets
+  better-shaped facets (smallest angle 49 vs 13 degrees). A cap shrinking evenly is
+  left alone.
 - Faster safeguards: a safeguarded Newton step undoes itself by the vertex
   coordinates instead of a dump (`ev.newton(1)` at 393k facets 3.85 -> 1.77 s, raw
   `hessian` 1.2 s), `relax()` no longer dumps the surface at its start, and

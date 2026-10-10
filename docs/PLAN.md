@@ -943,6 +943,16 @@ Every rule that reaches the helper's quality on case 8 coarsens narrowing necks
 or deliberately fine meshes, and every rule that protects those loses case 8.
 Reverted (user's choice); kept the shared _remesh_pass that adapt() uses. Case 8
 stays the documented "remesh explicitly each step" example.
+**Options 2-5 after that** (2026-10-10): relax() failed in the Lagrange model
+(tidying ran `u`) -- fixed; stability() always ran ritz (80 s at 98k, 275 s at
+393k) -- skipped when nothing is negative; Newton first in quadratic/Lagrange
+(order 2 2.7 -> 0.9 s, order 4 6.1 -> 2.7 s at 24k; in the linear model it lost
+accuracy on case 3: no tangential mesh motion); adapt by default at 25-30
+degrees: mixed accuracy, dropped; docs page docs/relaxing.md; case 3: contact-line
+spoke pass after convergence (split spokes > 1.5x the rim edges, relax again,
+kept only if converged; splitting at the start left the barrel with 2
+unconverged steps): case 3 fails only at 170 (1.69, limit 1.5), barrel 0.20% and
+min angle 49, cap 12 no growth, bridge grid 25/25 (theta 20 forces within 0.1%).
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and
