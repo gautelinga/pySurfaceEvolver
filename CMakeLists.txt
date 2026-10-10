@@ -56,6 +56,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(evolver_core PRIVATE -w
     -Wno-error=implicit-function-declaration -Wno-error=implicit-int
     -Wno-error=int-conversion -Wno-error=incompatible-pointer-types)
+  # No fused multiply-adds: GCC fuses them by default where the target has
+  # them (aarch64), which shifts unconverged runs by up to 1e-5 against x86
+  # and Evolver's reference values.
+  target_compile_options(evolver_core PRIVATE -ffp-contract=off)
 endif()
 # OpenMP for the parallel facet loops (fastloops.c); serial without it.
 option(PYSE_OPENMP "Use OpenMP for parallel facet loops" ON)
@@ -264,7 +268,7 @@ find_package(Threads REQUIRED)   # the SIGINT handler forwards between threads
 target_link_libraries(pyse_glue PUBLIC evolver_core Threads::Threads)
 set_target_properties(pyse_glue PROPERTIES ${EVOLVER_C_PROPERTIES})
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(pyse_glue PRIVATE -Wall -Wextra)
+  target_compile_options(pyse_glue PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
 # ---------------------------------------------------------------------------

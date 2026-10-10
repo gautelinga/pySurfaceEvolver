@@ -138,6 +138,9 @@ continuations and diagnostics as values.
 
 ### Fixes
 
+- The engine is compiled without fused multiply-adds (`-ffp-contract=off`): GCC fused
+  them on aarch64, which shifted unconverged runs by up to 1e-5 against x86 and
+  Evolver's reference values. No change on x86-64 builds.
 - Tiny-edge deletion (`t`, also used by `w` and `delete`) no longer merges the ends of an
   edge when they share neighbours other than the third vertices of its facets (the link
   condition). Evolver 2.70a merged them, making parallel and loop edges; later deletions

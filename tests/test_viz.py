@@ -8,16 +8,6 @@ from pysurfaceevolver._viz import surface_dataset
 pv = pytest.importorskip("pyvista")
 
 
-@pytest.fixture(scope="module")
-def can_render():
-    try:
-        plotter = pv.Plotter(off_screen=True)
-        plotter.add_mesh(pv.Sphere())
-        plotter.screenshot(return_img=True)
-        plotter.close()
-    except Exception as e:  # no display / no OpenGL
-        pytest.skip(f"off-screen rendering unavailable: {e}")
-
 
 def test_to_pyvista(cube):
     cube.command("g 5; r; g 5")

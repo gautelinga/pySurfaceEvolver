@@ -47,3 +47,23 @@ def run_python():
             capture_output=True, text=True, timeout=timeout, cwd=FE_DIR,
         )
     return _run
+
+
+@pytest.fixture(scope="session")
+def can_render():
+    """Skip unless PyVista can render off screen.
+
+    Tried in a process of its own: without a display VTK can crash outright
+    rather than raise.
+    """
+    pytest.importorskip("pyvista")
+    code = ("import pyvista as pv; p = pv.Plotter(off_screen=True); "
+            "p.add_mesh(pv.Sphere()); p.screenshot(return_img=True); p.close()")
+    try:
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        pytest.skip("off-screen rendering unavailable: timed out")
+    if r.returncode != 0:
+        last = (r.stderr.strip().splitlines() or [f"exit code {r.returncode}"])[-1]
+        pytest.skip(f"off-screen rendering unavailable: {last}")

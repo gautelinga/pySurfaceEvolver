@@ -287,17 +287,6 @@ def test_plot_and_live_view_mirror(can_render):
     ev.plot(off_screen=True, mirror=["x"], screenshot=None)
 
 
-@pytest.fixture(scope="module")
-def can_render():
-    pv = pytest.importorskip("pyvista")
-    try:
-        plotter = pv.Plotter(off_screen=True)
-        plotter.add_mesh(pv.Sphere())
-        plotter.screenshot(return_img=True)
-        plotter.close()
-    except Exception as e:  # no display / no OpenGL
-        pytest.skip(f"off-screen rendering unavailable: {e}")
-
 
 # ---- F8: continuation ------------------------------------------------------------
 
