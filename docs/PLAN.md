@@ -5,30 +5,35 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
-## Resume here (2026-10-10, 0.7.0 released)
+## Resume here (2026-10-11)
 
-Version 0.7.0 is tagged and pushed (wheels build on the tag; nothing is published to
-PyPI). 316 tests, mypy clean, CI (tests, docs, sanitizers) green. Docs deploy to GitHub
-Pages from main.
+0.7.0 is tagged at fd9783f, whose wheel build failed (fixed in b5216d4: no fused
+multiply-adds on aarch64, render probe in a subprocess). The user chose "release later":
+the next release (0.7.1 or 0.8.0) carries everything since; the tag stays. Main is
+pushed; CI green. 334 tests.
 
-Nothing is in progress. Open items, all waiting for the user to pick one:
+Done since 0.7.0 (CHANGELOG "Unreleased"): stress-case figures
+(`bench/stress/figures.py`); `relax()` and `health()` on all 25 Brakke samples (strings,
+simplex, no-Hessian fallback, 10% Newton energy cap, topology stamp for undo, elastic
+and crystalline energies keep the mesh, Plateau junctions popped by default, a guarded
+last resort that lets collapsing necks/films pinch off); edge deletion refuses only
+merges that duplicate facets (studied on an instrumented 2.70a: cat.fe pinches as in
+the original); five notebooks `docs/brakke_*.ipynb` (recipe vs relax per sample).
 
-* **Deferred by the user:** adapt by default (`relax(adapt=True)` stays opt-in at 15
-  degrees: the suite passes with it on everywhere but runs several times longer, and at 25-30
-  degrees accuracy is mixed); stress case 3 at 170 degrees (1.69 off, limit 1.5).
-* **Do not re-propose:** remeshing inside `relax()` for case 8 (the drainage band).
-  Researched and dropped on 2026-10-10: every rule that reaches the explicit
-  `ev.remesh(target=h)` quality there coarsens a narrowing neck, a thin fibre's rim or a
-  deliberately fine mesh somewhere else. Case 8 is the documented "remesh explicitly
-  each step" example.
-* **Long-term:** isotropic remeshing in C toward a geometric size field (what `adapt()`
-  and the guarded collapse build toward); phase E (one state struct, several engines
-  per process; the user said not now, 2026-10-08).
-* **Small loose ends:** PORD ordering after the second Newton step on one pattern (pays
-  off only for long Newton runs at 1.6M facets); the quadratic-model and edge setups
-  still use the generic `mat_mult`; `r` is serial (no single hotspot); metric.c
-  `edge_force_l_metric()`'s conformal branch may lack a 1/4 (unverified, no sample
-  reaches it); wheels are Linux only (x86-64 and aarch64).
+Open, for the user to pick:
+
+* **Release** 0.7.1/0.8.0 (the user said "release later").
+* **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing (the
+  last resort makes it 3x slower on plain defaults, 127 unconverged steps); mylarcube
+  ends 0.1% above its recipe; residual of crystalline energies never reaches 0 (corner
+  at the minimum) and of elastic ones scales with the modulus; Evolver's quotient-space
+  Hessian has a spurious negative mode (symtest.fe, also 2.70a); the barrel roll-up
+  (case 6) sometimes ends just unconverged at 70/80 degrees, so no stability report
+  (predates 0.7.0).
+* **Do not re-propose:** remeshing inside `relax()` for case 8 (researched 2026-10-10).
+* **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
+* **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
+  setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
 
 Ask the user before each step.
 
