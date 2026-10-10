@@ -616,6 +616,37 @@ drainage helper to the new API (they are the integration test: same numbers as
 now), update the tutorial and API docs. Each item: tests first where the behaviour
 is exact, full suite, quick sanitizers for C changes (none planned), one commit.
 
+## Phase G: robust by default (planned 2026-10-10)
+
+The user: "The solvers should be robust, not needing tailored fixes for every
+case" (the drainage example needed remeshing calls, a tidy cadence, Newton with
+rollback, tuned tolerances and per-layout gauges). And: "Probably needs more
+tough examples to challenge the approach". So first a stress suite, run with
+default settings only, as the baseline; then robustness inside the solvers
+(residual-based convergence, safeguarded Newton, quality-aware relaxation, a
+health report, builders that take the mirrors), judged on the whole suite.
+After success, the cases are condensed into notebook examples.
+
+Stress suite (`bench/stress/`, run on demand, not in CI); each case runs with
+default `relax()` (and `recipes.continuation`), no per-case knobs, and reports
+pass/fail against a reference, steps, wall time, mesh quality and stability:
+
+1. Liquid cylinder between plates at 90 degrees, volume lowered: unstable when
+   L > pi r (sliding contact lines). Must be reported, not silently converged.
+2. Catenoid between rings, separation raised to the fold (h/R = 1.3255): exact
+   area on the stable branch; no false "converged" past the fold.
+3. Sessile drop, contact angle 10 to 170 degrees (a parameter): exact caps.
+5. Bridge between spheres, gap down to 1e-3: axisymmetric Young-Laplace reference.
+6. Barrel drop on a fibre: axisymmetric reference; the clam-shell transition.
+8. The drainage band (ell = 1.1): the stored level-3 curve and break.
+9. Cube inflated 100x: E = (36 pi)^(1/3) V^(2/3) throughout.
+11. Gravity puddle (large Bond number): axisymmetric reference with gravity.
+12. Sessile cap shrinking to 1e-4 of its volume: exact caps all the way.
+
+(4 edge pinning, 7 foam, 10 Lagrange-3 at 100k+: skipped, the user's choice.)
+A shared axisymmetric Young-Laplace solver (shooting, with gravity) gives the
+references for 5, 6 and 11.
+
 ## Tools and conventions
 
 - Tests: `pytest`; with `PYSE_CHECK_FACET_CACHE=1` for cache verification.
