@@ -9,6 +9,12 @@
 - `ev.stability()` (and so `relax()`'s check) needs `ritz` only when some eigenvalue is
   below zero; a stable surface costs one factorization. `relax()` at 98k facets:
   80 -> 1.0 s, at 393k: 275 -> 4.2 s.
+- `relax()` in the quadratic and Lagrange models tries up to 5 safeguarded Newton steps
+  before any gradient step, and keeps them if they converge (volumes at their targets
+  included); otherwise it goes back and relaxes as before, and skips the attempt on its
+  next call. The Lagrange stage of a 24k-facet cube: order 2 2.7 -> 0.9 s, order 4
+  6.1 -> 2.7 s. Not in the linear model, where continuations with travelling contact
+  lines lost accuracy without the gradient rounds' mesh upkeep.
 - Faster safeguards: a safeguarded Newton step undoes itself by the vertex
   coordinates instead of a dump (`ev.newton(1)` at 393k facets 3.85 -> 1.77 s, raw
   `hessian` 1.2 s), `relax()` no longer dumps the surface at its start, and

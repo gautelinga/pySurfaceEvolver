@@ -543,3 +543,5 @@ def test_relax_in_the_lagrange_model(cube):
     cube.command("lagrange 2")
     r = cube.relax()
     assert r.converged and r.stable is True
+    # near its equilibrium, Newton alone gets there (no gradient steps)
+    assert len(r.energy) == 0 and r.newton_steps >= 1

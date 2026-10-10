@@ -303,6 +303,9 @@ def _hide_capture_wrapper(error: EvolverError) -> EvolverError:
 
 # mesh() result for the engine's current surface version (see _core.surface_version)
 _mesh_cache: "tuple[int, Mesh] | None" = None
+# relax(): whether the last Newton-first attempt on this surface failed (the
+# next call then skips it; reset when a surface is loaded)
+_newton_first_failed = False
 _mesh_cache_lock = threading.Lock()
 
 
@@ -427,6 +430,8 @@ class Evolver:
         If the datafile has errors, this raises :class:`EvolverError`, and
         there is no valid surface until a datafile loads successfully.
         """
+        global _newton_first_failed
+        _newton_first_failed = False
         path = os.fspath(datafile)
         try:
             output, _ = self._call(_core.load, path)
@@ -553,6 +558,11 @@ class Evolver:
 
         How it works:
 
+        * In the quadratic and Lagrange models (a final stage from a mesh
+          settled in the linear model) with ``levels=0``, up to 5 safeguarded
+          Newton steps come first; if they converge, that is all. If not, the
+          surface goes back and the steps below follow; right after such a
+          miss, the next call skips the attempt.
         * Gradient steps (Evolver's ``g``) come in rounds of ``tidy`` steps,
           each followed by equiangulation and vertex averaging (``u; V``;
           ``tidy=0``: none), until the energy changes by less than
@@ -600,12 +610,17 @@ class Evolver:
             facets0 = self.counts["facets"]
             run = functools.partial(self._gradient_phase, trace, energy_tol=energy_tol,
                                     window=window, callback=callback, every=every)
-            for lev in range(levels + 1):
-                if lev:
-                    self.refine()
-                run(lev, max_iter, tidy, watch=newton > 0)
-            steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol, newton,
-                                           seek, undo_if, fallback=cg == "auto")
+            first = self._newton_first(trace, tol, newton, seek, undo_if) \
+                if newton and levels == 0 and self.model != "linear" else None
+            if first is not None:
+                steps, residual = first
+            else:
+                for lev in range(levels + 1):
+                    if lev:
+                        self.refine()
+                    run(lev, max_iter, tidy, watch=newton > 0)
+                steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol,
+                                               newton, seek, undo_if, fallback=cg == "auto")
             if adapt and self.model == "linear":
                 turn = 15.0 if adapt is True else float(adapt)
                 for lev in range(levels + 1, levels + 1 + _ADAPT_PASSES):
@@ -637,6 +652,42 @@ class Evolver:
                                np.array(trace.scale), "".join(trace.output),
                                bool(residual < tol), steps, np.array(trace.level, dtype=int),
                                residual, stable, modes, health)
+
+    def _newton_first(self, trace: "_Trace", tol: float, newton: int, seek: Optional[bool],
+                      undo_if: Optional[Callable[["Evolver"], bool]]) -> "tuple[int, float] | None":
+        """Up to 5 safeguarded Newton steps before any gradient step (relax()
+        in the quadratic and Lagrange models): the Newton steps and residual
+        if they converge, else None with the coordinates put back. Skipped
+        (None) right after a failed attempt on this surface, so a run where
+        Newton rarely wins pays for every other attempt only. (Not in the
+        linear model: Newton moves vertices only along the normal, so over a
+        continuation the mesh doesn't follow a travelling contact line the way
+        gradient rounds make it, and accuracy drops.)"""
+        global _newton_first_failed
+        if _newton_first_failed:
+            _newton_first_failed = False
+            return None
+        coords = self.vertices
+        # no early stop on the residual: it doesn't see an unmet volume (a new
+        # target), which the Newton steps restore
+        with warnings.catch_warnings():     # an attempt; far from equilibrium the
+            warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)  # Hessian is indefinite
+            steps = self._newton(min(newton, _NEWTON_FIRST_STEPS), seek, None, undo_if,
+                                 trace.output)
+        residual = self.residual()
+        if residual < tol and self._volumes_met():
+            return steps, residual
+        self._put_back(coords)
+        _newton_first_failed = True
+        return None
+
+    def _volumes_met(self, rel: float = 1e-6) -> bool:
+        """Whether every body with a fixed volume is at its target."""
+        b = self.bodies()
+        if not len(b.ids):
+            return True
+        off = np.abs(b.volume - b.target)[b.fixed]
+        return bool((off <= rel*np.maximum(np.abs(b.target[b.fixed]), 1e-300)).all())
 
     def _finish(self, trace: "_Trace", lev: int, run: Callable[..., None], max_iter: int,
                 tidy: int, tol: float, newton: int, seek: Optional[bool],
@@ -1906,6 +1957,7 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
 # less is the chord of a curved wall next to a contact line
 _CROSS_TOL = 0.01
 _ADAPT_PASSES = 3
+_NEWTON_FIRST_STEPS = 5
 _FALLBACK_STEPS = 200    # gradient steps for relax()'s conjugate-gradient pass, at most
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
