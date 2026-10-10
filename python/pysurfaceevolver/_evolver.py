@@ -774,45 +774,23 @@ class Evolver:
 
         From the vertex velocities a gradient step would use (forces projected
         on the constraints, with the volume and quantity multipliers applied),
-        the part along each vertex's normal: tangential parts only slide
-        vertices within the surface (mesh motion, not shape), and Newton steps
-        don't remove them. At a contact line the velocity already lies in the
-        wall, so the normal part is the imbalance of the contact angle. Where
-        a vertex has no single normal (where films meet) the whole velocity
-        counts. Each velocity is about the vertex's share of the area times the
-        local pressure imbalance, so the root mean square times N/sqrt(area)
-        measures that imbalance relative to the surface's size: comparable
-        across meshes and scales. Curved (quadratic, Lagrange) models: the
-        facet corners only.
+        the part that changes the shape: along each vertex's normal, projected
+        into its constraints (at a contact line: the imbalance of the contact
+        angle). Tangential parts, and freedoms that only slide a vertex along a
+        wire, are mesh motion: Newton steps leave them to the gradient steps
+        and so does the residual. Each velocity is about the vertex's share of
+        the area times the local pressure imbalance, so the root mean square
+        times N/sqrt(area) measures that imbalance relative to the surface's
+        size: comparable across meshes and scales.
         """
         _, result = self._call(_core.residual)
-        vel = np.asarray(result.data, dtype=float)
-        if len(vel) == 0:
+        r = np.asarray(result.data, dtype=float)
+        if len(r) == 0:
             return 0.0
-        m = self.mesh()
-        if m.facets is None or len(m.facets) == 0:
-            r2 = (vel**2).sum(axis=1)
-        else:
-            p = m.vertices if m.vertices.shape[1] == 3 else np.column_stack(
-                [m.vertices, np.zeros(len(m.vertices))])
-            f = m.facets
-            fn = np.cross(p[f[:, 1]] - p[f[:, 0]], p[f[:, 2]] - p[f[:, 0]])
-            vn = np.zeros_like(p)
-            spread = np.zeros(len(p))
-            for k in range(3):
-                np.add.at(vn, f[:, k], fn)
-                np.add.at(spread, f[:, k], np.linalg.norm(fn, axis=1))
-            corners = np.unique(f)
-            vn, spread, vel = vn[corners], spread[corners], vel[corners]
-            mag = np.linalg.norm(vn, axis=1)
-            smooth = mag > 0.5*spread
-            along = np.einsum("ij,ij->i", vel, vn)/np.where(mag > 0, mag, 1.0)
-            r2 = np.where(smooth, along**2, (vel**2).sum(axis=1))
         area = _core.total_area()
-        n = len(r2)
         if area <= 0:
-            return float(np.sqrt(r2.sum()))
-        return float(np.sqrt(r2.sum()*n/area))
+            return float(np.sqrt((r**2).sum()))
+        return float(np.sqrt((r**2).sum()*len(r)/area))
 
     def eigen_counts(self, shift: float = 0.0) -> "EigenCounts":
         """How many Hessian eigenvalues lie below, at and above ``shift``

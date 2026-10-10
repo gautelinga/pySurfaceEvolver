@@ -35,3 +35,27 @@ def test_tiny_edge_deleted_when_safe():
     ev.command("t 0.02")
     assert ev.counts["vertices"] == 7 and ev.counts["facets"] == 6
     assert ev.command("check").strip() == ""
+
+
+def test_wire_vertices_add_no_spurious_hessian_modes():
+    # A catenoid between two wire rings (radius 1, z = +-0.3) is stable. Its wire
+    # vertices can only slide along the wires: a mesh mode, and an energy
+    # maximum for even spacing, which used to show as one negative eigenvalue
+    # per wire vertex. They take no Newton freedom now (hessian_slant_cutoff).
+    nt, nz, H = 24, 6, 0.3
+    v = [[np.cos(p), np.sin(p), z] for z in np.linspace(-H, H, nz + 1)
+         for p in 2*np.pi*np.arange(nt)/nt]
+    f = []
+    for i in range(nz):
+        for j in range(nt):
+            a, b = i*nt + j, i*nt + (j + 1) % nt
+            f += [[a, b, b + nt], [a, b + nt, a + nt]]
+    bottom, top = list(range(nt)), list(range(nz*nt, (nz + 1)*nt))
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(
+        v, f, constraints={1: "x^2 + y^2 = 1", 2: f"z = {H}", 3: f"z = {-H}"},
+        vertex_constraints={1: bottom + top, 2: top, 3: bottom}))
+    assert ev.relax().converged
+    counts = ev.eigen_counts()
+    assert counts.negative == 0
+    assert sum(counts) == (nz - 1)*nt           # one (normal) freedom per inner vertex

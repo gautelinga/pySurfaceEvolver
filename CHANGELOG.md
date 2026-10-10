@@ -4,6 +4,11 @@
 
 ### Robust by default (phase G, in progress)
 
+- Newton and eigenvalue counts no longer see spurious modes from vertices on wires
+  (curves where two constraints meet): their only freedom, sliding along the wire, is
+  left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the
+  raw surface normal and the freedom's magnitude). A stable catenoid counts 0 negative
+  eigenvalues (was about one per wire vertex).
 - `ev.residual()`: how far the surface is from equilibrium (the normal part of the
   projected vertex forces, dimensionless; 0 at an equilibrium). New C binding.
 - `relax()` defaults: rounds of 10 gradient steps with equiangulation and vertex

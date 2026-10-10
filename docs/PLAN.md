@@ -703,7 +703,15 @@ Steps, each measured on the whole stress suite (all nine cases, defaults only),
 the test suite, sanitizers (C changes), and the benchmark (no slowdown beyond
 noise on the user's workload sizes):
 
-G2.1 **Tangential relaxation in C** (a new command, used by relax() instead of
+(Done 2026-10-10, G2.1/G2.2: see the notes under each.)
+G2.1 **Tangential relaxation in C** -- *not needed*: Evolver's `V` (VOLKEEP, its
+     default) already removes the normal part of the averaging motion and, for
+     constrained vertices, averages only with neighbours on the same constraints
+     (even spacing along wires and contact lines); relax() runs it every 10 steps.
+     Its energy bump is second order (1.2e-5 relative on the refined cube);
+     projecting back onto the old facets is worse (-8.5e-4: the flat facets lie
+     inside the curved surface), and exact shape preservation would need a smooth
+     reconstruction, not worth it at that size. Original idea: (a new command, used by relax() instead of
      `V`): move each vertex toward the area-weighted centroid of its
      neighbours, but only within its tangent plane (interior vertices), along
      its boundary curve (wire vertices: even spacing) or within the constraint
@@ -711,7 +719,14 @@ G2.1 **Tangential relaxation in C** (a new command, used by relax() instead of
      line). Shape-neutral to first order, so no energy bumps. Target: the
      catenoid, barrel and drainage band keep sound facets with plain gradients,
      and rounds settle (the gradient phase stops hitting max_iter).
-G2.2 **Hessian degrees of freedom on boundary curves** (hessian.c): a vertex
+G2.2 *Done*: hessian_normal's slant test is now measured against the raw surface
+     normal (it used the normal already projected onto the constraints, so on a
+     wire it read ~1, or not, depending on which code path had stored it) and by
+     magnitude (the freedom's sign is arbitrary); default hessian_slant_cutoff
+     0.05. The stable catenoid: 0 negative eigenvalues (was ~1 per wire vertex,
+     erratic); 1 just past the fold. residual() (now in C) measures exactly the
+     freedoms Newton controls, so relax() converges with wires present.
+     Original plan: **Hessian degrees of freedom on boundary curves** (hessian.c): a vertex
      whose free directions are only tangent to its boundary curve gets no
      Hessian freedom (it is placed by G2.1, not by Newton). Contact-line vertices
      keep their one physical direction (normal projected into the wall).

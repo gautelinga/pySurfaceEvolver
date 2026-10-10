@@ -197,7 +197,9 @@ void reset_web()
   edges_same_vertices_count = 0;
   facets_same_vertices_count = 0;
   bad_errors_count = 0; 
-  hessian_slant_cutoff = 0.0;
+  /* pySE: freedoms almost perpendicular to the surface normal (sliding along a
+     wire: a mesh mode, indefinite) are left to the gradient steps */
+  hessian_slant_cutoff = 0.05;
   hessian_epsilon = hessian_epsilon_default;
   #ifdef MPI_EVOLVER
   sparse_constraints_flag = 0;

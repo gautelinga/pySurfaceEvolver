@@ -257,13 +257,13 @@ NB_MODULE(_core, m) {
   m.def("residual", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(PYSE_VERTEX);
-    std::vector<double> v(n > 0 ? size_t(3*n) : 0);
+    std::vector<double> v(n > 0 ? size_t(n) : 0);
     CallResult r = run_guarded([&] { return pyse_residual(v.data(), n); });
     if (r.status == PYSE_OK) {
       double *buf = new double[v.size() ? v.size() : 1];
       std::copy(v.begin(), v.end(), buf);
       nb::capsule owner(buf, [](void *p) noexcept { delete[] (double *)p; });
-      r.data = nb::cast(nb::ndarray<nb::numpy, double, nb::ndim<2>>(buf, {size_t(n), 3}, owner));
+      r.data = nb::cast(nb::ndarray<nb::numpy, double, nb::ndim<1>>(buf, {size_t(n)}, owner));
     }
     return r;
   }, CALLBACK_NAMES);

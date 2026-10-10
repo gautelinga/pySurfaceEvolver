@@ -144,12 +144,15 @@ def test_relax_tidy_reaches_the_same_energy(cube):
 
 
 def test_relax_newton_with_undo(cube):
-    cube.relax(tol=1e-8, max_iter=300)
-    e = cube.total_energy
-    result = cube.relax(tol=1e-14, max_iter=5, newton=3, undo_if=lambda ev: True)
+    cube.refine(2)
+    cube.relax(max_iter=20, newton=0)               # not converged: Newton has work
+    before = cube.save()
+    result = cube.relax(max_iter=1, tidy=0, newton=3, undo_if=lambda ev: True)
     assert result.newton_steps == 0 and result.converged is False
-    assert cube.total_energy == pytest.approx(cube.relax(tol=1e-8, max_iter=5).energy[-1])
-    assert abs(cube.total_energy - e) < 1e-6
+    one_step = cube.total_energy                    # the one gradient step, nothing more
+    cube.restore(before)
+    cube.relax(max_iter=1, tidy=0, newton=0)
+    assert cube.total_energy == pytest.approx(one_step, rel=1e-12)
 
 
 def test_newton_steps(cube):

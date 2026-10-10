@@ -691,24 +691,50 @@ int pyse_set_values(int type, const char *attribute, const double *values,
 
 struct residual_args { double *out; long n; };
 
+/* The part of a vertex's velocity (its projected force) that Newton steps
+   control: along the surface normal(s), projected into the vertex's
+   constraints. A projected normal almost perpendicular to the surface normal
+   (slant below hessian_slant_cutoff, e.g. sliding along a wire) is a mesh
+   freedom, not a shape one: left out, as hessian_normal leaves it out. */
+static double shape_velocity(vertex_id v_id, REAL *vel)
+{ MAT2D(nrm,MAXCOORD,MAXCOORD);
+  MAT2D(tmp,MAXCOORD,MAXCOORD);
+  int kk, q, i;
+  double sum = 0.0;
+  if ( get_vattr(v_id) & FIXED ) return 0.0;
+  kk = new_calc_vertex_normal(v_id,nrm);
+  kk = gram_schmidt(nrm,kk,SDIM);
+  if ( kk <= 0 ) return sqrt((double)SDIM_dot(vel,vel));
+  for ( q = 0 ; q < kk ; q++ )
+  { REAL *d = nrm[q];
+    if ( get_vattr(v_id) & CONSTRAINT )
+    { for ( i = 0 ; i < SDIM ; i++ ) tmp[0][i] = nrm[q][i];
+      if ( project_vertex_normals(v_id,tmp,1) < 1 ) continue;
+      if ( fabs(SDIM_dot(tmp[0],nrm[q])) < hessian_slant_cutoff ) continue;
+      d = tmp[0];
+    }
+    { double c = (double)SDIM_dot(vel,d);
+      sum += c*c;
+    }
+  }
+  return sqrt(sum);
+}
+
 static void residual_body(void *arg)
 { struct residual_args *a = (struct residual_args *)arg;
   vertex_id v_id;
   long row = 0;
-  int k;
   calc_all_grads(CALC_FORCE|CALC_VOLGRADS);
   FOR_ALL_VERTICES(v_id)
-  { REAL *vel = get_velocity(v_id);
-    if ( row >= a->n ) inconsistent("vertex count changed");
-    for ( k = 0 ; k < 3 ; k++ )
-      a->out[3*row + k] = k < SDIM ? (double)vel[k] : 0.0;
+  { if ( row >= a->n ) inconsistent("vertex count changed");
+    a->out[row] = shape_velocity(v_id,get_velocity(v_id));
     row++;
   }
   vgrad_end();
   expect_rows(row,a->n);
 }
 
-/* The vertex velocities (3 per vertex, in vertex order). */
+/* The shape part of each vertex's velocity (one per vertex, in vertex order). */
 int pyse_residual(double *out, long n)
 { struct residual_args a;
   if ( in_protected ) return PYSE_BUSY;

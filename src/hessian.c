@@ -1914,11 +1914,24 @@ void hessian_init(
         }
         if ( (hessian_normal_flag && (v->freedom == 1)) || hessian_double_normal_flag)
         { /* get cosine of normal and degree of freedom */
-          REAL *nor = get_vertex_v_normal(v_id)[0];
+          /* pySE: against the raw surface normal(s). The stored vertex normal
+             has been projected onto the constraints by now, so on a wire it
+             points along the wire and the slant came out near 1 (or not,
+             depending on which code path stored it); and the freedom's sign
+             is arbitrary, so compare magnitudes. With several normals (films
+             meeting), the length of the freedom's projection onto their span. */
+          MAT2D(raw,MAXCOORD,MAXCOORD);
+          int nn = new_calc_vertex_normal(v_id,raw);
+          int q;
+          nn = gram_schmidt(raw,nn,SDIM);
           v->slant = 0.0;
-          for ( i = 0 ; i < SDIM ; i++ )
-             v->slant += v->proj[i][0]*nor[i];
-          v->slant /= sqrt(SDIM_dot(nor,nor));
+          for ( q = 0 ; q < nn ; q++ )
+          { REAL c = 0.0;
+            for ( i = 0 ; i < SDIM ; i++ ) c += v->proj[i][0]*raw[q][i];
+            v->slant += c*c;
+          }
+          v->slant = sqrt(v->slant);
+          if ( nn == 0 ) v->slant = 1.0;
           if ( v->slant < hessian_slant_cutoff ) 
                 v->freedom = 0;
         }
