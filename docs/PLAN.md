@@ -285,9 +285,9 @@ degrees (one level more fixes 150-160), 8 drainage band (worst 8-15% at level
 relax() falls back to conjugate gradients), G2.7 in part (`ev.adapt()`, opt-in
 `relax(adapt=...)`), G2.8 coarsening (guarded collapse in C; adapt still
 opt-in: with it on everywhere the suite passes but runs several times longer),
-G2.9 health report. Deferred by the user: adapt by default, case 8, case 3 at
-160-170. Next: G2.10 examples on defaults (the drainage helper without its
-crutches). Ask the user before each step.
+G2.9 health report, G2.10 (drainage helper on plain relax after its remesh).
+Deferred by the user: adapt by default, case 8, case 3 at 160-170. Phase G2's
+list is done apart from those. Ask the user before each step.
 
 **Engine changes this round** (src/, CRLF): edge deletion keeps the link condition
 (trirevis.c, upstream bug); hessian_normal's slant measured against the raw normal
@@ -900,6 +900,17 @@ G2.9 *Done* (2026-10-10; user's choices: everything incl. gaps, fields only
      at the snap (a vertex past the y = 0 mirror, plausibly real); unconverged
      steps of cases 1, 2 and 8 all flagged (degenerate facets, crossings,
      near-contacts).
+G2.10 *Done* for the drainage helper (2026-10-10): `undo_if` dropped, plain
+     `relax(stability=False)` after the remesh (the band is unstable just before
+     its snap; drain() finds the snap by the gap). Case-8 setup, helper recipe vs
+     without undo_if vs also with stability: median 0.01/0.02/0.03%, worst 2.2%,
+     snap 0.4/0.4/0.1% off, 83/77/96 s. The remeshing stays (it is what case 8
+     lacks: median 0.3%, ~120 unconverged). Tried and dropped: a default Newton
+     guard rejecting steps that add constraint crossings (`crossed`): the band
+     dips into the bead near the dry patch by more than 1% of an edge, the
+     guard blocked the steps the drainage needs (median error 11-17%); not a
+     side effect (counting without rejecting changed nothing). health()'s
+     crossing tolerance is now 1% of the median edge (chords of curved walls).
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

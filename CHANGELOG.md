@@ -36,6 +36,9 @@
   lengths), vertices on the far side of a constraint, and `issues` in words (empty: `ok`).
   No warnings. About 0.2 s at 98k facets. New C binding: per-vertex signed distances to
   the constraints.
+- The drainage helper (docs) relaxes with plain `ev.relax(stability=False)` after its
+  remeshing; its Newton rollback (`undo_if` on the mirror gap) is no longer needed
+  (band pressures within 0.02% median of the stored level-3 run, snap 0.4% off).
 - Newton and eigenvalue counts no longer see spurious modes from vertices on wires
   (curves where two constraints meet): their only freedom, sliding along the wire, is
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the

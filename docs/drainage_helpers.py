@@ -146,9 +146,10 @@ class Cell:
             if self.edge_h is None:
                 self.edge_h = ev.mesh_quality().edge_median
             ev.remesh(target=self.edge_h)
-        # to equilibrium (gradient steps with mesh upkeep, then Newton steps); a
-        # Newton step that pushes the surface through the mirror y = 0 is undone
-        ev.relax(stability=False, undo_if=lambda ev: self.gap(ev, 6) < -1e-4)
+        # to equilibrium: gradient steps with mesh upkeep, then Newton steps. No
+        # stability check: just before its snap the band is unstable by nature,
+        # and drain() finds the snap from the gap to the mirror
+        ev.relax(stability=False)
 
 
 def _solve(f, target, lo, hi):

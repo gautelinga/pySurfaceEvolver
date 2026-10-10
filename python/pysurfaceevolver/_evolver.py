@@ -1036,31 +1036,19 @@ class Evolver:
         used = np.zeros(n, dtype=bool)
         used[e.ravel()] = True
         wall_gap, wall = np.inf, None
-        crossed: Dict[int, int] = {}
-        _, gaps = self._call(_core.constraint_gaps)
-        nums, attrs, dist = gaps.data
+        nums, attrs, dist = self._constraint_gaps()
         for c in range(len(nums)):
             d = dist[:, c]
             on = np.isnan(d) & used
             off = ~np.isnan(d) & used
             if not off.any():
                 continue
-            near = _grow(on, e, 2)
-            far = off & ~near
+            far = off & ~_grow(on, e, 2)
             if far.any():
                 g = float(np.abs(d[far]).min())/h
                 if g < wall_gap:
                     wall_gap, wall = g, int(nums[c])
-            eps = 1e-6*h
-            if attrs[c] & 2:            # NONNEGATIVE
-                bad = int((d[off] < -eps).sum())
-            elif attrs[c] & 1:          # NONPOSITIVE
-                bad = int((d[off] > eps).sum())
-            else:
-                pos, neg = int((d[off] > eps).sum()), int((d[off] < -eps).sum())
-                bad = min(pos, neg) if min(pos, neg) <= 0.05*(pos + neg) else 0
-            if bad:
-                crossed[int(nums[c])] = bad
+        crossed = _crossed(nums, attrs, dist, used, _CROSS_TOL*h)
         self_gap = _self_gap(m.vertices, e, used, h)
         issues = []
         if not residual < tol:
@@ -1080,6 +1068,12 @@ class Evolver:
         return Health(float(residual), stable, modes, float(quality.angle_min),
                       int(quality.skinny), float(wall_gap), wall, crossed, float(self_gap),
                       issues)
+
+    def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+        """Constraint numbers, attribute bits, and per vertex the signed distance
+        to each (NaN where on it)."""
+        _, gaps = self._call(_core.constraint_gaps)
+        return gaps.data
 
     def stability(self, nearest: int = 6) -> Stability:
         """Whether the surface sits at a stable equilibrium (a minimum, as far as
@@ -1838,6 +1832,28 @@ _GRADE = 1.0
 _MAX_REMESHES = 10
 
 
+def _crossed(nums: np.ndarray, attrs: np.ndarray, dist: np.ndarray, used: np.ndarray,
+             eps: float) -> Dict[int, int]:
+    """Per constraint, the vertices on its far side: the forbidden side of a
+    one-sided constraint, or a few (at most 5%) against all the others."""
+    out: Dict[int, int] = {}
+    for c in range(len(nums)):
+        d = dist[:, c]
+        off = ~np.isnan(d) & used
+        if not off.any():
+            continue
+        if attrs[c] & 2:            # NONNEGATIVE
+            bad = int((d[off] < -eps).sum())
+        elif attrs[c] & 1:          # NONPOSITIVE
+            bad = int((d[off] > eps).sum())
+        else:
+            pos, neg = int((d[off] > eps).sum()), int((d[off] < -eps).sum())
+            bad = min(pos, neg) if min(pos, neg) <= 0.05*(pos + neg) else 0
+        if bad:
+            out[int(nums[c])] = bad
+    return out
+
+
 def _grow(mask: np.ndarray, edges: np.ndarray, rings: int) -> np.ndarray:
     """The vertices within ``rings`` edges of the masked ones."""
     out = mask.copy()
@@ -1904,6 +1920,9 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
     return float("inf")
 
 
+# a vertex counts as crossed when beyond a constraint by this many median edge lengths:
+# less is the chord of a curved wall next to a contact line
+_CROSS_TOL = 0.01
 _ADAPT_PASSES = 3
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
