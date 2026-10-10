@@ -1153,16 +1153,41 @@ void edge_histogram()
 *
 *  Function: collapse_keeps_manifold()
 *
-*  Purpose: Tell whether merging the ends of an edge keeps the surface a
-*           manifold (the link condition): the ends may share no neighbours
-*           other than the third vertices of the facets on the edge, and no
-*           other edge may join them. Otherwise the merge makes parallel and
-*           then loop edges, and later deletions free elements twice.
+*  Purpose: Tell whether merging the ends of an edge keeps the surface
+*           sound. Refused: a merge that would make two facets one, that is
+*           where the ends share a neighbour (other than the third vertices
+*           of the facets on the edge) or a second edge, and a facet on one
+*           end's edge to it has the same third vertex as a facet on the
+*           other's. Evolver 2.70a merged those too and then freed elements
+*           twice, hung, or lost the surface. Allowed: shared neighbours and
+*           parallel edges without that, and loop edges, as when a ring of
+*           edges around a collapsing neck closes (each merge leaves a
+*           parallel edge, the last one a loop, which delete_edge removes;
+*           'o' then pops the pinched vertex).
 *
 *  Input:    edge id
 *
 *  Output:  1 if safe, 0 if not
 */
+
+/* whether a facet on edge a and a facet on edge b (both from a vertex to
+   the same neighbour) have the same third vertex */
+static int facets_share_third(edge_id a, edge_id b)
+{ facetedge_id fa,fb,firsta,firstb;
+  firsta = fa = get_edge_fe(a);
+  if ( !valid_id(fa) ) return 0;
+  do
+  { vertex_id wa = get_fe_headv(get_next_edge(fa));
+    firstb = fb = get_edge_fe(b);
+    if ( valid_id(fb) )
+      do
+      { if ( equal_id(get_fe_headv(get_next_edge(fb)),wa) ) return 1;
+        fb = get_next_facet(fb);
+      } while ( valid_id(fb) && !equal_id(fb,firstb) );
+    fa = get_next_facet(fa);
+  } while ( valid_id(fa) && !equal_id(fa,firsta) );
+  return 0;
+}
 
 static int collapse_keeps_manifold(edge_id short_edge)
 { vertex_id v1 = get_edge_tailv(short_edge);
@@ -1173,6 +1198,7 @@ static int collapse_keeps_manifold(edge_id short_edge)
   edge_id e1,e2;
   int guard1 = 0;
 
+  if ( equal_id(v1,v2) ) return 1;     /* a loop edge: delete_edge removes it */
   first = fe = get_edge_fe(short_edge);
   if ( valid_id(fe) )
     do
@@ -1185,8 +1211,9 @@ static int collapse_keeps_manifold(edge_id short_edge)
   do
   { vertex_id n1 = get_edge_headv(e1);
     int k, guard2 = 0;
-    if ( equal_id(n1,v2) && !equal_element(e1,short_edge) )
-      return 0;   /* another edge between the ends */
+    if ( equal_id(n1,v2) && !equal_element(e1,short_edge)
+         && facets_share_third(e1,short_edge) )
+      return 0;   /* another edge between the ends, with a facet like one on this */
     if ( !equal_id(n1,v2) && !equal_id(n1,v1) )
     { e2 = get_vertex_edge(v2);
       if ( valid_id(e2) )
@@ -1194,7 +1221,8 @@ static int collapse_keeps_manifold(edge_id short_edge)
         { if ( equal_id(get_edge_headv(e2),n1) )
           { for ( k = 0 ; k < nthird ; k++ )
               if ( equal_id(third[k],n1) ) break;
-            if ( k == nthird ) return 0;   /* a common neighbour off the edge */
+            if ( k == nthird && facets_share_third(e1,e2) )
+              return 0;   /* a common neighbour off the edge, and facets that would coincide */
           }
           e2 = get_next_tail_edge(e2);
         } while ( !equal_id(e2,get_vertex_edge(v2)) && ++guard2 < 100000 );
@@ -1428,7 +1456,7 @@ int delete_edge(edge_id short_edge)
 
   if ( (web.representation == SOAPFILM) && !collapse_keeps_manifold(short_edge) )
   { if ( verbose_flag )
-    { sprintf(msg,"Not deleting edge %s: its ends have other neighbours in common.\n",
+    { sprintf(msg,"Not deleting edge %s: merging its ends would make two facets one.\n",
         ELNAME(short_edge));
       outstring(msg);
     }

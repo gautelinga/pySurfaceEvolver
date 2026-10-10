@@ -36,6 +36,11 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   deleted first (`pinch=True`, the default; a converged surface never loses edges).
   `octa.fe` and `popstr.fe` now reach the energies of Brakke's recipes on defaults.
   `IterationResult.popped` and `.collapsed` count them.
+- Edge deletion refuses only merges that would make two facets one (the case that lost
+  surfaces in Evolver 2.70a). The check from 0.7.0 also refused shared neighbours and
+  parallel edges without that, and loop edges, which is how a collapsing neck's ring
+  of edges closes: `cat.fe`'s recipe (`t .05; o`) now pinches the catenoid into two
+  discs as in 2.70a (13.71288; was stuck at 15.53).
 - Fixed: stress case 3 counted only its second sweep's time and steps.
 
 ### Docs

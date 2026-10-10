@@ -1,6 +1,7 @@
 """Mesh maintenance: tiny-edge deletion keeps the surface a manifold."""
 
 import numpy as np
+import pytest
 import pysurfaceevolver as pyse
 
 
@@ -90,3 +91,18 @@ def test_wire_vertices_add_no_spurious_hessian_modes():
     counts = ev.eigen_counts()
     assert counts.negative == 0
     assert sum(counts) == (nz - 1)*nt           # one (normal) freedom per inner vertex
+
+
+def test_collapsing_neck_pinches_off(load):
+    # cat.fe at its fold: Brakke's recipe shrinks the neck, deletes its ring
+    # of edges ('t .05': shared neighbours and a parallel edge without
+    # duplicate facets, the last ring edge a loop) and pops the pinched
+    # vertex: two discs, as in Evolver 2.70a (13.7128791344603)
+    ev = load("cat.fe")
+    ev.command("r; u; g 120")
+    assert "Deleted edges: 12" in ev.command("t .05")
+    assert ev.command("check").strip() == ""
+    assert "Vertices popped: 1" in ev.command("o")
+    ev.command("g 5")
+    assert ev.total_energy == pytest.approx(13.7128791344603, rel=1e-9)
+    assert ev.command("check").strip() == ""
