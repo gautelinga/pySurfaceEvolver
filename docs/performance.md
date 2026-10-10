@@ -68,5 +68,29 @@ Lagrange 6 at 24k facets.
   third to a half of a large linear one), recording the matrix entries, and `r`
   (refinement), which is still serial (about 1.3 s at 393k facets).
 
+## `relax()` at scale
+
+What a default `ev.relax()` costs against the commands a script would run by hand, on
+a surface near its equilibrium (8 threads, best of two, measured 2026-10-10 with the
+desktop busy: load 3 to 8, so expect 10-20% noise). By hand: `g 5; hessian; hessian;
+hessian` (in the Lagrange model after `lagrange n`, the manual's final stage). `relax()`
+does more: it takes Newton steps until the residual is below 1e-8 and verifies it,
+checks stability (one factorization) and the mesh's health. In the linear model it also
+runs its tidied gradient rounds (at least three of ten steps); in the quadratic and
+Lagrange models it does what the hand-written stage does, `g 5` and then Newton.
+Seconds:
+
+| surface | by hand | `relax()` |
+|---|---|---|
+| cube, linear, 98k facets | 0.58 | 0.95 |
+| cube, linear, 393k facets | 3.05 | 5.15 |
+| cube, Lagrange 2, 24k facets | 0.79 | 1.04 |
+| cube, Lagrange 4, 24k facets | 2.96 | 5.40 |
+| double bubble (tutorial), Lagrange 2, 45k facets | 1.43 | 2.71 |
+| double bubble (tutorial), Lagrange 4, 45k facets | 5.93 | 10.92 |
+
+All converged and were reported stable with a healthy mesh. `relax(stability=False)`
+saves the factorization when the stability isn't needed.
+
 `bench/benchmark.py` in the repository measures pySE alone (`--threads`,
 `--levels`, `--json` to compare runs).
