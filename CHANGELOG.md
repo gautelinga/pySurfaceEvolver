@@ -10,6 +10,11 @@
   for slow mesh drift to wreck a surface (contact-line vertices sliding together on a
   coarse liquid bridge). Stress suite: 7 of 9 (the bridge passes), far fewer gradient
   steps (cylinder 26000 -> 1060, shrinking cap 25880 -> 3040).
+- `relax()` undoes a gradient round that more than doubles the residual (when Newton
+  follows) and hands over to Newton: on a coarse start a contact line can collapse
+  within a few steps. The liquid bridge relaxes on plain defaults (`relax(levels=3)`)
+  at every gap and contact angle of its notebook, which no longer needs its own
+  relaxation recipe.
 - Newton and eigenvalue counts no longer see spurious modes from vertices on wires
   (curves where two constraints meet): their only freedom, sliding along the wire, is
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the

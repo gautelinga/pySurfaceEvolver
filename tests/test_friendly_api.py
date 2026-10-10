@@ -384,12 +384,17 @@ def test_relax_warns_about_unstable_equilibria():
     assert ev.relax(stability=False).stable is None
 
 
-def _coarse_bridge():
-    """A liquid bridge (volume 0.05, contact angle 40) between unit spheres at
-    gap 0.2, started from a 16 x 4 tube: on this coarse mesh, long gradient
-    runs let the contact-line vertices slide together until the surface breaks."""
+def _coarse_bridge(gap=0.2, theta=40.0, volume=0.05, nz=4, nt=16):
+    """A liquid bridge between unit spheres, started from a coarse tube (by
+    default volume 0.05, contact angle 40, gap 0.2, 16 x 4: there, long gradient
+    runs let the contact-line vertices slide together until the surface breaks)."""
     from pysurfaceevolver import constraints as C
-    c, a, nz, nt = 1.1, 0.2606013422804717, 4, 16
+    c = 1 + gap/2
+    lo, hi = 0.0, 0.999                   # the tube radius that holds the volume
+    for _ in range(60):
+        a = (lo + hi)/2
+        v = 2*np.pi*(c*a*a - 2/3*(1 - (1 - a*a)**1.5))
+        lo, hi = (a, hi) if v < volume else (lo, a)
     zb = c - np.sqrt(1 - a*a)
     v = [[a*np.cos(p), a*np.sin(p), z]
          for z in np.linspace(-zb, zb, nz + 1) for p in 2*np.pi*np.arange(nt)/nt]
@@ -398,13 +403,13 @@ def _coarse_bridge():
         for j in range(nt):
             p, q = i*nt + j, i*nt + (j + 1) % nt
             f += [[p, q, q + nt], [p, q + nt, p + nt]]
-    s1 = C.sphere((0, 0, -c), 1.0, contact_angle=40.0, wet_poles=("north",))
-    s2 = C.sphere((0, 0, c), 1.0, contact_angle=40.0, wet_poles=("south",))
+    s1 = C.sphere((0, 0, -c), 1.0, contact_angle=theta, wet_poles=("north",))
+    s2 = C.sphere((0, 0, c), 1.0, contact_angle=theta, wet_poles=("south",))
     ev = pyse.Evolver()
     ev.load_string(pyse.make_datafile(
         np.array(v), f, constraints={1: s1, 2: s2},
         vertex_constraints={1: list(range(nt)), 2: list(range(nz*nt, (nz + 1)*nt))},
-        bodies=[pyse.Body(faces=range(len(f)), volume=0.05, volconst=s1.volconst + s2.volconst)]))
+        bodies=[pyse.Body(faces=range(len(f)), volume=volume, volconst=s1.volconst + s2.volconst)]))
     return ev, s1.energy_constant + s2.energy_constant
 
 
@@ -414,3 +419,10 @@ def test_relax_hands_over_to_newton_before_the_mesh_drifts():
     assert r.converged and len(r.energy) < 200
     assert abs(ev.total_energy + const - 0.0806) < 1e-3      # the axisymmetric 0.0839 when refined
 
+
+def test_relax_undoes_a_round_that_breaks_the_mesh():
+    # on this 8 x 3 start the contact line collapses within one round of 10
+    # steps (the residual jumps 100-fold); relax() undoes it and Newton finishes
+    ev, _ = _coarse_bridge(gap=0.4, theta=100.0, volume=0.3, nz=3, nt=8)
+    r = ev.relax()
+    assert r.converged and ev.mesh_quality().angle_min > 20

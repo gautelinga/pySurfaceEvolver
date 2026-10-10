@@ -280,10 +280,10 @@ inflated cube, 11 puddle, 12 shrinking cap). Failing: 3 sessile drop at 10 and
 150-170 degrees (one level more fixes 150-160), 8 drainage band (8-15% at level
 2; level 3 with the old tolerance: 2.4%, snap exact).
 
-**Next** (Phase G2 below, revised): G2.4 and G2.4b done (2026-10-10, see
-there; committed locally), G2.5 tidying around Newton (the liquid-bridge notebook keeps
-explicit `newton=0, stability=False` rounds until then), G2.6 guarded descent,
-then G2.7 refine-only adaptivity. Ask the user before each step.
+**Next** (Phase G2 below, revised): G2.4, G2.4b and G2.5 done (2026-10-10, see
+there; the liquid-bridge notebook is on `relax(levels=3)`). Then G2.6 guarded
+descent (case 3 at 10 degrees), G2.7 refine-only adaptivity (cases 3 at 170
+and 8). Ask the user before each step.
 
 **Engine changes this round** (src/, CRLF): edge deletion keeps the link condition
 (trirevis.c, upstream bug); hessian_normal's slant measured against the raw normal
@@ -821,6 +821,21 @@ G2.4b *Done*: `energy_tol` default 1e-5 when Newton follows (1e-9 with
      worst), far fewer gradient steps (cylinder 26000 -> 1060, cap 25880 -> 3040,
      catenoid 18460 -> 5290); case 8 at level 2: 8.3% (was 168%), snap 4% off,
      120 unconverged, smallest facet angle 0; case 3 unchanged.
+     *Done* (G2.5 as built, 2026-10-10): what broke the liquid bridge on defaults
+     was not Newton but the coarse start: on the 8-around cylinder the contact
+     line collapses within one 10-step round (residual 0.03 -> 3-7, smallest
+     angle -> 0), and refinement only spreads the damage. With Newton following,
+     relax() now measures the residual at the end of each round (before `u; V`,
+     which lifts it to its own floor) and, if it more than doubled from its
+     lowest, puts the round's vertices back (`ev.vertices`; a dump would cost 2x
+     a round at 393k facets) and hands over. Bridge grid (gaps 0-0.6 x theta 20,
+     60, 100 and theta 20-80 at gap 0.2): 25 of 25 converge, energies within
+     0.007% and forces within 0.1% of the notebook's tailored recipe (was 18 of
+     25 on defaults); the notebook now uses `relax(levels=3)`. Tried and dropped:
+     also ending the gradient phase when the residual set no new low for 3
+     rounds (case 8: median error 2.3% vs 0.3%; where Newton can't finish, the
+     gradient steps do the work). Not needed so far: alternating Newton and
+     tidied rounds. Suite 7 of 9 unchanged (case 8 8%, case 3 as before).
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

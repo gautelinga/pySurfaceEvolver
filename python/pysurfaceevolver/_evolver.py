@@ -500,7 +500,10 @@ class Evolver:
         consecutive rounds, or after ``max_iter`` steps. By default 1e-5 when
         Newton steps follow (Newton finishes faster and more reliably; long
         gradient runs let slow mesh drift grow, such as contact-line vertices
-        sliding together), 1e-9 with ``newton=0``. ``levels=n`` refines
+        sliding together), 1e-9 with ``newton=0``. When Newton follows, a
+        round that more than doubles :meth:`residual` from its lowest so far
+        is undone and the gradient phase ends there (on coarse meshes a
+        contact line can collapse within a few steps). ``levels=n`` refines
         and repeats it n times.
 
         Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
@@ -545,7 +548,8 @@ class Evolver:
                 n0 = len(energy)
                 remeshes += self._relax_level(energy_tol, max_iter, window, tidy,
                                               remesh and self.model == "linear",
-                                              callback, every, energy, area, scale, output)
+                                              callback, every, energy, area, scale, output,
+                                              watch=newton > 0)
                 level += [lev]*(len(energy) - n0)
                 if not np.isfinite(_core.total_energy()):
                     bad = _core.total_energy()
@@ -642,14 +646,23 @@ class Evolver:
     def _relax_level(self, energy_tol: float, max_iter: int, window: int, tidy: int,
                      remesh: bool, callback: Optional[Callable[["Evolver", int], Any]],
                      every: int, energy: List[float], area: List[float],
-                     scale: List[float], output: List[str]) -> int:
+                     scale: List[float], output: List[str], watch: bool = False) -> int:
         """Gradient steps until the energy settles. With tidy=k, 'u; V' every k
         steps (and a remeshing when the edges have grown uneven), and the energy
-        compared round to round. Returns the number of remeshings."""
+        compared round to round. With ``watch`` (Newton follows), also the
+        residual at the end of each round (before the tidying, which disturbs
+        it): a round that more than doubles it from its lowest is undone (the
+        vertices put back) and ends the steps. On a coarse mesh, slow drift such
+        as contact-line vertices sliding together lowers the energy while the
+        residual climbs, and the mesh can break down within a round. Returns
+        the number of remeshings."""
         previous = _core.total_energy()
         quiet = 0
+        best = np.inf
         first = len(energy)
         remeshes = 0
+        watch = watch and tidy > 0
+        start = self.vertices if watch else None
         for i in range(1, max_iter + 1):
             self._step(energy, area, scale, output)
             if callback is not None and i % every == 0:
@@ -658,6 +671,15 @@ class Evolver:
                 break
             if tidy and i % tidy:
                 continue                  # mid-round: no convergence check
+            if watch:
+                res = self.residual()
+                if res > 2*best:            # the round went wrong: undo it, hand over
+                    if start is not None and len(start) == _core.count(_core.VERTEX):
+                        self.vertices = start
+                    energy[-1] = _core.total_energy()
+                    area[-1] = _core.total_area()
+                    break
+                best = min(best, res)
             if tidy:
                 output.append(self.command("u; V"))
                 if remesh and remeshes < _MAX_REMESHES and self._uneven():
@@ -671,6 +693,8 @@ class Evolver:
             quiet = quiet + 1 if change < energy_tol else 0
             if quiet >= window:
                 break
+            if watch:
+                start = self.vertices
         steps = len(energy) - first
         if callback is not None and steps % every != 0:
             callback(self, steps)
