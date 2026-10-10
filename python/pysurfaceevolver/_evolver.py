@@ -475,7 +475,7 @@ class Evolver:
 
     def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: Optional[float] = None,
               window: int = 3, tidy: int = 10, remesh: bool = False, cg: Optional[bool] = None,
-              levels: int = 0, stability: bool = True,
+              levels: int = 0, stability: bool = True, adapt: Union[bool, float] = False,
               newton: int = 20, seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
@@ -518,6 +518,14 @@ class Evolver:
         10 degree contact angle) far from where Newton can take over.
         ``cg=False``: plain gradients only.
 
+        ``adapt=True`` (or a turning angle in degrees, default 15; linear model)
+        then refines where the surface curves too much for its edges (see
+        :meth:`adapt`) and relaxes again, up to three times, or until the
+        surface has four times the facets it started the call with; those
+        passes count as further levels in the result. Refinement never
+        coarsens, so over a long continuation (a surface that grows, or a neck
+        that pinches) the facets add up from call to call.
+
         If the energy becomes non-finite during the gradient steps, the surface
         is restored to its state before the call and :class:`EvolverError` is
         raised.
@@ -544,6 +552,7 @@ class Evolver:
             raise ValueError("tidy, levels and newton must be non-negative")
         with _threads_for_call(threads), self._conj_grad(bool(cg)):
             start = self.save()
+            facets0 = self.counts["facets"]
             energy: List[float] = []
             area: List[float] = []
             scale: List[float] = []
@@ -559,28 +568,43 @@ class Evolver:
                                               callback, every, energy, area, scale, output,
                                               watch=newton > 0)
                 level += [lev]*(len(energy) - n0)
-                if not np.isfinite(_core.total_energy()):
-                    bad = _core.total_energy()
-                    self.restore(start)
-                    raise EvolverError(f"relax(): the energy became {bad} during gradient "
-                                       "steps; the surface is back to its state before the call")
-            steps = self._newton(newton, seek, tol, undo_if, output) if newton else 0
-            residual = self.residual()
-            budget = max_iter - level.count(levels)    # what the last level left
-            if cg is None and newton and budget > 0 and not residual < tol \
-                    and np.isfinite(residual):
-                before, n0 = self.save(), len(energy)
-                with self._conj_grad(True):
-                    self._relax_level(energy_tol, budget, window, tidy, False, callback,
-                                      every, energy, area, scale, output, watch=True)
-                level += [levels]*(len(energy) - n0)
-                more = self._newton(newton, seek, tol, undo_if, output) \
-                    if np.isfinite(_core.total_energy()) else 0
-                second = self.residual()
-                if second < tol:              # kept only if it converges
-                    steps, residual = steps + more, second
-                else:
-                    self.restore(before)
+                self._check_finite(start)
+
+            def finish(lev: int) -> "tuple[int, float]":
+                # Newton, then (cg=None) a conjugate-gradient pass if still unconverged
+                steps = self._newton(newton, seek, tol, undo_if, output) if newton else 0
+                residual = self.residual()
+                budget = max_iter - level.count(lev)    # what this level left
+                if cg is None and newton and budget > 0 and not residual < tol \
+                        and np.isfinite(residual):
+                    before, n0 = self.save(), len(energy)
+                    with self._conj_grad(True):
+                        self._relax_level(energy_tol, budget, window, tidy, False, callback,
+                                          every, energy, area, scale, output, watch=True)
+                    level.extend([lev]*(len(energy) - n0))
+                    more = self._newton(newton, seek, tol, undo_if, output) \
+                        if np.isfinite(_core.total_energy()) else 0
+                    second = self.residual()
+                    if second < tol:              # kept only if it converges
+                        steps, residual = steps + more, second
+                    else:
+                        self.restore(before)
+                return steps, residual
+
+            steps, residual = finish(levels)
+            if adapt and self.model == "linear":
+                turn = 15.0 if adapt is True else float(adapt)
+                limit = _ADAPT_GROWTH*facets0
+                for lev in range(levels + 1, levels + 1 + _ADAPT_PASSES):
+                    if self.counts["facets"] > limit or not self.adapt(turn):
+                        break
+                    n0 = len(energy)
+                    self._relax_level(energy_tol, max_iter, window, tidy, False, callback,
+                                      every, energy, area, scale, output, watch=newton > 0)
+                    level += [lev]*(len(energy) - n0)
+                    self._check_finite(start)
+                    more, residual = finish(lev)
+                    steps += more
             stable: Optional[bool] = None
             modes: Optional[int] = None
             if stability and residual < tol:
@@ -598,6 +622,13 @@ class Evolver:
         return IterationResult(np.array(energy), np.array(area), np.array(scale),
                                "".join(output), bool(residual < tol), steps,
                                np.array(level, dtype=int), residual, remeshes, stable, modes)
+
+    def _check_finite(self, start: Snapshot) -> None:
+        if not np.isfinite(_core.total_energy()):
+            bad = _core.total_energy()
+            self.restore(start)
+            raise EvolverError(f"relax(): the energy became {bad} during gradient "
+                               "steps; the surface is back to its state before the call")
 
     @contextlib.contextmanager
     def _conj_grad(self, on: bool) -> Iterator[None]:
@@ -858,6 +889,36 @@ class Evolver:
         if average:
             self.command("V")
         return counts
+
+    def adapt(self, max_turn: float = 15.0) -> int:
+        """Split the edges along which the surface turns by more than
+        ``max_turn`` degrees (the angle between the vertex normals at its
+        ends), then equiangulate: one level of refinement where the curvature
+        needs it, such as the strongly curved rim of a drop at a high contact
+        angle. Never coarsens. Edges flagged ``no_refine`` are kept whole, and
+        edges touching a junction of three or more facets (a triple line) are
+        not judged (no normal there). Relax afterwards; ``relax(adapt=True)``
+        does both.
+
+        Linear model only. Returns the number of edges split.
+        """
+        if self.model != "linear":
+            raise ValueError("adapt() needs the linear model")
+        if not max_turn > 0:
+            raise ValueError("max_turn must be positive")
+        m = self.mesh()
+        if m.facets is None or len(m.facets) == 0:
+            return 0
+        mark = _edge_turn(m) > max_turn
+        if not mark.any():
+            return 0
+        if "pyse_mark" not in self._edge_attributes():
+            self.command("define edge attribute pyse_mark integer")
+        self.set_values("edge", "pyse_mark", mark.astype(float))
+        before = self.counts["vertices"]
+        self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
+        self.command("u")
+        return self.counts["vertices"] - before
 
     def residual(self) -> float:
         """How far the surface is from equilibrium, as a dimensionless number
@@ -1638,6 +1699,37 @@ class BodyView:
 _GRADE = 1.0
 # at most this many automatic remeshings per relax() call
 _MAX_REMESHES = 10
+
+
+_ADAPT_PASSES = 3
+_ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
+
+
+def _edge_turn(m: Mesh) -> np.ndarray:
+    """Per edge, the angle (degrees, 0-90) between the vertex normals at its
+    ends; 0 for edges touching a vertex where three or more facets meet on an
+    edge. Vertex normals: area-weighted facet normals, each sign-aligned with
+    one facet at the vertex (facet orientations needn't agree across a sheet)."""
+    f, x = m.facets, m.vertices
+    assert f is not None
+    n = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
+    ref = np.zeros_like(x)
+    for k in range(3):
+        ref[f[:, k]] = n
+    vn = np.zeros_like(x)
+    for k in range(3):
+        s = np.where(np.einsum("ij,ij->i", n, ref[f[:, k]]) < 0, -1.0, 1.0)
+        np.add.at(vn, f[:, k], n*s[:, None])
+    norm = np.linalg.norm(vn, axis=1)
+    vn = vn/np.where(norm > 0, norm, 1.0)[:, None]
+    e = m.edges
+    turn = np.degrees(np.arccos(np.clip(np.abs(np.einsum("ij,ij->i", vn[e[:, 0]], vn[e[:, 1]])),
+                                        0.0, 1.0)))
+    junction = np.zeros(len(x), dtype=bool)
+    hub = e[_edge_valence(m) > 2]
+    junction[hub.ravel()] = True
+    turn[junction[e[:, 0]] | junction[e[:, 1]] | (norm[e[:, 0]] == 0) | (norm[e[:, 1]] == 0)] = 0.0
+    return turn
 
 
 def _edge_valence(m: Mesh) -> np.ndarray:

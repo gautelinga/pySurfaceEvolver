@@ -282,8 +282,9 @@ degrees (one level more fixes 150-160), 8 drainage band (worst 8-15% at level
 
 **Next** (Phase G2 below, revised): G2.4, G2.4b, G2.5 and G2.6 done
 (2026-10-10, see there; the liquid-bridge notebook is on `relax(levels=3)`;
-relax() falls back to conjugate gradients). Then G2.7 refine-only adaptivity
-(case 3 at 150-170, case 8). Ask the user before each step.
+relax() falls back to conjugate gradients), G2.7 in part (`ev.adapt()`, opt-in
+`relax(adapt=...)`). Open: case 3 at 160-170 and case 8 (parked); adaptivity
+by default needs coarsening first (G2.8). Ask the user before each step.
 
 **Engine changes this round** (src/, CRLF): edge deletion keeps the link condition
 (trirevis.c, upstream bug); hessian_normal's slant measured against the raw normal
@@ -850,6 +851,23 @@ G2.6 *Done* (2026-10-10), differently from the plan. Case 3 at 10 degrees:
      (resolution, G2.7); bridge grid unchanged (the pass never runs); case 8
      back to baseline (20 states over 1%, median 0.35%) but ~60% slower, the
      pass tried and reverted on its ~125 unconverged steps.
+G2.7 *Done in part* (2026-10-10; user's choices: `ev.adapt()` plus opt-in
+     `relax(adapt=...)`, 15 degrees, case 8 parked). What case 3 at 170 needs is
+     not in the plan's criteria: its first ring of edges out from the contact
+     line is longer (0.35) than the contact radius (0.24), and the turning runs
+     along those edges, so facet angles there are small (3 degrees) and a 32-gon
+     turns 11.25 degrees per vertex at any size. Criterion built instead: the
+     angle between the vertex normals at an edge's ends (sign-aligned per
+     vertex; edges at triple lines not judged). 170 degree drop, per
+     continuation step: none 7.6 degrees off (480 facets), 15 degrees 3.5 (734),
+     10 degrees 1.6 (2022), uniform level 3.9 (1920). Static shapes: one pass,
+     then nothing left to split (cube 384 -> 1248, drop 480 -> 1312, hemisphere
+     480 -> 544). Suite with adapt on everywhere: all pass as before, more
+     accurate (bridge 0.09%, inflated cube 0.02%), case 3 fails only at 160-170
+     (2.97 worst); but refinement accumulates over continuations: inflated cube
+     92 s (2 s), catenoid past the fold 129 s (3-8 s), case 8 not done in 25 min.
+     So opt-in until coarsening (G2.8) exists. Not built: boundary-turning and
+     wall-gap criteria.
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

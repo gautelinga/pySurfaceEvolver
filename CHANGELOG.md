@@ -19,6 +19,11 @@
   conjugate gradient steps and Newton, kept only if it converges (with the gradient
   steps the last level left of `max_iter`). A sessile drop spread to 10 degrees now
   converges. `cg=True` still uses conjugate gradients throughout; `cg=False` never.
+- `ev.adapt(max_turn=15)`: splits the edges along which the surface turns by more than
+  `max_turn` degrees (between the vertex normals at their ends), one level per call,
+  never coarsening; `relax(adapt=True)` (opt-in) alternates it with relaxation, up to
+  three passes or 4x the facets. A sessile drop at 170 degrees: implied contact angle
+  off by 3.5 degrees with 734 facets, against 3.9 with 1920 refined uniformly.
 - Newton and eigenvalue counts no longer see spurious modes from vertices on wires
   (curves where two constraints meet): their only freedom, sliding along the wire, is
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the

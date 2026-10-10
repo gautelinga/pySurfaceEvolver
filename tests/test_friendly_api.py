@@ -462,3 +462,31 @@ def test_relax_falls_back_to_conjugate_gradients():
     ev.restore(snap)
     r = ev.relax()
     assert r.converged and r.newton_steps > 1
+
+
+def test_adapt_refines_where_the_surface_curves():
+    # a drop at 150 degrees: the rim curls sharply; one pass refines there, a
+    # second (after relaxing) finds nothing left, and the contact radius gets closer
+    ev = _hemisphere_drop()
+    ev.parameters["theta"] = 150.0
+    ev.relax()
+
+    def radius():
+        m = ev.mesh()
+        on = m.vertices[ev.on_constraint(1)]
+        return np.hypot(on[:, 0] - on[:, 0].mean(), on[:, 1] - on[:, 1].mean()).mean()
+
+    t = np.radians(150.0)
+    R = (2*np.pi/3/(np.pi*(2 - 3*np.cos(t) + np.cos(t)**3)/3))**(1/3)
+    exact = R*np.sin(t)
+    before, facets = abs(radius() - exact), ev.counts["facets"]
+    r = ev.relax(adapt=True)
+    assert r.converged and r.level.max() >= 1 and ev.counts["facets"] > facets
+    assert abs(radius() - exact) < 0.6*before
+    assert ev.adapt() == 0
+
+
+def test_adapt_needs_the_linear_model(cube):
+    cube.command("lagrange 2")
+    with pytest.raises(ValueError, match="linear"):
+        cube.adapt()
