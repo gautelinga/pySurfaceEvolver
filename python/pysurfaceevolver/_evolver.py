@@ -563,6 +563,7 @@ class Evolver:
             before = _core.total_energy()
             output.append(self.command("hessian_seek" if seek else "hessian"))
             if undo_if is not None and undo_if(self):
+                assert snapshot is not None
                 self.restore(snapshot)
                 return kept, False
             kept += 1

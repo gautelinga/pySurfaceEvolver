@@ -58,7 +58,7 @@ def _n(x: float) -> str:
     return f"({x!r})" if x < 0 else repr(x)
 
 
-def _lin(coeffs: Sequence[float], const: float = 0.0) -> str:
+def _lin(coeffs: "Sequence[float] | np.ndarray", const: float = 0.0) -> str:
     """const + a*x + b*y + c*z, without zero terms."""
     terms = [f"{_n(c)}*{v}" for c, v in zip(coeffs, "xyz") if c != 0]
     if const != 0 or not terms:
@@ -127,10 +127,16 @@ class _Coefficient:
 
     def times(self, x: float) -> str:
         """k*x as a datafile factor."""
-        return _n(self.value*x) if self.expr is None else f"{self.expr}*{_n(x)}"
+        if self.expr is not None:
+            return f"{self.expr}*{_n(x)}"
+        assert self.value is not None
+        return _n(self.value*x)
 
     def energy(self, area: float) -> float:
-        return float("nan") if self.expr is not None else -self.value*area
+        if self.expr is not None:
+            return float("nan")
+        assert self.value is not None
+        return -self.value*area
 
 
 def plane(normal, offset: float = 0.0, contact_angle: Optional[float] = None, *,
