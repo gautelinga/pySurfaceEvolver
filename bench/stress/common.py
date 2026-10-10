@@ -114,10 +114,12 @@ def cap_reference(volume: float, theta_deg: float) -> Dict[str, float]:
 
 
 def contact_radius(ev, constraint: int) -> float:
-    """Mean distance from the z axis of the vertices on a constraint."""
+    """Mean distance of the vertices on a constraint from their centre in x, y
+    (a drop on a plane may slide sideways: that costs nothing)."""
     m = ev.mesh()
     on = ev.on_constraint(constraint)
-    return float(np.hypot(m.vertices[on, 0], m.vertices[on, 1]).mean())
+    p = m.vertices[on, :2]
+    return float(np.linalg.norm(p - p.mean(axis=0), axis=1).mean())
 
 
 def rel(a: float, b: float) -> float:

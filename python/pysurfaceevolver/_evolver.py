@@ -204,6 +204,7 @@ class IterationResult:
     newton_steps: int = 0
     level: Optional[np.ndarray] = None
     residual: float = float("nan")    # Evolver.residual() at the end (relax)
+    remeshes: int = 0                  # automatic remeshings (relax)
 
 # eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
 # (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
@@ -456,18 +457,28 @@ class Evolver:
         scale.append(self.eval("scale"))
 
     def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: float = 1e-9,
-              window: int = 3, tidy: int = 10, levels: int = 0, newton: int = 20,
-              seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
+              window: int = 3, tidy: int = 10, remesh: bool = False, cg: bool = False,
+              levels: int = 0,
+              newton: int = 20, seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
         """Relax the surface to an equilibrium: gradient steps that keep the
         mesh in shape, then safeguarded Newton steps, until :meth:`residual`
         is below ``tol``.
 
-        Gradient steps (Evolver's ``g``) come in rounds of ``tidy`` steps, each
+        Gradient steps (Evolver's ``g``; with ``cg=True``, as conjugate
+        gradients: far faster on flat or stiff shapes, but they can diverge on
+        films bounded by wires, so off by default; your own ``conj_grad``
+        setting is restored after) come in rounds of ``tidy`` steps, each
         followed by equiangulation and vertex averaging (``u; V``), which keep
         facets from degenerating where the surface stretches or vertices drift
-        (``tidy=0``: no tidying). The gradient phase ends when the energy
+        (``tidy=0``: no tidying). With ``remesh=True`` (linear model; experimental, off by default), each round
+        also checks the edge lengths against graded targets (the bulk edge
+        size, but finer next to short boundary edges such as a small contact
+        line): when one is more than twice its target, or an interior one less
+        than 0.35 of it, as where a contact line travels or a surface grows or
+        shrinks, edges are split and deleted toward the targets. The gradient
+        phase ends when the energy
         changes by less than ``energy_tol`` (relative) over ``window``
         consecutive rounds, or after ``max_iter`` steps. ``levels=n`` refines
         and repeats it n times.
@@ -490,19 +501,21 @@ class Evolver:
             raise ValueError("tol and energy_tol must be positive; max_iter and window at least 1")
         if tidy < 0 or levels < 0 or newton < 0:
             raise ValueError("tidy, levels and newton must be non-negative")
-        with _threads_for_call(threads):
+        with _threads_for_call(threads), self._conj_grad(cg):
             start = self.save()
             energy: List[float] = []
             area: List[float] = []
             scale: List[float] = []
             level: List[int] = []
             output: List[str] = []
+            remeshes = 0
             for lev in range(levels + 1):
                 if lev:
                     self.refine()
                 n0 = len(energy)
-                self._relax_level(energy_tol, max_iter, window, tidy, callback, every,
-                                  energy, area, scale, output)
+                remeshes += self._relax_level(energy_tol, max_iter, window, tidy,
+                                              remesh and self.model == "linear",
+                                              callback, every, energy, area, scale, output)
                 level += [lev]*(len(energy) - n0)
                 if not np.isfinite(_core.total_energy()):
                     bad = _core.total_energy()
@@ -513,17 +526,86 @@ class Evolver:
             residual = self.residual()
         return IterationResult(np.array(energy), np.array(area), np.array(scale),
                                "".join(output), bool(residual < tol), steps,
-                               np.array(level, dtype=int), residual)
+                               np.array(level, dtype=int), residual, remeshes)
+
+    @contextlib.contextmanager
+    def _conj_grad(self, on: bool) -> Iterator[None]:
+        """Conjugate gradients on (or off) for a block; the setting restored after."""
+        before = self.eval("conj_grad") != 0
+        if before != on:
+            self.command(f"conj_grad {'on' if on else 'off'}")
+        try:
+            yield
+        finally:
+            if before != on and _core.surface_valid():
+                self.command(f"conj_grad {'on' if before else 'off'}")
+
+    def _edge_targets(self) -> "tuple[Mesh, np.ndarray, np.ndarray, np.ndarray]":
+        """Graded target lengths per edge: the bulk size (the 75th percentile of
+        the edge lengths), but near a short boundary (a small contact line, a
+        wire) no more than the boundary's edges plus half the distance from
+        it. Returns the mesh, lengths, targets and which edges are interior."""
+        m = self.mesh()
+        a, b = m.edges[:, 0], m.edges[:, 1]
+        lengths = np.linalg.norm(m.vertices[a] - m.vertices[b], axis=1)
+        interior = _edge_valence(m) >= 2
+        bulk = float(np.percentile(lengths, 75))
+        h = np.full(len(m.vertices), bulk)
+        boundary = ~interior
+        np.minimum.at(h, a[boundary], lengths[boundary])
+        np.minimum.at(h, b[boundary], lengths[boundary])
+        for _ in range(100):                  # grow away from the boundary
+            hn = h.copy()
+            np.minimum.at(hn, a, h[b] + _GRADE*lengths)
+            np.minimum.at(hn, b, h[a] + _GRADE*lengths)
+            if np.array_equal(hn, h):
+                break
+            h = hn
+        targets = (h[a] + h[b])/2
+        targets[boundary] = bulk          # boundary edges: split only when long
+        return m, lengths, targets, interior
+
+    def _uneven(self) -> bool:
+        """Whether some edge is far from its graded target length."""
+        m = self.mesh()
+        if len(m.edges) == 0 or m.facets is None:
+            return False
+        _, lengths, targets, interior = self._edge_targets()
+        # well beyond the remeshing's own limits (1.6, 0.5): no back and forth
+        return bool((lengths > 2.5*targets).any()
+                    or (lengths[interior] < 0.2*targets[interior]).any())
+
+    def _graded_remesh(self) -> None:
+        """Delete interior edges shorter than half their target, split edges
+        longer than 1.6 times it, equiangulate."""
+        if "pyse_mark" not in self._edge_attributes():
+            self.command("define edge attribute pyse_mark integer")
+        _, lengths, targets, interior = self._edge_targets()
+        self.set_values("edge", "pyse_mark", np.where(interior & (lengths < 0.5*targets), 1, 0))
+        self.command("delete edge ee where ee.pyse_mark == 1 and ee.valence != 1")
+        _, lengths, targets, interior = self._edge_targets()
+        self.set_values("edge", "pyse_mark", np.where(lengths > 1.6*targets, 2, 0))
+        self.command("refine edge ee where ee.pyse_mark == 2")
+        self.command("u")
+
+    def _edge_attributes(self) -> List[str]:
+        try:
+            self.eval("max(edge, pyse_mark)")
+            return ["pyse_mark"]
+        except EvolverError:
+            return []
 
     def _relax_level(self, energy_tol: float, max_iter: int, window: int, tidy: int,
-                     callback: Optional[Callable[["Evolver", int], Any]], every: int,
-                     energy: List[float], area: List[float], scale: List[float],
-                     output: List[str]) -> bool:
-        """Gradient steps until the energy settles; True if it did. With tidy=k,
-        'u; V' every k steps, and the energy compared round to round."""
+                     remesh: bool, callback: Optional[Callable[["Evolver", int], Any]],
+                     every: int, energy: List[float], area: List[float],
+                     scale: List[float], output: List[str]) -> int:
+        """Gradient steps until the energy settles. With tidy=k, 'u; V' every k
+        steps (and a remeshing when the edges have grown uneven), and the energy
+        compared round to round. Returns the number of remeshings."""
         previous = _core.total_energy()
         quiet = 0
         first = len(energy)
+        remeshes = 0
         for i in range(1, max_iter + 1):
             self._step(energy, area, scale, output)
             if callback is not None and i % every == 0:
@@ -534,6 +616,10 @@ class Evolver:
                 continue                  # mid-round: no convergence check
             if tidy:
                 output.append(self.command("u; V"))
+                if remesh and remeshes < _MAX_REMESHES and self._uneven():
+                    self._graded_remesh()
+                    remeshes += 1
+                    quiet = 0               # a new mesh: settle again
                 energy[-1] = _core.total_energy()
                 area[-1] = _core.total_area()
             change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
@@ -544,7 +630,7 @@ class Evolver:
         steps = len(energy) - first
         if callback is not None and steps % every != 0:
             callback(self, steps)
-        return quiet >= window
+        return remeshes
 
     def newton(self, steps: int = 1, *, seek: Optional[bool] = None, tol: Optional[float] = None,
                undo_if: Optional[Callable[["Evolver"], bool]] = None,
@@ -610,7 +696,8 @@ class Evolver:
 
     def remesh(self, target: Optional[float] = None, *, max_edge: Optional[float] = None,
                min_edge: Optional[float] = None, equiangulate: bool = True,
-               average: bool = False, protect=None) -> Dict[str, int]:
+               average: bool = False, protect=None,
+               keep_boundary: bool = True) -> Dict[str, int]:
         """Even out edge lengths: delete edges shorter than ``min_edge``
         (Evolver's ``t``), split edges longer than ``max_edge`` (``refine edge
         where length > max_edge``), then equiangulate (``u``) and, with
@@ -632,8 +719,13 @@ class Evolver:
         would land off the constraint, e.g. inside a solid sphere
         (``mesh.edges_touching(ev.on_constraint(k), "one")``).
 
+        ``keep_boundary`` (default): edges on the surface's boundary (contact
+        lines, wires) are never deleted: they are short where the geometry is
+        small, and deleting them would coarsen it.
+
         Linear model only (Evolver deletes edges only there). Returns the
-        numbers of edges ``deleted``, ``split`` and ``switched``.
+        numbers of edges ``deleted`` (about: each deletion removes three),
+        ``split`` and ``switched``.
         """
         if self.model != "linear":
             raise ValueError("remesh() needs the linear model (Evolver's 't' doesn't "
@@ -650,7 +742,12 @@ class Evolver:
             found = re.findall(r"(\d+)\s*$", text.strip())
             return int(found[-1]) if found else 0
 
-        if min_edge is not None:
+        if min_edge is not None and keep_boundary:
+            before = self.counts["edges"]
+            self.command(f"delete edge ee where ee.length < {_num(min_edge, 'min_edge')} "
+                         "and ee.valence != 1")
+            counts["deleted"] = max(0, (before - self.counts["edges"])//3)
+        elif min_edge is not None:
             counts["deleted"] = number(self.command(f"t {_num(min_edge, 'min_edge')}"))
         if max_edge is not None:
             newly: np.ndarray = np.zeros(0, dtype=np.int64)
@@ -1444,6 +1541,27 @@ class BodyView:
         return (f"<body {self.number}: volume {self.volume:.6g}, "
                 f"target {'free' if target is None else format(target, '.6g')}, "
                 f"pressure {self.pressure:.6g}>")
+
+
+# how fast graded target edge lengths may grow with distance from a boundary
+_GRADE = 1.0
+# at most this many automatic remeshings per relax() call
+_MAX_REMESHES = 10
+
+
+def _edge_valence(m: Mesh) -> np.ndarray:
+    """The number of facets on each edge (aligned with m.edges)."""
+    if m.facets is None or len(m.facets) == 0:
+        return np.zeros(len(m.edges), dtype=int)
+    f = m.facets
+    pairs = np.sort(np.vstack([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]), axis=1)
+    keys = pairs[:, 0]*(len(m.vertices) + 1) + pairs[:, 1]
+    uniq, counts = np.unique(keys, return_counts=True)
+    e = np.sort(m.edges, axis=1)
+    ekeys = e[:, 0]*(len(m.vertices) + 1) + e[:, 1]
+    idx = np.searchsorted(uniq, ekeys)
+    idx = np.clip(idx, 0, len(uniq) - 1)
+    return np.where(uniq[idx] == ekeys, counts[idx], 0)
 
 
 class Parameters(MutableMapping):

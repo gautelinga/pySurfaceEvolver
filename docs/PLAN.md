@@ -647,6 +647,35 @@ pass/fail against a reference, steps, wall time, mesh quality and stability:
 A shared axisymmetric Young-Laplace solver (shooting, with gravity) gives the
 references for 5, 6 and 11.
 
+**Status 2026-10-10.** Suite built (nine cases; `bench/stress/run.py`). Baseline
+with the old defaults: 1 of 9. In the package now: `ev.residual()` (normal part
+of the projected vertex forces, dimensionless; 1e-14 at a Newton solution, any
+scale), and default `relax()` = rounds of 10 gradient steps with `u; V`, then up
+to 20 safeguarded Newton steps (plain first, line search if rejected; reject only
+non-finite, or energy and residual both up: with a volume constraint, restoring
+the volume can cost energy), converged on the residual; NaN restores and raises.
+Result: 5 of 9 (2 catenoid 0.03%, 6 barrel, 9, 11 puddle, 12 shrinking cap).
+
+Tried and left opt-in (each fixed some cases and broke others, so not robust):
+* conjugate gradients (`cg=True`): the 10-degree drop converges (residual 7e-2
+  -> 2e-11), but the catenoid and the bridge diverge (finite blow-ups the guards
+  don't catch).
+* graded automatic remeshing (`remesh=True`): helps the high-angle drops, breaks
+  the barrel (rim on a thin fibre gets refined, then crushed) and, with other
+  thresholds, the band and the puddle; results swing with two thresholds.
+Learned: Evolver's `l` ignores `no_refine`; spurious negative eigenvalues come
+from boundary-wire vertices (even spacing is an energy maximum for sliding) and
+from soft contact-line modes of flat drops; contact radii of drops must be
+measured about the rim's centre (drops slide).
+
+Open (failing): 1 (no stability signal yet), 3 (150-170 and 10 degrees), 5
+(the bridge's start at gap 0.2; reference unconfirmed), 8 (the band: mesh at the
+moving contact line). Next ideas: a stability check that leaves out boundary
+sliding modes; a divergence guard for the gradient phase (energy blow-up per
+round -> restore and fall back), which would make cg safe; remeshing driven by
+the residual's distribution or by contact-angle resolution rather than by edge
+lengths.
+
 ## Tools and conventions
 
 - Tests: `pytest`; with `PYSE_CHECK_FACET_CACHE=1` for cache verification.
