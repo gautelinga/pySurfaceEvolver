@@ -813,12 +813,14 @@ class Evolver:
         for _ in range(steps):
             accepted = False
             for kind in kinds:
-                snapshot = self.save()
+                # a Newton step moves vertices only: their coordinates undo it
+                # (a dump would cost several Newton steps on a large surface)
+                snapshot = self.vertices
                 e0 = _core.total_energy()
                 try:
                     output.append(self.command(kind))
                 except EvolverError:
-                    self.restore(snapshot)
+                    self._put_back(snapshot)
                     continue
                 e1 = _core.total_energy()
                 res1 = self.residual()
@@ -828,7 +830,7 @@ class Evolver:
                        or (e1 > e0 + 1e-12*max(1.0, abs(e0)) and res1 > 1.1*res0)
                        or (undo_if is not None and undo_if(self)))
                 if bad:
-                    self.restore(snapshot)
+                    self._put_back(snapshot)
                     continue
                 accepted = True
                 break
@@ -842,6 +844,12 @@ class Evolver:
             if not progress:
                 break
         return kept
+
+    def _put_back(self, coords: np.ndarray) -> None:
+        """Restore vertex coordinates taken before a step that only moves them."""
+        if len(coords) != _core.count(_core.VERTEX):
+            raise EvolverError("a step changed the number of vertices; it can't be undone")
+        self.vertices = coords
 
     def remesh(self, target: Optional[float] = None, *, max_edge: Optional[float] = None,
                min_edge: Optional[float] = None, equiangulate: bool = True,
