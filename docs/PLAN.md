@@ -283,8 +283,9 @@ degrees (one level more fixes 150-160), 8 drainage band (worst 8-15% at level
 **Next** (Phase G2 below, revised): G2.4, G2.4b, G2.5 and G2.6 done
 (2026-10-10, see there; the liquid-bridge notebook is on `relax(levels=3)`;
 relax() falls back to conjugate gradients), G2.7 in part (`ev.adapt()`, opt-in
-`relax(adapt=...)`). Open: case 3 at 160-170 and case 8 (parked); adaptivity
-by default needs coarsening first (G2.8). Ask the user before each step.
+`relax(adapt=...)`), G2.8 coarsening (guarded collapse in C; adapt still
+opt-in: with it on everywhere the suite passes but runs several times longer).
+Open: case 3 at 160-170 and case 8 (parked). Ask the user before each step.
 
 **Engine changes this round** (src/, CRLF): edge deletion keeps the link condition
 (trirevis.c, upstream bug); hessian_normal's slant measured against the raw normal
@@ -868,6 +869,22 @@ G2.7 *Done in part* (2026-10-10; user's choices: `ev.adapt()` plus opt-in
      92 s (2 s), catenoid past the fold 129 s (3-8 s), case 8 not done in 25 min.
      So opt-in until coarsening (G2.8) exists. Not built: boundary-turning and
      wall-gap criteria.
+G2.8 *Done* (2026-10-10; user's choices: goal adapt safe by default, the guard
+     in C inside Evolver's edge loop). trirevis.c collapse_keeps_shape(), called
+     in delete_edge() after the link condition: refuses a merge that tilts any
+     facet around either end by more than `collapse_max_tilt` degrees (or flips
+     it), or makes an edge from the merged vertex longer than
+     `collapse_max_edge` (new internal variables, 0 = off by default; linear
+     soapfilm 3D, no torus/symmetry). adapt() merges interior edges shorter than
+     0.75 of the bulk (75th percentile) with turning < max_turn/3, guard at
+     max_turn/2 and 4/3 bulk. Static shapes settle in 2-3 passes (a merge pass
+     moves the volume ~1e-4 before the constraint restores it). Suite with adapt
+     everywhere: all pass as before; catenoid 46 s (129 refine-only, 3-8 off),
+     inflated cube 66 s (92; 2 off), bridge 66 s (33 off), cylinder 20 s (3.5).
+     Not a pile-up any more: turning per edge is scale-invariant, so 15 degrees
+     simply asks for more facets than the suite's coarse meshes (and gains
+     accuracy: cube 0.02% vs 0.34%). The target "adapt on at today's times" is
+     not met; adapt stays opt-in. Case 3 still fails at 160-170 with it.
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

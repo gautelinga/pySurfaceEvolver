@@ -900,6 +900,8 @@ struct ckey internal_variables[] = {
   {"everything_quantities",V_EVERYTHING_QUANTITIES},
   {"gravity_constant",GRAV_CONST_TOK},
   {"hessian_slant_cutoff",V_HESSIAN_SLANT_CUTOFF},
+  {"collapse_max_tilt",V_COLLAPSE_MAX_TILT},
+  {"collapse_max_edge",V_COLLAPSE_MAX_EDGE},
   {"ambient_pressure_value",V_AMBIENT_PRESSURE},
   {"last_error",V_LAST_ERROR},
   {"memory_arena",V_MEMARENA},

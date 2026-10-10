@@ -484,6 +484,8 @@ void other_stuff(
         case GRAV_CONST_NODE: oldvalue = web.grav_const; break;
         case V_THICKNESS: oldvalue = thickness; break;
         case V_HESSIAN_SLANT_CUTOFF: oldvalue = hessian_slant_cutoff; break;
+        case V_COLLAPSE_MAX_TILT: oldvalue = collapse_max_tilt; break;
+        case V_COLLAPSE_MAX_EDGE: oldvalue = collapse_max_edge; break;
         case V_AMBIENT_PRESSURE: oldvalue = web.pressure; break;
         case V_DIFFUSION: oldvalue = web.diffusion_const;
             web.diffusion_flag = 1; break;
@@ -601,6 +603,8 @@ void other_stuff(
            case V_DIFFUSION: web.diffusion_const = val; break;
            case V_AMBIENT_PRESSURE: web.pressure = val; break;
            case V_HESSIAN_SLANT_CUTOFF: hessian_slant_cutoff = val; break;
+           case V_COLLAPSE_MAX_TILT: collapse_max_tilt = val; break;
+           case V_COLLAPSE_MAX_EDGE: collapse_max_edge = val; break;
            case V_THICKNESS: thickness = val; user_thickness_flag = 1;
                   update_display();break;
            case V_SCALE_SCALE: web.scale_scale = val; break;           
@@ -5432,6 +5436,10 @@ REAL get_internal_variable(int vartok /* token number of variable */)
       return thickness; 
     case V_HESSIAN_SLANT_CUTOFF:
       return hessian_slant_cutoff; 
+    case V_COLLAPSE_MAX_TILT:
+      return collapse_max_tilt; 
+    case V_COLLAPSE_MAX_EDGE:
+      return collapse_max_edge; 
     case V_HESS_EPSILON:
       return hessian_epsilon; 
     case GRAV_CONST_NODE:

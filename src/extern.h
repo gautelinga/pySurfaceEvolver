@@ -1505,6 +1505,8 @@ extern int hessian_double_normal_flag; /* 1 for hessian constrained to normal */
 extern REAL hessian_slant_cutoff; /* for treating constrained vertices as
      fixed with hessian_normal */
 extern int hessian_linear_metric_flag; /* linear interp dot product */
+extern REAL collapse_max_tilt; /* pySE: edge deletion refused if it tilts a facet more (degrees; 0 off) */
+extern REAL collapse_max_edge; /* pySE: edge deletion refused if it makes an edge longer (0 off) */
 extern REAL linear_metric_mix;  /* proportion of linear interp metric */
 extern REAL quadratic_metric_mix; /* proportion of quadratic interp metric */
 extern int min_square_grad_flag; /* what to minimize in hessian_line_seek */

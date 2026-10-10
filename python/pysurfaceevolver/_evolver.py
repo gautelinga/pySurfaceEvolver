@@ -890,17 +890,26 @@ class Evolver:
             self.command("V")
         return counts
 
-    def adapt(self, max_turn: float = 15.0) -> int:
-        """Split the edges along which the surface turns by more than
-        ``max_turn`` degrees (the angle between the vertex normals at its
-        ends), then equiangulate: one level of refinement where the curvature
-        needs it, such as the strongly curved rim of a drop at a high contact
-        angle. Never coarsens. Edges flagged ``no_refine`` are kept whole, and
-        edges touching a junction of three or more facets (a triple line) are
-        not judged (no normal there). Relax afterwards; ``relax(adapt=True)``
-        does both.
+    def adapt(self, max_turn: float = 15.0, *, coarsen: bool = True) -> int:
+        """Fit the mesh to the curvature: split the edges along which the
+        surface turns by more than ``max_turn`` degrees (the angle between the
+        vertex normals at its ends), such as on the strongly curved rim of a
+        drop at a high contact angle, then equiangulate. One level per call.
 
-        Linear model only. Returns the number of edges split.
+        With ``coarsen`` (default), first merge the ends of short interior
+        edges (under 3/4 of the bulk edge length, the 75th percentile) along
+        which it turns by less than a third of that, where the surface has
+        flattened since it was refined. A merge is refused if it would tilt a
+        facet by more than ``max_turn/2``, flip one, or make an edge longer
+        than 4/3 of the bulk length (checked in Evolver's edge deletion;
+        ``collapse_max_tilt`` and ``collapse_max_edge``). Boundary edges
+        (contact lines, wires) are never merged.
+
+        Edges flagged ``no_refine`` are kept whole, and edges touching a
+        junction of three or more facets (a triple line) are not judged (no
+        normal there). Relax afterwards; ``relax(adapt=True)`` does both.
+
+        Linear model only. Returns the number of edges split plus merged.
         """
         if self.model != "linear":
             raise ValueError("adapt() needs the linear model")
@@ -909,16 +918,36 @@ class Evolver:
         m = self.mesh()
         if m.facets is None or len(m.facets) == 0:
             return 0
-        mark = _edge_turn(m) > max_turn
-        if not mark.any():
-            return 0
         if "pyse_mark" not in self._edge_attributes():
             self.command("define edge attribute pyse_mark integer")
+        merged = 0
+        if coarsen:
+            turn, judged = _edge_turn(m)
+            lengths = np.linalg.norm(m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)
+            bulk = float(np.percentile(lengths, 75))
+            mark = judged & (_edge_valence(m) == 2) & (turn < max_turn/3) & (lengths < 0.75*bulk)
+            if mark.any():
+                self.set_values("edge", "pyse_mark", mark.astype(float))
+                before = self.counts["vertices"]
+                self.command(f"collapse_max_tilt := {_num(max_turn/2, 'max_turn')}; "
+                             f"collapse_max_edge := {_num(4/3*bulk, 'length')}")
+                try:
+                    self.command("delete edge ee where ee.pyse_mark == 1")
+                finally:
+                    self.command("collapse_max_tilt := 0; collapse_max_edge := 0")
+                merged = before - self.counts["vertices"]
+                m = self.mesh()
+        turn, _ = _edge_turn(m)
+        mark = turn > max_turn
+        if not mark.any():
+            if merged:
+                self.command("u")
+            return merged
         self.set_values("edge", "pyse_mark", mark.astype(float))
         before = self.counts["vertices"]
         self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
         self.command("u")
-        return self.counts["vertices"] - before
+        return merged + self.counts["vertices"] - before
 
     def residual(self) -> float:
         """How far the surface is from equilibrium, as a dimensionless number
@@ -1705,10 +1734,10 @@ _ADAPT_PASSES = 3
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 
-def _edge_turn(m: Mesh) -> np.ndarray:
+def _edge_turn(m: Mesh) -> "tuple[np.ndarray, np.ndarray]":
     """Per edge, the angle (degrees, 0-90) between the vertex normals at its
-    ends; 0 for edges touching a vertex where three or more facets meet on an
-    edge. Vertex normals: area-weighted facet normals, each sign-aligned with
+    ends, and whether it was judged: not for edges touching a vertex where
+    three or more facets meet on an edge (their angle is 0). Vertex normals: area-weighted facet normals, each sign-aligned with
     one facet at the vertex (facet orientations needn't agree across a sheet)."""
     f, x = m.facets, m.vertices
     assert f is not None
@@ -1728,8 +1757,9 @@ def _edge_turn(m: Mesh) -> np.ndarray:
     junction = np.zeros(len(x), dtype=bool)
     hub = e[_edge_valence(m) > 2]
     junction[hub.ravel()] = True
-    turn[junction[e[:, 0]] | junction[e[:, 1]] | (norm[e[:, 0]] == 0) | (norm[e[:, 1]] == 0)] = 0.0
-    return turn
+    unjudged = junction[e[:, 0]] | junction[e[:, 1]] | (norm[e[:, 0]] == 0) | (norm[e[:, 1]] == 0)
+    turn[unjudged] = 0.0
+    return turn, ~unjudged
 
 
 def _edge_valence(m: Mesh) -> np.ndarray:

@@ -200,6 +200,8 @@ void reset_web()
   /* pySE: freedoms almost perpendicular to the surface normal (sliding along a
      wire: a mesh mode, indefinite) are left to the gradient steps */
   hessian_slant_cutoff = 0.05;
+  collapse_max_tilt = 0.0;    /* pySE: no geometric guard on edge deletion */
+  collapse_max_edge = 0.0;
   hessian_epsilon = hessian_epsilon_default;
   #ifdef MPI_EVOLVER
   sparse_constraints_flag = 0;

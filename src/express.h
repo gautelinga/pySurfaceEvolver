@@ -402,3 +402,5 @@ struct eval_frame {  /* for access to parent eval's */
 #define V_THIS_TASK 2279
 #define V_WINDOW_ASPECT_RATIO 2277
 #define V_BOUNDING_BOX_COLOR 2309
+#define V_COLLAPSE_MAX_TILT 2310
+#define V_COLLAPSE_MAX_EDGE 2311

@@ -24,6 +24,12 @@
   never coarsening; `relax(adapt=True)` (opt-in) alternates it with relaxation, up to
   three passes or 4x the facets. A sessile drop at 170 degrees: implied contact angle
   off by 3.5 degrees with 734 facets, against 3.9 with 1920 refined uniformly.
+- `ev.adapt()` also coarsens (`coarsen=True`): short interior edges along which the
+  surface turns by less than a third of `max_turn` are merged, unless that would tilt a
+  facet by more than `max_turn/2`, flip one, or make an edge longer than 4/3 of the bulk
+  length. Engine: Evolver's edge deletion checks this when the new variables
+  `collapse_max_tilt` (degrees) and `collapse_max_edge` are set (both 0 by default:
+  no change for Evolver scripts).
 - Newton and eigenvalue counts no longer see spurious modes from vertices on wires
   (curves where two constraints meet): their only freedom, sliding along the wire, is
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the

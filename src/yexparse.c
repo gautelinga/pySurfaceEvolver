@@ -1528,6 +1528,7 @@ Tree:              WHERE_
          switch(left)
         { /* break on settable variables */
           case V_AMBIENT_PRESSURE: case V_HESSIAN_SLANT_CUTOFF:
+          case V_COLLAPSE_MAX_TILT: case V_COLLAPSE_MAX_EDGE:
           case GRAV_CONST_NODE: case V_BREAKFLAG_NODE: case V_VISIBILITY_DEBUG_NODE:
           case V_TOLERANCE: case V_HESS_EPSILON:  case V_DETORUS_EPSILON:
           case V_BOUNDING_BOX_COLOR: 

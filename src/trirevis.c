@@ -1206,6 +1206,93 @@ static int collapse_keeps_manifold(edge_id short_edge)
 
 /*******************************************************************
 *
+*  Function: collapse_keeps_shape()
+*
+*  Purpose: pySE: tell whether merging the ends of an edge (keep_v moving
+*           to the midpoint, or staying) keeps the facets around them in
+*           shape: none tilts by more than collapse_max_tilt degrees (or
+*           flips), and no edge from the merged vertex is longer than
+*           collapse_max_edge. Either check is off at 0 (the default).
+*           Linear soapfilm in 3D without torus or symmetry only.
+*
+*  Input:    kept and eliminated vertices, whether keep_v moves to the middle
+*
+*  Output:  1 if acceptable, 0 if not
+*/
+
+static int collapse_keeps_shape(vertex_id keep_v, vertex_id elim_v, int midpoint)
+{ REAL p[MAXCOORD];
+  REAL *xk,*xe;
+  REAL cosmax;
+  int i,pass;
+
+  if ( collapse_max_tilt <= 0.0 && collapse_max_edge <= 0.0 ) return 1;
+  if ( web.torus_flag || web.symmetry_flag || (SDIM != 3) || (web.modeltype != LINEAR) )
+    return 1;
+  cosmax = (collapse_max_tilt > 0.0) ? cos(collapse_max_tilt*M_PI/180) : -2.0;
+  xk = get_coord(keep_v);
+  xe = get_coord(elim_v);
+  for ( i = 0 ; i < SDIM ; i++ )
+    p[i] = midpoint ? (xk[i] + xe[i])/2 : xk[i];
+
+  for ( pass = 0 ; pass < 2 ; pass++ )
+  { vertex_id v = pass ? elim_v : keep_v;
+    edge_id e0 = get_vertex_edge(v);
+    edge_id e = e0;
+    int guard = 0;
+    if ( !valid_id(e0) ) continue;
+    do
+    { vertex_id other = get_edge_headv(e);
+      if ( !equal_id(other,keep_v) && !equal_id(other,elim_v) )
+      { facetedge_id fe0 = get_edge_fe(e);
+        facetedge_id fe = fe0;
+        int guard2 = 0;
+        if ( collapse_max_edge > 0.0 )
+        { REAL *xo = get_coord(other);
+          REAL d2 = 0.0;
+          for ( i = 0 ; i < SDIM ; i++ ) d2 += (p[i]-xo[i])*(p[i]-xo[i]);
+          if ( d2 > collapse_max_edge*collapse_max_edge ) return 0;
+        }
+        if ( valid_id(fe0) && (collapse_max_tilt > 0.0) )
+          do
+          { facet_id f = get_fe_facet(fe);
+            if ( valid_id(f) )
+            { REAL *x[3],*y[3];
+              REAL a[3],b[3],n0[3],n1[3];
+              REAL dot,nn0,nn1;
+              facetedge_id ffe = get_facet_fe(f);
+              int k,hit = 0;
+              for ( k = 0 ; k < 3 ; k++ )
+              { vertex_id fv = get_fe_tailv(ffe);
+                x[k] = y[k] = get_coord(fv);
+                if ( equal_id(fv,keep_v) || equal_id(fv,elim_v) )
+                { y[k] = p; hit++; }
+                ffe = get_next_edge(ffe);
+              }
+              if ( hit == 1 )   /* facets on the edge itself go away */
+              { for ( k = 0 ; k < 3 ; k++ )
+                { a[k] = x[1][k] - x[0][k]; b[k] = x[2][k] - x[0][k]; }
+                cross_prod(a,b,n0);
+                for ( k = 0 ; k < 3 ; k++ )
+                { a[k] = y[1][k] - y[0][k]; b[k] = y[2][k] - y[0][k]; }
+                cross_prod(a,b,n1);
+                dot = n0[0]*n1[0] + n0[1]*n1[1] + n0[2]*n1[2];
+                nn0 = sqrt(n0[0]*n0[0] + n0[1]*n0[1] + n0[2]*n0[2]);
+                nn1 = sqrt(n1[0]*n1[0] + n1[1]*n1[1] + n1[2]*n1[2]);
+                if ( nn1 <= 0.0 || dot <= cosmax*nn0*nn1 ) return 0;
+              }
+            }
+            fe = get_next_facet(fe);
+          } while ( valid_id(fe) && !equal_id(fe,fe0) && (++guard2 < 100000) );
+      }
+      e = get_next_tail_edge(e);
+    } while ( !equal_id(e,e0) && (++guard < 100000) );
+  }
+  return 1;
+} // end collapse_keeps_shape()
+
+/*******************************************************************
+*
 *  Function: delete_edge()
 *
 *  Purpose: delete an edge and adjacent facets (if triangles in STRING);
@@ -1342,6 +1429,16 @@ int delete_edge(edge_id short_edge)
   if ( (web.representation == SOAPFILM) && !collapse_keeps_manifold(short_edge) )
   { if ( verbose_flag )
     { sprintf(msg,"Not deleting edge %s: its ends have other neighbours in common.\n",
+        ELNAME(short_edge));
+      outstring(msg);
+    }
+    return 0;
+  }
+
+  if ( (web.representation == SOAPFILM)
+         && !collapse_keeps_shape(keep_v,elim_v,edge_head_same && edge_tail_same) )
+  { if ( verbose_flag )
+    { sprintf(msg,"Not deleting edge %s: it would tilt facets or lengthen edges too much.\n",
         ELNAME(short_edge));
       outstring(msg);
     }
