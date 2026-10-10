@@ -905,37 +905,55 @@ class Evolver:
         m = self.mesh()
         if m.facets is None or len(m.facets) == 0:
             return 0
+        lengths = _edge_lengths(m)
+        bulk = float(np.percentile(lengths, 75))
+        return self._remesh_pass(merge_below=0.75*bulk if coarsen else None,
+                                 flat=max_turn/3, tilt=max_turn/2, longest=4/3*bulk,
+                                 split_turn=max_turn, split_above=None)
+
+    def _remesh_pass(self, *, merge_below: Optional[float], flat: float, tilt: float,
+                     longest: float, split_turn: Optional[float],
+                     split_above: Optional[float]) -> int:
+        """Merge interior edges shorter than ``merge_below`` along which the
+        surface turns by less than ``flat`` degrees (refused by the engine if a
+        facet would tilt by more than ``tilt`` or flip, or an edge grow longer
+        than ``longest``; not on a torus or with symmetry, where the engine
+        can't check), then split edges turning more than ``split_turn`` or
+        longer than ``split_above`` (not ``no_refine`` ones), equiangulate.
+        Returns the edges merged plus split."""
         if "pyse_mark" not in self._edge_attributes():
             self.command("define edge attribute pyse_mark integer")
+        m = self.mesh()
         merged = 0
-        if coarsen:
+        if merge_below is not None and not (self.eval("torus") or self.eval("symmetry_group")):
             valence = _edge_valence(m)
             turn, judged = _edge_turn(m, valence)
-            lengths = np.linalg.norm(m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)
-            bulk = float(np.percentile(lengths, 75))
-            mark = judged & (valence == 2) & (turn < max_turn/3) & (lengths < 0.75*bulk)
+            mark = judged & (valence == 2) & (turn < flat) & (_edge_lengths(m) < merge_below)
             if mark.any():
                 self.set_values("edge", "pyse_mark", mark.astype(float))
                 before = self.counts["vertices"]
-                self.command(f"collapse_max_tilt := {_num(max_turn/2, 'max_turn')}; "
-                             f"collapse_max_edge := {_num(4/3*bulk, 'length')}")
+                self.command(f"collapse_max_tilt := {_num(tilt, 'tilt')}; "
+                             f"collapse_max_edge := {_num(longest, 'length')}")
                 try:
                     self.command("delete edge ee where ee.pyse_mark == 1")
                 finally:
                     self.command("collapse_max_tilt := 0; collapse_max_edge := 0")
                 merged = before - self.counts["vertices"]
                 m = self.mesh()
-        turn, _ = _edge_turn(m, _edge_valence(m))
-        mark = turn > max_turn
-        if not mark.any():
-            if merged:
-                self.command("u")
-            return merged
-        self.set_values("edge", "pyse_mark", mark.astype(float))
-        before = self.counts["vertices"]
-        self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
-        self.command("u")
-        return merged + self.counts["vertices"] - before
+        mark = np.zeros(len(m.edges), dtype=bool)
+        if split_turn is not None:
+            mark |= _edge_turn(m, _edge_valence(m))[0] > split_turn
+        if split_above is not None:
+            mark |= _edge_lengths(m) > split_above
+        split = 0
+        if mark.any():
+            self.set_values("edge", "pyse_mark", mark.astype(float))
+            before = self.counts["vertices"]
+            self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
+            split = self.counts["vertices"] - before
+        if merged or split:
+            self.command("u")
+        return merged + split
 
     def residual(self) -> float:
         """How far the surface is from equilibrium, as a dimensionless number
@@ -1914,6 +1932,10 @@ def _edge_turn(m: Mesh, valence: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
     unjudged = junction[e[:, 0]] | junction[e[:, 1]] | (norm[e[:, 0]] == 0) | (norm[e[:, 1]] == 0)
     turn[unjudged] = 0.0
     return turn, ~unjudged
+
+
+def _edge_lengths(m: Mesh) -> np.ndarray:
+    return np.linalg.norm(m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)
 
 
 def _edge_valence(m: Mesh) -> np.ndarray:

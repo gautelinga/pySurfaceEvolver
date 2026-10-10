@@ -920,6 +920,29 @@ the round's start); conjugate-gradient pass by coordinates, V-only tidying, at m
 into _gradient_phase/_finish/adapt passes with a _Trace; cg="auto"; summary reprs
 for IterationResult and Health; constraint names in health; binding status
 return. Suite unchanged (7 of 9), bridge grid 25 of 25, notebooks unchanged.
+**Case 8 on defaults: remeshing inside relax() researched and dropped**
+(2026-10-10; user: research first). Prior art: isotropic remeshing (Botsch &
+Kobbelt: split > 4/3 L, collapse < 4/5 L, flips, tangential smoothing), El Topo
+(fixed window 0.5-1.5 of the initial mean edge, every step, collapses refused on
+collisions, flips on volume change > 0.1 xi^3), Brakke (edges on curved
+constraints go uneven; autochop). What case 8 needs (the helper's remesh every
+band step): first-step-only 1.2% median, split-only 2.3%, every step 0.02%; the
+continual merges of squeezed edges in the contact-line/mirror corner matter
+most. A fixed target fails elsewhere (sizes change in continuations: inflated
+cube all long, shrinking cap 96% short). Tried inside relax(), once per call and
+level, split > 1.6 median: (a) merges < 0.5 median, flat, C guard: suite fine,
+case 8 worse (748%); (b) + sliver test (protects the deliberately anisotropic
+catenoid test): admits too few; (c) unrestricted merges: case 8 snap 0.4%, 42
+unconverged, but barrel 68% (rim crushed), bridge 55%, catenoid 0.31%; (d)
+vertex history (shortest incident edge when first seen, reset next to new
+vertices; squeezed < 0.5 x median ratio) + guard: case 8 1.1% worst (helper
+1.3-2.2%), barrel/bridge pass and better, catenoid 0.24% (0.03), anisotropic
+test coarsened 120 -> 24 inner vertices; with min(1, median) normalization:
+catenoid 0.03%, case 8 97%; (e) per-edge history: catenoid 0.04%, case 8 286%.
+Every rule that reaches the helper's quality on case 8 coarsens narrowing necks
+or deliberately fine meshes, and every rule that protects those loses case 8.
+Reverted (user's choice); kept the shared _remesh_pass that adapt() uses. Case 8
+stays the documented "remesh explicitly each step" example.
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and
