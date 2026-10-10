@@ -122,3 +122,18 @@ def contact_radius(ev, constraint: int) -> float:
 
 def rel(a: float, b: float) -> float:
     return abs(a/b - 1)
+
+
+def revolve(r, z, nt: int = 24):
+    """A surface of revolution about the z axis through the meridian points
+    (r_i, z_i), i from the bottom ring to the top ring; normals point away from
+    the axis. Returns vertices, faces, bottom-ring rows, top-ring rows."""
+    r, z = np.asarray(r, float), np.asarray(z, float)
+    phis = 2*np.pi*np.arange(nt)/nt
+    v = [[ri*np.cos(p), ri*np.sin(p), zi] for ri, zi in zip(r, z) for p in phis]
+    f = []
+    for i in range(len(r) - 1):
+        for j in range(nt):
+            a, b = i*nt + j, i*nt + (j + 1) % nt
+            f += [[a, b, b + nt], [a, b + nt, a + nt]]
+    return np.array(v), f, list(range(nt)), list(range((len(r) - 1)*nt, len(r)*nt))
