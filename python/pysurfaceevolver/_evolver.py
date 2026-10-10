@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import re
 import sys
@@ -144,7 +145,7 @@ class Stability:
     threshold: float          # eigenvalues below this counted as negative
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class Health:
     """See :meth:`Evolver.health`. Gaps are in units of the median edge length."""
 
@@ -162,6 +163,16 @@ class Health:
     @property
     def ok(self) -> bool:
         return not self.issues
+
+    def summary(self) -> str:
+        """``"ok"``, or the issues in a line."""
+        return "ok" if self.ok else "; ".join(self.issues)
+
+    def __repr__(self) -> str:
+        gaps = (f"wall gap {self.wall_gap:.2g} (constraint {self.wall})"
+                if self.wall is not None else "no wall nearby")
+        return (f"Health({self.summary()}: residual {self.residual:.2g}, smallest angle "
+                f"{self.angle_min:.3g} degrees, {gaps}, self gap {self.self_gap:.2g})")
 
 
 _REPRESENTATIONS = {1: "string", 2: "soapfilm", 3: "simplex"}
@@ -239,10 +250,42 @@ class IterationResult:
     newton_steps: int = 0
     level: Optional[np.ndarray] = None
     residual: float = float("nan")    # Evolver.residual() at the end (relax)
-    remeshes: int = 0                  # automatic remeshings (relax)
     stable: Optional[bool] = None      # relax(): checked once converged (None: not checked)
     negative_modes: Optional[int] = None   # relax(): directions that lower the energy
     health: Optional["Health"] = None  # relax(): Evolver.health() at the end
+
+    def __repr__(self) -> str:
+        n = len(self.energy)
+        steps = f"{n} gradient step{'' if n == 1 else 's'}"
+        if self.converged is None:          # iterate()
+            energy = f", energy {self.energy[0]:.10g} -> {self.energy[-1]:.10g}" if n else ""
+            return f"IterationResult({steps}{energy})"
+        parts = [("converged" if self.converged else "not converged")
+                 + f" after {steps} and {self.newton_steps} Newton",
+                 f"residual {self.residual:.2g}"]
+        if self.stable is not None:
+            parts.append("stable" if self.stable else
+                         f"unstable ({self.negative_modes} negative modes)")
+        if self.health is not None:
+            parts.append(f"health {self.health.summary()}")
+        return f"IterationResult({', '.join(parts)})"
+
+
+class _Trace:
+    """What the gradient steps of an iterate() or relax() call did."""
+
+    def __init__(self) -> None:
+        self.energy: List[float] = []
+        self.area: List[float] = []
+        self.scale: List[float] = []
+        self.level: List[int] = []
+        self.output: List[str] = []
+
+    def step(self, ev: "Evolver") -> None:
+        self.output.append(ev.command("g 1"))
+        self.energy.append(_core.total_energy())
+        self.area.append(_core.total_area())
+        self.scale.append(ev.eval("scale"))
 
 # eval() and values() run `[foreach TYPE do] printf "@pyse@%.17g\n", (EXPR)`
 # (see pyse_api.c); show just EXPR when Evolver echoes that line in an error.
@@ -476,95 +519,73 @@ class Evolver:
         """
         if n < 0:
             raise ValueError("n must be non-negative")
-        energy: List[float] = []
-        area: List[float] = []
-        scale: List[float] = []
-        output: List[str] = []
+        trace = _Trace()
         for i in range(1, n + 1):
-            self._step(energy, area, scale, output)
+            trace.step(self)
             if callback is not None and (i % every == 0 or i == n):
                 callback(self, i)
-        return IterationResult(np.array(energy), np.array(area), np.array(scale),
-                               "".join(output))
+        return IterationResult(np.array(trace.energy), np.array(trace.area),
+                               np.array(trace.scale), "".join(trace.output))
 
-    def _step(self, energy: List[float], area: List[float], scale: List[float],
-              output: List[str]) -> None:
-        output.append(self.command("g 1"))
-        energy.append(_core.total_energy())
-        area.append(_core.total_area())
-        scale.append(self.eval("scale"))
-
-    def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: Optional[float] = None,
-              window: int = 3, tidy: int = 10, remesh: bool = False, cg: Optional[bool] = None,
-              levels: int = 0, stability: bool = True, adapt: Union[bool, float] = False,
-              newton: int = 20, seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
+    def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, levels: int = 0,
+              newton: int = 20, stability: bool = True, adapt: Union[bool, float] = False,
+              cg: Union[bool, str] = "auto", tidy: int = 10, energy_tol: Optional[float] = None,
+              window: int = 3, seek: Optional[bool] = None,
+              undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
         """Relax the surface to an equilibrium: gradient steps that keep the
         mesh in shape, then safeguarded Newton steps, until :meth:`residual`
-        is below ``tol``.
+        is below ``tol``. The defaults are meant to work as they are; the
+        result says whether it ``converged``, whether the equilibrium is
+        ``stable``, and how the surface looks (``health``).
 
-        Gradient steps (Evolver's ``g``; with ``cg=True``, as conjugate
-        gradients, which are far faster on flat or stiff shapes but wear the
-        mesh down where contact lines travel; your own ``conj_grad`` setting is
-        restored after) come in rounds of ``tidy`` steps, each
-        followed by equiangulation and vertex averaging (``u; V``), which keep
-        facets from degenerating where the surface stretches or vertices drift
-        (``tidy=0``: no tidying). With ``remesh=True`` (linear model; experimental, off by default), each round
-        also checks the edge lengths against graded targets (the bulk edge
-        size, but finer next to short boundary edges such as a small contact
-        line): when one is more than twice its target, or an interior one less
-        than 0.35 of it, as where a contact line travels or a surface grows or
-        shrinks, edges are split and deleted toward the targets. The gradient
-        phase ends when the energy
-        changes by less than ``energy_tol`` (relative) over ``window``
-        consecutive rounds, or after ``max_iter`` steps. By default 1e-5 when
-        Newton steps follow (Newton finishes faster and more reliably; long
-        gradient runs let slow mesh drift grow, such as contact-line vertices
-        sliding together), 1e-9 with ``newton=0``. When Newton follows, a
-        round that more than doubles :meth:`residual` from its lowest so far
-        is undone and the gradient phase ends there (on coarse meshes a
-        contact line can collapse within a few steps). ``levels=n`` refines
-        and repeats it n times.
+        Common options: ``levels=n`` refines and relaxes again n times;
+        ``newton=0`` uses gradient steps only; ``stability=False`` skips the
+        stability check (about two factorizations); ``adapt=True`` (linear
+        model) then refines where the surface curves too much for its edges
+        and coarsens where it has flattened (:meth:`adapt`; or give the
+        turning angle in degrees, default 15), up to three passes or four
+        times the facets the call began with. ``callback(ev, i)`` runs every
+        ``every``-th gradient step and at the end of each level; ``threads``
+        sets the threads for this call only (see
+        :func:`pysurfaceevolver.threads_limit`).
 
-        Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
-        ``seek`` and ``undo_if`` as there), until the residual is below ``tol``
-        or stops falling. ``newton=0``: gradient steps only.
+        How it works:
 
-        If that leaves the surface unconverged, by default (``cg=None``) a
-        second pass follows: conjugate gradient steps, then Newton again, kept
-        only if that converges (otherwise the surface goes back to where the
-        first pass left it), with the gradient steps the last level left of
-        ``max_iter``. Plain gradients crawl on flat shapes (a drop at a
-        10 degree contact angle) far from where Newton can take over.
-        ``cg=False``: plain gradients only.
+        * Gradient steps (Evolver's ``g``) come in rounds of ``tidy`` steps,
+          each followed by equiangulation and vertex averaging (``u; V``;
+          ``tidy=0``: none), until the energy changes by less than
+          ``energy_tol`` (relative) over ``window`` rounds, or ``max_iter``
+          steps. ``energy_tol`` is 1e-5 when Newton follows (it finishes faster
+          and more reliably, and long gradient runs let slow mesh drift grow),
+          1e-9 with ``newton=0``. When Newton follows, a round that more than
+          doubles the residual from its lowest so far is undone and Newton
+          takes over (on a coarse mesh a contact line can collapse within a
+          few steps).
+        * Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
+          ``seek`` and ``undo_if`` as there), until the residual is below
+          ``tol`` or stops falling.
+        * If that leaves the surface unconverged, ``cg="auto"`` tries once more
+          with conjugate gradients (far faster on flat or stiff shapes, such as
+          a drop at a 10 degree contact angle, but they wear the mesh down
+          where contact lines travel), then Newton, with up to 200 of the
+          steps the level left of ``max_iter``; kept only if that converges. ``cg=True`` uses
+          conjugate gradients throughout, ``cg=False`` never (your own
+          ``conj_grad`` setting is restored after).
+        * Once converged, with ``stability``, :meth:`stability` sets ``stable``
+          and ``negative_modes`` and warns (:class:`UnstableEquilibriumWarning`)
+          at a saddle, such as a liquid column past its Rayleigh-Plateau limit:
+          the solver finds saddles too, so the warning is the only sign.
 
-        ``adapt=True`` (or a turning angle in degrees, default 15; linear model)
-        then refines where the surface curves too much for its edges (see
-        :meth:`adapt`) and relaxes again, up to three times, or until the
-        surface has four times the facets it started the call with; those
-        passes count as further levels in the result. Refinement never
-        coarsens, so over a long continuation (a surface that grows, or a neck
-        that pinches) the facets add up from call to call.
-
-        If the energy becomes non-finite during the gradient steps, the surface
-        is restored to its state before the call and :class:`EvolverError` is
+        If the energy becomes non-finite, the surface is put back to the start
+        of the gradient round where it happened and :class:`EvolverError` is
         raised.
 
-        Once converged, with ``stability=True``, checks that the equilibrium is
-        stable (:meth:`stability`; about two factorizations), sets ``stable`` and
-        ``negative_modes`` in the result, and warns
-        (:class:`UnstableEquilibriumWarning`) if it isn't: a saddle that some
-        motion would leave, such as a liquid column past its Rayleigh-Plateau
-        limit. The symmetric solver keeps finding it, so the warning is the
-        only sign.
-
-        Returns the gradient steps' :class:`IterationResult`, with ``level``,
-        ``newton_steps``, ``residual``, ``converged`` (residual below
-        ``tol``) and ``health`` (:meth:`health` of the result, with the
-        stability found here). ``callback(ev, i)`` runs every ``every``-th gradient step and
-        at the end of each level; ``threads`` sets the threads for this call
-        only (see :func:`pysurfaceevolver.threads_limit`).
+        Returns an :class:`IterationResult`: one entry per gradient step in
+        ``energy``, ``area``, ``scale`` and ``level`` (adaptive passes count as
+        further levels), plus ``newton_steps``, ``residual``, ``converged``,
+        ``stable``, ``negative_modes`` and ``health``.
         """
         if energy_tol is None:
             energy_tol = 1e-5 if newton else 1e-9
@@ -572,60 +593,27 @@ class Evolver:
             raise ValueError("tol and energy_tol must be positive; max_iter and window at least 1")
         if tidy < 0 or levels < 0 or newton < 0:
             raise ValueError("tidy, levels and newton must be non-negative")
-        with _threads_for_call(threads), self._conj_grad(bool(cg)):
-            start = self.save()
+        if cg not in ("auto", True, False):
+            raise ValueError('cg must be "auto", True or False')
+        with _threads_for_call(threads), self._conj_grad(cg is True):
+            trace = _Trace()
             facets0 = self.counts["facets"]
-            energy: List[float] = []
-            area: List[float] = []
-            scale: List[float] = []
-            level: List[int] = []
-            output: List[str] = []
-            remeshes = 0
+            run = functools.partial(self._gradient_phase, trace, energy_tol=energy_tol,
+                                    window=window, callback=callback, every=every)
             for lev in range(levels + 1):
                 if lev:
                     self.refine()
-                n0 = len(energy)
-                remeshes += self._relax_level(energy_tol, max_iter, window, tidy,
-                                              remesh and self.model == "linear",
-                                              callback, every, energy, area, scale, output,
-                                              watch=newton > 0)
-                level += [lev]*(len(energy) - n0)
-                self._check_finite(start)
-
-            def finish(lev: int) -> "tuple[int, float]":
-                # Newton, then (cg=None) a conjugate-gradient pass if still unconverged
-                steps = self._newton(newton, seek, tol, undo_if, output) if newton else 0
-                residual = self.residual()
-                budget = max_iter - level.count(lev)    # what this level left
-                if cg is None and newton and budget > 0 and not residual < tol \
-                        and np.isfinite(residual):
-                    before, n0 = self.save(), len(energy)
-                    with self._conj_grad(True):
-                        self._relax_level(energy_tol, budget, window, tidy, False, callback,
-                                          every, energy, area, scale, output, watch=True)
-                    level.extend([lev]*(len(energy) - n0))
-                    more = self._newton(newton, seek, tol, undo_if, output) \
-                        if np.isfinite(_core.total_energy()) else 0
-                    second = self.residual()
-                    if second < tol:              # kept only if it converges
-                        steps, residual = steps + more, second
-                    else:
-                        self.restore(before)
-                return steps, residual
-
-            steps, residual = finish(levels)
+                run(lev, max_iter, tidy, watch=newton > 0)
+            steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol, newton,
+                                           seek, undo_if, fallback=cg == "auto")
             if adapt and self.model == "linear":
                 turn = 15.0 if adapt is True else float(adapt)
-                limit = _ADAPT_GROWTH*facets0
                 for lev in range(levels + 1, levels + 1 + _ADAPT_PASSES):
-                    if self.counts["facets"] > limit or not self.adapt(turn):
+                    if self.counts["facets"] > _ADAPT_GROWTH*facets0 or not self.adapt(turn):
                         break
-                    n0 = len(energy)
-                    self._relax_level(energy_tol, max_iter, window, tidy, False, callback,
-                                      every, energy, area, scale, output, watch=newton > 0)
-                    level += [lev]*(len(energy) - n0)
-                    self._check_finite(start)
-                    more, residual = finish(lev)
+                    run(lev, max_iter, tidy, watch=newton > 0)
+                    more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
+                                                  seek, undo_if, fallback=cg == "auto")
                     steps += more
             stable: Optional[bool] = None
             modes: Optional[int] = None
@@ -645,17 +633,35 @@ class Evolver:
                 health: Optional[Health] = self._health(residual, stable, modes, tol)
             except EvolverError:
                 health = None
-        return IterationResult(np.array(energy), np.array(area), np.array(scale),
-                               "".join(output), bool(residual < tol), steps,
-                               np.array(level, dtype=int), residual, remeshes, stable, modes,
-                               health)
+        return IterationResult(np.array(trace.energy), np.array(trace.area),
+                               np.array(trace.scale), "".join(trace.output),
+                               bool(residual < tol), steps, np.array(trace.level, dtype=int),
+                               residual, stable, modes, health)
 
-    def _check_finite(self, start: Snapshot) -> None:
-        if not np.isfinite(_core.total_energy()):
-            bad = _core.total_energy()
-            self.restore(start)
-            raise EvolverError(f"relax(): the energy became {bad} during gradient "
-                               "steps; the surface is back to its state before the call")
+    def _finish(self, trace: "_Trace", lev: int, run: Callable[..., None], max_iter: int,
+                tidy: int, tol: float, newton: int, seek: Optional[bool],
+                undo_if: Optional[Callable[["Evolver"], bool]], fallback: bool) -> "tuple[int, float]":
+        """Newton steps, then (``fallback``) one conjugate-gradient pass and
+        Newton again if still unconverged, kept only if that converges. The
+        pass averages vertices but doesn't equiangulate, so the coordinates
+        taken before it can undo it. Returns the Newton steps kept and the
+        residual."""
+        steps = self._newton(newton, seek, tol, undo_if, trace.output) if newton else 0
+        residual = self.residual()
+        budget = min(max_iter - trace.level.count(lev), _FALLBACK_STEPS)
+        if not (fallback and newton and budget > 0 and np.isfinite(residual)
+                and not residual < tol):
+            return steps, residual
+        before = self.vertices
+        with self._conj_grad(True):
+            run(lev, budget, tidy, watch=True, average_only=True)
+        more = self._newton(newton, seek, tol, undo_if, trace.output) \
+            if np.isfinite(_core.total_energy()) else 0
+        second = self.residual()
+        if second < tol:
+            return steps + more, second
+        self._put_back(before)
+        return steps, residual
 
     @contextlib.contextmanager
     def _conj_grad(self, on: bool) -> Iterator[None]:
@@ -669,54 +675,6 @@ class Evolver:
             if before != on and _core.surface_valid():
                 self.command(f"conj_grad {'on' if before else 'off'}")
 
-    def _edge_targets(self) -> "tuple[Mesh, np.ndarray, np.ndarray, np.ndarray]":
-        """Graded target lengths per edge: the bulk size (the 75th percentile of
-        the edge lengths), but near a short boundary (a small contact line, a
-        wire) no more than the boundary's edges plus half the distance from
-        it. Returns the mesh, lengths, targets and which edges are interior."""
-        m = self.mesh()
-        a, b = m.edges[:, 0], m.edges[:, 1]
-        lengths = np.linalg.norm(m.vertices[a] - m.vertices[b], axis=1)
-        interior = _edge_valence(m) >= 2
-        bulk = float(np.percentile(lengths, 75))
-        h = np.full(len(m.vertices), bulk)
-        boundary = ~interior
-        np.minimum.at(h, a[boundary], lengths[boundary])
-        np.minimum.at(h, b[boundary], lengths[boundary])
-        for _ in range(100):                  # grow away from the boundary
-            hn = h.copy()
-            np.minimum.at(hn, a, h[b] + _GRADE*lengths)
-            np.minimum.at(hn, b, h[a] + _GRADE*lengths)
-            if np.array_equal(hn, h):
-                break
-            h = hn
-        targets = (h[a] + h[b])/2
-        targets[boundary] = bulk          # boundary edges: split only when long
-        return m, lengths, targets, interior
-
-    def _uneven(self) -> bool:
-        """Whether some edge is far from its graded target length."""
-        m = self.mesh()
-        if len(m.edges) == 0 or m.facets is None:
-            return False
-        _, lengths, targets, interior = self._edge_targets()
-        # well beyond the remeshing's own limits (1.6, 0.5): no back and forth
-        return bool((lengths > 2.5*targets).any()
-                    or (lengths[interior] < 0.2*targets[interior]).any())
-
-    def _graded_remesh(self) -> None:
-        """Delete interior edges shorter than half their target, split edges
-        longer than 1.6 times it, equiangulate."""
-        if "pyse_mark" not in self._edge_attributes():
-            self.command("define edge attribute pyse_mark integer")
-        _, lengths, targets, interior = self._edge_targets()
-        self.set_values("edge", "pyse_mark", np.where(interior & (lengths < 0.5*targets), 1, 0))
-        self.command("delete edge ee where ee.pyse_mark == 1 and ee.valence != 1")
-        _, lengths, targets, interior = self._edge_targets()
-        self.set_values("edge", "pyse_mark", np.where(lengths > 1.6*targets, 2, 0))
-        self.command("refine edge ee where ee.pyse_mark == 2")
-        self.command("u")
-
     def _edge_attributes(self) -> List[str]:
         try:
             self.eval("max(edge, pyse_mark)")
@@ -724,62 +682,56 @@ class Evolver:
         except EvolverError:
             return []
 
-    def _relax_level(self, energy_tol: float, max_iter: int, window: int, tidy: int,
-                     remesh: bool, callback: Optional[Callable[["Evolver", int], Any]],
-                     every: int, energy: List[float], area: List[float],
-                     scale: List[float], output: List[str], watch: bool = False) -> int:
-        """Gradient steps until the energy settles. With tidy=k, 'u; V' every k
-        steps (and a remeshing when the edges have grown uneven), and the energy
-        compared round to round. With ``watch`` (Newton follows), also the
-        residual at the end of each round (before the tidying, which disturbs
-        it): a round that more than doubles it from its lowest is undone (the
-        vertices put back) and ends the steps. On a coarse mesh, slow drift such
-        as contact-line vertices sliding together lowers the energy while the
-        residual climbs, and the mesh can break down within a round. Returns
-        the number of remeshings."""
+    def _gradient_phase(self, trace: "_Trace", lev: int, max_iter: int, tidy: int, *,
+                        energy_tol: float, window: int,
+                        callback: Optional[Callable[["Evolver", int], Any]], every: int,
+                        watch: bool = False, average_only: bool = False) -> None:
+        """Gradient steps until the energy settles (see relax()). With tidy=k,
+        'u; V' (``average_only``: 'V') every k steps and the energy compared
+        round to round. With ``watch`` (Newton follows), also the residual at
+        the end of each round, before the tidying (which disturbs it): a round
+        that more than doubles it from its lowest is undone and ends the
+        phase. The coordinates at the start of each round also undo a round
+        whose energy turns non-finite (then EvolverError)."""
         previous = _core.total_energy()
         quiet = 0
         best = np.inf
-        first = len(energy)
-        remeshes = 0
+        first = len(trace.energy)
         watch = watch and tidy > 0
-        start = self.vertices if watch else None
+        start = self.vertices
         for i in range(1, max_iter + 1):
-            self._step(energy, area, scale, output)
+            trace.step(self)
             if callback is not None and i % every == 0:
                 callback(self, i)
-            if not np.isfinite(energy[-1]):
-                break
+            if not np.isfinite(trace.energy[-1]):
+                bad = trace.energy[-1]
+                self._put_back(start)
+                raise EvolverError(f"relax(): the energy became {bad} during gradient steps; "
+                                   "the surface is back where that round began")
             if tidy and i % tidy:
                 continue                  # mid-round: no convergence check
             if watch:
                 res = self.residual()
                 if res > 2*best:            # the round went wrong: undo it, hand over
-                    if start is not None and len(start) == _core.count(_core.VERTEX):
-                        self.vertices = start
-                    energy[-1] = _core.total_energy()
-                    area[-1] = _core.total_area()
+                    self._put_back(start)
+                    trace.energy[-1] = _core.total_energy()
+                    trace.area[-1] = _core.total_area()
                     break
                 best = min(best, res)
             if tidy:
-                output.append(self.command("u; V"))
-                if remesh and remeshes < _MAX_REMESHES and self._uneven():
-                    self._graded_remesh()
-                    remeshes += 1
-                    quiet = 0               # a new mesh: settle again
-                energy[-1] = _core.total_energy()
-                area[-1] = _core.total_area()
-            change = abs(energy[-1] - previous) / max(1.0, abs(energy[-1]))
-            previous = energy[-1]
+                trace.output.append(self.command("V" if average_only else "u; V"))
+                trace.energy[-1] = _core.total_energy()
+                trace.area[-1] = _core.total_area()
+                start = self.vertices
+            change = abs(trace.energy[-1] - previous) / max(1.0, abs(trace.energy[-1]))
+            previous = trace.energy[-1]
             quiet = quiet + 1 if change < energy_tol else 0
             if quiet >= window:
                 break
-            if watch:
-                start = self.vertices
-        steps = len(energy) - first
+        steps = len(trace.energy) - first
+        trace.level += [lev]*steps
         if callback is not None and steps % every != 0:
             callback(self, steps)
-        return remeshes
 
     def newton(self, steps: int = 1, *, seek: Optional[bool] = None, tol: Optional[float] = None,
                undo_if: Optional[Callable[["Evolver"], bool]] = None,
@@ -957,10 +909,11 @@ class Evolver:
             self.command("define edge attribute pyse_mark integer")
         merged = 0
         if coarsen:
-            turn, judged = _edge_turn(m)
+            valence = _edge_valence(m)
+            turn, judged = _edge_turn(m, valence)
             lengths = np.linalg.norm(m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)
             bulk = float(np.percentile(lengths, 75))
-            mark = judged & (_edge_valence(m) == 2) & (turn < max_turn/3) & (lengths < 0.75*bulk)
+            mark = judged & (valence == 2) & (turn < max_turn/3) & (lengths < 0.75*bulk)
             if mark.any():
                 self.set_values("edge", "pyse_mark", mark.astype(float))
                 before = self.counts["vertices"]
@@ -972,7 +925,7 @@ class Evolver:
                     self.command("collapse_max_tilt := 0; collapse_max_edge := 0")
                 merged = before - self.counts["vertices"]
                 m = self.mesh()
-        turn, _ = _edge_turn(m)
+        turn, _ = _edge_turn(m, _edge_valence(m))
         mark = turn > max_turn
         if not mark.any():
             if merged:
@@ -1044,7 +997,8 @@ class Evolver:
         used = np.zeros(n, dtype=bool)
         used[e.ravel()] = True
         wall_gap, wall = np.inf, None
-        nums, attrs, dist = self._constraint_gaps()
+        nums, attrs, dist, names = self._constraint_gaps()
+        label = {int(c): f"constraint {nm or c}" for c, nm in zip(nums, names)}
         for c in range(len(nums)):
             d = dist[:, c]
             on = np.isnan(d) & used
@@ -1067,9 +1021,9 @@ class Evolver:
             issues.append(f"degenerate facets (smallest angle {quality.angle_min:.2g} degrees, "
                           f"{quality.skinny} below 5)")
         for c, k in crossed.items():
-            issues.append(f"{k} vertices on the far side of constraint {c}")
+            issues.append(f"{k} {'vertex' if k == 1 else 'vertices'} on the far side of {label[c]}")
         if wall_gap < 0.1:
-            issues.append(f"the surface nearly touches constraint {wall} "
+            issues.append(f"the surface nearly touches {label.get(wall or 0, 'a constraint')} "
                           f"({wall_gap:.2g} edge lengths away)")
         if self_gap < 0.1:
             issues.append(f"the surface nearly touches itself ({self_gap:.2g} edge lengths)")
@@ -1077,9 +1031,9 @@ class Evolver:
                       int(quality.skinny), float(wall_gap), wall, crossed, float(self_gap),
                       issues)
 
-    def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
-        """Constraint numbers, attribute bits, and per vertex the signed distance
-        to each (NaN where on it)."""
+    def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
+        """Constraint numbers, attribute bits, per vertex the signed distance
+        to each (NaN where on it), and their names ("" if unnamed)."""
         _, gaps = self._call(_core.constraint_gaps)
         return gaps.data
 
@@ -1834,10 +1788,6 @@ class BodyView:
                 f"pressure {self.pressure:.6g}>")
 
 
-# how fast graded target edge lengths may grow with distance from a boundary
-_GRADE = 1.0
-# at most this many automatic remeshings per relax() call
-_MAX_REMESHES = 10
 
 
 def _crossed(nums: np.ndarray, attrs: np.ndarray, dist: np.ndarray, used: np.ndarray,
@@ -1932,14 +1882,17 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
 # less is the chord of a curved wall next to a contact line
 _CROSS_TOL = 0.01
 _ADAPT_PASSES = 3
+_FALLBACK_STEPS = 200    # gradient steps for relax()'s conjugate-gradient pass, at most
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 
-def _edge_turn(m: Mesh) -> "tuple[np.ndarray, np.ndarray]":
+def _edge_turn(m: Mesh, valence: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
     """Per edge, the angle (degrees, 0-90) between the vertex normals at its
     ends, and whether it was judged: not for edges touching a vertex where
-    three or more facets meet on an edge (their angle is 0). Vertex normals: area-weighted facet normals, each sign-aligned with
-    one facet at the vertex (facet orientations needn't agree across a sheet)."""
+    three or more facets meet on an edge (their angle is 0). Vertex normals:
+    area-weighted facet normals, each sign-aligned with one facet at the
+    vertex (facet orientations needn't agree across a sheet). ``valence``:
+    _edge_valence(m)."""
     f, x = m.facets, m.vertices
     assert f is not None
     n = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
@@ -1956,7 +1909,7 @@ def _edge_turn(m: Mesh) -> "tuple[np.ndarray, np.ndarray]":
     turn = np.degrees(np.arccos(np.clip(np.abs(np.einsum("ij,ij->i", vn[e[:, 0]], vn[e[:, 1]])),
                                         0.0, 1.0)))
     junction = np.zeros(len(x), dtype=bool)
-    hub = e[_edge_valence(m) > 2]
+    hub = e[valence > 2]
     junction[hub.ravel()] = True
     unjudged = junction[e[:, 0]] | junction[e[:, 1]] | (norm[e[:, 0]] == 0) | (norm[e[:, 1]] == 0)
     turn[unjudged] = 0.0

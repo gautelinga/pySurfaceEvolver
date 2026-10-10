@@ -732,12 +732,21 @@ static void residual_body(void *arg)
   double *A = NULL, *bvec = NULL, *lam = NULL, *proj = NULL;
   int *ndir = NULL;
   int mode = CALC_FORCE|CALC_VOLGRADS;
+  REAL ***pre_normal = NULL;       /* shape directions found in parallel */
+  int *pre_dims = NULL;
+  vertex_id *pre_list = NULL;
+  long pre_n = 0;
   find_fixed();
   calc_volgrads(DO_OPTS);
   calc_force();
   pressure_forces();
   partner_shift_grads(mode);
   convert_forms_to_vectors(mode);
+  if ( a->n >= 4096 )
+  { pre_normal = temp_dmatrix3(a->n,MAXCOORD,MAXCOORD);
+    pre_dims = fl_shape_normals(pre_normal,&pre_list,&pre_n);
+    if ( pre_dims && pre_n != a->n ) { free(pre_dims); pre_dims = NULL; }
+  }
   FOR_ALL_VERTICES(v_id)
   { volgrad *vg;
     for ( vg = get_vertex_vgrad(v_id) ; vg ; vg = vg->chain )
@@ -755,7 +764,12 @@ static void residual_body(void *arg)
     volgrad *vg;
     double *pv;
     if ( row >= a->n ) inconsistent("vertex count changed");
-    nd = shape_directions(v_id,dirs);
+    if ( pre_dims && pre_dims[row] != -2 )
+    { nd = pre_dims[row];
+      for ( k = 0 ; k < (nd > 0 ? nd : 0) ; k++ )
+        for ( i = 0 ; i < SDIM ; i++ ) dirs[k][i] = pre_normal[row][k][i];
+    }
+    else nd = shape_directions(v_id,dirs);
     if ( nd < 0 )                         /* no normal: the velocity's axes */
     { nd = SDIM;
       for ( i = 0 ; i < SDIM ; i++ )
@@ -815,6 +829,8 @@ static void residual_body(void *arg)
     }
     a->out[k] = sqrt(sum);
   }
+  if ( pre_dims ) free(pre_dims);
+  if ( pre_normal ) free_temp_matrix3(pre_normal);
   vgrad_end();
 }
 
@@ -831,7 +847,7 @@ int pyse_residual(double *out, long n)
 }
 
 /* Constraints in use and each vertex's signed distance to the ones it isn't on. */
-struct conlist_args { int *nums; int *attrs; int max; int count; };
+struct conlist_args { int *nums; int *attrs; const char **names; int max; int count; };
 
 static void conlist_body(void *arg)
 { struct conlist_args *a = (struct conlist_args *)arg;
@@ -843,19 +859,21 @@ static void conlist_body(void *arg)
     if ( a->nums && a->count < a->max )
     { a->nums[a->count] = i;
       if ( a->attrs ) a->attrs[a->count] = (int)con->attr;
+      if ( a->names ) a->names[a->count] = (con->attr & NAMED_THING) ? con->name : "";
     }
     a->count++;
   }
 }
 
-int pyse_constraint_list(int *nums, int *attrs, int max)
+int pyse_constraint_list(int *nums, int *attrs, const char **names, int max, int *count)
 { struct conlist_args a;
   int status;
-  if ( in_protected ) return -1;
-  if ( !initialized || !surface_valid ) return -1;
-  a.nums = nums; a.attrs = attrs; a.max = max; a.count = 0;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  a.nums = nums; a.attrs = attrs; a.names = names; a.max = max; a.count = 0;
   status = surface_call(conlist_body,&a);
-  return status == PYSE_OK ? a.count : -1;
+  if ( count ) *count = a.count;
+  return status;
 }
 
 struct gaps_args { const int *nums; int ncon; double *out; long n; };

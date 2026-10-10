@@ -271,25 +271,30 @@ NB_MODULE(_core, m) {
   m.def("constraint_gaps", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     std::vector<int> nums, attrs;
+    std::vector<const char *> names;
     long n = 0;
     std::vector<double> dist;
     CallResult r = run_guarded([&] {
-      int k = pyse_constraint_list(nullptr, nullptr, 0);
-      if (k < 0) return pyse_constraint_gaps(nullptr, 0, nullptr, -1);
-      nums.resize(size_t(k)); attrs.resize(size_t(k));
-      pyse_constraint_list(nums.data(), attrs.data(), k);
+      int k = 0;
+      int status = pyse_constraint_list(nullptr, nullptr, nullptr, 0, &k);
+      if (status != PYSE_OK) return status;
+      nums.resize(size_t(k)); attrs.resize(size_t(k)); names.resize(size_t(k));
+      status = pyse_constraint_list(nums.data(), attrs.data(), names.data(), k, &k);
+      if (status != PYSE_OK) return status;
       n = pyse_count(PYSE_VERTEX);
       dist.resize(size_t(n) * size_t(k));
       return pyse_constraint_gaps(nums.data(), k, dist.data(), n);
     });
     if (r.status == PYSE_OK) {
       size_t k = nums.size();
+      nb::list py_names;
+      for (const char *s : names) py_names.append(nb::str(s ? s : ""));
       r.data = nb::make_tuple(to_numpy(std::move(nums), {k}), to_numpy(std::move(attrs), {k}),
-                              to_numpy(std::move(dist), {size_t(n), k}));
+                              to_numpy(std::move(dist), {size_t(n), k}), py_names);
     }
     return r;
-  }, CALLBACK_NAMES, "data: (constraint numbers (k,), attribute bits (k,), "
-                     "signed distances (n vertices, k), NaN where on the constraint)");
+  }, CALLBACK_NAMES, "data: (constraint numbers (k,), attribute bits (k,), signed "
+                     "distances (n vertices, k; NaN on the constraint), names (\"\": unnamed))");
 
   m.def("values", [](int type, const std::string &expr, CALLBACK_ARGS) {
     CALL_SCOPE;

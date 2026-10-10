@@ -911,6 +911,15 @@ G2.10 *Done* for the drainage helper (2026-10-10): `undo_if` dropped, plain
      guard blocked the steps the drainage needs (median error 11-17%); not a
      side effect (counting without rejecting changed nothing). health()'s
      crossing tolerance is now 1% of the median edge (chords of curved walls).
+**Review of G2.4-G2.10** (2026-10-10, user: performance, simplicity, user
+friendliness; all fixed): Newton undoes by vertex coordinates (newton(1) 393k
+3.85 -> 1.77 s; the dump was the cost); residual's shape directions in parallel
+(fl_shape_normals, 393k 0.39 -> 0.14 s); no dump at relax() start (a NaN puts back
+the round's start); conjugate-gradient pass by coordinates, V-only tidying, at most
+200 steps (case 8 166 -> 119 s); remesh=True and its helpers removed; relax() split
+into _gradient_phase/_finish/adapt passes with a _Trace; cg="auto"; summary reprs
+for IterationResult and Health; constraint names in health; binding status
+return. Suite unchanged (7 of 9), bridge grid 25 of 25, notebooks unchanged.
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

@@ -127,6 +127,12 @@ int fl_calc_leftside(REAL **rleftside, struct linsys *S, int fixcount, int *degf
    project_vertex_normals() into v_normal[k]; returns the malloc'ed
    dimensions, -1 for vertices left to the caller. NULL: nothing done. */
 int *fl_vertex_normals(REAL ***v_normal, vertex_id **list, long *n);
+/* pySE residual's shape directions in parallel: for the k-th vertex of *list
+   (FOR_ALL order) with no constraints and not on a boundary,
+   new_calc_vertex_normal() then gram_schmidt() into v_normal[k]; dims[k] is
+   their number (0 for fixed vertices, -1 for none), -2 for vertices left to
+   the caller. Returns the malloc'ed dims, or NULL: nothing done. */
+int *fl_shape_normals(REAL ***v_normal, vertex_id **list, long *n);
 
 /* Serial loops over the vertices or edges whose attributes have any of
    `bits` (all of them for bits 0), in FOR_ALL order, found by a parallel

@@ -1187,6 +1187,39 @@ static int *fl_vertex_normals_impl(REAL ***v_normal, vertex_id **listp, long *np
   return dims;
 }
 
+static int *fl_shape_normals_impl(REAL ***v_normal, vertex_id **listp, long *np)
+{ vertex_id *list;
+  int *dims;
+  long n, k;
+  if ( web.representation == SIMPLEX || (web.symmetry_flag && !web.torus_flag) )
+    return NULL;
+  if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return NULL;
+  if ( !(dims = (int*)malloc(n*sizeof(int))) ) return NULL;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
+#endif
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    jmp_buf trap;
+    dims[k] = -2;
+    if ( get_vattr(v_id) & FIXED ) { dims[k] = 0; continue; }
+    if ( get_vattr(v_id) & BOUNDARY ) continue;
+    if ( get_v_constraint_map(v_id)[0] ) continue;
+    if ( setjmp(trap) == 0 )
+    { int kk;
+      fl_trap = &trap;   /* kb_error() comes back here */
+      kk = new_calc_vertex_normal(v_id,v_normal[k]);
+      kk = gram_schmidt(v_normal[k],kk,SDIM);
+      dims[k] = kk > 0 ? kk : -1;
+      fl_trap = NULL;
+    }
+    else dims[k] = -2;
+  }
+  *listp = list;
+  *np = n;
+  return dims;
+}
+
 /**************************************************************************
  * Lagrange facet setup
  *
@@ -1319,6 +1352,9 @@ int fl_zero_forces(void)
 
 int *fl_vertex_normals(REAL ***v_normal, vertex_id **list, long *n)
 { int *r; fl_enter(); r = fl_vertex_normals_impl(v_normal,list,n); fl_leave(); return r; }
+
+int *fl_shape_normals(REAL ***v_normal, vertex_id **list, long *n)
+{ int *r; fl_enter(); r = fl_shape_normals_impl(v_normal,list,n); fl_leave(); return r; }
 
 int fl_move_vertices(REAL scale, int dim)
 { int r; fl_enter(); r = fl_move_vertices_impl(scale,dim); fl_leave(); return r; }

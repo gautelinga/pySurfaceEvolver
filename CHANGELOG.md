@@ -4,6 +4,15 @@
 
 ### Robust by default (phase G, in progress)
 
+- Faster safeguards: a safeguarded Newton step undoes itself by the vertex
+  coordinates instead of a dump (`ev.newton(1)` at 393k facets 3.85 -> 1.77 s, raw
+  `hessian` 1.2 s), `relax()` no longer dumps the surface at its start, and
+  `ev.residual()` finds the shape directions in parallel (393k facets, 8 threads:
+  0.39 -> 0.14 s).
+- `relax()` reorganized: the experimental `remesh=True` and `IterationResult.remeshes` are
+  gone (`ev.adapt()` and `ev.remesh()` remain); a result prints as a summary
+  (`IterationResult(converged after 130 gradient steps and 2 Newton, residual 2.8e-09,
+  stable, health ok)`), and so does `Health`. Health messages name named constraints.
 - `relax()` hands over to Newton sooner: `energy_tol` now defaults to 1e-5 when Newton
   steps follow (1e-9 with `newton=0`). The tidying in every round keeps the energy from
   settling to 1e-9, so the gradient phase used to run its full 1000 steps, long enough
@@ -15,10 +24,10 @@
   within a few steps. The liquid bridge relaxes on plain defaults (`relax(levels=3)`)
   at every gap and contact angle of its notebook, which no longer needs its own
   relaxation recipe.
-- `relax(cg=None)` (new default): when the first pass ends unconverged, a second pass of
-  conjugate gradient steps and Newton, kept only if it converges (with the gradient
-  steps the last level left of `max_iter`). A sessile drop spread to 10 degrees now
-  converges. `cg=True` still uses conjugate gradients throughout; `cg=False` never.
+- `relax(cg="auto")` (new default): when the first pass ends unconverged, a second pass
+  of conjugate gradient steps (at most 200, averaging vertices) and Newton, kept only if
+  it converges. A sessile drop spread to 10 degrees now converges. `cg=True` still uses
+  conjugate gradients throughout; `cg=False` never.
 - `ev.adapt(max_turn=15)`: splits the edges along which the surface turns by more than
   `max_turn` degrees (between the vertex normals at their ends), one level per call,
   never coarsening; `relax(adapt=True)` (opt-in) alternates it with relaxation, up to
@@ -59,7 +68,8 @@
 - `relax()` defaults: rounds of 10 gradient steps with equiangulation and vertex
   averaging, then up to 20 safeguarded Newton steps, converged when the residual is
   below `tol` (now a residual tolerance, default 1e-8; `energy_tol` ends the gradient
-  phase). A NaN surface is restored and raised, not reported as converged.
+  phase). A NaN surface is put back to the start of the gradient round where it
+  happened and raised, not reported as converged.
 - Newton steps (`relax`, `ev.newton()`) are safeguarded: plain Newton first, a line
   search if that is rejected; a step that makes things non-finite, or raises both the
   energy and the residual, is undone.

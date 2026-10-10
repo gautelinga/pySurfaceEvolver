@@ -148,9 +148,10 @@ double pyse_total_energy(void);
 /* per vertex, the shape part of its velocity (projected force): along its
    normal(s), projected into its constraints; one per vertex in vertex order */
 int pyse_residual(double *out, long n);
-/* the constraints in use: their numbers and attribute bits; returns how many
-   (at most max are written; nums may be NULL to count) */
-int pyse_constraint_list(int *nums, int *attrs, int max);
+/* the constraints in use: how many (*count), and up to max of their numbers,
+   attribute bits and names ("" if unnamed; Evolver's own strings); the
+   arrays may be NULL to only count */
+int pyse_constraint_list(int *nums, int *attrs, const char **names, int max, int *count);
 /* per vertex (rows) and listed constraint (columns): the constraint's value
    over its gradient's length, a signed distance to first order; NaN where the
    vertex is on that constraint or the gradient vanishes */
