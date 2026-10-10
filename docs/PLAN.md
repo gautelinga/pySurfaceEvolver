@@ -254,6 +254,52 @@ Pause after step 3 (solver decision) and at the end of C2.
 
 ## Current state and next steps
 
+### Resume here (2026-10-10, end of session)
+
+**Where things stand.** Pushed to GitHub (main, 272a31f; CI tests and docs green):
+phase F (friendlier API: `ev.body(i)`, mask selections, `relax(levels, tidy,
+newton)`, `ev.newton`, `ev.remesh`, diagnostics, mirrored plots,
+`pyse.constraints` builders with contact angles, `pyse.recipes.continuation`),
+phase G (stress suite in `bench/stress/`, `ev.residual()`, robust `relax()`
+defaults) and G2.2-G2.3 (no spurious Newton freedoms on wires, stability reports).
+Local only (not pushed): 4809c2d, the revised G2 plan. Version still 0.6.0;
+everything since is under "Unreleased" in CHANGELOG.md.
+
+**relax() today** (default): rounds of 10 gradient steps with `u; V`, then up to 20
+safeguarded Newton steps (plain first, line search if rejected; a step is undone
+if anything turns non-finite or both energy and residual rise), converged when
+`ev.residual()` < tol (1e-8; tol is a residual tolerance now, `energy_tol` ends
+the gradient phase), then `ev.stability()` (`result.stable`,
+`UnstableEquilibriumWarning`). Opt-in, not robust yet: `cg=True` (conjugate
+gradients), `remesh=True` (graded remeshing).
+
+**Stress suite** (`.venv/bin/python bench/stress/run.py [case numbers]`, defaults
+only, ~10 min for all; results in bench/stress/results.json): 6 of 9 pass (1
+cylinder past Rayleigh-Plateau, 2 catenoid to its fold, 6 barrel, 9 inflated
+cube, 11 puddle, 12 shrinking cap). Failing: 3 sessile drop at 10 and 150-170
+degrees, 5 bridge at gap 0.2 (its reference is confirmed), 8 drainage band.
+
+**Next** (Phase G2 below, revised): G2.4 resolution check (rerun 3, 5, 8 with
+one more refinement), G2.5 tidying around Newton (the liquid-bridge notebook keeps
+explicit `newton=0, stability=False` rounds until then), G2.6 guarded descent,
+then G2.7 refine-only adaptivity. Ask the user before each step.
+
+**Engine changes this round** (src/, CRLF): edge deletion keeps the link condition
+(trirevis.c, upstream bug); hessian_normal's slant measured against the raw normal
+by magnitude, `hessian_slant_cutoff` 0.05 (hessian.c, lexinit.c); bindings:
+`pyse_residual` (force balance in the shape directions, multipliers fitted by
+least squares there; bindings/pyse_api.c, module.cpp).
+
+**Practical** (see also "How we work"):
+* The local .venv has numpy 1.26, CI numpy 2: numpy floats formatted with `!r`
+  become `np.float64(...)` and break Evolver commands. CI's docs build catches it;
+  a CI-like venv is scratchpad/venv_ci (rebuild: `pip install ".[docs]"`).
+* CI runs `python -m mypy -p pysurfaceevolver` in the tests job; run it before
+  pushing (local errors about cloudpickle/meshio/gmsh stubs are local-only).
+* Docs notebooks execute in the build (600 s each; the drainage notebook sets 900 s).
+* The user wants quick turnaround: run checks in parallel, keep reports short,
+  don't chase last digits.
+
 2026-10-08: C2 speed items done (MUMPS analysis reuse 4-8%; parallel Newton-step
 normals 17-25% at 393k-1.6M); phase D complete (all nine items, see below).
 User decisions (2026-10-08): pySE's own code is MIT (LICENSE); docs published to
