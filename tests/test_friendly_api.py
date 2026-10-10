@@ -371,7 +371,8 @@ def test_relax_reports_stable_equilibria(cube):
     r = cube.relax()
     assert r.converged and r.stable is True and r.negative_modes == 0
     s = cube.stability()
-    assert s.stable and s.lowest[0] > s.threshold     # the translations aren't instabilities
+    # the translations aren't instabilities (no eigenvalues listed if none was below zero)
+    assert s.stable and (len(s.lowest) == 0 or s.lowest[0] > s.threshold)
 
 
 def test_relax_warns_about_unstable_equilibria():
@@ -534,3 +535,11 @@ def test_health_sees_the_surface_close_to_itself():
     h = ev.health()
     assert h.self_gap == pytest.approx(0.04, rel=0.01)
     assert any("touches itself" in s for s in h.issues)
+
+
+def test_relax_in_the_lagrange_model(cube):
+    # Evolver can't equiangulate the Lagrange model: relax() tidies with V alone
+    cube.relax(levels=1)
+    cube.command("lagrange 2")
+    r = cube.relax()
+    assert r.converged and r.stable is True

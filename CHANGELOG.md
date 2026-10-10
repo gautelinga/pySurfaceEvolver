@@ -4,6 +4,11 @@
 
 ### Robust by default (phase G, in progress)
 
+- Fixed: `relax()` failed in the Lagrange model ("Cannot equiangulate LAGRANGE model"):
+  its tidying rounds now only average vertices there.
+- `ev.stability()` (and so `relax()`'s check) needs `ritz` only when some eigenvalue is
+  below zero; a stable surface costs one factorization. `relax()` at 98k facets:
+  80 -> 1.0 s, at 393k: 275 -> 4.2 s.
 - Faster safeguards: a safeguarded Newton step undoes itself by the vertex
   coordinates instead of a dump (`ev.newton(1)` at 393k facets 3.85 -> 1.77 s, raw
   `hessian` 1.2 s), `relax()` no longer dumps the surface at its start, and

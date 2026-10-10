@@ -719,7 +719,9 @@ class Evolver:
                     break
                 best = min(best, res)
             if tidy:
-                trace.output.append(self.command("V" if average_only else "u; V"))
+                # Evolver can't equiangulate the Lagrange model
+                equi = not average_only and self.model != "lagrange"
+                trace.output.append(self.command("u; V" if equi else "V"))
                 trace.energy[-1] = _core.total_energy()
                 trace.area[-1] = _core.total_area()
                 start = self.vertices
@@ -1059,22 +1061,26 @@ class Evolver:
         """Whether the surface sits at a stable equilibrium (a minimum, as far as
         second order tells; call it once converged, see :meth:`residual`).
 
-        Counts the Hessian eigenvalues below a small negative threshold: -1% of
+        Counts the Hessian eigenvalues below zero (one factorization); if
+        there are any, counts again below a small negative threshold: -1% of
         the scale of the lowest ones (the median magnitude of the positive
-        ones among the ``nearest`` to zero, from Evolver's ``ritz``). Exact zero
-        modes from symmetries (a drop sliding on a plane, a barrel along its
-        fibre) come out slightly above or below zero numerically; the threshold
-        keeps them from reading as instabilities, at the price of noticing a
-        real one slightly past its onset. Costs about two factorizations.
+        ones among the ``nearest`` to zero, from Evolver's ``ritz``, which is
+        slow on large surfaces). Exact zero modes from symmetries (a drop
+        sliding on a plane, a barrel along its fibre) come out slightly above
+        or below zero numerically; the threshold keeps them from reading as
+        instabilities, at the price of noticing a real one slightly past its
+        onset.
         """
         first = self.eigen_counts(0.0).negative
+        if first == 0:
+            return Stability(True, 0, np.array([]), 0.0)
         text = self.command(f"ritz(0, {max(int(nearest), first + 4)})")
         values = np.array(sorted(float(x) for x in re.findall(
             r"^\s*\d+\.\s+([-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)\s*$", text, re.MULTILINE)))
         positive = np.abs(values[values > 0])
         scale = float(np.median(positive)) if len(positive) else float(np.abs(values).max(initial=1.0))
         threshold = -0.01*scale
-        negative = self.eigen_counts(threshold).negative if first else 0
+        negative = self.eigen_counts(threshold).negative
         return Stability(negative == 0, negative, values, threshold)
 
     def eigen_counts(self, shift: float = 0.0) -> "EigenCounts":
