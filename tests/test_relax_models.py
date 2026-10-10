@@ -153,3 +153,12 @@ def test_relax_pinches_a_collapsing_neck(load):
     assert r.converged and r.collapsed > 0 and r.popped > 0
     assert ev.total_energy == pytest.approx(13.6603, rel=1e-4)
     assert r.health.ok
+
+
+def test_relax_crystalline_skips_tidying(load):
+    # crystal.fe: a crystalline (Wulff) energy; equiangulating and averaging
+    # undo the facets' alignment, and relax() ended at 3.608 where plain
+    # gradient steps reach 3.3256
+    ev = load("crystal.fe")
+    ev.relax()
+    assert ev.total_energy == pytest.approx(3.3256068, rel=1e-6)

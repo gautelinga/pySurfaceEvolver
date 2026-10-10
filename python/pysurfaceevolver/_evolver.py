@@ -636,6 +636,11 @@ class Evolver:
             tidy = 0
             if seek is None:
                 seek = True
+        if _core.crystalline():
+            # a crystalline energy depends on each facet's orientation: flipping
+            # and averaging undo the facets' alignment with the crystal (and it
+            # has no Hessian: gradient steps only)
+            tidy = 0
         if _core.representation() == 3 and self.model != "lagrange":
             # Evolver has no Hessian for simplex bodies outside the Lagrange
             # model, and a failed attempt leaves the surface unusable

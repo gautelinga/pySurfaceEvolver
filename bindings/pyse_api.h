@@ -147,6 +147,7 @@ int pyse_representation(void);  /* 1 string, 2 soapfilm, 3 simplex */
 int pyse_modeltype(void);       /* 1 linear, 2 quadratic, 3 lagrange */
 int pyse_lagrange_order(void);
 int pyse_torus(void);
+int pyse_crystalline(void);   /* a Wulff (crystalline) integrand is in use */
 /* goes up with every topology change (Evolver's top_timestamp) */
 long pyse_topology_stamp(void);
 double pyse_total_energy(void);

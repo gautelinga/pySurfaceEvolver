@@ -57,6 +57,9 @@ representation outside the Lagrange model. With an elastic energy (Evolver's
 `linear_elastic`, `relaxed_elastic`, `neo_hookean`, `SVK_elastic` and the like) the
 in-plane forces are physical, so `relax()` doesn't tidy the mesh, counts every force
 direction in the residual, and takes Newton steps by line search (`hessian_seek`).
+Crystalline (Wulff) energies get no tidying either: they depend on each facet's
+orientation, and their residual stays above zero even at the minimum (the energy has
+a corner there).
 A Newton step that raises the energy by more than 10% is always undone. Where
 Evolver changes the topology during gradient steps (`autopop`, `autochop`), a round
 can't be undone, and `relax()` goes on from where it is.

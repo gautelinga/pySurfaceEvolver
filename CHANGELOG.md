@@ -24,6 +24,10 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
 - Elastic energies (Evolver's elastic methods, such as `relaxed_elastic_A` in
   `mylarcube.fe`): no mesh tidying (it corrupted the facets' reference shapes), a
   residual over all force directions, Newton by `hessian_seek`.
+- Crystalline (Wulff) energies: no mesh tidying in `relax()` (flipping and averaging undid
+  the facets' alignment with the crystal: `crystal.fe` 3.608 -> 3.3256, as plain gradient
+  steps reach). Their residual stays above zero at the minimum (the energy has a corner
+  there), so such results read as unconverged.
 - `ev.residual()`: plain forces under `area_normalization` (it divided each by its
   vertex's area), and dimensionless for strings and simplices too.
 - `ev.health()`: `junctions` counts junctions that break Plateau's laws (`octa.fe`: 6,

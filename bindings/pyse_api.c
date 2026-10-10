@@ -1464,6 +1464,7 @@ int pyse_representation(void) { return web.representation; }
 int pyse_modeltype(void) { return web.modeltype; }
 int pyse_lagrange_order(void) { return web.lagrange_order; }
 int pyse_torus(void) { return web.torus_flag; }
+int pyse_crystalline(void) { return web.wulff_flag; }
 long pyse_topology_stamp(void) { return top_timestamp; }
 double pyse_total_energy(void) { return (double)web.total_energy; }
 double pyse_total_area(void) { return (double)web.total_area; }
