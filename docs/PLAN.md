@@ -741,6 +741,11 @@ G2.3 *Done*: `ev.stability()` counts eigenvalues below -1% of the scale of the
      **Stability in every relax() result**: an eigenvalue count after
      convergence (one factorization; skippable), `stable` in the result and a
      warning when not. Target: case 1 passes; case 2 reports the fold.
+G2.3b *Found in the cleanup*: relax()'s Newton phase moves only along normals; when
+     it moves a contact line far (the liquid bridge from its cylinder), facets at
+     the contact line degenerate (smallest angle 3e-5 degrees), since no tidying
+     follows. Alternate tidied gradient rounds and Newton until both the residual
+     and the mesh are sound. The bridge example keeps its explicit recipe until then.
 G2.4 **Isotropic remeshing in C toward a size field** (the standard algorithm,
      Botsch-Kobbelt style, inside the engine): split edges longer than 4/3 h,
      collapse edges shorter than 4/5 h (with the link condition and constraint

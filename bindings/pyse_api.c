@@ -691,20 +691,17 @@ int pyse_set_values(int type, const char *attribute, const double *values,
 
 struct residual_args { double *out; long n; };
 
-/* The part of a vertex's velocity (its projected force) that Newton steps
-   control: along the surface normal(s), projected into the vertex's
-   constraints. A projected normal almost perpendicular to the surface normal
-   (slant below hessian_slant_cutoff, e.g. sliding along a wire) is a mesh
-   freedom, not a shape one: left out, as hessian_normal leaves it out. */
-static double shape_velocity(vertex_id v_id, REAL *vel)
+/* A vertex's shape directions: its surface normal(s), projected into its
+   constraints, leaving out those almost perpendicular to the normal (sliding
+   along a wire: a mesh freedom), as hessian_normal does. Returns how many. */
+static int shape_directions(vertex_id v_id, REAL dirs[MAXCOORD][MAXCOORD])
 { MAT2D(nrm,MAXCOORD,MAXCOORD);
   MAT2D(tmp,MAXCOORD,MAXCOORD);
-  int kk, q, i;
-  double sum = 0.0;
-  if ( get_vattr(v_id) & FIXED ) return 0.0;
+  int kk, q, i, count = 0;
+  if ( get_vattr(v_id) & FIXED ) return 0;
   kk = new_calc_vertex_normal(v_id,nrm);
   kk = gram_schmidt(nrm,kk,SDIM);
-  if ( kk <= 0 ) return sqrt((double)SDIM_dot(vel,vel));
+  if ( kk <= 0 ) return -1;              /* no normal: use the whole velocity */
   for ( q = 0 ; q < kk ; q++ )
   { REAL *d = nrm[q];
     if ( get_vattr(v_id) & CONSTRAINT )
@@ -713,25 +710,112 @@ static double shape_velocity(vertex_id v_id, REAL *vel)
       if ( fabs(SDIM_dot(tmp[0],nrm[q])) < hessian_slant_cutoff ) continue;
       d = tmp[0];
     }
-    { double c = (double)SDIM_dot(vel,d);
-      sum += c*c;
-    }
+    for ( i = 0 ; i < SDIM ; i++ ) dirs[count][i] = d[i];
+    count++;
   }
-  return sqrt(sum);
+  return count;
 }
 
+/* The force balance in the shape directions. The vertex forces and the
+   gradients of the fixed volumes and quantities, as vectors (what a gradient
+   step uses before Evolver's own multiplier fit), are projected onto each
+   vertex's shape directions; the multipliers (pressures) are fitted by least
+   squares there, as Newton balances them, and what is left at each vertex is
+   its residual. (Evolver's calc_lagrange() fits them over the full velocities,
+   tangential mesh forces included, which leaves a uniform normal remainder
+   at a Newton solution.) */
 static void residual_body(void *arg)
 { struct residual_args *a = (struct residual_args *)arg;
   vertex_id v_id;
-  long row = 0;
-  calc_all_grads(CALC_FORCE|CALC_VOLGRADS);
+  long row = 0, k;
+  int Q = 0, i, j, q, r, nd;
+  double *A = NULL, *bvec = NULL, *lam = NULL, *proj = NULL;
+  int *ndir = NULL;
+  int mode = CALC_FORCE|CALC_VOLGRADS;
+  find_fixed();
+  calc_volgrads(DO_OPTS);
+  calc_force();
+  pressure_forces();
+  partner_shift_grads(mode);
+  convert_forms_to_vectors(mode);
   FOR_ALL_VERTICES(v_id)
-  { if ( row >= a->n ) inconsistent("vertex count changed");
-    a->out[row] = shape_velocity(v_id,get_velocity(v_id));
+  { volgrad *vg;
+    for ( vg = get_vertex_vgrad(v_id) ; vg ; vg = vg->chain )
+      if ( vg->fixnum + 1 > Q ) Q = vg->fixnum + 1;
+  }
+  /* per vertex and direction: the force, then the Q gradients, projected */
+  proj = (double*)temp_calloc((size_t)a->n*MAXCOORD*(Q + 1) + 1,sizeof(double));
+  ndir = (int*)temp_calloc((size_t)a->n + 1,sizeof(int));
+  A = (double*)temp_calloc((size_t)Q*Q + 1,sizeof(double));
+  bvec = (double*)temp_calloc((size_t)Q + 1,sizeof(double));
+  lam = (double*)temp_calloc((size_t)Q + 1,sizeof(double));
+  FOR_ALL_VERTICES(v_id)
+  { REAL dirs[MAXCOORD][MAXCOORD];
+    REAL *vel = get_velocity(v_id);
+    volgrad *vg;
+    double *pv;
+    if ( row >= a->n ) inconsistent("vertex count changed");
+    nd = shape_directions(v_id,dirs);
+    if ( nd < 0 )                         /* no normal: the velocity's axes */
+    { nd = SDIM;
+      for ( i = 0 ; i < SDIM ; i++ )
+        for ( j = 0 ; j < SDIM ; j++ ) dirs[i][j] = (i == j);
+    }
+    ndir[row] = nd;
+    pv = proj + (size_t)row*MAXCOORD*(Q + 1);
+    for ( k = 0 ; k < nd ; k++ )
+    { pv[k*(Q + 1)] = (double)SDIM_dot(vel,dirs[k]);
+      for ( vg = get_vertex_vgrad(v_id) ; vg ; vg = vg->chain )
+        if ( vg->fixnum >= 0 && vg->velocity )
+          pv[k*(Q + 1) + 1 + vg->fixnum] = (double)SDIM_dot(vg->velocity,dirs[k]);
+    }
     row++;
   }
-  vgrad_end();
   expect_rows(row,a->n);
+  for ( k = 0 ; k < a->n ; k++ )        /* normal equations for the multipliers */
+  { double *pv = proj + (size_t)k*MAXCOORD*(Q + 1);
+    for ( i = 0 ; i < ndir[k] ; i++ )
+    { double *e = pv + i*(Q + 1);
+      for ( q = 0 ; q < Q ; q++ )
+      { bvec[q] += e[0]*e[1 + q];
+        for ( r = 0 ; r < Q ; r++ ) A[q*Q + r] += e[1 + q]*e[1 + r];
+      }
+    }
+  }
+  for ( q = 0 ; q < Q ; q++ ) lam[q] = bvec[q];
+  for ( q = 0 ; q < Q ; q++ )            /* Gaussian elimination, partial pivoting */
+  { int piv = q;
+    for ( r = q + 1 ; r < Q ; r++ )
+      if ( fabs(A[r*Q + q]) > fabs(A[piv*Q + q]) ) piv = r;
+    if ( piv != q )
+    { for ( j = 0 ; j < Q ; j++ )
+      { double t = A[q*Q + j]; A[q*Q + j] = A[piv*Q + j]; A[piv*Q + j] = t; }
+      { double t = lam[q]; lam[q] = lam[piv]; lam[piv] = t; }
+    }
+    if ( fabs(A[q*Q + q]) < 1e-300 ) continue;
+    for ( r = q + 1 ; r < Q ; r++ )
+    { double f = A[r*Q + q]/A[q*Q + q];
+      for ( j = q ; j < Q ; j++ ) A[r*Q + j] -= f*A[q*Q + j];
+      lam[r] -= f*lam[q];
+    }
+  }
+  for ( q = Q - 1 ; q >= 0 ; q-- )
+  { double t = lam[q];
+    for ( j = q + 1 ; j < Q ; j++ ) t -= A[q*Q + j]*lam[j];
+    lam[q] = fabs(A[q*Q + q]) < 1e-300 ? 0.0 : t/A[q*Q + q];
+  }
+  for ( k = 0 ; k < a->n ; k++ )
+  { double *pv = proj + (size_t)k*MAXCOORD*(Q + 1);
+    double sum = 0.0;
+    for ( i = 0 ; i < ndir[k] ; i++ )
+    { double *e = pv + i*(Q + 1);
+      double c = e[0];
+      for ( q = 0 ; q < Q ; q++ ) c -= lam[q]*e[1 + q];
+      sum += c*c;
+    }
+    a->out[k] = sqrt(sum);
+  }
+  vgrad_end();
 }
 
 /* The shape part of each vertex's velocity (one per vertex, in vertex order). */

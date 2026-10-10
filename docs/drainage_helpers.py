@@ -146,10 +146,9 @@ class Cell:
             if self.edge_h is None:
                 self.edge_h = ev.mesh_quality().edge_median
             ev.remesh(target=self.edge_h)
-        # rounds of 10 gradient steps with equiangulation and vertex averaging,
-        # then Newton steps (with a line search), undone if one crosses y = 0
-        ev.relax(tol=1e-9, window=1, max_iter=800, tidy=10, newton=3, seek=True,
-                 undo_if=lambda ev: self.gap(ev, 6) < -1e-4)
+        # to equilibrium (gradient steps with mesh upkeep, then Newton steps); a
+        # Newton step that pushes the surface through the mirror y = 0 is undone
+        ev.relax(stability=False, undo_if=lambda ev: self.gap(ev, 6) < -1e-4)
 
 
 def _solve(f, target, lo, hi):

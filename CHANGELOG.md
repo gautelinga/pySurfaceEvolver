@@ -9,6 +9,12 @@
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the
   raw surface normal and the freedom's magnitude). A stable catenoid counts 0 negative
   eigenvalues (was about one per wire vertex).
+- `ev.residual()` balances the pressures (volume and quantity multipliers) in the shape
+  directions, as Newton does; Evolver's own fit over the full velocities, tangential
+  mesh forces included, left a uniform remainder at a Newton solution (the double
+  bubble stalled at 5.9e-7; now 4e-11).
+- The examples (tutorial, liquid bridge, slit droplet, drainage) relax with plain
+  `ev.relax()` / `ev.relax(levels=3)`.
 - `ev.stability()` and, once `relax()` converges, `result.stable` /
   `result.negative_modes` with an `UnstableEquilibriumWarning`: unstable equilibria
   (a liquid column past Rayleigh-Plateau, a barrel drop rolling up) are reported
