@@ -371,6 +371,7 @@ class Evolver:
     """
 
     _no_hessian: bool = False      # set by _newton(): no Hessian for this surface
+    _keep_mesh: bool = False       # relax(): no tidying (elastic, crystalline)
 
     def __init__(
         self,
@@ -630,17 +631,14 @@ class Evolver:
         ``stable``, ``negative_modes`` and ``health``.
         """
         elastic = self._elastic()
-        if elastic:
-            # a membrane: no mesh tidying (it would change the physics), and
-            # Newton by line search, which keeps the surface from running off
-            tidy = 0
-            if seek is None:
-                seek = True
-        if _core.crystalline():
-            # a crystalline energy depends on each facet's orientation: flipping
-            # and averaging undo the facets' alignment with the crystal (and it
-            # has no Hessian: gradient steps only)
-            tidy = 0
+        # a membrane: no mesh tidying (it would change the physics), and Newton
+        # by line search, which keeps the surface from running off; a
+        # crystalline energy depends on each facet's orientation, and flipping
+        # and averaging undo the facets' alignment with the crystal. Rounds of
+        # ``tidy`` steps still measure convergence.
+        keep_mesh = elastic or _core.crystalline()
+        if elastic and seek is None:
+            seek = True
         if _core.representation() == 3 and self.model != "lagrange":
             # Evolver has no Hessian for simplex bodies outside the Lagrange
             # model, and a failed attempt leaves the surface unusable
@@ -653,7 +651,8 @@ class Evolver:
             raise ValueError("tidy, levels and newton must be non-negative")
         if cg not in ("auto", True, False):
             raise ValueError('cg must be "auto", True or False')
-        with _threads_for_call(threads), self._conj_grad(cg is True):
+        with _threads_for_call(threads), self._conj_grad(cg is True), \
+                self._mesh_kept(keep_mesh):
             trace = _Trace()
             facets0 = self.counts["facets"]
             run = functools.partial(self._gradient_phase, trace, energy_tol=energy_tol,
@@ -856,10 +855,23 @@ class Evolver:
         _, result = self._call(_core.energy_methods)
         return not _ELASTIC_METHODS.isdisjoint(result.data)
 
+    @contextlib.contextmanager
+    def _mesh_kept(self, on: bool) -> Iterator[None]:
+        """No tidying commands in the gradient rounds for a block."""
+        before = self._keep_mesh
+        self._keep_mesh = on
+        try:
+            yield
+        finally:
+            self._keep_mesh = before
+
     def _tidy_kinds(self) -> Tuple[bool, bool]:
         """Whether Evolver can equiangulate ('u') and vertex-average ('V') this
         surface: 'u' only for linear or quadratic facets (not strings, simplices
-        or the Lagrange model), 'V' for all but the simplex representation."""
+        or the Lagrange model), 'V' for all but the simplex representation;
+        neither while relax() keeps the mesh (elastic, crystalline)."""
+        if self._keep_mesh:
+            return False, False
         rep = _core.representation()            # 1 string, 2 soapfilm, 3 simplex
         return rep == 2 and self.model != "lagrange", rep != 3
 
@@ -1415,9 +1427,9 @@ class Evolver:
 
     def mesh_quality(self, skinny_angle: float = 15.0) -> "MeshQuality":
         """Edge lengths and facet shapes; see :meth:`Mesh.quality`. In a torus
-        model, from Evolver's own edge lengths (vertex coordinates are wrapped
-        into the unit cell, so facets across its sides would look torn)."""
-        if not self.eval("torus"):
+        or quotient space, from Evolver's own edge lengths (vertex coordinates
+        are wrapped, so facets across the cell's sides would look torn)."""
+        if not _core.symmetry():
             return self.mesh().quality(skinny_angle)
         lengths = self.values("edge", "length")
         nan = float("nan")

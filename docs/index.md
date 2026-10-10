@@ -18,6 +18,11 @@ slit_droplet
 slit_drainage
 relaxing
 stress_cases
+brakke_films
+brakke_capillarity
+brakke_crystals_membranes
+brakke_strings
+brakke_lagrange
 api
 performance
 ```

@@ -161,4 +161,4 @@ def test_relax_crystalline_skips_tidying(load):
     # gradient steps reach 3.3256
     ev = load("crystal.fe")
     ev.relax()
-    assert ev.total_energy == pytest.approx(3.3256068, rel=1e-6)
+    assert ev.total_energy == pytest.approx(3.3256068, rel=1e-5)

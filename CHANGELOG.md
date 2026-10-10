@@ -24,6 +24,13 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
 - Elastic energies (Evolver's elastic methods, such as `relaxed_elastic_A` in
   `mylarcube.fe`): no mesh tidying (it corrupted the facets' reference shapes), a
   residual over all force directions, Newton by `hessian_seek`.
+- Elastic and crystalline energies keep relax()'s rounds of 10 steps for measuring
+  convergence (only the tidying is skipped): `tidy=0` measured step to step and stopped
+  early (`mylarcube.fe` along its recipe's modulus ramp: -1.2518 -> -1.2563, recipe
+  -1.2577).
+- Facet angles in quotient spaces from Evolver's edge lengths too (`symtest.fe`).
+  Evolver's Hessian there has a spurious negative mode (also in 2.70a): `symtest.fe`
+  reads as unstable, `twointor.fe`, the same surface, doesn't.
 - Crystalline (Wulff) energies: no mesh tidying in `relax()` (flipping and averaging undid
   the facets' alignment with the crystal: `crystal.fe` 3.608 -> 3.3256, as plain gradient
   steps reach). Their residual stays above zero at the minimum (the energy has a corner
@@ -54,6 +61,13 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
 
 ### Docs
 
+- Five notebooks on Brakke's 25 sample datafiles (films and foams, drops and capillarity,
+  crystals and membranes, strings and other dimensions, quadratic and Lagrange): each
+  sample's own recipe against a default `relax()` with as many refinements, with a
+  table and pictures (`docs/brakke_helpers.py`). Among them Kelvin's foam against
+  Weaire-Phelan's (0.35% less area per cell), and the Lagrange ladders of `cube.fe` and
+  `catman.fe` (`relax()` agrees with the recipes to 1e-14; `catman.fe`'s own `gogo3`
+  compares with the wrong catenoid).
 - Stress cases: figures for each case (result against its reference, error per step,
   what `relax()` did, and the surface at a few steps), drawn by
   `bench/stress/figures.py`.

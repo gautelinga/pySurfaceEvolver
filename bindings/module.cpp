@@ -520,6 +520,7 @@ NB_MODULE(_core, m) {
   m.def("lagrange_order", []() { Lock lock; return pyse_lagrange_order(); });
   m.def("torus", []() { Lock lock; return bool(pyse_torus()); });
   m.def("crystalline", []() { Lock lock; return bool(pyse_crystalline()); });
+  m.def("symmetry", []() { Lock lock; return bool(pyse_symmetry()); });
   m.def("topology_stamp", []() { Lock lock; return pyse_topology_stamp(); });
   m.def("total_energy", []() { Lock lock; return pyse_total_energy(); });
   m.def("total_area", []() { Lock lock; return pyse_total_area(); });
