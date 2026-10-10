@@ -116,3 +116,29 @@ def test_health_in_the_plane(load):
     ev = load("metric.fe")             # a string in two dimensions
     h = ev.health()
     assert np.isfinite(h.residual)
+
+
+def test_relax_pops_junctions_against_plateau(load):
+    # octa.fe: a symmetric film with six edges where four films meet; popping
+    # them (and deleting the small films that then shrink away) reaches the
+    # energy of Brakke's own recipe (gogo)
+    ev = load("octa.fe")
+    r = ev.relax()
+    assert r.converged and r.popped > 0
+    assert ev.total_energy == pytest.approx(22.627417, rel=1e-6)
+    assert ev.health().junctions == 0
+    ev = load("popstr.fe")
+    r = ev.relax()
+    assert r.popped == 1
+    assert ev.total_energy == pytest.approx(2.7320508, rel=1e-7)
+
+
+def test_relax_pinch_false_keeps_collapsing_edges(load):
+    ev = load("octa.fe")
+    r = ev.relax(pinch=False)
+    assert r.collapsed == 0 and r.popped > 0
+
+
+def test_relax_leaves_a_sound_surface_alone(cube):
+    r = cube.relax()
+    assert r.popped == 0 and r.collapsed == 0

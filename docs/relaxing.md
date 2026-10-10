@@ -134,10 +134,16 @@ Other things to know:
 
 * **Saddles.** `relax()` converges to saddles as readily as to minima. Check
   `r.stable`, or watch for `UnstableEquilibriumWarning`.
-* **Topology.** `relax()` never changes the topology. A film or string network whose
-  junctions break Plateau's laws (Brakke's `octa.fe` and `popstr.fe` start that way)
-  is in equilibrium for its topology; `r.health.junctions` counts them, and Evolver's
-  `o` pops them (`ev.command("o")`), after which relax again.
+* **Topology.** Plateau's laws say how soap films meet in a stable equilibrium:
+  three films along an edge at 120 degrees, four such edges at a point (strings:
+  three at a point). Other junctions can always lower the energy by splitting, so
+  `relax()` pops them (Evolver's `o`) and relaxes again; `r.popped` counts them, and
+  Brakke's `octa.fe` and `popstr.fe` reach the energies of his own recipes. If the
+  surface still won't converge, edges that have collapsed to a 20th of the median
+  are deleted first, as when a small film in a foam shrinks away (`r.collapsed`;
+  `relax(pinch=False)` turns this off). A converged surface never loses edges. Not
+  yet handled: a neck that the tidying turns into a thin tube of sliver facets
+  instead of short edges (`cat.fe`'s collapsing catenoid).
 * **No Hessian.** Gap energies, crystalline integrands and simplex bodies get
   gradient steps only, and gradient steps converge slowly: such results often end
   unconverged by the residual, with the energy settled.

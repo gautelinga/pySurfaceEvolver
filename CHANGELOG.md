@@ -31,6 +31,11 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   top) or from contact lines on a constraint drawn twice (slidestr); facet angles in a
   torus from Evolver's edge lengths (wrapped coordinates made the foams' facets look
   degenerate); planar and simplex surfaces handled.
+- `relax()` pops junctions that break Plateau's laws (Evolver's `o`) and relaxes again;
+  if the surface still won't converge, edges collapsed below a 20th of the median are
+  deleted first (`pinch=True`, the default; a converged surface never loses edges).
+  `octa.fe` and `popstr.fe` now reach the energies of Brakke's recipes on defaults.
+  `IterationResult.popped` and `.collapsed` count them.
 - Fixed: stress case 3 counted only its second sweep's time and steps.
 
 ### Docs

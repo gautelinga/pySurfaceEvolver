@@ -259,6 +259,8 @@ class IterationResult:
     stable: Optional[bool] = None      # relax(): checked once converged (None: not checked)
     negative_modes: Optional[int] = None   # relax(): directions that lower the energy
     health: Optional["Health"] = None  # relax(): Evolver.health() at the end
+    popped: int = 0                    # relax(): junctions popped (Evolver's 'o')
+    collapsed: int = 0                 # relax(): collapsed edges deleted (pinch-off)
 
     def __repr__(self) -> str:
         n = len(self.energy)
@@ -269,6 +271,8 @@ class IterationResult:
         parts = [("converged" if self.converged else "not converged")
                  + f" after {steps} and {self.newton_steps} Newton",
                  f"residual {self.residual:.2g}"]
+        if self.popped or self.collapsed:
+            parts.append(f"{self.popped} popped, {self.collapsed} collapsed edges deleted")
         if self.stable is not None:
             parts.append("stable" if self.stable else
                          f"unstable ({self.negative_modes} negative modes)")
@@ -543,7 +547,7 @@ class Evolver:
     def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, levels: int = 0,
               newton: int = 20, stability: bool = True, adapt: Union[bool, float] = False,
               cg: Union[bool, str] = "auto", tidy: int = 10, energy_tol: Optional[float] = None,
-              window: int = 3, seek: Optional[bool] = None,
+              window: int = 3, seek: Optional[bool] = None, pinch: bool = True,
               undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
@@ -599,6 +603,14 @@ class Evolver:
           surface relaxed again, kept only if that converges: a shrinking
           contact circle (a drop at a high contact angle) would otherwise end
           up smaller than the facets next to it.
+        * Then (linear model, films and strings) junctions that break
+          Plateau's laws are popped (Evolver's ``o``: four films on an edge,
+          four strings at a point, ...) and the surface relaxed again, up to
+          five times. With ``pinch`` (default), if it is still unconverged,
+          edges that have collapsed below a 20th of the median edge are
+          deleted first (Evolver's ``t``): a film or neck shrinking to
+          nothing, as before a foam's T1 change or a pinch-off. A converged
+          surface never loses edges. ``popped`` and ``collapsed`` count them.
         * Once converged, with ``stability``, :meth:`stability` sets ``stable``
           and ``negative_modes`` and warns (:class:`UnstableEquilibriumWarning`)
           at a saddle, such as a liquid column past its Rayleigh-Plateau limit:
@@ -662,6 +674,20 @@ class Evolver:
                     more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
                                                   seek, undo_if, fallback=cg == "auto")
                     steps += more
+            popped = collapsed = 0
+            if self.model == "linear" and _core.representation() != 3:
+                for _ in range(_TOPOLOGY_PASSES):
+                    gone = self._delete_collapsed() if pinch and not residual < tol else 0
+                    pops = self._pop()
+                    if not gone and not pops:
+                        break
+                    popped += pops
+                    collapsed += gone
+                    lev = max(trace.level, default=levels) + 1
+                    run(lev, max_iter, tidy, watch=newton > 0)
+                    more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
+                                                  seek, undo_if, fallback=cg == "auto")
+                    steps += more
             stable: Optional[bool] = None
             modes: Optional[int] = None
             if stability and residual < tol:
@@ -683,7 +709,27 @@ class Evolver:
         return IterationResult(np.array(trace.energy), np.array(trace.area),
                                np.array(trace.scale), "".join(trace.output),
                                bool(residual < tol), steps, np.array(trace.level, dtype=int),
-                               residual, stable, modes, health)
+                               residual, stable, modes, health, popped, collapsed)
+
+    def _pop(self) -> int:
+        """Evolver's 'o': pop the junctions that break Plateau's laws; how many."""
+        out = self.command("o")
+        return sum(int(n) for n in re.findall(r"popped:\s*(\d+)", out))
+
+    def _delete_collapsed(self) -> int:
+        """Delete the edges (not fixed) that have collapsed below a 20th of the
+        median edge (Evolver's 't'): a neck or film shrinking to nothing, as
+        it does before a pinch-off or a foam's T1 change; how many."""
+        lengths = self.values("edge", "length")
+        free = lengths[self.values("edge", "fixed") == 0]
+        if len(free) == 0:
+            return 0
+        cut = _COLLAPSED*float(np.median(free))
+        if not (free < cut).any():
+            return 0
+        out = self.command(f"t {_num(cut, 'length')}")
+        found = re.search(r"Deleted edges:\s*(\d+)", out)
+        return int(found.group(1)) if found else 0
 
     def _newton_first(self, trace: "_Trace", tol: float, newton: int, seek: Optional[bool],
                       undo_if: Optional[Callable[["Evolver"], bool]]) -> "tuple[int, float] | None":
@@ -2144,6 +2190,8 @@ _ELASTIC_METHODS = frozenset({
     "relaxed_elastic1", "relaxed_elastic2", "relaxed_elastic_A", "relaxed_elastic1_A",
     "relaxed_elastic2_A", "dirichlet_elastic", "SVK_elastic", "neo_hookean",
     "stress_integral"})
+_TOPOLOGY_PASSES = 5          # relax(): pop / delete collapsed edges, relax again, at most
+_COLLAPSED = 0.05              # an edge below this times the median has collapsed
 _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative) is undone
 _GRADIENT_ONLY_TOL = 1e-9      # energy_tol when no Newton follows    # gradient steps for relax()'s conjugate-gradient pass, at most
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
