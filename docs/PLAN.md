@@ -276,14 +276,14 @@ gradients), `remesh=True` (graded remeshing).
 **Stress suite** (`.venv/bin/python bench/stress/run.py [case numbers]`, defaults
 only, ~3 min for all; results in bench/stress/results.json): 7 of 9 pass (1
 cylinder past Rayleigh-Plateau, 2 catenoid to its fold, 5 bridge, 6 barrel, 9
-inflated cube, 11 puddle, 12 shrinking cap). Failing: 3 sessile drop at 10 and
-150-170 degrees (one level more fixes 150-160), 8 drainage band (8-15% at level
-2; level 3 with the old tolerance: 2.4%, snap exact).
+inflated cube, 11 puddle, 12 shrinking cap). Failing: 3 sessile drop at 150-170
+degrees (one level more fixes 150-160), 8 drainage band (worst 8-15% at level
+2, ~20 states over 1%; level 3 with the old tolerance: 2.4%, snap exact).
 
-**Next** (Phase G2 below, revised): G2.4, G2.4b and G2.5 done (2026-10-10, see
-there; the liquid-bridge notebook is on `relax(levels=3)`). Then G2.6 guarded
-descent (case 3 at 10 degrees), G2.7 refine-only adaptivity (cases 3 at 170
-and 8). Ask the user before each step.
+**Next** (Phase G2 below, revised): G2.4, G2.4b, G2.5 and G2.6 done
+(2026-10-10, see there; the liquid-bridge notebook is on `relax(levels=3)`;
+relax() falls back to conjugate gradients). Then G2.7 refine-only adaptivity
+(case 3 at 150-170, case 8). Ask the user before each step.
 
 **Engine changes this round** (src/, CRLF): edge deletion keeps the link condition
 (trirevis.c, upstream bug); hessian_normal's slant measured against the raw normal
@@ -836,6 +836,20 @@ G2.4b *Done*: `energy_tol` default 1e-5 when Newton follows (1e-9 with
      rounds (case 8: median error 2.3% vs 0.3%; where Newton can't finish, the
      gradient steps do the work). Not needed so far: alternating Newton and
      tidied rounds. Suite 7 of 9 unchanged (case 8 8%, case 3 as before).
+G2.6 *Done* (2026-10-10), differently from the plan. Case 3 at 10 degrees:
+     plain gradients crawl (residual 0.14 after 650 steps), Newton can't take
+     over; with cg it converges in 70 steps + 4 Newton. Conjugate gradients on
+     every relax: cases 2 and 5 no longer diverge (the new tolerance and the
+     round undo), but the bridge grid loses 3 of 25 (theta 20 at gaps 0.4-0.6:
+     folded contact lines, angles +-4 degrees) and case 8 doubles its states
+     over 1% (36-39 vs 17-22): cg wears the mesh where contact lines travel, no
+     energy jump for a guard to catch. So instead: `cg=None` (default) adds a
+     cg + Newton pass when the first pass ends unconverged, kept only if it
+     converges (kept when the residual merely fell, case 8 got worse again:
+     34 states over 1%, median 0.5%). Suite: case 3 now fails only at 150-170
+     (resolution, G2.7); bridge grid unchanged (the pass never runs); case 8
+     back to baseline (20 states over 1%, median 0.35%) but ~60% slower, the
+     pass tried and reverted on its ~125 unconverged steps.
 G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
      a contact line far without tidying, and its facets degenerate (the liquid
      bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and

@@ -15,6 +15,10 @@
   within a few steps. The liquid bridge relaxes on plain defaults (`relax(levels=3)`)
   at every gap and contact angle of its notebook, which no longer needs its own
   relaxation recipe.
+- `relax(cg=None)` (new default): when the first pass ends unconverged, a second pass of
+  conjugate gradient steps and Newton, kept only if it converges (with the gradient
+  steps the last level left of `max_iter`). A sessile drop spread to 10 degrees now
+  converges. `cg=True` still uses conjugate gradients throughout; `cg=False` never.
 - Newton and eigenvalue counts no longer see spurious modes from vertices on wires
   (curves where two constraints meet): their only freedom, sliding along the wire, is
   left to the gradient steps (`hessian_slant_cutoff` now 0.05, and its test uses the

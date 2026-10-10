@@ -474,7 +474,7 @@ class Evolver:
         scale.append(self.eval("scale"))
 
     def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, energy_tol: Optional[float] = None,
-              window: int = 3, tidy: int = 10, remesh: bool = False, cg: bool = False,
+              window: int = 3, tidy: int = 10, remesh: bool = False, cg: Optional[bool] = None,
               levels: int = 0, stability: bool = True,
               newton: int = 20, seek: Optional[bool] = None, undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
@@ -484,9 +484,9 @@ class Evolver:
         is below ``tol``.
 
         Gradient steps (Evolver's ``g``; with ``cg=True``, as conjugate
-        gradients: far faster on flat or stiff shapes, but they can diverge on
-        films bounded by wires, so off by default; your own ``conj_grad``
-        setting is restored after) come in rounds of ``tidy`` steps, each
+        gradients, which are far faster on flat or stiff shapes but wear the
+        mesh down where contact lines travel; your own ``conj_grad`` setting is
+        restored after) come in rounds of ``tidy`` steps, each
         followed by equiangulation and vertex averaging (``u; V``), which keep
         facets from degenerating where the surface stretches or vertices drift
         (``tidy=0``: no tidying). With ``remesh=True`` (linear model; experimental, off by default), each round
@@ -509,6 +509,14 @@ class Evolver:
         Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
         ``seek`` and ``undo_if`` as there), until the residual is below ``tol``
         or stops falling. ``newton=0``: gradient steps only.
+
+        If that leaves the surface unconverged, by default (``cg=None``) a
+        second pass follows: conjugate gradient steps, then Newton again, kept
+        only if that converges (otherwise the surface goes back to where the
+        first pass left it), with the gradient steps the last level left of
+        ``max_iter``. Plain gradients crawl on flat shapes (a drop at a
+        10 degree contact angle) far from where Newton can take over.
+        ``cg=False``: plain gradients only.
 
         If the energy becomes non-finite during the gradient steps, the surface
         is restored to its state before the call and :class:`EvolverError` is
@@ -534,7 +542,7 @@ class Evolver:
             raise ValueError("tol and energy_tol must be positive; max_iter and window at least 1")
         if tidy < 0 or levels < 0 or newton < 0:
             raise ValueError("tidy, levels and newton must be non-negative")
-        with _threads_for_call(threads), self._conj_grad(cg):
+        with _threads_for_call(threads), self._conj_grad(bool(cg)):
             start = self.save()
             energy: List[float] = []
             area: List[float] = []
@@ -558,6 +566,21 @@ class Evolver:
                                        "steps; the surface is back to its state before the call")
             steps = self._newton(newton, seek, tol, undo_if, output) if newton else 0
             residual = self.residual()
+            budget = max_iter - level.count(levels)    # what the last level left
+            if cg is None and newton and budget > 0 and not residual < tol \
+                    and np.isfinite(residual):
+                before, n0 = self.save(), len(energy)
+                with self._conj_grad(True):
+                    self._relax_level(energy_tol, budget, window, tidy, False, callback,
+                                      every, energy, area, scale, output, watch=True)
+                level += [levels]*(len(energy) - n0)
+                more = self._newton(newton, seek, tol, undo_if, output) \
+                    if np.isfinite(_core.total_energy()) else 0
+                second = self.residual()
+                if second < tol:              # kept only if it converges
+                    steps, residual = steps + more, second
+                else:
+                    self.restore(before)
             stable: Optional[bool] = None
             modes: Optional[int] = None
             if stability and residual < tol:

@@ -426,3 +426,39 @@ def test_relax_undoes_a_round_that_breaks_the_mesh():
     ev, _ = _coarse_bridge(gap=0.4, theta=100.0, volume=0.3, nz=3, nt=8)
     r = ev.relax()
     assert r.converged and ev.mesh_quality().angle_min > 20
+
+
+def _hemisphere_drop(nr=8, nt=32):
+    """A hemispherical drop of volume 2 pi/3 on the plane z = 0, its contact
+    angle the parameter theta (90)."""
+    from pysurfaceevolver import constraints as C
+    v, f = [[0, 0, 1.0]], []
+    for i in range(1, nr + 1):
+        t = np.pi/2*i/nr
+        v += [[np.sin(t)*np.cos(p), np.sin(t)*np.sin(p), np.cos(t)]
+              for p in 2*np.pi*np.arange(nt)/nt]
+    ring = lambda i, j: 1 + (i - 1)*nt + j % nt
+    f += [[0, ring(1, j), ring(1, j + 1)] for j in range(nt)]
+    for i in range(1, nr):
+        for j in range(nt):
+            f += [[ring(i, j), ring(i + 1, j), ring(i + 1, j + 1)],
+                  [ring(i, j), ring(i + 1, j + 1), ring(i, j + 1)]]
+    ev = pyse.Evolver()
+    ev.load_string(pyse.make_datafile(
+        np.array(v), f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle="theta")},
+        vertex_constraints={1: [ring(nr, j) for j in range(nt)]}, parameters={"theta": 90.0},
+        bodies=[pyse.Body(faces=range(len(f)), volume=2*np.pi/3)]))
+    return ev
+
+
+def test_relax_falls_back_to_conjugate_gradients():
+    # spreading to a flat 10 degree drop, plain gradients crawl and stop far
+    # from where Newton can take over; the conjugate-gradient pass gets there
+    ev = _hemisphere_drop()
+    ev.relax()
+    ev.parameters["theta"] = 10.0
+    snap = ev.save()
+    assert not ev.relax(cg=False).converged
+    ev.restore(snap)
+    r = ev.relax()
+    assert r.converged and r.newton_steps > 1
