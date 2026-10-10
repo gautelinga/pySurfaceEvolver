@@ -225,16 +225,18 @@ def case2(d):
     hh = np.linspace(H.min(), c2.H_FOLD*0.99999, 300)
     a.plot(hh, [catenoid_area(h) for h in hh], color=GREY, lw=2, label="stable catenoid")
     a.axvline(c2.H_FOLD, color=ORANGE, lw=1, label=f"fold, H = {c2.H_FOLD:.4f}")
+    a.plot([c2.H_FOLD, H.max()], [2*np.pi, 2*np.pi], "--", color=GREY, lw=2, label="two discs")
     conv = np.array([x["converged"] for x in rows])
     a.plot(H[conv], area[conv], "o", color=BLUE, ms=4, label="relax(), converged")
-    a.plot(H[~conv], area[~conv], "x", color=RED, ms=6, mew=2, label="relax(), not converged")
+    if (~conv).any():
+        a.plot(H[~conv], area[~conv], "x", color=RED, ms=6, mew=2, label="relax(), not converged")
     a.set_xlabel("half separation H")
     a.set_ylabel("area")
     a.legend(fontsize=7)
     a.set_title("result against the reference", fontsize=10)
-    ok = np.array(["error" in x for x in rows])
-    error_panel(b, H[ok], np.array([x["error"] for x in rows if "error" in x]), limit=0.01,
-                xlabel="half separation H")
+    error_panel(b, H, np.array([x["error"] for x in rows]), limit=0.01,
+                xlabel="half separation H", label="relative error (past the fold: two discs)")
+    b.axvline(c2.H_FOLD, color=ORANGE, lw=1)
     solver_panel(c, d, H, "half separation H")
     save(fig, "case02.png")
 
@@ -245,7 +247,7 @@ def case2(d):
                        color="k", line_width=3)
     picks = nearest(H, [0.325, 0.5, 0.65, H.max()])
     render(d, picks, "case02_shapes.png", context=rings,
-           labels=[f"H = {H[i]:.3f}" + ("" if rows[i]["converged"] else " (not converged)")
+           labels=[f"H = {H[i]:.3f}" + (" (two discs)" if H[i] > c2.H_FOLD else "")
                    for i in picks])
 
 

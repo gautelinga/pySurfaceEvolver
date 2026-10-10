@@ -1,6 +1,8 @@
 """2. A soap film between two rings of radius 1 at z = +-H, H raised past the
 fold (H = 0.6627: no catenoid beyond). Reference: the exact catenoid's area on
-the stable branch; past the fold the solver must not report a converged film."""
+the stable branch; past the fold the film must pinch off into two flat discs
+(area 2 pi, less for the polygons the rings' vertices make), not stay a film
+reported converged."""
 
 import numpy as np
 import pysurfaceevolver as pyse
@@ -52,9 +54,12 @@ def run(quick=False):
         res.rows.append(row)
     track.finish(ev, res, eigen=False)
     res.error = max(errors)
-    false_ok = [r["H"] for r in past if r["converged"]]
-    res.passed = max(errors) < 0.01 and not false_ok
+    for r in past:
+        r["error"] = rel(r["area"], 2*np.pi)
+    discs = [r["H"] for r in past if r["converged"] and r["error"] < 0.01]
+    res.passed = max(errors) < 0.01 and len(discs) == len(past)
     res.summary = (f"area against the catenoid up to the fold: worst {max(errors):.2%}; "
-                   f"past the fold (H > {H_FOLD:.4f}) relax() said converged at H = "
-                   f"{[round(h, 3) for h in false_ok]} (necks {[round(r['neck'], 3) for r in past]})")
+                   f"past the fold (H > {H_FOLD:.4f}) two discs at H = "
+                   f"{[round(h, 3) for h in discs]} of {len(past)} steps, areas "
+                   f"{[round(r['area'], 4) for r in past]} (2 pi = {2*np.pi:.4f})")
     return res

@@ -606,11 +606,15 @@ class Evolver:
         * Then (linear model, films and strings) junctions that break
           Plateau's laws are popped (Evolver's ``o``: four films on an edge,
           four strings at a point, ...) and the surface relaxed again, up to
-          five times. With ``pinch`` (default), if it is still unconverged,
-          edges that have collapsed below a 20th of the median edge are
-          deleted first (Evolver's ``t``): a film or neck shrinking to
-          nothing, as before a foam's T1 change or a pinch-off. A converged
-          surface never loses edges. ``popped`` and ``collapsed`` count them.
+          five times. With ``pinch`` (default), if it is still unconverged, a
+          last resort: up to 300 gradient steps without tidying (which can
+          hold a shrinking neck open), then edges that have collapsed below a
+          20th of the median edge are deleted (Evolver's ``t``: a film or neck
+          shrinking to nothing, as before a foam's T1 change or a pinch-off),
+          junctions popped and the surface relaxed, kept only if that
+          converges or lowers the energy on a sound mesh. A converged surface
+          never loses edges.
+          ``popped`` and ``collapsed`` count them.
         * Once converged, with ``stability``, :meth:`stability` sets ``stable``
           and ``negative_modes`` and warns (:class:`UnstableEquilibriumWarning`)
           at a saddle, such as a liquid column past its Rayleigh-Plateau limit:
@@ -677,17 +681,23 @@ class Evolver:
             popped = collapsed = 0
             if self.model == "linear" and _core.representation() != 3:
                 for _ in range(_TOPOLOGY_PASSES):
-                    gone = self._delete_collapsed() if pinch and not residual < tol else 0
                     pops = self._pop()
-                    if not gone and not pops:
+                    if not pops:
                         break
                     popped += pops
-                    collapsed += gone
                     lev = max(trace.level, default=levels) + 1
                     run(lev, max_iter, tidy, watch=newton > 0)
                     more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
                                                   seek, undo_if, fallback=cg == "auto")
                     steps += more
+                if pinch and not residual < tol and not elastic:
+                    found = self._collapse(trace, run, max_iter, tidy, tol, newton, seek,
+                                           undo_if, cg == "auto", levels)
+                    if found is not None:
+                        more, residual, pops, gone = found
+                        steps += more
+                        popped += pops
+                        collapsed += gone
             stable: Optional[bool] = None
             modes: Optional[int] = None
             if stability and residual < tol:
@@ -710,6 +720,50 @@ class Evolver:
                                np.array(trace.scale), "".join(trace.output),
                                bool(residual < tol), steps, np.array(trace.level, dtype=int),
                                residual, stable, modes, health, popped, collapsed)
+
+    def _collapse(self, trace: "_Trace", run: Callable[..., None], max_iter: int, tidy: int,
+                  tol: float, newton: int, seek: Optional[bool],
+                  undo_if: Optional[Callable[["Evolver"], bool]], fallback: bool,
+                  levels: int) -> "tuple[int, float, int, int] | None":
+        """relax()'s last resort for an unconverged surface: gradient steps
+        without tidying (which can hold a shrinking neck open as a tube of
+        slivers), up to a few hundred, then delete what collapsed, pop and
+        relax again. Kept if that converges, or lowers the energy without
+        leaving degenerate facets; else the surface and the trace go back
+        (None). Returns the Newton steps,
+        residual, pops and deleted edges."""
+        snapshot = self.save()
+        energy = _core.total_energy()
+        marks = (len(trace.energy), len(trace.area), len(trace.scale), len(trace.level),
+                 len(trace.output))
+        lev = max(trace.level, default=levels) + 1
+        steps = popped = gone = 0
+        residual = float("inf")
+        try:
+            run(lev, _COLLAPSE_STEPS, 0, energy_tol=_GRADIENT_ONLY_TOL)
+            gone = self._delete_collapsed()
+            if gone:
+                for _ in range(_TOPOLOGY_PASSES):
+                    popped += self._pop()
+                    run(lev, max_iter, tidy, watch=newton > 0)
+                    more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
+                                                  seek, undo_if, fallback=fallback)
+                    steps += more
+                    extra = self._delete_collapsed() if not residual < tol else 0
+                    gone += extra
+                    if not extra:
+                        break
+        except EvolverError:
+            gone = 0
+        # a lower energy counts only on a sound mesh: a coarse one can lower
+        # it by collapsing facets
+        if gone and (residual < tol or (_core.total_energy() < energy
+                                        and not self.mesh_quality(5.0).angle_min < 1.0)):
+            return steps, residual, popped, gone
+        self.restore(snapshot)
+        del trace.energy[marks[0]:], trace.area[marks[1]:], trace.scale[marks[2]:]
+        del trace.level[marks[3]:], trace.output[marks[4]:]
+        return None
 
     def _pop(self) -> int:
         """Evolver's 'o': pop the junctions that break Plateau's laws; how many."""
@@ -2191,7 +2245,8 @@ _ELASTIC_METHODS = frozenset({
     "relaxed_elastic2_A", "dirichlet_elastic", "SVK_elastic", "neo_hookean",
     "stress_integral"})
 _TOPOLOGY_PASSES = 5          # relax(): pop / delete collapsed edges, relax again, at most
-_COLLAPSED = 0.05              # an edge below this times the median has collapsed
+_COLLAPSED = 0.05
+_COLLAPSE_STEPS = 300          # relax(): untidied gradient steps of the last resort              # an edge below this times the median has collapsed
 _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative) is undone
 _GRADIENT_ONLY_TOL = 1e-9      # energy_tol when no Newton follows    # gradient steps for relax()'s conjugate-gradient pass, at most
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with

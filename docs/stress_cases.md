@@ -78,8 +78,8 @@ The column at radius 0.5, 0.4, at the onset and at 0.2: still a cylinder, a sadd
 ## A catenoid to its fold
 
 A soap film between two wire rings of radius 1, pulled apart. Up to H = 0.6627 the
-stable catenoid exists; past the fold there is no film, and the solver must not claim
-one. The wires are curves where two constraints meet: their vertices can only slide
+stable catenoid exists; past the fold its neck collapses and the film pinches off into
+two flat discs, one in each ring. The wires are curves where two constraints meet: their vertices can only slide
 along them, which Newton must not mistake for a freedom.
 
 ```python
@@ -111,7 +111,8 @@ for step in recipes.continuation(ev, recipes.parameter("hh"), np.arange(0.325, 0
         print(f"H = {step.value:.3f}: area {ev.total_energy:.6f}, catenoid {ref:.6f}, "
               f"error {abs(ev.total_energy/ref - 1):.2%}")
     else:
-        print(f"H = {step.value:.3f}: past the fold, converged {step.result.converged}")
+        print(f"H = {step.value:.3f}: past the fold, area {ev.total_energy:.6f} (two discs "
+              f"{2*np.pi:.6f}), converged {step.result.converged}")
 ```
 
 ```text
@@ -129,27 +130,29 @@ H = 0.575: area 6.758706, catenoid 6.760303, error 0.02%
 H = 0.600: area 6.997991, catenoid 6.999643, error 0.02%
 H = 0.625: area 7.225879, catenoid 7.227532, error 0.02%
 H = 0.650: area 7.438262, catenoid 7.439781, error 0.02%
-H = 0.675: past the fold, converged False
-H = 0.700: past the fold, converged False
-H = 0.725: past the fold, converged False
-H = 0.750: past the fold, converged False
+H = 0.675: past the fold, area 6.273097 (two discs 6.283185), converged True
+H = 0.700: past the fold, area 6.273097 (two discs 6.283185), converged True
+H = 0.725: past the fold, area 6.273097 (two discs 6.283185), converged True
+H = 0.750: past the fold, area 6.273097 (two discs 6.283185), converged True
 ```
 
-Within 0.03% of the exact catenoid up to the fold; past it the film collapses and
-`relax()` says it did not converge.
+Within 0.03% of the exact catenoid up to the fold. Past it, `relax()` can't converge
+the film, lets the neck collapse, deletes its collapsed ring of edges and pops the
+pinched vertex (`step.result.collapsed`, `.popped`): two discs, whose area is that of
+the 64-sided polygons the rings' vertices make (0.16% below 2 pi).
 
 ```{figure} _static/stress/case02.png
 :alt: Case 2: result, error and solver steps
 :width: 100%
 
-Left, the film's area on the exact catenoid up to the fold; past it no step converges (red crosses), as there is no film to converge to. Middle, the error against the reference. Right, what relax() did at each step.
+Left, the film's area on the exact catenoid up to the fold, and past it on two flat discs. Middle, the error against the reference. Right, what relax() did at each step.
 ```
 
 ```{figure} _static/stress/case02_shapes.png
 :alt: Case 2: shapes
 :width: 100%
 
-The film at H = 0.325, 0.5 and 0.65, and past the fold, where its neck has collapsed.
+The film at H = 0.325, 0.5 and 0.65, and past the fold, pinched off into two discs.
 ```
 
 ## A sessile drop at high contact angles

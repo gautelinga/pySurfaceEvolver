@@ -33,9 +33,14 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   degenerate); planar and simplex surfaces handled.
 - `relax()` pops junctions that break Plateau's laws (Evolver's `o`) and relaxes again;
   if the surface still won't converge, edges collapsed below a 20th of the median are
-  deleted first (`pinch=True`, the default; a converged surface never loses edges).
+  deleted (`pinch=True`, the default; a converged surface never loses edges).
   `octa.fe` and `popstr.fe` now reach the energies of Brakke's recipes on defaults.
-  `IterationResult.popped` and `.collapsed` count them.
+  `IterationResult.popped` and `.collapsed` count them. The deletion runs as a last
+  resort: untidied gradient steps let a shrinking neck or film collapse (the tidying
+  held it open as slivers), and the outcome is kept only if it converges or lowers the
+  energy on a sound mesh. `cat.fe` and the stress catenoid past its fold pinch off into
+  two discs (stress case 2 now checks the discs); the drainage stress case on plain
+  defaults takes about 3x longer (127 unconverged steps).
 - Edge deletion refuses only merges that would make two facets one (the case that lost
   surfaces in Evolver 2.70a). The check from 0.7.0 also refused shared neighbours and
   parallel edges without that, and loop edges, which is how a collapsing neck's ring

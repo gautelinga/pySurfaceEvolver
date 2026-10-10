@@ -139,11 +139,14 @@ Other things to know:
   three at a point). Other junctions can always lower the energy by splitting, so
   `relax()` pops them (Evolver's `o`) and relaxes again; `r.popped` counts them, and
   Brakke's `octa.fe` and `popstr.fe` reach the energies of his own recipes. If the
-  surface still won't converge, edges that have collapsed to a 20th of the median
-  are deleted first, as when a small film in a foam shrinks away (`r.collapsed`;
-  `relax(pinch=False)` turns this off). A converged surface never loses edges. Not
-  yet handled: a neck that the tidying turns into a thin tube of sliver facets
-  instead of short edges (`cat.fe`'s collapsing catenoid).
+  surface still won't converge, a last resort: gradient steps without tidying (which
+  can hold a shrinking neck open as a tube of slivers), then edges that have
+  collapsed to a 20th of the median are deleted, junctions popped, and the surface
+  relaxed, kept only if that converges or lowers the energy on a sound mesh
+  (`r.collapsed`; `relax(pinch=False)` turns it off). That is how a small film in a
+  foam shrinks away, and how a catenoid past its fold pinches off into two discs
+  (`cat.fe`, stress case 2). A converged surface never loses edges. The last resort
+  costs up to a few hundred gradient steps on each unconverged result.
 * **No Hessian.** Gap energies, crystalline integrands and simplex bodies get
   gradient steps only, and gradient steps converge slowly: such results often end
   unconverged by the residual, with the energy settled.

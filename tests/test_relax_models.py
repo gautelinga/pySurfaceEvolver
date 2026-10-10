@@ -142,3 +142,14 @@ def test_relax_pinch_false_keeps_collapsing_edges(load):
 def test_relax_leaves_a_sound_surface_alone(cube):
     r = cube.relax()
     assert r.popped == 0 and r.collapsed == 0
+
+
+def test_relax_pinches_a_collapsing_neck(load):
+    # cat.fe: a catenoid at its fold. The neck collapses during untidied
+    # gradient steps, its ring of edges is deleted and the pinched vertex
+    # popped: two discs (the rings are 12-gons after one refinement)
+    ev = load("cat.fe")
+    r = ev.relax(levels=1)
+    assert r.converged and r.collapsed > 0 and r.popped > 0
+    assert ev.total_energy == pytest.approx(13.6603, rel=1e-4)
+    assert r.health.ok
