@@ -741,34 +741,52 @@ G2.3 *Done*: `ev.stability()` counts eigenvalues below -1% of the scale of the
      **Stability in every relax() result**: an eigenvalue count after
      convergence (one factorization; skippable), `stable` in the result and a
      warning when not. Target: case 1 passes; case 2 reports the fold.
-G2.3b *Found in the cleanup*: relax()'s Newton phase moves only along normals; when
-     it moves a contact line far (the liquid bridge from its cylinder), facets at
-     the contact line degenerate (smallest angle 3e-5 degrees), since no tidying
-     follows. Alternate tidied gradient rounds and Newton until both the residual
-     and the mesh are sound. The bridge example keeps its explicit recipe until then.
-G2.4 **Isotropic remeshing in C toward a size field** (the standard algorithm,
-     Botsch-Kobbelt style, inside the engine): split edges longer than 4/3 h,
-     collapse edges shorter than 4/5 h (with the link condition and constraint
-     compatibility), flip toward valence 6, tangential relaxation (G2.1),
-     projection to constraints. The size field h(x) comes from the geometry, not
-     from current edge lengths: principal curvature (a chordal error bound),
-     boundary-curve curvature (small contact lines), and gaps to nearby
-     constraints and surfaces (thin films, necks), clamped by a global size and
-     graded. Run by relax() when the mesh strays from the field. Target: cases
-     3 and 8 (and the bridge's neck in 5) pass; no regressions.
-G2.5 **Guarded descent**: per round, if the energy rises beyond what volume
-     corrections explain, restore the round's start and fall back (conjugate ->
-     plain gradients, smaller scale). Then reconsider conjugate gradients as the
-     default (the flat 10-degree drop needs them or Newton).
-G2.6 **Health report** in relax() results: residual, stability, facet quality,
-     near-contacts with constraints, mirrors and other parts of the surface (the
-     events of the drainage example), as data plus warnings; topology changes
-     stay the user's call, but nothing goes unnoticed.
-G2.7 **Examples on defaults**: the notebooks with plain relax() (re-verified
-     numbers); then the stress cases condensed into notebook examples.
+**Revised 2026-10-10 (after G2.2, G2.3 and two failed remeshing attempts).**
+Both attempts failed on the remeshing details, not the idea: a size field that
+chased its own mesh, and edge collapses that lost volume (20% on a cap). Most of
+the remaining failures may need refinement only, and collapses caused all the
+damage, so the order is now: find out what each failure needs, fix the cheap
+things, then refine only, and collapse only if mesh growth calls for it. Each
+step judged as before (stress suite with defaults, tests, sanitizers for C).
 
-Also: confirm case 5's reference at gap 0.2 with a converged fine run before
-judging the solver there.
+G2.4 **Resolution check** (about 15 minutes, first). Rerun the failing cases
+     (3, 5, 8) with defaults and one uniform refinement more. If they pass,
+     resolution is the cause and adaptive refinement only has to be cheaper; if
+     not, the cause is elsewhere and gets its own step. Case 5's reference is
+     confirmed (a converged fine run matches it to 0.5%).
+G2.5 **Tidying around Newton** (was G2.3b; small). relax()'s Newton phase moves
+     a contact line far without tidying, and its facets degenerate (the liquid
+     bridge: smallest angle 3e-5 degrees). Alternate tidied gradient rounds and
+     a few Newton steps until both the residual and the mesh are sound (a quality
+     check between them). Target: the liquid-bridge example on plain defaults;
+     maybe case 5.
+G2.6 **Guarded descent** (a few hours). Per gradient round, an energy jump beyond
+     what volume corrections explain is undone, falling back from conjugate to
+     plain gradients. Then conjugate gradients by default. Target: case 3 at 10
+     degrees (the flat drop converges only with them), no regression in 2 and 5
+     (where they diverged).
+G2.7 **Refine-only adaptivity** (if G2.4 says resolution). Split edges where the
+     geometry needs it, never collapse: a boundary curve turning more than
+     ~11 degrees per vertex (at least ~32 edges around a small contact circle),
+     facets meeting at more than ~20 degrees, and (as a C helper) thin gaps to
+     nearby walls. At most one level per pass, from a size field smoothed over
+     the one-ring so it can't chase mesh noise; relaxation in between. Validate
+     on static shapes first (a pass keeps the volume to 1e-4, a second pass after
+     relaxation changes nothing, the facet count stays bounded), then on the
+     suite. Target: cases 3 and 8.
+G2.8 **Guarded collapsing** (only if mesh growth becomes a problem). A collapse is
+     rejected if it would flip a facet, tilt neighbouring normals by more than
+     ~15 degrees, change the local enclosed volume beyond a tolerance, or make
+     edges longer than 4/3 of the target; in C, inside the edge loop.
+G2.9 **Health report** (was G2.6): residual, stability, facet quality,
+     near-contacts with walls, mirrors and the surface itself, in every relax()
+     result.
+G2.10 **Examples on defaults** (was G2.7): the liquid bridge and the drainage
+     helper without their crutches (remesh() each step, undo_if, stability=False);
+     then the stress cases condensed into notebook examples.
+
+The earlier G2.4 design (full isotropic remeshing in C toward a geometric size
+field) stays the long-term target that G2.7 and G2.8 build toward.
 
 ## Tools and conventions
 
