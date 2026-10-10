@@ -16,10 +16,11 @@ tutorial
 liquid_bridge
 slit_droplet
 slit_drainage
+relaxing
 api
 performance
 ```
 
 The README has a
 compact overview of the API; the tutorial works through one problem from datafile to
-FEM mesh; the liquid-bridge example adds contact angles on curved solids, the slit example walls and mirror planes; the API reference documents every public class and function.
+FEM mesh; the liquid-bridge example adds contact angles on curved solids, the slit example walls and mirror planes; *Relaxing a surface* explains what `relax()` does, how to read its result and where the defaults stop working; the API reference documents every public class and function.
