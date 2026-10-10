@@ -676,6 +676,74 @@ round -> restore and fall back), which would make cg safe; remeshing driven by
 the residual's distribution or by contact-angle resolution rather than by edge
 lengths.
 
+## Phase G2: robustness in the core (replanned 2026-10-10)
+
+The user: changes in the core are permitted; robustness is key. Phase G showed
+that thresholds layered on Evolver's operations (V, l, t, K, conj_grad) fix one
+case and break another. The failures trace to four root causes, each better
+fixed in the engine than worked around in Python:
+
+1. **Tangential drift.** Gradient steps move vertices along the surface too;
+   vertices pile up (wire rings, contact lines, thin fibres) and facets collapse.
+   `V` fights it by moving vertices to neighbour averages, which also moves them
+   off the surface: it bumps the energy every round and keeps convergence from
+   settling.
+2. **Spurious Hessian modes.** Vertices on a boundary curve (two constraints in
+   3D) keep a tangential degree of freedom in `hessian_normal`: sliding along
+   the wire, a mesh mode with negative curvature. It makes Newton indefinite
+   and eigenvalue counts meaningless (the catenoid: ~120 "negative"
+   eigenvalues = its wire vertices).
+3. **Resolution that doesn't follow the geometry.** Fixed meshes go too coarse
+   where features shrink (a small contact disk, a thin film over a bead, the
+   neck of a bridge) and stay needlessly fine elsewhere.
+4. **Unguarded descent.** Conjugate gradients can blow up to finite but huge
+   energies; no guard notices.
+
+Steps, each measured on the whole stress suite (all nine cases, defaults only),
+the test suite, sanitizers (C changes), and the benchmark (no slowdown beyond
+noise on the user's workload sizes):
+
+G2.1 **Tangential relaxation in C** (a new command, used by relax() instead of
+     `V`): move each vertex toward the area-weighted centroid of its
+     neighbours, but only within its tangent plane (interior vertices), along
+     its boundary curve (wire vertices: even spacing) or within the constraint
+     and along the contact line (contact-line vertices: even spacing along the
+     line). Shape-neutral to first order, so no energy bumps. Target: the
+     catenoid, barrel and drainage band keep sound facets with plain gradients,
+     and rounds settle (the gradient phase stops hitting max_iter).
+G2.2 **Hessian degrees of freedom on boundary curves** (hessian.c): a vertex
+     whose free directions are only tangent to its boundary curve gets no
+     Hessian freedom (it is placed by G2.1, not by Newton). Contact-line vertices
+     keep their one physical direction (normal projected into the wall).
+     Target: the catenoid shows 0 negative eigenvalues while stable; the
+     cylinder's count turns negative at r = 1/pi.
+G2.3 **Stability in every relax() result**: an eigenvalue count after
+     convergence (one factorization; skippable), `stable` in the result and a
+     warning when not. Target: case 1 passes; case 2 reports the fold.
+G2.4 **Isotropic remeshing in C toward a size field** (the standard algorithm,
+     Botsch-Kobbelt style, inside the engine): split edges longer than 4/3 h,
+     collapse edges shorter than 4/5 h (with the link condition and constraint
+     compatibility), flip toward valence 6, tangential relaxation (G2.1),
+     projection to constraints. The size field h(x) comes from the geometry, not
+     from current edge lengths: principal curvature (a chordal error bound),
+     boundary-curve curvature (small contact lines), and gaps to nearby
+     constraints and surfaces (thin films, necks), clamped by a global size and
+     graded. Run by relax() when the mesh strays from the field. Target: cases
+     3 and 8 (and the bridge's neck in 5) pass; no regressions.
+G2.5 **Guarded descent**: per round, if the energy rises beyond what volume
+     corrections explain, restore the round's start and fall back (conjugate ->
+     plain gradients, smaller scale). Then reconsider conjugate gradients as the
+     default (the flat 10-degree drop needs them or Newton).
+G2.6 **Health report** in relax() results: residual, stability, facet quality,
+     near-contacts with constraints, mirrors and other parts of the surface (the
+     events of the drainage example), as data plus warnings; topology changes
+     stay the user's call, but nothing goes unnoticed.
+G2.7 **Examples on defaults**: the notebooks with plain relax() (re-verified
+     numbers); then the stress cases condensed into notebook examples.
+
+Also: confirm case 5's reference at gap 0.2 with a converged fine run before
+judging the solver there.
+
 ## Tools and conventions
 
 - Tests: `pytest`; with `PYSE_CHECK_FACET_CACHE=1` for cache verification.
