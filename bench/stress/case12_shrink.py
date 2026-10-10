@@ -29,7 +29,9 @@ def run(quick=False):
         ref = cap_reference(step.value, theta)
         err = max(rel(ev.total_energy, ref["energy"]), rel(contact_radius(ev, 1), ref["radius"]))
         errors.append(err)
-        res.rows.append(dict(volume=step.value, error=err))
+        res.rows.append(dict(volume=step.value, energy=ev.total_energy, energy_ref=ref["energy"],
+                             radius=contact_radius(ev, 1), radius_ref=ref["radius"], error=err,
+                             call=track.last))
     track.finish(ev, res)
     res.error = max(errors)
     limit = max(2*errors[0], 1e-3)

@@ -46,7 +46,8 @@ def run(quick=False):
         counts = ev.eigen_counts()
         row = dict(theta=step.value, energy=ev.total_energy, pressure=ev.body(1).pressure,
                    equator=eq, negative=counts.negative, zero=counts.zero,
-                   stable=step.result.stable, unstable_modes=step.result.negative_modes)
+                   stable=step.result.stable, unstable_modes=step.result.negative_modes,
+                   call=track.last)
         if ref is not None:
             err = max(rel(ev.total_energy, ref["energy"]), rel(ev.body(1).pressure, ref["pressure"]),
                       rel(eq, ref["equator"]))

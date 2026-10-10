@@ -14,6 +14,12 @@ The examples import starting shapes and reference solutions from
 `sys.path`. `recipes.continuation` steps a parameter or a volume and relaxes after
 each step; `step.result` is that relaxation's result.
 
+Each case has two figures, from a run of the full suite version
+(`python bench/stress/figures.py`, which also redraws them): the result against its
+reference, the error per step with the case's pass limit, and what `relax()` did at each
+step (gradient and Newton steps, seconds, and marks where it didn't converge or reported
+an unstable equilibrium); and the surface at a few steps.
+
 A ninth case, the drainage band of [slit_drainage](slit_drainage.ipynb), needs the mesh
 remeshed explicitly at each step (`ev.remesh(target=h)`, as in that notebook); with
 `relax()` alone its band pressures are off by up to several percent. See
@@ -54,6 +60,20 @@ unstable from r = 0.3125 (theory 1/pi = 0.3183)
 ```
 
 The check flags it one step past the onset (the steps are 0.0125 apart in radius).
+
+```{figure} _static/stress/case01.png
+:alt: Case 1: result, error and solver steps
+:width: 100%
+
+Left, the column's area against the cylinder's, with the count of negative Hessian eigenvalues (red) turning to one at r = 1/pi; relax() marks every step past the onset unstable. Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case01_shapes.png
+:alt: Case 1: shapes
+:width: 100%
+
+The column at radius 0.5, 0.4, at the onset and at 0.2: still a cylinder, a saddle.
+```
 
 ## A catenoid to its fold
 
@@ -118,6 +138,20 @@ H = 0.750: past the fold, converged False
 Within 0.03% of the exact catenoid up to the fold; past it the film collapses and
 `relax()` says it did not converge.
 
+```{figure} _static/stress/case02.png
+:alt: Case 2: result, error and solver steps
+:width: 100%
+
+Left, the film's area on the exact catenoid up to the fold; past it no step converges (red crosses), as there is no film to converge to. Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case02_shapes.png
+:alt: Case 2: shapes
+:width: 100%
+
+The film at H = 0.325, 0.5 and 0.65, and past the fold, where its neck has collapsed.
+```
+
 ## A sessile drop at high contact angles
 
 A drop (no gravity) whose contact angle is stepped from 90 to 170 degrees at fixed
@@ -161,6 +195,20 @@ theta 170.0: energy error 0.17%, contact radius 0.1608 (exact 0.1378), 1120 face
 Energies within 0.25%. At 170 degrees the contact disk (radius 0.14) is resolved by a
 coarse ring and the radius is 17% off: the implied contact angle is 1.7 degrees off.
 Start from a finer mesh for such angles.
+
+```{figure} _static/stress/case03.png
+:alt: Case 3: result, error and solver steps
+:width: 100%
+
+Left, the contact radius against the exact cap (log scale) and the error of the implied contact angle (limit 1.5 degrees: only 170 fails) and of the energy; the first bar of each sweep includes the first relaxation. Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case03_shapes.png
+:alt: Case 3: shapes
+:width: 100%
+
+The drop at 10, 50, 130 and 170 degrees, same volume.
+```
 
 ## A liquid bridge as the gap closes
 
@@ -211,6 +259,20 @@ gap 0.001: energy -0.41160 (reference -0.41151), pressure -1.8424 (reference -1.
 Energies within 0.2% and pressures within 0.01 (0.5% where they are large) at every
 gap.
 
+```{figure} _static/stress/case05.png
+:alt: Case 5: result, error and solver steps
+:width: 100%
+
+Left, energy and neck radius against the axisymmetric bridge, the gap on a log scale; each gap is a new surface relaxed with two refinements. Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case05_shapes.png
+:alt: Case 5: shapes
+:width: 100%
+
+The bridge at gaps 0.2, 0.01 and 0.001.
+```
+
 ## A barrel drop on a fibre
 
 A drop of volume 2 on a fibre of radius 0.2, its contact angle stepped from 20 to 80
@@ -255,6 +317,20 @@ theta   80: energy 7.5844 (barrel 7.5806), stable False
 Within 0.2% of the barrel; unstable (two negative modes, the roll-up in two
 directions) from 70 degrees on.
 
+```{figure} _static/stress/case06.png
+:alt: Case 6: result, error and solver steps
+:width: 100%
+
+Left, the equator radius against the axisymmetric barrel; from 70 degrees relax() reports the barrel unstable (orange): it would roll up into a clam shell. Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case06_shapes.png
+:alt: Case 6: shapes
+:width: 100%
+
+The barrel at 20, 50 and 80 degrees.
+```
+
 ## A cube inflated a hundredfold
 
 The sample cube relaxed to a sphere and inflated to 100 times its volume: the surface
@@ -280,6 +356,20 @@ volume   100: area 104.5410, sphere 104.1879, error 0.339%
 ```
 
 The error stays at the coarse mesh's 0.34%.
+
+```{figure} _static/stress/case09.png
+:alt: Case 9: result, error and solver steps
+:width: 100%
+
+Left, the area against a sphere's; the error stays at the starting mesh's as the surface stretches tenfold. Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case09_shapes.png
+:alt: Case 9: shapes
+:width: 100%
+
+The surface at volumes 1, 10 and 100, to scale.
+```
 
 ## A gravity puddle
 
@@ -313,6 +403,20 @@ height 1.0739 (reference 1.0714), energy 62.6164 (reference 62.5967)
 ```
 
 Height and energy within 0.25%.
+
+```{figure} _static/stress/case11.png
+:alt: Case 11: result, error and solver steps
+:width: 100%
+
+Left, the vertices against the axisymmetric profile with gravity, and the four errors (limit 0.5%). Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case11_shapes.png
+:alt: Case 11: shapes
+:width: 100%
+
+The puddle.
+```
 
 ## A drop evaporating to 1e-4 of its volume
 
@@ -353,3 +457,17 @@ volume 6.54e-05: energy error 0.22%, radius error 0.60%
 
 The error stays near the starting mesh's (the contact radius of the coarse rim is
 0.4-0.6% off).
+
+```{figure} _static/stress/case12.png
+:alt: Case 12: result, error and solver steps
+:width: 100%
+
+Left, the contact radius against the exact cap over four decades of volume; the error stays near the starting mesh's. Middle, the error against the reference. Right, what relax() did at each step.
+```
+
+```{figure} _static/stress/case12_shapes.png
+:alt: Case 12: shapes
+:width: 100%
+
+The cap at the start, at 1e-2 and at 1e-4 of its volume, each to its own scale.
+```

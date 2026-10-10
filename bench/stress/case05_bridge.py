@@ -77,7 +77,7 @@ def run(quick=False):
         errs.append(err)
         res.rows.append(dict(gap=gap, energy=e, energy_ref=ref["energy"], pressure=p,
                              pressure_ref=ref["pressure"], neck=neck_radius(ev), neck_ref=ref["neck"],
-                             error=err, negative=ev.eigen_counts().negative))
+                             error=err, negative=ev.eigen_counts().negative, call=track.last))
     if ev is not None:
         track.finish(ev, res)
     res.error = max(errs)

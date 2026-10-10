@@ -36,7 +36,7 @@ def run(quick=False):
         if said is False and flagged is None:
             flagged = r
         res.rows.append(dict(radius=r, energy=ev.total_energy, cylinder=2*np.pi*r,
-                             negative=neg, reported_stable=said))
+                             negative=neg, reported_stable=said, call=track.last))
     track.finish(ev, res)
     res.error = rel(first_unstable, rc) if first_unstable else float("nan")
     res.passed = flagged is not None and rel(flagged, rc) < 0.05

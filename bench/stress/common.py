@@ -30,6 +30,7 @@ class Result:
     negative_eigenvalues: Optional[int] = None   # at the end (None: not checked)
     notes: List[str] = field(default_factory=list)
     rows: List[Dict[str, Any]] = field(default_factory=list)   # per step, for plots
+    calls: List[Dict[str, Any]] = field(default_factory=list)  # Tracker.calls
 
 
 class Tracker:
@@ -40,11 +41,24 @@ class Tracker:
         self.gradient = 0
         self.newton = 0
         self.unconverged = 0
+        self.calls: List[Dict[str, Any]] = []   # per relax(), with the mesh after it
 
     def relax(self, ev) -> Any:
+        t = time.perf_counter()
         r = ev.relax()
+        seconds = time.perf_counter() - t
         self.add(r)
+        m = ev.mesh()
+        self.calls.append(dict(seconds=seconds, gradient=len(r.energy), newton=r.newton_steps,
+                               converged=bool(r.converged), stable=r.stable,
+                               negative_modes=r.negative_modes, residual=float(r.residual),
+                               vertices=m.vertices.copy(), facets=m.facets.copy()))
         return r
+
+    @property
+    def last(self) -> int:
+        """Index of the latest relax() call in ``calls``, for a row to refer to."""
+        return len(self.calls) - 1
 
     def add(self, r) -> None:
         self.gradient += len(r.energy)
@@ -54,6 +68,7 @@ class Tracker:
 
     def finish(self, ev, result: Result, eigen: bool = True) -> Result:
         result.seconds = time.perf_counter() - self.start
+        result.calls = self.calls
         result.gradient_steps = self.gradient
         result.newton_steps = self.newton
         result.unconverged_steps = self.unconverged

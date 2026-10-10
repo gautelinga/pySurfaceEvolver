@@ -43,7 +43,7 @@ def run(quick=False):
         m = ev.mesh()
         neck = float(np.hypot(m.vertices[:, 0], m.vertices[:, 1]).min())
         row = dict(H=step.value, area=ev.total_energy, reference=ref, neck=neck,
-                   converged=step.result.converged)
+                   converged=step.result.converged, call=track.last)
         if ref is None:
             past.append(row)
         else:

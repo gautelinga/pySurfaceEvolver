@@ -35,7 +35,8 @@ def run(quick=False):
                 pressure_err=abs(ev.body(1).pressure - ref["pressure"])/max(1.0, abs(ref["pressure"])))
     res.rows.append(dict(energy=ev.total_energy, energy_ref=ref["energy"], height=height,
                          height_ref=ref["height"], radius=radius, radius_ref=ref["radius"],
-                         pressure=ev.body(1).pressure, pressure_ref=ref["pressure"], **errs))
+                         pressure=ev.body(1).pressure, pressure_ref=ref["pressure"], call=track.last,
+                         **errs))
     track.finish(ev, res)
     res.error = max(errs.values())
     res.passed = res.error < 5e-3

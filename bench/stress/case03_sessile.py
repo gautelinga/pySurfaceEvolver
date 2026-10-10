@@ -38,9 +38,9 @@ def run(quick=False):
     volume = 2*np.pi/3
     res = Result(NAME, False, "")
     worst = 0.0
+    track = Tracker()
     for angles in (np.arange(80, 5, -10), np.arange(100, 175, 10)):
         ev = load(volume)
-        track = Tracker()
         track.relax(ev)
         for step in recipes.continuation(ev, recipes.parameter("theta"), angles.astype(float),
                                          relax=track.relax):
@@ -50,8 +50,8 @@ def run(quick=False):
             worst = max(worst, e_err)
             res.rows.append(dict(theta=step.value, energy_err=e_err, angle=angle,
                                  angle_err=abs(angle - step.value),
-                                 converged=bool(step.result.converged)))
-        track.finish(ev, res, eigen=False)
+                                 converged=bool(step.result.converged), call=track.last))
+    track.finish(ev, res, eigen=False)
     res.error = worst
     bad = [r["theta"] for r in res.rows
            if r["energy_err"] >= 0.01 or r["angle_err"] >= 1.5 or not r["converged"]]

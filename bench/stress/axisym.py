@@ -14,6 +14,8 @@ Solvers (each returns a dict):
 * ``bridge_spheres(volume, gap, theta, R=1)``: a bridge between two spheres of
   radius R centred at z = +-(R + gap/2).
 * ``barrel(volume, b, theta)``: a barrel drop on a fibre of radius b (the z axis).
+* ``sessile_profile(volume, theta, rho_g=0)``: the sessile drop's meridian, (r, z)
+  arrays (not a dict).
 
 ``python axisym.py`` validates against exact shapes and prints the errors.
 """
@@ -66,7 +68,7 @@ def _root_in_scan(f, xs):
 
 # ---- sessile drop --------------------------------------------------------------
 
-def _sessile(b, theta, rho_g):
+def _sessile(b, theta, rho_g, profile=False):
     """From the apex (curvature 1/b, at height H unknown) down to tangent angle
     theta. Uses depth y below the apex: dphi/ds = 2/b + rho_g y - sin(phi)/x."""
     t = np.radians(theta)
@@ -84,7 +86,7 @@ def _sessile(b, theta, rho_g):
                     rtol=RTOL, atol=ATOL)
     if sol.status != 1:
         raise ValueError("contact angle not reached")
-    return sol.y[:, -1]
+    return sol.y if profile else sol.y[:, -1]
 
 
 def sessile(volume, theta, rho_g=0.0):
@@ -95,6 +97,13 @@ def sessile(volume, theta, rho_g=0.0):
     energy = area - np.cos(t)*np.pi*x*x + grav
     return dict(radius=x, height=h, area=area, volume=vol, gravity=grav, energy=energy,
                 apex_radius=b, pressure=2/b + rho_g*h)
+
+
+def sessile_profile(volume, theta, rho_g=0.0):
+    """The drop's meridian from the apex to the contact line: (r, z) arrays."""
+    b = brentq(lambda b: _sessile(b, theta, rho_g)[4] - volume, 1e-3, 1e3, xtol=1e-14, rtol=1e-14)
+    y = _sessile(b, theta, rho_g, profile=True)
+    return y[0], y[1, -1] - y[1]
 
 
 # ---- bridge between spheres ---------------------------------------------------

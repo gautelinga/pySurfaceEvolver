@@ -38,7 +38,8 @@ def main(argv):
               f"{r.gradient_steps:8d} {r.newton_steps:6d} {r.unconverged_steps:6d} "
               f"{r.min_angle:9.1f} {str(r.negative_eigenvalues):>7s}")
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results.json")
-    json.dump([r.__dict__ for r in results], open(out, "w"), indent=1, default=str)
+    json.dump([{k: v for k, v in r.__dict__.items() if k != "calls"} for r in results],
+              open(out, "w"), indent=1, default=str)
 
 
 if __name__ == "__main__":

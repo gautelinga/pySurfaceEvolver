@@ -28,7 +28,8 @@ def run(quick=False):
                                      relax=track.relax):
         err = rel(ev.total_energy, sphere(step.value))
         errors.append(err)
-        res.rows.append(dict(volume=step.value, error=err))
+        res.rows.append(dict(volume=step.value, energy=ev.total_energy, reference=sphere(step.value),
+                             error=err, call=track.last))
     track.finish(ev, res)
     res.error = max(errors)
     limit = max(2*errors[0], 1e-3)
