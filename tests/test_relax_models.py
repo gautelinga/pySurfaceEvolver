@@ -215,3 +215,43 @@ def test_relax_warns_when_asked_for_newton_without_a_hessian(load):
         ev.relax(newton=5, max_iter=20)
     with pytest.warns(pyse.EvolverWarning, match="no Newton steps"):
         load("simplex3.fe").relax(stability=True, max_iter=20)
+
+
+# ---- Brakke's online examples (kenbrakke.com/evolver/examples) -----------------------
+
+def test_relax_equiangulates_a_coarse_start_early(load):
+    # cbga1: solder on a pad under a sphere, started as a hexagonal prism of
+    # quads split at their centres. Its recipe first swaps the vertical edges
+    # by hand; without that, gradient steps settle at an energy of 11 on the
+    # badly triangulated prism (5.3 swapped). relax() equiangulates after its
+    # first step, which swaps them.
+    ev = load("cbga1.fe")
+    r = ev.relax(levels=1)
+    assert r.converged and r.health.angle_min > 10
+    assert ev.total_energy < 4.6
+
+
+def test_saddle_then_relax_finds_the_tilted_drop(load):
+    # cbga2 (solder at a 90 degree contact angle on a sphere): the symmetric
+    # bulge is a saddle, as the file's comments say; saddle() and relax()
+    # find the drop leaning to one side
+    ev = load("cbga2.fe")
+    with pytest.warns(pyse.UnstableEquilibriumWarning):
+        r = ev.relax(levels=2)
+    assert r.converged and r.stable is False
+    symmetric = ev.total_energy
+    assert ev.saddle() > 0
+    r = ev.relax()
+    assert r.converged and r.stable is True and ev.total_energy < symmetric - 0.05
+
+
+@pytest.mark.parametrize("name, levels, recipe", [
+    ("pcell.fe", 3, 0.1955095825),     # Schwarz P, quotient space, after its gogo
+    ("dcell.fe", 4, 0.3199260248),     # Schwarz D
+    ("bga-1.fe", 2, 0.1547576148),     # a ball grid array joint
+])
+def test_relax_matches_the_online_recipes(load, name, levels, recipe):
+    ev = load(name)
+    r = ev.relax(levels=levels)
+    assert r.converged and r.stable is True
+    assert ev.total_energy == pytest.approx(recipe, rel=3e-5)

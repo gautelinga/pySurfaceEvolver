@@ -1,0 +1,162 @@
+// cbga2.fe
+// Liquid solder between circular pad and sphere.
+// This file uses explicit facets on the sphere
+// to define volume and contact tension, instead
+// of edge integrals.
+
+
+// physical constants, in cgs units
+parameter S_TENSION=430       // liquid solder surface tension, erg/cm^2
+parameter SOLDER_DENSITY=8.6  // grams/cm^3
+gravity_constant 980          // cm/sec^2
+parameter r_pad = 0.04        // radius of upper pads, cm
+parameter height = 0.02       // height of upper pad, cm
+parameter r_sphere = 0.04     // radius of solder sphere, cm
+
+#define  RIN  sqrt(2*r_sphere*height-height^2)
+
+constraint 1
+formula: z = 0
+
+constraint 2
+formula: x^2 + y^2 = r_pad^2
+
+constraint 3 // contact facets on sphere
+formula: x^2 + y^2 + (z - r_sphere)^2 = r_sphere^2
+
+constraint 4 // for display of the sphere
+formula: x^2 + y^2 + (z - r_sphere)^2 = r_sphere^2
+
+Vertices
+//vertices of the low pad
+1  r_pad*cos(0*pi/3)  r_pad*sin(0*pi/3)  0   constraints 1,2 fixed
+2  r_pad*cos(1*pi/3)  r_pad*sin(1*pi/3)  0   constraints 1,2 fixed
+3  r_pad*cos(2*pi/3)  r_pad*sin(2*pi/3)  0   constraints 1,2 fixed
+4  r_pad*cos(3*pi/3)  r_pad*sin(3*pi/3)  0   constraints 1,2 fixed
+5  r_pad*cos(4*pi/3)  r_pad*sin(4*pi/3)  0   constraints 1,2 fixed
+6  r_pad*cos(5*pi/3)  r_pad*sin(5*pi/3)  0   constraints 1,2 fixed
+// vertices of the up pad
+7  r_pad*cos(0*pi/3)  r_pad*sin(0*pi/3)  height  constraint 3
+8  r_pad*cos(1*pi/3)  r_pad*sin(1*pi/3)  height  constraint 3
+9  r_pad*cos(2*pi/3)  r_pad*sin(2*pi/3)  height  constraint 3 
+10 r_pad*cos(3*pi/3)  r_pad*sin(3*pi/3)  height  constraint 3 
+11 r_pad*cos(4*pi/3)  r_pad*sin(4*pi/3)  height  constraint 3 
+12 r_pad*cos(5*pi/3)  r_pad*sin(5*pi/3)  height  constraint 3 
+//the center of low pad
+19  0  0  0  constraint 1  fixed
+//to show the lower half sphere
+20 r_sphere*cos(0*pi/3)  r_sphere*sin(0*pi/3)  r_sphere  constraint 4 fixed
+21 r_sphere*cos(1*pi/3)  r_sphere*sin(1*pi/3)  r_sphere  constraint 4 fixed
+22 r_sphere*cos(2*pi/3)  r_sphere*sin(2*pi/3)  r_sphere  constraint 4 fixed
+23 r_sphere*cos(3*pi/3)  r_sphere*sin(3*pi/3)  r_sphere  constraint 4 fixed
+24 r_sphere*cos(4*pi/3)  r_sphere*sin(4*pi/3)  r_sphere  constraint 4 fixed
+25 r_sphere*cos(5*pi/3)  r_sphere*sin(5*pi/3)  r_sphere  constraint 4 fixed
+26  0             0         0            fixed constraint 4
+
+Edges
+//the edges of the lower pad
+1    1  2  constraints 1,2   fixed
+2    2  3  constraints 1,2   fixed
+3    3  4  constraints 1,2   fixed
+4    4  5  constraints 1,2   fixed
+5    5  6  constraints 1,2   fixed
+6    6  1  constraints 1,2   fixed
+//outside edges of the upper pad
+7    7  8   constraint 3   
+8    8  9   constraint 3
+9    9  10  constraint 3   
+10   10 11  constraint 3   
+11   11 12  constraint 3   
+12   12 7   constraint 3
+//the vertical edges
+13   1  7
+14   2  8
+15   3  9
+16   4  10
+17   5  11
+18   6  12
+
+31  7 19  constraint 3 fixed
+32  8 19  constraint 3 fixed 
+33  9 19  constraint 3 fixed
+34  10 19  constraint 3 fixed
+35  11 19  constraint 3 fixed
+36  12 19  constraint 3 fixed
+//to show the low half sphere
+37  20 21  constraint 4 fixed 
+38  21 22  constraint 4 fixed 
+39  22 23  constraint 4 fixed 
+40  23 24  constraint 4 fixed 
+41  24 25  constraint 4 fixed
+42  25 20  constraint 4 fixed
+43  20 26  constraint 4 fixed
+44  21 26  constraint 4 fixed
+45  22 26  constraint 4 fixed
+46  23 26  constraint 4 fixed
+47  24 26  constraint 4 fixed
+48  25 26  constraint 4 fixed
+
+Faces
+// defined by oriented edge loops to have outward normal
+// the vertical faces
+1   1 14  -7 -13 tension S_TENSION
+2   2 15  -8 -14 tension S_TENSION
+3   3 16  -9 -15 tension S_TENSION
+4   4 17 -10 -16 tension S_TENSION
+5   5 18 -11 -17 tension S_TENSION
+6   6 13 -12 -18 tension S_TENSION
+//the faces assoiated with constraint sphere
+13    7 32 -31   constraint 3 fixed tension 0 // for 90 degree contact
+14    8 33 -32   constraint 3 fixed tension 0
+15    9 34 -33   constraint 3 fixed tension 0
+16   10 35 -34   constraint 3 fixed tension 0
+17   11 36 -35   constraint 3 fixed tension 0
+18   12 31 -36   constraint 3 fixed tension 0
+//to show the low half sphere
+19   37  44 -43    constraint 4 color red tension 0  fixed
+20   38  45 -44    constraint 4 color red tension 0  fixed
+21   39  46 -45    constraint 4 color red tension 0  fixed
+22   40  47 -46    constraint 4 color red tension 0  fixed
+23   41  48 -47    constraint 4 color red tension 0  fixed
+24   42  43 -48    constraint 4 color red tension 0  fixed
+
+//to show the bottom of the low pad
+25   -6 -5 -4 -3 -2 -1 constraints 1 no_refine color green tension 0 fixed
+
+Bodies // defined by oriented face list
+1  1 2 3 4 5 6  13 14 15 16 17 18  volume 0.0001  density SOLDER_DENSITY
+
+read
+hessian_normal
+unfix vertex where id>=7 and id<=12 // were fixed by being on fixed edges
+//t .01 // get rid of some stuff
+
+
+// to set contact tension to proper value for given angle
+angle := 90  // set this angle in degrees
+settension := { set facet tension (-S_TENSION*cos(angle*pi/180)) where
+                on_constraint 3;
+              }
+// do this to stop red sphere refining
+fixred := { set facet no_refine where color == red;
+            set edge ee no_refine where max(ee.facet,color==red) == 1;
+          }
+
+// a typical evolution
+gogo := { edgeswap edge where id >= 13 and id <= 18;
+          g 5;
+          r;
+          g 5;
+          r;
+          g 22;
+          fixred;
+          g 12;
+
+        }
+
+// For high enough contact angles, the bulge is unstable to bulging to
+// one side.  Use this to detect instability.  If there are negative
+// eigenvalues, use "saddle" to move off saddle point.
+detect := { convert_to_quantities; // since gravity involved
+        eigenprobe 0;  // see if any negative eigenvalues
+          }

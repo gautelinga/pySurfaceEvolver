@@ -1,0 +1,236 @@
+/* TwoSpheres.fe 
+
+   Two spheres stacked vertically, in contact or not, with ring of liquid between.
+   This version uses energy and content integrands on the constraints.  For
+   explicit contact surfaces for comparison, see TwoSpheres-explicit.fe.
+
+   The integrands are based on my document 
+   https://facstaff.susqu.edu/brakke/evolver/examples/TwoSpheres/TwoSpheres.pdf
+
+   Author: Ken Brakke, brakke@susqu.edu
+*/
+
+keep_originals
+
+parameter rad_upper = 1.00 // upper sphere radius 
+parameter angle_upper = 45 // upper sphere contact angle
+
+parameter rad_lower = 1.00 // bottom sphere radius 
+parameter angle_lower = 45 // bottom sphere contact angle
+
+parameter height_lower = 0.0  // height of the center of the lower sphere
+parameter height_upper = height_lower + rad_upper+rad_lower  // height of center of upper sphere; 
+                                                             // This value is for spheres in contact
+
+#define T_UPPER (-cos(angle_upper*pi/180)) // contact surface tension on upper sphere
+#define T_LOWER (-cos(angle_lower*pi/180)) // contact surface tension on upper sphere
+
+#define DENS 1    // density of the liquid
+
+// the lower sphere - display
+constraint low_disp_con 
+formula: sqrt(x^2 + y^2 + (z-height_lower)^2) = rad_lower
+
+// the upper sphere - display 
+constraint up_disp_con
+formula: sqrt(x^2 + y^2 + (z-height_upper)^2) = rad_upper 
+
+// liquid bridge upper contact line
+constraint upper_con
+#define H2 height_upper
+#define R2 rad_upper
+formula: sqrt(x^2 + y^2 + (z-H2)^2) = rad_upper 
+#define VUPPER (1/2*H2 - 1/3*(R2^2+R2*(H2-z)+(H2-z)^2)/(R2-z+H2))
+#define GUPPER (1/2*DENS*G*((H2^2+R2^2)/2 - 1/4*(x^2+y^2) - 2/3*H2*((H2-z)^2+(H2-z)*R2+R2^2)/(R2-z+H2)))
+energy:  // For contact angle.  
+e1: -T_UPPER*R2*y/(R2 - z + H2) - y*GUPPER
+e2:  T_UPPER*R2*x/(R2 - z + H2) + x*GUPPER
+e3: 0
+content:
+c1:  y*VUPPER
+c2: -x*VUPPER
+c3: 0
+
+// liquid bridge lower contact line
+constraint lower_con
+#define H1 height_lower
+#define R1 rad_lower
+#define VLOWER (1/2*H1 + 1/3*(R1^2+R1*(z-H1)+(z-H1)^2)/(R1+z-H1))
+#define GLOWER (1/2*DENS*G*((H1^2+R1^2)/2 - 1/4*(x^2+y^2) + 2/3*H1*((z-H1)^2+(z-H1)*R1+R1^2)/(R1+z-H1)))
+formula: sqrt(x^2 + y^2 + (z - H1)^2) = rad_lower
+energy:  // for contact angle
+e1: -T_LOWER*y/(R1 + z - H1) + y*GLOWER
+e2:  T_LOWER*x/(R1 + z - H1) - x*GLOWER
+e3: 0 
+content:
+c1:  y*VLOWER
+c2: -x*VLOWER
+c3: 0
+
+vertices: 
+
+// Lower sphere display
+1  rad_lower  0         height_lower low_disp_con FIXED 
+2  0          rad_lower height_lower low_disp_con FIXED 
+3 -rad_lower  0         height_lower low_disp_con FIXED 
+4  0         -rad_lower height_lower low_disp_con FIXED 
+5  0          0         height_lower-rad_lower constraint low_disp_con FIXED 
+6  0          0         height_lower+rad_lower constraint low_disp_con FIXED 
+
+// Upper sphere display
+7   0          rad_upper height_upper     constraint up_disp_con FIXED 
+8  -rad_upper  0         height_upper     constraint up_disp_con FIXED 
+9   0         -rad_upper height_upper     constraint up_disp_con FIXED 
+10  rad_upper  0         height_upper     constraint up_disp_con FIXED 
+12  0          0         height_upper+rad_upper     constraint up_disp_con FIXED  
+11  0          0         height_upper-rad_upper     constraint up_disp_con FIXED 
+
+// Liquid contact lines 
+#define ZUP (height_upper - 0.3*rad_upper)
+#define ZLO (height_lower + 0.3*rad_lower)
+22          sin(pi/3)   0  ZUP  constraint upper_con
+23      0.5*sin(pi/3)  3/4 ZUP  constraint upper_con 
+24     -0.5*sin(pi/3)  3/4 ZUP  constraint upper_con             
+25         -sin(pi/3)   0  ZUP  constraint upper_con  
+26     -0.5*sin(pi/3) -3/4 ZUP constraint upper_con  
+27      0.5*sin(pi/3) -3/4 ZUP constraint upper_con  
+28          sin(pi/3)   0  ZLO  constraint lower_con
+29      0.5*sin(pi/3)  3/4 ZLO  constraint lower_con 
+30     -0.5*sin(pi/3)  3/4 ZLO  constraint lower_con             
+31         -sin(pi/3)   0  ZLO  constraint lower_con  
+32     -0.5*sin(pi/3) -3/4 ZLO constraint lower_con  
+33      0.5*sin(pi/3) -3/4 ZLO constraint lower_con
+
+
+
+edges: 
+
+// Upper sphere display
+1  10  7     constraint up_disp_con FIXED
+2  11 10     constraint up_disp_con FIXED
+3  10 12     constraint up_disp_con FIXED 
+4   9 10     constraint up_disp_con FIXED
+5  12  9     constraint up_disp_con FIXED 
+6   9 11     constraint up_disp_con FIXED 
+7  11  7     constraint up_disp_con FIXED 
+8   7 12     constraint up_disp_con FIXED 
+9  12  8     constraint up_disp_con FIXED 
+10  9  8     constraint up_disp_con FIXED 
+11 11  8     constraint up_disp_con FIXED 
+12  7  8     constraint up_disp_con FIXED
+
+// Lower sphere display
+13  1 2    constraint low_disp_con FIXED
+14  2 3    constraint low_disp_con FIXED 
+15  3 4    constraint low_disp_con FIXED
+16  4 1    constraint low_disp_con FIXED
+17  5 4    constraint low_disp_con FIXED
+18  1 5    constraint low_disp_con FIXED
+19  4 6    constraint low_disp_con FIXED
+20  6 1    constraint low_disp_con FIXED 
+21  6 2    constraint low_disp_con FIXED
+22  2 5    constraint low_disp_con FIXED
+23  3 5    constraint low_disp_con FIXED
+24  6 3    constraint low_disp_con FIXED
+
+
+//the liquid bridge
+
+25    22  23 constraint upper_con    
+26    23  24 constraint upper_con    
+27    24  25 constraint upper_con    
+28    25  26 constraint upper_con    
+29    26  27 constraint upper_con    
+30    27  22 constraint upper_con    
+31    28  29 constraint lower_con    
+32    29  30 constraint lower_con    
+33    30  31 constraint lower_con    
+34    31  32 constraint lower_con    
+35    32  33 constraint lower_con    
+36    33  28 constraint lower_con    
+37    22  28
+38    23  29
+39    24  30
+40    25  31
+41    26  32
+42    27  33
+
+
+
+faces: 
+
+// Upper sphere display
+1 -10  -5  9     constraint up_disp_con density 0 FIXED
+2  10 -11 -6     constraint up_disp_con density 0 FIXED 
+3  11 -12 -7     constraint up_disp_con density 0 FIXED 
+4  12  -9 -8     constraint up_disp_con density 0 FIXED 
+5   7  -1 -2     constraint up_disp_con density 0 FIXED
+6   2  -4  6     constraint up_disp_con density 0 FIXED
+7   4   3  5     constraint up_disp_con density 0 FIXED
+8   1   8 -3     constraint up_disp_con density 0 FIXED
+
+// Lower sphere display
+9   17  16  18    constraint low_disp_con density 0 FIXED
+10 -16  19  20    constraint low_disp_con density 0 FIXED
+11  21 -13 -20    constraint low_disp_con density 0 FIXED
+12  13  22 -18    constraint low_disp_con density 0 FIXED
+13  15 -17 -23    constraint low_disp_con density 0 FIXED
+14 -19 -15 -24    constraint low_disp_con density 0 FIXED
+15  14  23 -22    constraint low_disp_con density 0 FIXED
+16 -21  24 -14    constraint low_disp_con density 0 FIXED
+
+// The liquid bridge surface
+17  37 31 -38 -25  color green
+18  42 36 -37 -30  color green
+19  41 35 -42 -29  color green
+20  40 34 -41 -28  color green
+21  39 33 -40 -27  color green 
+22  38 32 -39 -26  color green
+
+
+
+bodies:  
+1   17 18 19 20 21 22   volume 1  density 1
+
+read
+
+
+// Making nicely refined spheres and then freezing them so they don't refine more.
+ref_spheres := {
+  set edge no_refine where not fixed;
+  r;r;r;r;
+  set facet no_refine where fixed;
+  unset edge no_refine;
+  set edge no_refine where fixed;
+}
+
+// Printing out the various quantities to be compared with TwoSpheres-explicit.fe.
+// Usage: Load this file in Evolver, do "u" and "r" several times, then "test".
+//        Compare to exactly the same usage in TwoSpheres-explicit.fe
+convert_to_quantities  // to get the various values in named quantity form
+show_all_quantities    // which can be seen with the "Q" command.
+
+test := {
+   G 0; //  turn off gravity
+   printf "Upper sphere contact energy: %15.10f\n",constraint_upper_con_energy.value;
+   printf "Lower sphere contact energy: %15.10f\n",constraint_lower_con_energy.value;
+   printf "Upper sphere volume:         %15.10f\n",body_1_upper_con_meth.value;
+   printf "Lower sphere volume:         %15.10f\n",body_1_lower_con_meth.value;
+   no_G_energy_up := constraint_upper_con_energy.value;
+   no_G_energy_low := constraint_lower_con_energy.value;
+   G 1;
+   printf "Upper sphere gravity:        %15.10f\n",constraint_upper_con_energy.value - no_G_energy_up;
+   printf "Lower sphere gravity:        %15.10f\n",constraint_lower_con_energy.value - no_G_energy_low;
+                
+}   
+
+
+
+// Sample evolution script
+gogo := { u;
+          g 5;
+          r; g 10;
+          r; g 20;
+          r; g 20;
+}
+

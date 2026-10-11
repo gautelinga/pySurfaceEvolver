@@ -168,6 +168,18 @@ ev.relax(levels=1)
 e0 = ev.total_energy
 ev.saddle()                                 # a step along the negative mode
 print(f"energy {e0:.6f} -> {ev.total_energy:.6f}")'''),
+    md("""
+## Triply periodic minimal surfaces: `pcell.fe`, `dcell.fe`, `IWP.fe`
+
+From Brakke's collection of periodic minimal surfaces online (included with pySE):
+Schwarz's P and D surfaces and Schoen's I-WP, each a small piece of the surface in a
+quotient space (a symmetry group generates the rest)."""),
+    code('''for name in ("pcell.fe", "dcell.fe", "IWP.fe"):
+    runs = bh.compare(name)'''),
+    md("""
+`relax()` agrees with the recipes of P and D to about 1e-5. On I-WP the recipe
+refines the edges along the boundary once more and stops unconverged, so the two
+end on different meshes."""),
 ])
 
 # ---- 2. drops and capillarity --------------------------------------------------------
@@ -233,6 +245,39 @@ from fewer refinements (`levels=1`) its facets degenerate first, and it stops th
 says so instead of sliding into what the degenerate mesh allows."""),
     code('''runs = bh.compare("tankex.fe", "r; r; g 1000", levels=2)
 bh.show(runs)'''),
+    md("""
+## Solder joints: `bga-1.fe`, `cbga1.fe`, `cbga2.fe`
+
+Three files from Brakke's online examples (included with pySE), in cgs units
+(surface tension 430-480 erg/cm²). `bga-1.fe` is the first of his ball grid array
+tutorial: solder between two round pads."""),
+    code('''runs = bh.compare("bga-1.fe")
+bh.show(runs)'''),
+    md("""
+`cbga1.fe` holds solder between a pad and a sphere, its contact with the sphere as
+edge integrals. It starts as a hexagonal prism of quads that Evolver splits at their
+centres; the recipe first swaps the six vertical edges by hand (`edgeswap`), and
+without that, gradient steps settle at an energy of 11 on the badly triangulated prism.
+`relax()` equiangulates after its first step, which swaps them. (The recipe ends
+unconverged.)"""),
+    code('''runs = bh.compare("cbga1.fe")
+bh.show(runs)'''),
+    md("""
+`cbga2.fe` is the same joint with explicit contact facets on the sphere. Its comments
+say that at high contact angles the symmetric bulge is unstable, bulging to one side,
+and suggest Evolver's `saddle` to move off it. `relax()` finds the symmetric bulge and
+reports it unstable; `ev.saddle()` steps along the unstable mode, and relaxing from
+there finds the drop leaning over, at a lower energy."""),
+    code('''import warnings
+ev = pyse.Evolver("cbga2.fe")
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", pyse.UnstableEquilibriumWarning)
+    r = ev.relax(levels=2)
+print(f"symmetric: energy {ev.total_energy:.6f}, {r.negative_modes} unstable directions")
+print(f"saddle() lowers the energy by {ev.saddle():.4f}")
+r = ev.relax()
+print(f"leaning:   energy {ev.total_energy:.6f}, stable: {r.stable}")
+ev.plot(color="sandybrown", show_edges=False, smooth_shading=True)'''),
 ])
 
 # ---- 3. crystals and elastic membranes ---------------------------------------------

@@ -137,7 +137,8 @@ def test_relax_tidy_reaches_the_same_energy(cube):
     cube.restore(start)
     cube.refine()
     tidy = cube.relax(tol=1e-9, max_iter=2000, tidy=10)
-    assert plain.converged and tidy.converged and len(tidy.energy) % 10 == 0
+    # rounds of 10 steps after a first one of a single step
+    assert plain.converged and tidy.converged and len(tidy.energy) % 10 == 1
     # vertex averaging moves the vertices along the surface: a slightly
     # different discrete equilibrium
     assert tidy.energy[-1] == pytest.approx(plain.energy[-1], rel=1e-4)
@@ -377,7 +378,7 @@ def test_relax_warns_about_unstable_equilibria():
 def _coarse_bridge(gap=0.2, theta=40.0, volume=0.05, nz=4, nt=16):
     """A liquid bridge between unit spheres, started from a coarse tube (by
     default volume 0.05, contact angle 40, gap 0.2, 16 x 4: there, long gradient
-    runs let the contact-line vertices slide together until the surface breaks)."""
+    runs let the contact-line vertices slide together)."""
     from pysurfaceevolver import constraints as C
     c = 1 + gap/2
     lo, hi = 0.0, 0.999                   # the tube radius that holds the volume
@@ -536,11 +537,15 @@ def test_relax_reports_a_healthy_surface(cube):
     assert r.health.residual == r.residual and r.health.angle_min > 20
 
 
-def test_health_names_a_broken_surface():
-    # gradient steps only, long enough for the coarse bridge to fall apart
-    ev, _ = _coarse_bridge()
-    ev.relax(newton=0)
-    h = ev.health()
+def test_health_names_a_broken_surface(cube):
+    # a vertex pushed almost onto its neighbour: slivers
+    cube.refine()
+    m = cube.mesh()
+    a, b = m.edges[0]
+    v = cube.vertices
+    v[a] = v[b] + 1e-4*(v[a] - v[b])
+    cube.vertices = v
+    h = cube.health()
     assert not h.ok and any("degenerate" in s for s in h.issues)
 
 

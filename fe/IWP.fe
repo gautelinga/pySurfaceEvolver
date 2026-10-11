@@ -1,0 +1,122 @@
+// iwp.fe
+
+// fundamental cell for Schoen's IW-P minimal surface
+
+// Programmer: Ken Brakke, brakke@susqu.edu, http://www.susqu.edu
+
+/* Commands:
+   gogo - typical evolution
+   showcube - show one unit cell, as on web page
+   showcubelet - show 1/8 of unit cell
+   transforms off - show just single fundamental region
+   setcolor - to color one side yellow, as in my web page.
+
+   To turn off showing all the edges in the graphics display,
+      hit the "e" key in the graphics window.
+*/
+
+// from Alan Mackay UBCG04M@CCS.BBK.AC.UK Sat Jul  2 06:23:56 1994:
+// My colleague Cvijovic has proved that the area of surface is exactly
+// two time root three (in unit cube)  and the space is divided in the 
+// ratio of root three over two to one.
+
+// So area here (in 2x2x2 cube with 48-fold symmetry) should be 
+//  2*sqrt(3)/12 = 0.288675134594813
+
+// square_curvature 0
+
+CONSTRAINT 1   // top
+FUNCTION:  z  = 1  
+CONTENT 
+C1: 0.5*(y-1)  
+C2: -0.5*(x-1)  
+C3: 0  
+
+CONSTRAINT 2  // right side
+FUNCTION:  y - x  = 0  
+
+CONSTRAINT 3  // left  side
+FUNCTION:  -y  = 0  
+
+CONSTRAINT 4  // front bottom
+FUNCTION:  x - z  = 0  
+CONTENT 
+C1: (2*x+1)*y/6
+C2: -(2*x+1)*(x-1)/6
+C3: 0  
+
+
+view_transform_generators 4
+1,0,0,0  0,1,0,0   0,0,-1,2  0,0,0,1  // a: z=1 mirror
+0,1,0,0  1,0,0,0   0,0,1,0   0,0,0,1  // b: x=y mirror
+1,0,0,0  0,-1,0,0  0,0,1,0   0,0,0,1  // c: y=0 mirror
+0,0,1,0  0,1,0,0   1,0,0,0   0,0,0,1  // d: x=z mirror
+
+
+vertices         
+  1  1   0.5   1   constraints 1 4 
+  2  0.5 0.5   1   constraints 1 2 
+  3  0.0 0.0 0.5   constraints 2 3 
+  4  0.5 0 0.5   constraints 3 4 
+  5                  0                 0                 0  fixed  bare
+  6                  0                 0                 1  fixed  bare
+  7                  1                 0                 1  fixed  bare
+  8                  1                 1                 1  fixed  bare
+
+edges
+1   1 2 constraint 1
+2   2 3 constraint 2
+3   3 4 constraint 3
+4   4 1 constraint 4
+5   5 6 fixed bare no_refine // for tetrahedron display
+6   5 7 fixed bare no_refine
+7   5 8 fixed bare no_refine
+8   6 7 fixed bare no_refine
+9   6 8 fixed bare no_refine
+10  7 8 fixed bare no_refine
+
+facets
+1  1 2 3 4
+
+bodies 
+1  1 volume  1/(1+sqrt(.75))/6  volconst -1/3
+
+read
+hessian_normal
+
+// to display cubical cell
+showcube := {
+  set edge color clear where bare;
+  transform_expr "3(bcd)";
+  show_trans "R";
+}
+
+// show 1/8 of unit cell
+showcubelet := {
+  set edge color clear where bare;
+  transform_expr "bdb";
+  show_trans "R";
+}
+
+// Set inside color to yellow
+setcolor := { set facet frontcolor yellow }
+
+// typical evolution
+gogo := { r; u; g 5; refine edge where valence==1;
+          u; V; g 5; r; g 12; u; V;
+          convert_to_quantities; hessian; hessian;
+          r; hessian; hessian;
+}
+
+/* Commands:
+   gogo - typical evolution
+   showcube - show one unit cell, as on web page
+   showcubelet - show 1/8 of unit cell
+   transforms off - show just single fundamental region
+   setcolor - to color one side yellow, as in my web page.
+
+   To turn off showing all the edges in the graphics display,
+      hit the "e" key in the graphics window.
+*/
+
+// from Alan Mackay UBCG04M@CCS.BBK.AC.UK Sat Jul  2 06:23:56 1994:

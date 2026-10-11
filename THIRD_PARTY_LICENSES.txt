@@ -37,6 +37,11 @@ available and is in use by a number of researchers."
 Every source file carries: "This file is part of the Surface Evolver source
 code. Programmer: Ken Brakke, brakke@susqu.edu".
 
+The sample datafiles in fe/ come with Surface Evolver 2.70a, except these,
+from Brakke's online examples (https://kenbrakke.com/evolver/examples/,
+https://kenbrakke.com/evolver/bga/bga.htm), unchanged: cbga1.fe, cbga2.fe,
+pcell.fe, dcell.fe, IWP.fe, bga-1.fe, TwoSpheres.fe, TwoSpheres-explicit.fe.
+
 ==============================================================================
 MUMPS (LICENSE)
 ==============================================================================

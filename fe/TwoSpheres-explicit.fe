@@ -1,0 +1,230 @@
+/* TwoSpheres-explicit.fe 
+
+   Two spheres stacked vertically, in contact or not, with ring of liquid between.
+   This version uses explicit contact facets instead of energy and content integrands 
+   on the constraints.  For constraint integrands, for comparison, see TwoSpheres-explicit.fe.
+
+   Author: Ken Brakke, brakke@susqu.edu
+*/
+
+keep_originals
+
+parameter rad_upper = 1.00 // upper sphere radius 
+parameter angle_upper = 45 // upper sphere contact angle
+
+parameter rad_lower = 1.00 // bottom sphere radius 
+parameter angle_lower = 45 // bottom sphere contact angle
+
+parameter height_lower = 0.0  // height of the center of the lower sphere
+parameter height_upper = height_lower + rad_upper+rad_lower  // height of center of upper sphere; 
+                                                             // This value is for spheres in contact
+
+#define T_UPPER (-cos(angle_upper*pi/180)) // contact surface tension on upper sphere
+#define T_LOWER (-cos(angle_lower*pi/180)) // contact surface tension on upper sphere
+
+#define DENS 1    // density of the liquid
+
+// the lower sphere - display
+constraint low_disp_con 
+formula: sqrt(x^2 + y^2 + (z-height_lower)^2) = rad_lower
+
+// the upper sphere - display 
+constraint up_disp_con
+formula: sqrt(x^2 + y^2 + (z-height_upper)^2) = rad_upper 
+
+// liquid bridge upper contact line
+constraint upper_con
+#define H2 height_upper
+formula: sqrt(x^2 + y^2 + (z-H2)^2) = rad_upper 
+
+// liquid bridge lower contact line
+constraint lower_con
+#define H1 height_lower
+formula: sqrt(x^2 + y^2 + (z - H1)^2) = rad_lower
+
+constraint extop_con // explicit contact upper 
+formula: sqrt(x^2 + y^2 + (z-height_upper)^2) = rad_upper
+
+constraint exbottom_con // explicit contact lower
+formula: sqrt(x^2 + y^2 + (z - height_lower)^2) = rad_lower
+
+
+vertices: 
+
+// Lower sphere display
+1  rad_lower  0         height_lower low_disp_con FIXED 
+2  0          rad_lower height_lower low_disp_con FIXED 
+3 -rad_lower  0         height_lower low_disp_con FIXED 
+4  0         -rad_lower height_lower low_disp_con FIXED 
+5  0          0         height_lower-rad_lower constraint low_disp_con FIXED 
+6  0          0         height_lower+rad_lower constraint low_disp_con FIXED 
+
+// Upper sphere display
+7   0          rad_upper height_upper     constraint up_disp_con FIXED 
+8  -rad_upper  0         height_upper     constraint up_disp_con FIXED 
+9   0         -rad_upper height_upper     constraint up_disp_con FIXED 
+10  rad_upper  0         height_upper     constraint up_disp_con FIXED 
+11  0          0         height_upper-rad_upper     constraint up_disp_con FIXED 
+12  0          0         height_upper+rad_upper     constraint up_disp_con FIXED  
+
+// Liquid contact lines 
+#define ZUP (height_upper - 0.3*rad_upper)
+#define ZLO (height_lower + 0.3*rad_lower)
+22      sin(pi/3)   0  ZUP  constraint upper_con
+23  0.5*sin(pi/3)  3/4 ZUP  constraint upper_con 
+24 -0.5*sin(pi/3)  3/4 ZUP  constraint upper_con             
+25     -sin(pi/3)   0  ZUP  constraint upper_con  
+26 -0.5*sin(pi/3) -3/4 ZUP  constraint upper_con  
+27  0.5*sin(pi/3) -3/4 ZUP  constraint upper_con  
+28      sin(pi/3)   0  ZLO  constraint lower_con
+29  0.5*sin(pi/3)  3/4 ZLO  constraint lower_con 
+30 -0.5*sin(pi/3)  3/4 ZLO  constraint lower_con             
+31     -sin(pi/3)   0  ZLO  constraint lower_con  
+32 -0.5*sin(pi/3) -3/4 ZLO  constraint lower_con  
+33  0.5*sin(pi/3) -3/4 ZLO  constraint lower_con
+
+// Added for explict contact surfaces
+40    0 0 height_upper-rad_upper constraint extop_con fixed  // south pole of upper sphere
+41    0 0 height_lower+rad_lower constraint exbottom_con fixed // north pole of bottom sphere
+
+edges: 
+
+// Upper sphere display
+1  10  7     constraint up_disp_con FIXED
+2  11 10     constraint up_disp_con FIXED
+3  10 12     constraint up_disp_con FIXED 
+4   9 10     constraint up_disp_con FIXED
+5  12  9     constraint up_disp_con FIXED 
+6   9 11     constraint up_disp_con FIXED 
+7  11  7     constraint up_disp_con FIXED 
+8   7 12     constraint up_disp_con FIXED 
+9  12  8     constraint up_disp_con FIXED 
+10  9  8     constraint up_disp_con FIXED 
+11 11  8     constraint up_disp_con FIXED 
+12  7  8     constraint up_disp_con FIXED
+
+// Lower sphere display
+13  1 2    constraint low_disp_con FIXED
+14  2 3    constraint low_disp_con FIXED 
+15  3 4    constraint low_disp_con FIXED
+16  4 1    constraint low_disp_con FIXED
+17  5 4    constraint low_disp_con FIXED
+18  1 5    constraint low_disp_con FIXED
+19  4 6    constraint low_disp_con FIXED
+20  6 1    constraint low_disp_con FIXED 
+21  6 2    constraint low_disp_con FIXED
+22  2 5    constraint low_disp_con FIXED
+23  3 5    constraint low_disp_con FIXED
+24  6 3    constraint low_disp_con FIXED
+
+//the liquid bridge
+
+25    22  23 constraint upper_con    
+26    23  24 constraint upper_con    
+27    24  25 constraint upper_con    
+28    25  26 constraint upper_con    
+29    26  27 constraint upper_con    
+30    27  22 constraint upper_con    
+31    28  29 constraint lower_con    
+32    29  30 constraint lower_con    
+33    30  31 constraint lower_con    
+34    31  32 constraint lower_con    
+35    32  33 constraint lower_con    
+36    33  28 constraint lower_con    
+37    22  28
+38    23  29
+39    24  30
+40    25  31
+41    26  32
+42    27  33
+
+// Added for explict contact surfaces
+// upper sphere 
+50  40 22 fixed constraint extop_con
+51  40 23 fixed constraint extop_con
+52  40 24 fixed constraint extop_con
+53  40 25 fixed constraint extop_con
+54  40 26 fixed constraint extop_con
+55  40 27 fixed constraint extop_con
+// lower sphere
+60  41 28 fixed constraint exbottom_con
+61  41 29 fixed constraint exbottom_con
+62  41 30 fixed constraint exbottom_con
+63  41 31 fixed constraint exbottom_con
+64  41 32 fixed constraint exbottom_con
+65  41 33 fixed constraint exbottom_con
+
+faces: 
+
+// Upper sphere display
+1 -10  -5  9     constraint up_disp_con density 0 FIXED
+2  10 -11 -6     constraint up_disp_con density 0 FIXED 
+3  11 -12 -7     constraint up_disp_con density 0 FIXED 
+4  12  -9 -8     constraint up_disp_con density 0 FIXED 
+5   7  -1 -2     constraint up_disp_con density 0 FIXED
+6   2  -4  6     constraint up_disp_con density 0 FIXED
+7   4   3  5     constraint up_disp_con density 0 FIXED
+8   1   8 -3     constraint up_disp_con density 0 FIXED
+
+// Lower sphere display
+9   17  16  18    constraint low_disp_con density 0 FIXED
+10 -16  19  20    constraint low_disp_con density 0 FIXED
+11  21 -13 -20    constraint low_disp_con density 0 FIXED
+12  13  22 -18    constraint low_disp_con density 0 FIXED
+13  15 -17 -23    constraint low_disp_con density 0 FIXED
+14 -19 -15 -24    constraint low_disp_con density 0 FIXED
+15  14  23 -22    constraint low_disp_con density 0 FIXED
+16 -21  24 -14    constraint low_disp_con density 0 FIXED
+
+// The liquid bridge surface
+17  37 31 -38 -25  color green
+18  42 36 -37 -30  color green
+19  41 35 -42 -29  color green
+20  40 34 -41 -28  color green
+21  39 33 -40 -27  color green 
+22  38 32 -39 -26  color green
+
+// Added for explicit contact surfaces
+// upper sphere
+30   50  25 -51 color green fixed constraint extop_con tension T_UPPER
+31   51  26 -52 color green fixed constraint extop_con tension T_UPPER 
+32   52  27 -53 color green fixed constraint extop_con tension T_UPPER
+33   53  28 -54 color green fixed constraint extop_con tension T_UPPER
+34   54  29 -55 color green fixed constraint extop_con tension T_UPPER
+35   55  30 -50 color green fixed constraint extop_con tension T_UPPER
+// bottom sphere
+40   60  31 -61 color green fixed constraint exbottom_con tension T_LOWER
+41   61  32 -62 color green fixed constraint exbottom_con tension T_LOWER
+42   62  33 -63 color green fixed constraint exbottom_con tension T_LOWER
+43   63  34 -64 color green fixed constraint exbottom_con tension T_LOWER
+44   64  35 -65 color green fixed constraint exbottom_con tension T_LOWER
+45   65  36 -60 color green fixed constraint exbottom_con tension T_LOWER
+
+
+bodies:  
+1   17 18 19 20 21 22 30 31 32 33 34 35 -40 -41 -42 -43 -44 -45   volume 1  density 1
+
+read
+
+// Printing out the various quantities to be compared with TwoSpheres-explicit.fe.
+// Usage: Load this file in Evolver, do "u" and "r" several times, then "test".
+//        Compare to exactly the same usage in TwoSpheres-explicit.fe
+convert_to_quantities  // to get the various values in named quantity form
+show_all_quantities    // which can be seen with the "Q" command.
+
+test := {
+   printf "Upper sphere contact energy: %15.10f\n",
+          sum(facet where on_constraint extop_con,area*tension);
+   printf "Lower sphere contact energy: %15.10f\n",
+          sum(facet where on_constraint exbottom_con,area*tension);
+   printf "Upper sphere volume:         %15.10f\n",
+          sum(facet where on_constraint extop_con,body_1_vol_meth);
+   printf "Lower sphere volume:         %15.10f\n",
+          sum(facet where on_constraint exbottom_con,body_1_vol_meth);
+   printf "Upper sphere gravity:        %15.10f\n",
+          sum(facet where on_constraint extop_con,gravity_quant);
+   printf "Lower sphere gravity:        %15.10f\n",
+          sum(facet where on_constraint exbottom_con,gravity_quant);
+                
+}   
+

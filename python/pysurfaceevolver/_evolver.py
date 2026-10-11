@@ -388,8 +388,8 @@ class Evolver:
 
     _no_hessian: bool = False      # set by _newton(): no Hessian for this surface
     _keep_mesh: bool = False       # relax(): no tidying (elastic, crystalline)
-    # set by _newton(): the coordinates a plain Newton step left, and the
-    # negative eigenvalues its factorization counted (just before the step)
+    # set by _newton(): the coordinates a Newton step left, the negative
+    # eigenvalues its factorization counted (where it began) and the residual there
     _inertia: "tuple[_Coords, int, float] | None" = None
 
     def __init__(
@@ -1071,7 +1071,7 @@ class Evolver:
                          else "its topology changed during the round, so it stays as it is")
                 raise EvolverError(f"relax(): the energy became {bad} during gradient steps; "
                                    + where)
-            if tidy and i % tidy:
+            if tidy and i % tidy and i > _FIRST_ROUND:
                 continue                  # mid-round: no convergence check
             # on a degenerate mesh Evolver's volume projection can fail without
             # an error: a round that pushes a volume off its target is undone
@@ -1194,8 +1194,9 @@ class Evolver:
                     self._put_back(snapshot)
                     continue
                 accepted = True
+                # (both kinds factor the Hessian where the step begins)
                 self._inertia = (self._coords(), int(self.eval("eigen_neg")), res0) \
-                    if kind == "hessian" and res0 < _INERTIA_NEAR else None
+                    if res0 < _INERTIA_NEAR else None
                 break
             if not accepted:
                 # no step at all: this surface has no Hessian (gap energies,
@@ -1213,7 +1214,7 @@ class Evolver:
         return kept, res0
 
     def _inertia_unchanged(self) -> Optional[int]:
-        """The negative eigenvalues the last plain Newton step counted, if it
+        """The negative eigenvalues the last Newton step counted, if it
         began near equilibrium and the surface is as it left it; else None."""
         if self._inertia is None:
             return None
@@ -2615,8 +2616,10 @@ _STABILITY_NEAR = 100          # relax() checks stability below this many times 
 # relax() takes stability from the last Newton step's factorization if that
 # step began this close to equilibrium (residual) and counted no negative
 # eigenvalue: a step so small can't carry one across zero (except at the
-# onset of an instability, which the threshold of stability() blurs anyway)
-_INERTIA_NEAR = 1e-4
+# onset of an instability, which the threshold of stability() blurs anyway).
+# It matched the full check in all of some 230 relaxes (stress cases, tests,
+# Brakke's samples; steps from residuals up to 4e-3).
+_INERTIA_NEAR = 1e-2
 # a body volume or quantity this far off its target (relative) is missed: a
 # new target for Newton to meet, or a gradient round gone wrong (vertex
 # averaging alone leaves volumes about 2e-5 off)
@@ -2624,6 +2627,10 @@ _TARGET_LOST = 1e-4
 _ENERGY_TOL = 1e-5             # relax(): gradient rounds settle at this relative change...
 _WINDOW = 3                    # ... over this many rounds
 _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
+# the first round of each gradient phase ends after this many steps: a coarse
+# start triangulated badly is equiangulated before it settles into what its
+# mesh allows (cbga1.fe: energy 11 instead of 5.3)
+_FIRST_ROUND = 1
 _FALLBACK_TIDY = 1             # the conjugate-gradient pass averages every this many rounds
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
