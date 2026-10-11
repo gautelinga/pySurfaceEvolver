@@ -29,10 +29,58 @@ def test_relax_without_hessian_runs_gradient_rounds(load):
     # tankex: gap energy on a curved wall, no Hessian ("third derivatives");
     # relax() goes on with plain gradient rounds instead of stopping early
     ev = load("tankex.fe")
-    r = ev.relax(levels=1)
+    r = ev.relax(levels=2)
     assert r.newton_steps == 0
     assert len(r.energy) > 400
-    assert ev.total_energy < 1.65          # the residual watch stopped at 1.75
+    assert ev.total_energy < 1.52          # the residual watch stopped at 1.71
+    assert r.health.target_gap < 1e-4
+
+
+def test_relax_without_hessian_keeps_a_degenerate_mesh_from_sliding(load):
+    # from 8 facets refined once, tankex's facets degenerate; plain gradient
+    # rounds then slid to energy 0.03, and the last tidying lost 40% of the
+    # volume without a word
+    ev = load("tankex.fe")
+    r = ev.relax(levels=1)
+    assert ev.total_energy > 1.5           # the finer mesh's 1.50 is the floor
+    assert r.health.target_gap < 1e-4
+
+
+def test_newton_meets_a_new_volume_target(cube):
+    # the residual doesn't see an unmet volume, and the safeguard undid the
+    # step restoring it (energy and residual both rose)
+    cube.relax(levels=1, stability=False)
+    for target in (2.0, 0.5):
+        cube.body(1).target = target
+        assert cube.newton(10) > 0
+        assert cube.body(1).volume == pytest.approx(target, rel=1e-9)
+        assert cube.residual() < 1e-8
+
+
+def test_health_reports_a_missed_target(cube):
+    cube.body(1).target = 2.0
+    h = cube.health()
+    assert h.target_gap == pytest.approx(0.5)
+    assert any("off its target" in i for i in h.issues)
+
+
+def test_last_resort_backs_off_after_failures(cube):
+    from pysurfaceevolver import _evolver
+    r = cube.relax(newton=0, max_iter=5, tol=1e-14, stability=False)     # unconverged, nothing collapses
+    assert not r.converged and r.collapsed == 0
+    assert (_evolver._collapse_failures, _evolver._collapse_skip) == (1, 1)
+    cube.relax(newton=0, max_iter=5, tol=1e-14, stability=False)         # skipped
+    assert (_evolver._collapse_failures, _evolver._collapse_skip) == (1, 0)
+    cube.relax(newton=0, max_iter=5, tol=1e-14, stability=False)         # tried again
+    assert (_evolver._collapse_failures, _evolver._collapse_skip) == (2, 3)
+
+
+def test_relax_checks_stability_just_short_of_tol(load):
+    # a step that ends a little above tol still gets its stability checked
+    first = load("cube.fe").relax(newton=0, max_iter=200)
+    ev = load("cube.fe")
+    r = ev.relax(newton=0, max_iter=200, tol=first.residual/10)
+    assert not r.converged and r.stable is not None
 
 
 def test_newton_step_raising_the_energy_is_undone(load):
@@ -102,7 +150,7 @@ def test_torus_facet_angles_from_edge_lengths(load):
 
 def test_health_counts_junctions_against_plateau(load):
     ev = load("octa.fe")
-    assert ev.health().junctions == 6
+    assert ev.health().junctions == 7       # six edges, and the cone at the centre
     ev.command("o")
     assert ev.health().junctions == 0
     ev = load("popstr.fe")
@@ -160,5 +208,8 @@ def test_relax_crystalline_skips_tidying(load):
     # undo the facets' alignment, and relax() ended at 3.608 where plain
     # gradient steps reach 3.3256
     ev = load("crystal.fe")
-    ev.relax()
+    r = ev.relax()
     assert ev.total_energy == pytest.approx(3.3256068, rel=1e-5)
+    # its residual doesn't vanish at the Wulff shape: converged = settled
+    assert r.converged and r.settled and r.residual > 1
+    assert r.health.ok

@@ -159,6 +159,9 @@ double pyse_total_energy(void);
 int pyse_residual(double *out, long n, int full);
 /* per vertex, 1 if fixed, on a constraint or on a boundary */
 int pyse_vertex_attached(unsigned char *out, long n);
+/* how many free vertices (not fixed, on no constraint or boundary) have a
+   tangent cone that Evolver's 'o' would pop (soapfilm; 0 otherwise) */
+int pyse_poppable_vertices(long *count);
 /* the constraints in use: how many (*count), and up to max of their numbers,
    attribute bits and names ("" if unnamed; Evolver's own strings); the
    arrays may be NULL to only count */

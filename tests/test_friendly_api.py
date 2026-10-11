@@ -441,17 +441,20 @@ def _hemisphere_drop(nr=8, nt=32):
     return ev
 
 
-def test_relax_falls_back_to_conjugate_gradients():
-    # spreading to a flat 10 degree drop, plain gradients crawl and stop far
-    # from where Newton can take over; the conjugate-gradient pass gets there
+def test_relax_spreads_a_flat_drop():
+    # spreading to a flat 10 degree drop: the last vertex averaging leaves the
+    # volume a little off, and the Newton step restoring it was undone (energy
+    # and residual both rose), so only the conjugate-gradient pass got there
     ev = _hemisphere_drop()
     ev.relax()
     ev.parameters["theta"] = 10.0
     snap = ev.save()
-    assert not ev.relax(cg=False).converged
+    plain = ev.relax(cg=False)
+    energy = ev.total_energy
     ev.restore(snap)
     r = ev.relax()
-    assert r.converged and r.newton_steps > 1
+    assert plain.converged and r.converged and r.newton_steps > 1
+    assert ev.total_energy == pytest.approx(energy, rel=1e-9)
 
 
 def test_adapt_refines_where_the_surface_curves():

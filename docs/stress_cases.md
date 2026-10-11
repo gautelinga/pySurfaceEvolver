@@ -5,7 +5,8 @@ defaults: contact lines that travel far, surfaces that grow or shrink a
 hundredfold, wires, instabilities, gravity. They are the stress suite in
 `bench/stress/` condensed into examples (`python bench/stress/run.py` runs the full
 versions and checks them). The code below is not run when the documentation is built;
-the outputs are from running it in October 2026 (pySE 0.7.0, 2 threads), and they vary in
+the outputs are from running it in October 2026 (the development version after pySE
+0.7.0, 2 threads), and they vary in
 the last digits with the thread count.
 
 The examples import starting shapes and reference solutions from
@@ -191,8 +192,8 @@ theta 120.0: energy error 0.24%, contact radius 0.7352 (exact 0.7274), 480 facet
 theta 130.0: energy error 0.25%, contact radius 0.6351 (exact 0.6261), 608 facets
 theta 140.0: energy error 0.22%, contact radius 0.5258 (exact 0.5168), 736 facets
 theta 150.0: energy error 0.20%, contact radius 0.4088 (exact 0.3986), 864 facets
-theta 160.0: energy error 0.18%, contact radius 0.2833 (exact 0.2717), 992 facets
-theta 170.0: energy error 0.17%, contact radius 0.1608 (exact 0.1378), 1120 facets
+theta 160.0: energy error 0.18%, contact radius 0.2834 (exact 0.2717), 992 facets
+theta 170.0: energy error 0.17%, contact radius 0.1609 (exact 0.1378), 1120 facets
 ```
 
 Energies within 0.25%. At 170 degrees the contact disk (radius 0.14) is resolved by a
@@ -254,9 +255,9 @@ for gap in (0.2, 0.05, 0.01, 0.001):
 
 ```text
 gap 0.200: energy 0.08377 (reference 0.08390), pressure -0.1753 (reference -0.1734)
-gap 0.050: energy -0.24965 (reference -0.24967), pressure -1.9178 (reference -1.9090)
-gap 0.010: energy -0.37992 (reference -0.37985), pressure -1.8903 (reference -1.8867)
-gap 0.001: energy -0.41160 (reference -0.41151), pressure -1.8424 (reference -1.8377)
+gap 0.050: energy -0.24965 (reference -0.24967), pressure -1.9179 (reference -1.9090)
+gap 0.010: energy -0.37990 (reference -0.37985), pressure -1.8928 (reference -1.8867)
+gap 0.001: energy -0.41157 (reference -0.41151), pressure -1.8437 (reference -1.8377)
 ```
 
 Energies within 0.2% and pressures within 0.01 (0.5% where they are large) at every
@@ -454,8 +455,8 @@ for step in recipes.continuation(ev, recipes.body_target(1), volume*np.geomspace
 volume 6.54e-01: energy error 0.15%, radius error 0.42%
 volume 6.54e-02: energy error 0.15%, radius error 0.46%
 volume 6.54e-03: energy error 0.15%, radius error 0.48%
-volume 6.54e-04: energy error 0.17%, radius error 0.52%
-volume 6.54e-05: energy error 0.22%, radius error 0.60%
+volume 6.54e-04: energy error 0.17%, radius error 0.51%
+volume 6.54e-05: energy error 0.21%, radius error 0.58%
 ```
 
 The error stays near the starting mesh's (the contact radius of the coarse rim is

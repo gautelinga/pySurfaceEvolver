@@ -283,6 +283,14 @@ NB_MODULE(_core, m) {
     return r;
   }, CALLBACK_NAMES, "data: per vertex, fixed or on a constraint or boundary");
 
+  m.def("poppable_vertices", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long count = 0;
+    CallResult r = run_guarded([&] { return pyse_poppable_vertices(&count); });
+    if (r.status == PYSE_OK) r.data = nb::cast(count);
+    return r;
+  }, CALLBACK_NAMES, "data: free vertices whose tangent cone Evolver's 'o' would pop");
+
   m.def("constraint_gaps", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     std::vector<int> nums, attrs;

@@ -31,19 +31,22 @@ run with default settings) and are from October 2026.
    more than doubles it from its lowest, the round is undone and Newton takes over: on
    a coarse mesh a contact line can collapse within a few steps (its vertices slide
    together), and the energy keeps falling while it does.
-3. **Safeguarded Newton steps.** Up to 20, each undone if it makes things non-finite
-   or raises both the energy and the residual, until the residual is below `tol`
-   (1e-8). Newton converges quadratically near an equilibrium; the gradient steps are
-   there to get it near.
+3. **Safeguarded Newton steps.** Up to 20, each undone if it makes things non-finite,
+   raises both the energy and the residual (unless it brings a missed volume or
+   quantity target at least halfway: the residual doesn't see those), or raises the
+   energy by more than 10% plus what meeting the targets costs, until the residual is
+   below `tol` (1e-8) with the targets met. Newton converges quadratically near an
+   equilibrium; the gradient steps are there to get it near.
 4. **A second try.** If the surface is still not in equilibrium, conjugate gradients
    (at most 200 steps) and Newton again, kept only if that converges. Plain gradients
-   crawl on flat shapes, such as a drop spread to a 10 degree contact angle.
+   crawl on flat or stiff shapes.
 5. **Finer next to contact lines.** Once converged (linear model), edges leaving a
    contact line that are longer than 1.5 times the contact-line edges there are split
    and the surface relaxed again, kept only if that converges: a contact circle that
    shrinks (a drop at a high contact angle) would otherwise end up smaller than the
    facets next to it.
-6. **A stability check.** Once converged, the Hessian's eigenvalues are counted (one
+6. **A stability check.** Once converged (or within 100 times `tol`, as when a step
+   of a continuation stops just short), the Hessian's eigenvalues are counted (one
    factorization). A saddle, such as a liquid column past its Rayleigh-Plateau limit,
    is an equilibrium too, and Newton finds it as readily as a minimum; `r.stable` is
    then `False` and an `UnstableEquilibriumWarning` is raised. Exact zero modes of
@@ -51,16 +54,26 @@ run with default settings) and are from October 2026.
 
 Other models change some of this. Strings are only vertex-averaged, the simplex
 representation only equiangulated. Surfaces without a Hessian get plain gradient
-rounds, settled to 1e-9, in place of Newton steps: Evolver has no Hessian for gap
-energies on curved walls, crystalline integrands, or bodies in the simplex
-representation outside the Lagrange model. With an elastic energy (Evolver's
+rounds, settled to 1e-9, in place of Newton steps, while no facet is degenerate (below
+1 degree; on degenerate facets a long gradient run slides into what the mesh allows):
+Evolver has no Hessian for gap energies on curved walls, crystalline integrands, or
+bodies in the simplex representation outside the Lagrange model. When such a run ends
+with the energy settled but the residual above `tol`, `r.settled` is `True` and the
+result reads `not converged (energy settled)`. With an elastic energy (Evolver's
 `linear_elastic`, `relaxed_elastic`, `neo_hookean`, `SVK_elastic` and the like) the
 in-plane forces are physical, so `relax()` doesn't tidy the mesh, counts every force
 direction in the residual, and takes Newton steps by line search (`hessian_seek`).
+The residual is then in units of the load (a pressure, say), not the modulus: with
+a stiffer membrane the same residual means a smaller strain error.
 Crystalline (Wulff) energies get no tidying either: they depend on each facet's
 orientation, and their residual stays above zero even at the minimum (the energy has
-a corner there).
-A Newton step that raises the energy by more than 10% is always undone. Where
+a corner there), so `relax()` counts them converged once the energy settles, and
+`health()` leaves their residual out.
+A Newton step that raises the energy by more than 10%, plus what meeting volume or
+quantity targets costs, is always undone. A gradient round that pushes a met volume
+off its target (Evolver's projection can fail on a degenerate mesh) is undone and
+ends the rounds; `health()` reports any volume or fixed quantity more than 1e-4 off
+its target. Where
 Evolver changes the topology during gradient steps (`autopop`, `autochop`), a round
 can't be undone, and `relax()` goes on from where it is.
 
@@ -88,7 +101,8 @@ r.health.issues          # what looks wrong, in words; empty when all is well
 | `wall_gap`, `wall` | nearest approach of a vertex to a constraint it isn't on (in median edge lengths), leaving out vertices within two edges of the constraint's own vertices |
 | `crossed` | vertices on the far side of a constraint |
 | `self_gap` | nearest approach of the surface to itself, between vertices more than two edges apart |
-| `junctions` | junctions that break Plateau's laws: edges where four or more films meet, vertices where more than four triple edges (or, in a string network, four or more strings) meet |
+| `junctions` | junctions that break Plateau's laws: edges where four or more films meet, vertices whose tangent cone Evolver's `o` would pop (more than four triple edges, a cube's cone, ...), or in a string network four or more strings meeting |
+| `target_gap` | largest relative gap between a fixed body volume or quantity and its target |
 
 It raises no warnings; a broken surface shows in `issues` (`"degenerate facets
 (smallest angle 0.21 degrees, 6 below 5)"`, `"3 vertices on the far side of
@@ -149,12 +163,18 @@ Other things to know:
   (`r.collapsed`; `relax(pinch=False)` turns it off). That is how a small film in a
   foam shrinks away, and how a catenoid past its fold pinches off into two discs
   (`cat.fe`, stress case 2). A converged surface never loses edges. The last resort
-  costs up to a few hundred gradient steps on each unconverged result.
-* **No Hessian.** Gap energies, crystalline integrands and simplex bodies get
-  gradient steps only, and gradient steps converge slowly: such results often end
-  unconverged by the residual, with the energy settled.
-* **Elastic energies.** The residual assumes a surface tension of about 1; with an
-  elastic modulus it scales with the modulus, so `tol` may need to scale too.
+  costs up to a few hundred gradient steps and a save and restore; after k failed
+  attempts in a row the next 2^k - 1 calls skip it, so a continuation that stays
+  unconverged pays for a few attempts, not one per step.
+* **No Hessian.** Gap energies and simplex bodies get gradient steps only, and
+  gradient steps converge slowly: such results often end unconverged by the residual,
+  with the energy settled (`r.settled`). Crystalline energies count as converged once
+  their energy settles.
+* **Elastic energies and other units.** The residual is a force balance in the
+  surface's own units (a tension: load times length), sized for loads of about 1. A
+  stiffer membrane under the same load needs no other `tol` (the same residual means
+  a smaller strain error); a load a thousand times larger needs a `tol` about that
+  much larger.
 * **Unconverged results.** `r.converged` is `False` when the residual didn't reach
   `tol`; the surface is the best `relax()` found. `r.health.issues` tells whether it
   is merely unfinished or broken.

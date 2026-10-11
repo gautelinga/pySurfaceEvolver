@@ -10,7 +10,7 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 0.7.0 is tagged at fd9783f, whose wheel build failed (fixed in b5216d4: no fused
 multiply-adds on aarch64, render probe in a subprocess). The user chose "release later":
 the next release (0.7.1 or 0.8.0) carries everything since; the tag stays. Main is
-pushed; CI green. 334 tests.
+pushed; CI green.
 
 Done since 0.7.0 (CHANGELOG "Unreleased"): stress-case figures
 (`bench/stress/figures.py`); `relax()` and `health()` on all 25 Brakke samples (strings,
@@ -20,20 +20,28 @@ last resort that lets collapsing necks/films pinch off); edge deletion refuses o
 merges that duplicate facets (studied on an instrumented 2.70a: cat.fe pinches as in
 the original); five notebooks `docs/brakke_*.ipynb` (recipe vs relax per sample).
 
+Also done (2026-10-11, "Found afterwards" in CHANGELOG): newton() meets new volume
+targets (safeguard counts a missed target > 1e-4); last-resort backoff (2^k - 1 calls
+skipped after k failures); `health().junctions` via a cone_analyze binding (matches `o`
+on all 25 samples); volume guards for degenerate meshes and `health().target_gap`;
+`IterationResult.settled`; crystalline converged by energy settling; stability checked
+within 100*tol (barrel roll-up now reported at 70 and 80); wheels CI on main + weekly;
+`tools/make_brakke_notebooks.py`; `tools/check_doc_snippets.py` (+ docs CI job). The
+"spurious quotient-space negative mode" was wrong: symtest.fe's volumes are comments,
+so the instability is real. 339 tests. Case 8 on defaults: 136 s, worst 2.7%.
+
 Open, for the user to pick:
 
 * **Release** 0.7.1/0.8.0 (the user said "release later").
-* **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing (the
-  last resort makes it 3x slower on plain defaults, 127 unconverged steps); mylarcube
-  ends 0.1% above its recipe; residual of crystalline energies never reaches 0 (corner
-  at the minimum) and of elastic ones scales with the modulus; Evolver's quotient-space
-  Hessian has a spurious negative mode (symtest.fe, also 2.70a); the barrel roll-up
-  (case 6) sometimes ends just unconverged at 70/80 degrees, so no stability report
-  (predates 0.7.0).
+* **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing for
+  full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient fallback
+  in `relax()` no longer rescues any test case (Newton now converges the 10-degree drop
+  directly), kept as it costs nothing when converged.
 * **Do not re-propose:** remeshing inside `relax()` for case 8 (researched 2026-10-10).
 * **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
+* **Scripts:** run benchmarks and tests with OMP_NUM_THREADS=4 or less.
 
 Ask the user before each step.
 

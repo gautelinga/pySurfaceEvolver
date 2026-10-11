@@ -29,16 +29,19 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   early (`mylarcube.fe` along its recipe's modulus ramp: -1.2518 -> -1.2563, recipe
   -1.2577).
 - Facet angles in quotient spaces from Evolver's edge lengths too (`symtest.fe`).
-  Evolver's Hessian there has a spurious negative mode (also in 2.70a): `symtest.fe`
-  reads as unstable, `twointor.fe`, the same surface, doesn't.
+  `symtest.fe` reads as unstable and `twointor.fe`, the same surface, doesn't: rightly,
+  since `symtest.fe`'s volumes are only comments, so its cells can trade volume
+  (Evolver's `saddle` lowers the energy).
 - Crystalline (Wulff) energies: no mesh tidying in `relax()` (flipping and averaging undid
   the facets' alignment with the crystal: `crystal.fe` 3.608 -> 3.3256, as plain gradient
   steps reach). Their residual stays above zero at the minimum (the energy has a corner
-  there), so such results read as unconverged.
+  there), so `relax()` takes gradient rounds only and counts them converged once the
+  energy settles; `health()` leaves their residual out.
 - `ev.residual()`: plain forces under `area_normalization` (it divided each by its
   vertex's area), and dimensionless for strings and simplices too.
-- `ev.health()`: `junctions` counts junctions that break Plateau's laws (`octa.fe`: 6,
-  popped by `o`). No more false alarms from fixed vertices drawing a wall (mound's table
+- `ev.health()`: `junctions` counts junctions that break Plateau's laws (`octa.fe`: 7,
+  popped by `o`): edges where four or more films meet, and vertices whose tangent cone
+  `o` would pop, found as `o` finds them (new binding). No more false alarms from fixed vertices drawing a wall (mound's table
   top) or from contact lines on a constraint drawn twice (slidestr); facet angles in a
   torus from Evolver's edge lengths (wrapped coordinates made the foams' facets look
   degenerate); planar and simplex surfaces handled.
@@ -50,14 +53,47 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   resort: untidied gradient steps let a shrinking neck or film collapse (the tidying
   held it open as slivers), and the outcome is kept only if it converges or lowers the
   energy on a sound mesh. `cat.fe` and the stress catenoid past its fold pinch off into
-  two discs (stress case 2 now checks the discs); the drainage stress case on plain
-  defaults takes about 3x longer (127 unconverged steps).
+  two discs (stress case 2 now checks the discs). After k failed attempts in a row,
+  the next 2^k - 1 calls skip the last resort (without that it made the drainage
+  stress case on plain defaults, with its ~120 unconverged steps, about 3x slower).
 - Edge deletion refuses only merges that would make two facets one (the case that lost
   surfaces in Evolver 2.70a). The check from 0.7.0 also refused shared neighbours and
   parallel edges without that, and loop edges, which is how a collapsing neck's ring
   of edges closes: `cat.fe`'s recipe (`t .05; o`) now pinches the catenoid into two
   discs as in 2.70a (13.71288; was stuck at 15.53).
 - Fixed: stress case 3 counted only its second sweep's time and steps.
+
+### Found afterwards
+
+- Fixed: `ev.newton()` couldn't meet a new volume target (`ev.body(1).target = 2.0`
+  then `ev.newton()` took no step; also in 0.7.0). The residual doesn't see an unmet
+  volume, so the safeguard read the step restoring it as making things worse. A step
+  that brings a missed volume or fixed-quantity target (more than 1e-4 off) at least
+  halfway is now accepted, and the energy rise allowed is 10% plus what meeting the
+  targets costs (pressure times the change). (With a threshold of 1e-6 instead, the
+  2e-5 that vertex averaging leaves let nearly every step skip the safeguard: the
+  drainage stress case's worst band pressure went from 6% to 89% off.) This hit `relax()` too: the last vertex averaging
+  leaves a volume slightly off, and the conjugate-gradient pass was what rescued a
+  drop spread to 10 degrees; Newton now converges it directly.
+- Fixed: on a degenerate mesh, `relax()`'s last vertex averaging could lose a body's
+  volume without a word (`tankex.fe` from 8 facets: 0.354 against 0.6), and plain
+  gradient rounds slid into what the degenerate mesh allows (energy 1.6 -> 0.03). A
+  gradient step now follows tidying that leaves a volume off; a round that pushes a
+  met volume off its target is undone and ends the rounds; the gradient rounds that
+  replace Newton (no Hessian) run only while no facet is below 1 degree. `ev.health()`
+  reports volumes and fixed quantities more than 1e-4 off their targets (`target_gap`).
+- Fixed: the last resort crashed when edge deletion left a facet without its three
+  edges (it now counts as unsound and the surface goes back).
+- `relax()` checks stability when it ends within 100 times `tol` too (a continuation
+  step stopping just short skipped the check).
+- `IterationResult.settled`: the energy settled with the residual above `tol`
+  (surfaces without a Hessian; shown as `not converged (energy settled)`).
+- `ev.restore()` keeps `relax()`'s memory of failed attempts (it reloads a dump, which
+  counted as a new surface).
+- Drainage stress case on plain defaults, after all of the above: 276 s -> 136 s,
+  worst band pressure 6.1% -> 2.7% off the reference, none over 10%.
+- The wheels workflow also runs on pushes to main and weekly (the aarch64 wheels broke
+  unnoticed until the release tag built them).
 
 ### Docs
 
@@ -68,6 +104,9 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   Weaire-Phelan's (0.35% less area per cell), and the Lagrange ladders of `cube.fe` and
   `catman.fe` (`relax()` agrees with the recipes to 1e-14; `catman.fe`'s own `gogo3`
   compares with the wrong catenoid).
+- `tools/make_brakke_notebooks.py` generates the Brakke notebooks;
+  `tools/check_doc_snippets.py` runs the code on `stress_cases.md` (or another page)
+  and compares the outputs shown there (`--update` refreshes them).
 - Stress cases: figures for each case (result against its reference, error per step,
   what `relax()` did, and the surface at a few steps), drawn by
   `bench/stress/figures.py`.

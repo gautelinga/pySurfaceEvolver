@@ -878,6 +878,72 @@ int pyse_vertex_attached(unsigned char *out, long n)
   return surface_call(attached_body,&a);
 }
 
+/* Free vertices (not fixed, on no constraint or boundary) whose tangent cone
+   Evolver's 'o' would pop: the cone types find_vertex_to_pop() pops, found
+   the same way but without popping. Soapfilm only. */
+struct poppable_args { long count; };
+
+/* cone_analyze()'s types that find_vertex_to_pop() pops (src/popfilm.c
+   defines them locally) */
+#define PYSE_OTHERCONE   0
+#define PYSE_KRAYNIKCONE 7
+#define PYSE_CUBECONE    8
+#define PYSE_ODD4CONE    9
+
+static int pyse_vfcomp(const void *a, const void *b)
+{ const struct verfacet *x = (const struct verfacet *)a;
+  const struct verfacet *y = (const struct verfacet *)b;
+  return x->v_id < y->v_id ? -1 : x->v_id > y->v_id ? 1 : 0;
+}
+
+static void poppable_body(void *arg)
+{ struct poppable_args *a = (struct poppable_args *)arg;
+  struct verfacet *vflist;
+  facet_id f_id;
+  facetedge_id fe;
+  long count = 0, spot, dups;
+  int k;
+  a->count = 0;
+  if ( web.representation != SOAPFILM || web.skel[FACET].count == 0 ) return;
+  vflist = (struct verfacet *)temp_calloc(sizeof(struct verfacet),
+                                          3*(size_t)web.skel[FACET].count);
+  FOR_ALL_FACETS(f_id)
+  { fe = get_facet_fe(f_id);
+    for ( k = 0 ; k < 3 ; k++ )
+    { vflist[count].f_id = f_id;
+      vflist[count].v_id = get_fe_tailv(fe);
+      count++;
+      fe = get_next_edge(fe);
+    }
+  }
+  qsort((char *)vflist,(size_t)count,sizeof(struct verfacet),pyse_vfcomp);
+  for ( spot = 0 ; spot < count ; spot += dups )
+  { vertex_id v_id = vflist[spot].v_id;
+    struct cone_info cinfo;
+    int type;
+    for ( dups = 1 ; spot + dups < count ; dups++ )
+      if ( !equal_id(vflist[spot+dups].v_id,v_id) ) break;
+    if ( get_vattr(v_id) & (FIXED|CONSTRAINT|BOUNDARY) ) continue;
+    type = cone_analyze(vflist + spot,(int)dups,&cinfo);
+    temp_free((char *)cinfo.felist);
+    if ( type == PYSE_KRAYNIKCONE || type == PYSE_CUBECONE || type == PYSE_ODD4CONE
+         || type == PYSE_OTHERCONE )
+      a->count++;
+  }
+  temp_free((char *)vflist);
+}
+
+int pyse_poppable_vertices(long *count)
+{ struct poppable_args a;
+  int status;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  a.count = 0;
+  status = surface_call(poppable_body,&a);
+  if ( count ) *count = a.count;
+  return status;
+}
+
 /* Constraints in use and each vertex's signed distance to the ones it isn't on. */
 struct conlist_args { int *nums; int *attrs; const char **names; int max; int count; };
 

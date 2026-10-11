@@ -164,6 +164,7 @@ class Health:
     crossed: Dict[int, int]         # constraint -> vertices on its far side
     self_gap: float                 # nearest approach of the surface to itself (inf: none under 1/2)
     junctions: int                  # junctions that break Plateau's laws (see Evolver.health)
+    target_gap: float               # largest relative gap of a fixed volume or quantity to its target
     issues: List[str]               # what looks wrong, in words (empty: nothing)
 
     @property
@@ -261,6 +262,10 @@ class IterationResult:
     health: Optional["Health"] = None  # relax(): Evolver.health() at the end
     popped: int = 0                    # relax(): junctions popped (Evolver's 'o')
     collapsed: int = 0                 # relax(): collapsed edges deleted (pinch-off)
+    # relax(): the residual stayed above tol, but the last gradient rounds ended
+    # with the energy settled (surfaces without a Hessian; a crystalline energy,
+    # which then counts as converged)
+    settled: Optional[bool] = None
 
     def __repr__(self) -> str:
         n = len(self.energy)
@@ -268,7 +273,8 @@ class IterationResult:
         if self.converged is None:          # iterate()
             energy = f", energy {self.energy[0]:.10g} -> {self.energy[-1]:.10g}" if n else ""
             return f"IterationResult({steps}{energy})"
-        parts = [("converged" if self.converged else "not converged")
+        settled = " (energy settled)" if self.settled else ""
+        parts = [("converged" if self.converged else "not converged") + settled
                  + f" after {steps} and {self.newton_steps} Newton",
                  f"residual {self.residual:.2g}"]
         if self.popped or self.collapsed:
@@ -290,6 +296,7 @@ class _Trace:
         self.scale: List[float] = []
         self.level: List[int] = []
         self.output: List[str] = []
+        self.settled = False        # the last gradient phase ended with the energy settled
 
     def step(self, ev: "Evolver") -> None:
         self.output.append(ev.command("g 1"))
@@ -316,6 +323,10 @@ _mesh_cache: "tuple[int, Mesh] | None" = None
 # relax(): whether the last Newton-first attempt on this surface failed (the
 # next call then skips it; reset when a surface is loaded)
 _newton_first_failed = False
+# relax(): failed last-resort attempts in a row on this surface, and the calls
+# still to skip before the next attempt (reset when a surface is loaded)
+_collapse_failures = 0
+_collapse_skip = 0
 _mesh_cache_lock = threading.Lock()
 
 
@@ -443,8 +454,9 @@ class Evolver:
         If the datafile has errors, this raises :class:`EvolverError`, and
         there is no valid surface until a datafile loads successfully.
         """
-        global _newton_first_failed
+        global _newton_first_failed, _collapse_failures, _collapse_skip
         _newton_first_failed = False
+        _collapse_failures = _collapse_skip = 0
         path = os.fspath(datafile)
         try:
             output, _ = self._call(_core.load, path)
@@ -614,21 +626,34 @@ class Evolver:
           shrinking to nothing, as before a foam's T1 change or a pinch-off),
           junctions popped and the surface relaxed, kept only if that
           converges or lowers the energy on a sound mesh. A converged surface
-          never loses edges.
+          never loses edges. After k failed attempts in a row, the next
+          2**k - 1 calls skip the last resort.
           ``popped`` and ``collapsed`` count them.
-        * Once converged, with ``stability``, :meth:`stability` sets ``stable``
+        * Once converged (or within 100 times ``tol``), with ``stability``,
+          :meth:`stability` sets ``stable``
           and ``negative_modes`` and warns (:class:`UnstableEquilibriumWarning`)
           at a saddle, such as a liquid column past its Rayleigh-Plateau limit:
           the solver finds saddles too, so the warning is the only sign.
 
+        * Without a Hessian (gap energies, simplex bodies outside the Lagrange
+          model, ...) the Newton steps give way to gradient rounds settled as
+          with ``newton=0``, while no facet is degenerate (below 1 degree); a
+          crystalline (Wulff) energy takes gradient rounds only and counts as
+          converged once its energy settles, since its residual doesn't
+          vanish at the Wulff shape. ``settled`` says the energy settled with
+          the residual above ``tol``.
+
         If the energy becomes non-finite, the surface is put back to the start
         of the gradient round where it happened and :class:`EvolverError` is
-        raised.
+        raised. A gradient round that pushes a met body volume or fixed
+        quantity off its target (Evolver's projection can fail on a degenerate
+        mesh) is undone and ends the rounds.
 
         Returns an :class:`IterationResult`: one entry per gradient step in
         ``energy``, ``area``, ``scale`` and ``level`` (adaptive passes count as
         further levels), plus ``newton_steps``, ``residual``, ``converged``,
-        ``stable``, ``negative_modes`` and ``health``.
+        ``settled``, ``stable``, ``negative_modes``, ``health``, ``popped``
+        and ``collapsed``.
         """
         elastic = self._elastic()
         # a membrane: no mesh tidying (it would change the physics), and Newton
@@ -636,9 +661,16 @@ class Evolver:
         # crystalline energy depends on each facet's orientation, and flipping
         # and averaging undo the facets' alignment with the crystal. Rounds of
         # ``tidy`` steps still measure convergence.
-        keep_mesh = elastic or _core.crystalline()
+        crystalline = _core.crystalline()
+        keep_mesh = elastic or crystalline
         if elastic and seek is None:
             seek = True
+        if crystalline:
+            # no Hessian for a crystalline energy, and its residual doesn't
+            # vanish at the Wulff shape (the facets sit at corners of the
+            # energy): gradient rounds until the energy settles, which counts
+            # as converged
+            newton, stability = 0, False
         if _core.representation() == 3 and self.model != "lagrange":
             # Evolver has no Hessian for simplex bodies outside the Lagrange
             # model, and a failed attempt leaves the surface unusable
@@ -668,7 +700,7 @@ class Evolver:
                     run(lev, max_iter, tidy, watch=newton > 0)
                 steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol,
                                                newton, seek, undo_if, fallback=cg == "auto")
-            if self.model == "linear" and residual < tol and not elastic:
+            if self.model == "linear" and residual < tol and not keep_mesh:
                 more, residual = self._contact_pass(trace, levels + 1, run, max_iter, tidy, tol,
                                                     newton, seek, undo_if, cg == "auto", residual)
                 steps += more
@@ -694,7 +726,7 @@ class Evolver:
                     more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
                                                   seek, undo_if, fallback=cg == "auto")
                     steps += more
-                if pinch and not residual < tol and not elastic:
+                if pinch and not residual < tol and not keep_mesh:
                     found = self._collapse(trace, run, max_iter, tidy, tol, newton, seek,
                                            undo_if, cg == "auto", levels)
                     if found is not None:
@@ -704,7 +736,9 @@ class Evolver:
                         collapsed += gone
             stable: Optional[bool] = None
             modes: Optional[int] = None
-            if stability and residual < tol:
+            # just short of tol the eigenvalues are as good as at it (a step
+            # of a continuation that stops a little early still gets checked)
+            if stability and residual < _STABILITY_NEAR*tol:
                 try:
                     check = self.stability()
                     stable, modes = check.stable, check.negative
@@ -713,17 +747,20 @@ class Evolver:
                 if stable is False:
                     lowest = check.lowest[0] if len(check.lowest) else float("nan")
                     warnings.warn(
-                        f"relax() converged to an unstable equilibrium: {modes} "
-                        f"direction(s) lower the energy (lowest eigenvalue {lowest:.3g})",
+                        f"relax() {'converged to' if residual < tol else 'ended near'} an "
+                        f"unstable equilibrium: {modes} direction(s) lower the energy "
+                        f"(lowest eigenvalue {lowest:.3g})",
                         UnstableEquilibriumWarning, stacklevel=2)
             try:
                 health: Optional[Health] = self._health(residual, stable, modes, tol)
             except EvolverError:
                 health = None
+            settled = trace.settled and not residual < tol
         return IterationResult(np.array(trace.energy), np.array(trace.area),
                                np.array(trace.scale), "".join(trace.output),
-                               bool(residual < tol), steps, np.array(trace.level, dtype=int),
-                               residual, stable, modes, health, popped, collapsed)
+                               bool(residual < tol or (crystalline and settled)), steps,
+                               np.array(trace.level, dtype=int), residual, stable, modes,
+                               health, popped, collapsed, settled)
 
     def _collapse(self, trace: "_Trace", run: Callable[..., None], max_iter: int, tidy: int,
                   tol: float, newton: int, seek: Optional[bool],
@@ -735,7 +772,15 @@ class Evolver:
         relax again. Kept if that converges, or lowers the energy without
         leaving degenerate facets; else the surface and the trace go back
         (None). Returns the Newton steps,
-        residual, pops and deleted edges."""
+        residual, pops and deleted edges.
+
+        After k failed attempts in a row the next 2**k - 1 calls skip it (a
+        continuation that stays unconverged pays for a few attempts, not one
+        per call); a kept attempt starts the count over."""
+        global _collapse_failures, _collapse_skip
+        if _collapse_skip:
+            _collapse_skip -= 1
+            return None
         snapshot = self.save()
         energy = _core.total_energy()
         marks = (len(trace.energy), len(trace.area), len(trace.scale), len(trace.level),
@@ -761,9 +806,15 @@ class Evolver:
             gone = 0
         # a lower energy counts only on a sound mesh: a coarse one can lower
         # it by collapsing facets
-        if gone and (residual < tol or (_core.total_energy() < energy
-                                        and not self.mesh_quality(5.0).angle_min < 1.0)):
+        try:
+            sound = gone and not self.mesh_quality(5.0).angle_min < 1.0
+        except EvolverError:        # a facet left without its three edges
+            sound, residual = False, float("inf")
+        if gone and (residual < tol or (_core.total_energy() < energy and sound)):
+            _collapse_failures = 0
             return steps, residual, popped, gone
+        _collapse_failures += 1
+        _collapse_skip = 2**_collapse_failures - 1
         self.restore(snapshot)
         del trace.energy[marks[0]:], trace.area[marks[1]:], trace.scale[marks[2]:]
         del trace.level[marks[3]:], trace.output[marks[4]:]
@@ -907,9 +958,12 @@ class Evolver:
         if newton and self._no_hessian:
             # no Newton for this surface: plain gradient rounds instead, settled
             # as with newton=0 (the residual watch, there for Newton, is off)
+            # only on a sound mesh: on degenerate facets a long gradient run
+            # slides into what the mesh allows rather than the shape (tankex
+            # from 8 facets: energy 1.6 -> 0.03)
             budget = max_iter - trace.level.count(lev)
-            if budget > 0:
-                run(lev, budget, tidy, energy_tol=_GRADIENT_ONLY_TOL)
+            if budget > 0 and not self.mesh_quality(5.0).angle_min < 1.0:
+                run(lev, budget, tidy, energy_tol=_GRADIENT_ONLY_TOL, sound=True)
             return 0, self.residual()
         residual = self.residual()
         budget = min(max_iter - trace.level.count(lev), _FALLBACK_STEPS)
@@ -948,20 +1002,25 @@ class Evolver:
     def _gradient_phase(self, trace: "_Trace", lev: int, max_iter: int, tidy: int, *,
                         energy_tol: float, window: int,
                         callback: Optional[Callable[["Evolver", int], Any]], every: int,
-                        watch: bool = False, average_only: bool = False) -> None:
+                        watch: bool = False, average_only: bool = False,
+                        sound: bool = False) -> None:
         """Gradient steps until the energy settles (see relax()). With tidy=k,
         'u; V' (``average_only``: 'V') every k steps and the energy compared
         round to round. With ``watch`` (Newton follows), also the residual at
         the end of each round, before the tidying (which disturbs it): a round
         that more than doubles it from its lowest is undone and ends the
         phase. The coordinates at the start of each round also undo a round
-        whose energy turns non-finite (then EvolverError)."""
+        whose energy turns non-finite (then EvolverError), or one that pushes
+        a met volume or quantity off its target (which ends the phase). With
+        ``sound``, the phase ends once a round leaves degenerate facets
+        (below 1 degree)."""
         previous = _core.total_energy()
         quiet = 0
         best = np.inf
         first = len(trace.energy)
         watch = watch and tidy > 0
         start = self._coords()
+        gap, _ = self._target_gap()
         for i in range(1, max_iter + 1):
             trace.step(self)
             if callback is not None and i % every == 0:
@@ -974,6 +1033,16 @@ class Evolver:
                                    + where)
             if tidy and i % tidy:
                 continue                  # mid-round: no convergence check
+            # on a degenerate mesh Evolver's volume projection can fail without
+            # an error: a round that pushes a volume off its target is undone
+            # (a new target, still being approached, only counts if it grows)
+            now, _ = self._target_gap()
+            if now > _TARGET_LOST and now > 2*gap:
+                if tidy and self._put_back(start):
+                    trace.energy[-1] = _core.total_energy()
+                    trace.area[-1] = _core.total_area()
+                break
+            gap = min(gap, now)
             if watch:
                 res = self.residual()
                 if res > 2*best:            # the round went wrong: undo it, hand over
@@ -990,11 +1059,19 @@ class Evolver:
                 trace.energy[-1] = _core.total_energy()
                 trace.area[-1] = _core.total_area()
                 start = self._coords()
+                if sound and self.mesh_quality(5.0).angle_min < 1.0:
+                    break
             change = abs(trace.energy[-1] - previous) / max(1.0, abs(trace.energy[-1]))
             previous = trace.energy[-1]
             quiet = quiet + 1 if change < energy_tol else 0
             if quiet >= window:
                 break
+        # vertex averaging moves volumes a little (on a degenerate mesh a lot),
+        # and the next round's steps would project them back: at the end, one
+        # step does
+        if tidy and len(trace.energy) > first and self._target_gap()[0] > _TARGET_LOST:
+            trace.step(self)
+        trace.settled = quiet >= window
         steps = len(trace.energy) - first
         trace.level += [lev]*steps
         if callback is not None and steps % every != 0:
@@ -1009,9 +1086,13 @@ class Evolver:
         rejected, one with a line search (``hessian_seek``); ``seek=True`` or
         ``False`` uses only the one kind. A step is rejected (undone) if it
         makes the energy or the :meth:`residual` non-finite, raises both the
-        energy and the residual, or makes ``undo_if(ev)`` true; with no step
-        accepted, Newton stops. It also stops when the residual stops falling,
-        or, with ``tol``, once it is below ``tol``.
+        energy and the residual, raises the energy by more than 10% plus what
+        meeting the volume and quantity targets costs (pressure times the
+        change), or makes ``undo_if(ev)`` true; a step that brings an unmet
+        target (say a new body volume) at least halfway may raise both. With
+        no step accepted, Newton stops. It also stops when neither the
+        residual nor an unmet target is improving, or, with ``tol``, once the
+        residual is below ``tol`` with the targets met.
         Returns the number of steps kept. (:meth:`hessian` takes one step with
         no checks.)
         """
@@ -1025,7 +1106,10 @@ class Evolver:
         """Safeguarded Newton steps; see newton()."""
         kept = 0
         res0 = self.residual()
-        if tol is not None and res0 < tol:
+        # the residual doesn't see an unmet volume or quantity target (a new
+        # one): restoring it is progress, and its cost an allowed energy rise
+        gap0, cost = self._target_gap()
+        if tol is not None and res0 < tol and gap0 <= _TARGET_LOST:
             return 0
         kinds = ["hessian_seek"] if seek is True else ["hessian"] if seek is False \
             else ["hessian", "hessian_seek"]
@@ -1046,14 +1130,17 @@ class Evolver:
                     continue
                 e1 = _core.total_energy()
                 res1 = self.residual()
+                gap1, _ = self._target_gap()
+                closer = gap0 > _TARGET_LOST and gap1 < 0.5*gap0
                 # with constraints the energy alone is no merit (restoring a
                 # volume can cost energy): reject what got worse on both, or
                 # raised the energy by more than a volume correction could (far
                 # from equilibrium a step can run off to a tangled surface
                 # whose residual is small)
                 bad = (not np.isfinite(e1) or not np.isfinite(res1)
-                       or (e1 > e0 + 1e-12*max(1.0, abs(e0)) and res1 > 1.1*res0)
-                       or e1 > e0 + _NEWTON_MAX_RISE*abs(e0)
+                       or (e1 > e0 + 1e-12*max(1.0, abs(e0)) and res1 > 1.1*res0
+                           and not closer)
+                       or e1 > e0 + _NEWTON_MAX_RISE*abs(e0) + cost
                        or (undo_if is not None and undo_if(self)))
                 if bad:
                     self._put_back(snapshot)
@@ -1066,13 +1153,33 @@ class Evolver:
                 self._no_hessian = step == 0 and failed == len(kinds)
                 break
             kept += 1
-            progress = res1 < 0.9*res0
+            progress = res1 < 0.9*res0 or closer
             res0 = res1
-            if tol is not None and res1 < tol:
+            gap0, cost = self._target_gap()
+            if tol is not None and res1 < tol and gap0 <= _TARGET_LOST:
                 break
             if not progress:
                 break
         return kept
+
+    def _target_gap(self) -> "tuple[float, float]":
+        """How far the fixed body volumes and fixed quantities are from their
+        targets (the largest gap, relative to the target; absolute for a
+        target of 0), and what closing the gaps costs in energy to first
+        order (the sum of |pressure * gap|)."""
+        gaps: List[float] = []
+        cost = 0.0
+        b = self.bodies()
+        if len(b.ids) and b.fixed.any():
+            target = b.target[b.fixed]
+            off = target - b.volume[b.fixed]
+            gaps += list(np.abs(off)/np.where(target != 0, np.abs(target), 1.0))
+            cost += float(np.abs(b.pressure[b.fixed]*off).sum())
+        for q in self.quantities().values():
+            if q.kind == "fixed":
+                gaps.append(abs(q.target - q.value)/(abs(q.target) if q.target else 1.0))
+                cost += abs(q.pressure*(q.target - q.value))
+        return max(gaps, default=0.0), cost
 
     def _coords(self) -> "_Coords":
         """The vertex coordinates, to undo steps that only move vertices."""
@@ -1276,14 +1383,20 @@ class Evolver:
         to a contact line the surface is close to its wall by design);
         ``self_gap`` measures between vertices more than two edges apart.
         ``junctions`` counts free junctions that break Plateau's laws (edges
-        where four or more films meet, vertices where more than four triple
-        edges or, in a string network, four or more strings do): the surface
+        where four or more films meet, vertices whose tangent cone Evolver's
+        ``o`` pops, such as more than four triple edges, or, in a string
+        network, four or more strings meeting): the surface
         is in equilibrium for its topology, but popping them (Evolver's
-        ``o``) lowers the energy. ``crossed`` counts vertices on the far side of a constraint: the
+        ``o``) lowers the energy. ``target_gap`` is the largest relative
+        gap between a fixed body volume or quantity and its target (Evolver's
+        projection onto them can fail on a degenerate mesh; an issue above
+        1e-4). ``crossed`` counts vertices on the far side of a constraint: the
         forbidden side of a one-sided one, or a few vertices (at most 5%)
         against all the others for an equality constraint. ``issues`` puts
         what looks wrong in words: unconverged, unstable, facets below 1
-        degree, crossings, gaps under 0.1. :meth:`relax` attaches one to its
+        degree, crossings, gaps under 0.1, targets missed. (For a
+        crystalline energy the residual is left out of ``issues``: it
+        doesn't vanish at the Wulff shape.) :meth:`relax` attaches one to its
         result. Cost: about a gradient step (the stability check: two
         factorizations).
         """
@@ -1328,7 +1441,7 @@ class Evolver:
         crossed = _crossed(nums, attrs, dist, used, _CROSS_TOL*h)
         self_gap = _self_gap(m.vertices, e, moving, h)
         issues = []
-        if not residual < tol:
+        if not residual < tol and not _core.crystalline():
             issues.append(f"not in equilibrium (residual {residual:.2g})")
         if stable is False:
             issues.append(f"unstable: {modes} direction(s) lower the energy")
@@ -1342,19 +1455,24 @@ class Evolver:
                           f"({wall_gap:.2g} edge lengths away)")
         if self_gap < 0.1:
             issues.append(f"the surface nearly touches itself ({self_gap:.2g} edge lengths)")
+        target_gap, _ = self._target_gap()
+        if target_gap > _TARGET_LOST:
+            issues.append(f"a fixed volume or quantity is off its target ({target_gap:.2g} "
+                          "relative)")
         junctions = self._bad_junctions()
         if junctions:
             issues.append(f"{junctions} {'junction breaks' if junctions == 1 else 'junctions break'} "
                           "Plateau's laws (Evolver's 'o' pops them)")
         return Health(float(residual), stable, modes, float(quality.angle_min),
                       int(quality.skinny), float(wall_gap), wall, crossed, float(self_gap),
-                      junctions, issues)
+                      junctions, float(target_gap), issues)
 
     def _bad_junctions(self) -> int:
         """Junctions a minimal surface can't have, away from walls, wires and
         fixed elements: in a film, edges where four or more facets meet (not
-        fixed, at least one end free) and free vertices where more than four
-        triple edges do; in a string network, free vertices where four or
+        fixed, at least one end free) and free vertices whose tangent cone
+        Evolver's 'o' pops (as it decides: more than four triple edges, a
+        cube's cone, ...); in a string network, free vertices where four or
         more strings meet."""
         rep = _core.representation()
         if rep == 3 or self.model == "lagrange":
@@ -1370,9 +1488,13 @@ class Evolver:
         # along a wire or wall (both ends attached) more films may meet
         loose = (free[m.edges[:, 0]] | free[m.edges[:, 1]]) & (self.values("edge", "fixed") == 0)
         bad = int(((valence >= 4) & loose).sum())
-        triple = valence == 3
-        count = np.bincount(m.edges[triple].ravel(), minlength=len(free))
-        return bad + int(((count > 4) & free).sum())
+        try:          # the tangent cones 'o' pops (cubes, Kraynik's, ...)
+            _, cones = self._call(_core.poppable_vertices)
+            return bad + int(cones.data)
+        except EvolverError:        # a cone it can't analyze: more than four triple edges
+            triple = valence == 3
+            count = np.bincount(m.edges[triple].ravel(), minlength=len(free))
+            return bad + int(((count > 4) & free).sum())
 
     def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
         """Constraint numbers, attribute bits, per vertex the signed distance
@@ -1513,12 +1635,16 @@ class Evolver:
 
     def restore(self, snapshot: Snapshot) -> None:
         """Replace the surface with a snapshot from :meth:`save`."""
+        global _newton_first_failed, _collapse_failures, _collapse_skip
+        # the same surface, not a new one: relax()'s memory of failed attempts stays
+        kept = _newton_first_failed, _collapse_failures, _collapse_skip
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "snapshot.fe")
             with open(path, "w") as f:
                 f.write(snapshot.text)
             self.load(path)
         _core.set_datafile(snapshot.datafile)
+        _newton_first_failed, _collapse_failures, _collapse_skip = kept
 
     # ------------------------------------------------------------------
     # Writing element data
@@ -2254,7 +2380,7 @@ _CROSS_TOL = 0.01
 _ADAPT_PASSES = 3
 _NEWTON_FIRST_SETTLE = 5   # gradient steps before relax()'s Newton-first attempt
 _SPOKE_RATIO = 1.5       # relax() splits edges leaving a contact line longer than this many contact-line edges
-_FALLBACK_STEPS = 200
+_FALLBACK_STEPS = 200           # gradient steps for relax()'s conjugate-gradient pass, at most
 # Evolver's methods whose in-plane forces are physical (membranes)
 _ELASTIC_METHODS = frozenset({
     "linear_elastic", "general_linear_elastic", "linear_elastic_B", "relaxed_elastic",
@@ -2262,10 +2388,15 @@ _ELASTIC_METHODS = frozenset({
     "relaxed_elastic2_A", "dirichlet_elastic", "SVK_elastic", "neo_hookean",
     "stress_integral"})
 _TOPOLOGY_PASSES = 5          # relax(): pop / delete collapsed edges, relax again, at most
-_COLLAPSED = 0.05
-_COLLAPSE_STEPS = 300          # relax(): untidied gradient steps of the last resort              # an edge below this times the median has collapsed
+_COLLAPSED = 0.05              # an edge below this times the median has collapsed
+_COLLAPSE_STEPS = 300          # relax(): untidied gradient steps of the last resort
 _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative) is undone
-_GRADIENT_ONLY_TOL = 1e-9      # energy_tol when no Newton follows    # gradient steps for relax()'s conjugate-gradient pass, at most
+_STABILITY_NEAR = 100          # relax() checks stability below this many times tol
+# a body volume or quantity this far off its target (relative) is missed: a
+# new target for Newton to meet, or a gradient round gone wrong (vertex
+# averaging alone leaves volumes about 2e-5 off)
+_TARGET_LOST = 1e-4
+_GRADIENT_ONLY_TOL = 1e-9      # energy_tol when no Newton follows
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 
