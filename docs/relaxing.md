@@ -54,7 +54,7 @@ run with default settings) and are from October 2026.
 
 Other models change some of this. Strings are only vertex-averaged, the simplex
 representation only equiangulated. Surfaces without a Hessian get plain gradient
-rounds, settled to 1e-9, in place of Newton steps, while no facet is degenerate (below
+rounds (and an explicit `newton` or `stability=True` warns that it can't be had), settled to 1e-9, in place of Newton steps, while no facet is degenerate (below
 1 degree; on degenerate facets a long gradient run slides into what the mesh allows):
 Evolver has no Hessian for gap energies on curved walls, crystalline integrands, or
 bodies in the simplex representation outside the Lagrange model. When such a run ends
@@ -159,8 +159,8 @@ Other things to know:
   surface still won't converge, a last resort: gradient steps without tidying (which
   can hold a shrinking neck open as a tube of slivers), then edges that have
   collapsed to a 20th of the median are deleted, junctions popped, and the surface
-  relaxed, kept only if that converges or lowers the energy on a sound mesh
-  (`r.collapsed`; `relax(pinch=False)` turns it off). That is how a small film in a
+  relaxed, kept only if that converges, or lowers the energy on a sound mesh without
+  raising the residual (`r.collapsed`; `relax(pinch=False)` turns it off). That is how a small film in a
   foam shrinks away, and how a catenoid past its fold pinches off into two discs
   (`cat.fe`, stress case 2). A converged surface never loses edges. The last resort
   costs up to a few hundred gradient steps and a save and restore; after k failed
@@ -177,7 +177,11 @@ Other things to know:
   much larger.
 * **Unconverged results.** `r.converged` is `False` when the residual didn't reach
   `tol`; the surface is the best `relax()` found. `r.health.issues` tells whether it
-  is merely unfinished or broken.
+  is merely unfinished or broken. Converged results agree across thread counts to
+  about the tolerance; unconverged ones need not: threads add the forces in a
+  different order, and a long run that never settles (no Hessian, a coarse mesh)
+  follows a different path (`tankex.fe` from 8 facets ends at energy 1.60 with 16
+  threads and 1.67 with 4). Compare unconverged results only at the same thread count.
 * **Large surfaces.** At 400k facets a default `relax()` near equilibrium takes about
   4 s with 8 threads (a raw `g 5` and three Newton steps: 2.8 s); the stability check
   is one factorization of the Hessian.

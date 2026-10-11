@@ -558,7 +558,8 @@ class Evolver:
                                np.array(trace.scale), "".join(trace.output))
 
     def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, levels: int = 0,
-              newton: int = 20, stability: bool = True, adapt: Union[bool, float] = False,
+              newton: Optional[int] = None, stability: Optional[bool] = None,
+              adapt: Union[bool, float] = False,
               cg: Union[bool, str] = "auto", tidy: int = 10, energy_tol: Optional[float] = None,
               window: int = 3, seek: Optional[bool] = None, pinch: bool = True,
               undo_if: Optional[Callable[["Evolver"], bool]] = None,
@@ -625,7 +626,8 @@ class Evolver:
           20th of the median edge are deleted (Evolver's ``t``: a film or neck
           shrinking to nothing, as before a foam's T1 change or a pinch-off),
           junctions popped and the surface relaxed, kept only if that
-          converges or lowers the energy on a sound mesh. A converged surface
+          converges, or lowers the energy on a sound mesh without raising the
+          residual. A converged surface
           never loses edges. After k failed attempts in a row, the next
           2**k - 1 calls skip the last resort.
           ``popped`` and ``collapsed`` count them.
@@ -665,16 +667,21 @@ class Evolver:
         keep_mesh = elastic or crystalline
         if elastic and seek is None:
             seek = True
-        if crystalline:
-            # no Hessian for a crystalline energy, and its residual doesn't
-            # vanish at the Wulff shape (the facets sit at corners of the
-            # energy): gradient rounds until the energy settles, which counts
-            # as converged
+        # no Hessian for a crystalline energy, and its residual doesn't vanish
+        # at the Wulff shape (the facets sit at corners of the energy): gradient
+        # rounds until the energy settles, which counts as converged. Nor for
+        # simplex bodies outside the Lagrange model, where a failed attempt
+        # leaves the surface unusable.
+        why = ("a crystalline energy" if crystalline else
+               "simplex bodies outside the Lagrange model"
+               if _core.representation() == 3 and self.model != "lagrange" else None)
+        if why is not None:
+            if newton or stability:
+                warnings.warn(f"relax(): no Newton steps or stability check for {why} "
+                              "(Evolver has no Hessian for it)", EvolverWarning, stacklevel=2)
             newton, stability = 0, False
-        if _core.representation() == 3 and self.model != "lagrange":
-            # Evolver has no Hessian for simplex bodies outside the Lagrange
-            # model, and a failed attempt leaves the surface unusable
-            newton, stability = 0, False
+        newton = 20 if newton is None else newton
+        stability = True if stability is None else stability
         if energy_tol is None:
             energy_tol = 1e-5 if newton else _GRADIENT_ONLY_TOL
         if tol <= 0 or energy_tol <= 0 or max_iter < 1 or window < 1:
@@ -783,6 +790,7 @@ class Evolver:
             return None
         snapshot = self.save()
         energy = _core.total_energy()
+        residual0 = self.residual()
         marks = (len(trace.energy), len(trace.area), len(trace.scale), len(trace.level),
                  len(trace.output))
         lev = max(trace.level, default=levels) + 1
@@ -804,14 +812,16 @@ class Evolver:
                         break
         except EvolverError:
             gone = 0
-        # a lower energy counts only on a sound mesh with its volumes met: a
-        # coarse one can lower it by collapsing facets
+        # a lower energy counts only on a sound mesh no farther from
+        # equilibrium: a coarse one can lower it by collapsing facets into
+        # what the mesh allows (tankex from 8 facets: energy 1.77 -> 0.24,
+        # residual 0.94 -> 1.38).
         try:
-            sound = (gone and not self.mesh_quality(5.0).angle_min < 1.0
-                     and self._target_gap()[0] <= _TARGET_LOST)
+            sound = gone and not self.mesh_quality(5.0).angle_min < 1.0
         except EvolverError:        # a facet left without its three edges
             sound, residual = False, float("inf")
-        if gone and (residual < tol or (_core.total_energy() < energy and sound)):
+        if gone and (residual < tol or (_core.total_energy() < energy and sound
+                                        and residual <= residual0)):
             _collapse_failures = 0
             return steps, residual, popped, gone
         _collapse_failures += 1
@@ -972,6 +982,7 @@ class Evolver:
                 and not residual < tol):
             return steps, residual
         before = self._coords()
+        settled = trace.settled
         with self._conj_grad(True):
             run(lev, budget, tidy, watch=True, average_only=True)
         more = self._newton(newton, seek, tol, undo_if, trace.output) \
@@ -979,6 +990,7 @@ class Evolver:
         second = self.residual()
         if second < tol or not self._put_back(before):   # (not: the topology changed)
             return steps + more, second
+        trace.settled = settled             # the pass is undone: as the rounds before it
         return steps, residual
 
     @contextlib.contextmanager
@@ -1094,6 +1106,12 @@ class Evolver:
         no step accepted, Newton stops. It also stops when neither the
         residual nor an unmet target is improving, or, with ``tol``, once the
         residual is below ``tol`` with the targets met.
+
+        Newton converges to the equilibrium nearest in its own sense, saddles
+        included: after a large jump of a target (a volume made 16 times
+        larger in one go) it can end at an unstable one. Check with
+        :meth:`stability`, or let :meth:`relax` (gradient steps first) or a
+        continuation in smaller steps take such jumps.
         Returns the number of steps kept. (:meth:`hessian` takes one step with
         no checks.)
         """

@@ -84,9 +84,14 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   reports volumes and fixed quantities more than 1e-4 off their targets (`target_gap`).
 - Fixed: the last resort crashed when edge deletion left a facet without its three
   edges (it now counts as unsound and the surface goes back).
-- The last resort keeps a lower energy only with the volumes on their targets too
-  (`tankex.fe` from 8 facets slid to energy 0.24 with angles above 1 degree and a
-  volume 2e-4 off, and that was kept).
+- The last resort keeps an unconverged lower energy only if the residual didn't rise
+  (`tankex.fe` from 8 facets, at 2 threads: energy 1.77 -> 0.24 by collapsing facets,
+  residual 0.94 -> 1.38, and that was kept).
+- `relax()` warns when `newton` or `stability=True` is asked for a surface without a
+  Hessian (crystalline energies, simplex bodies outside the Lagrange model); the
+  defaults are now `None` (20 Newton steps, stability checked).
+- `settled` describes the gradient rounds, not an undone conjugate-gradient pass.
+- The wheels workflow runs on main only when what goes into a wheel changes.
 - `health()` skips the cone analysis on films without junctions (no edge where three
   films meet): 55 ms at 98k facets, on every `relax()`.
 - `relax()` checks stability when it ends within 100 times `tol` too (a continuation
@@ -95,8 +100,12 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   (surfaces without a Hessian; shown as `not converged (energy settled)`).
 - `ev.restore()` keeps `relax()`'s memory of failed attempts (it reloads a dump, which
   counted as a new surface).
-- Drainage stress case on plain defaults, after all of the above: 276 s -> 136 s,
-  worst band pressure 6.1% -> 2.7% off the reference, none over 10%.
+- Drainage stress case on plain defaults, after all of the above: about 2.2x faster
+  than before the last-resort backoff (at 2 threads, 4 runs each: 500 s against
+  790-1210 s). Median band pressure 0.2% off as before; the worst state varies from run
+  to run (the case is path-sensitive): 3-8% in 6 runs before, mostly 3-7% now but
+  over 10% in about a quarter of some 30 runs. The last resort is never kept in this
+  case, so its acceptance rules don't change it; the cause is open.
 - The wheels workflow also runs on pushes to main and weekly (the aarch64 wheels broke
   unnoticed until the release tag built them).
 

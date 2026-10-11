@@ -1,14 +1,23 @@
 name: wheels
 
 # Builds manylinux wheels and an sdist, tests them, and uploads them as
-# workflow artifacts. Nothing is published. Runs on main too (and weekly, for
-# runner and toolchain changes): the aarch64 wheels once broke unnoticed
-# until a release tag built them.
+# workflow artifacts. Nothing is published. Runs on main too when what goes
+# into a wheel changes (and weekly, for runner and toolchain changes): the
+# aarch64 wheels once broke unnoticed until a release tag built them.
 
 on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths:
+      - "src/**"
+      - "bindings/**"
+      - "python/**"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "pyproject.toml"
+      - "tools/build_openblas.sh"
+      - ".github/workflows/wheels.yml"
   pull_request:
   schedule:
     - cron: "17 4 * * 1"

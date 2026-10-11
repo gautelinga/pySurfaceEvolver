@@ -38,8 +38,9 @@ jobs:
           path: docs/_build/html
 
   # The stress-cases page shows code with its outputs but isn't executed in
-  # the build: run it and compare (numbers within 1e-3). Not a gate for
-  # deploying the docs; a failure means the page needs `--update`.
+  # the build: run it and compare (numbers within 1e-3; at 1, 2 and 4 threads
+  # they agree to the printed digits). Not a gate for deploying the docs; a
+  # failure means the page needs `--update`.
   snippets:
     runs-on: ubuntu-latest
     steps:

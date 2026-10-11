@@ -457,6 +457,47 @@ def test_relax_spreads_a_flat_drop():
     assert ev.total_energy == pytest.approx(energy, rel=1e-9)
 
 
+def test_relax_conjugate_gradient_pass_is_kept_only_if_it_converges(monkeypatch):
+    # the fallback no longer has a natural case among the tests (Newton
+    # converges the flat drop directly; the drainage stress case uses it about
+    # once in 130 steps): make the first Newton pass fail and check that the
+    # pass, then Newton, converges and is kept, and that an unconverged one
+    # goes back
+    from pysurfaceevolver import _evolver
+    ev = _hemisphere_drop()
+    ev.relax()
+    ev.parameters["theta"] = 60.0
+    real = _evolver.Evolver._newton
+    calls = []
+
+    def first_fails(self, *args):
+        calls.append(1)
+        return 0 if len(calls) == 1 else real(self, *args)
+
+    monkeypatch.setattr(_evolver.Evolver, "_newton", first_fails)
+    r = ev.relax(stability=False, pinch=False)
+    assert r.converged and len(calls) >= 2
+    assert ev.eval("conj_grad") == 0               # the setting comes back
+
+    # no Newton at all: the pass can't converge, and the surface goes back
+    # to where it began
+    monkeypatch.setattr(_evolver.Evolver, "_newton", lambda self, *args: 0)
+    real_put_back = _evolver.Evolver._put_back
+    undone = []
+
+    def put_back(self, snapshot):
+        ok = real_put_back(self, snapshot)
+        undone.append((ok, snapshot.coords.copy()))
+        return ok
+
+    monkeypatch.setattr(_evolver.Evolver, "_put_back", put_back)
+    ev.parameters["theta"] = 70.0
+    r = ev.relax(stability=False, pinch=False)
+    assert not r.converged
+    ok, coords = undone[-1]
+    assert ok and np.array_equal(ev.vertices, coords)
+
+
 def test_adapt_refines_where_the_surface_curves():
     # a drop at 150 degrees: the rim curls sharply; one pass refines there, a
     # second (after relaxing) finds nothing left, and the contact radius gets closer

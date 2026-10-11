@@ -213,3 +213,11 @@ def test_relax_crystalline_skips_tidying(load):
     # its residual doesn't vanish at the Wulff shape: converged = settled
     assert r.converged and r.settled and r.residual > 1
     assert r.health.ok
+
+
+def test_relax_warns_when_asked_for_newton_without_a_hessian(load):
+    ev = load("crystal.fe")
+    with pytest.warns(pyse.EvolverWarning, match="no Newton steps"):
+        ev.relax(newton=5, max_iter=20)
+    with pytest.warns(pyse.EvolverWarning, match="no Newton steps"):
+        load("simplex3.fe").relax(stability=True, max_iter=20)
