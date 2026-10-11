@@ -804,10 +804,11 @@ class Evolver:
                         break
         except EvolverError:
             gone = 0
-        # a lower energy counts only on a sound mesh: a coarse one can lower
-        # it by collapsing facets
+        # a lower energy counts only on a sound mesh with its volumes met: a
+        # coarse one can lower it by collapsing facets
         try:
-            sound = gone and not self.mesh_quality(5.0).angle_min < 1.0
+            sound = (gone and not self.mesh_quality(5.0).angle_min < 1.0
+                     and self._target_gap()[0] <= _TARGET_LOST)
         except EvolverError:        # a facet left without its three edges
             sound, residual = False, float("inf")
         if gone and (residual < tol or (_core.total_energy() < energy and sound)):
@@ -1488,6 +1489,8 @@ class Evolver:
         # along a wire or wall (both ends attached) more films may meet
         loose = (free[m.edges[:, 0]] | free[m.edges[:, 1]]) & (self.values("edge", "fixed") == 0)
         bad = int(((valence >= 4) & loose).sum())
+        if not (valence >= 3).any():  # a film without junctions: every vertex is a disc
+            return bad
         try:          # the tangent cones 'o' pops (cubes, Kraynik's, ...)
             _, cones = self._call(_core.poppable_vertices)
             return bad + int(cones.data)

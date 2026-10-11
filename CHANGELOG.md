@@ -84,6 +84,11 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
   reports volumes and fixed quantities more than 1e-4 off their targets (`target_gap`).
 - Fixed: the last resort crashed when edge deletion left a facet without its three
   edges (it now counts as unsound and the surface goes back).
+- The last resort keeps a lower energy only with the volumes on their targets too
+  (`tankex.fe` from 8 facets slid to energy 0.24 with angles above 1 degree and a
+  volume 2e-4 off, and that was kept).
+- `health()` skips the cone analysis on films without junctions (no edge where three
+  films meet): 55 ms at 98k facets, on every `relax()`.
 - `relax()` checks stability when it ends within 100 times `tol` too (a continuation
   step stopping just short skipped the check).
 - `IterationResult.settled`: the energy settled with the residual above `tol`
