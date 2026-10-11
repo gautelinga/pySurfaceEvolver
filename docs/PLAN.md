@@ -28,15 +28,17 @@ on all 25 samples); volume guards for degenerate meshes and `health().target_gap
 within 100*tol (barrel roll-up now reported at 70 and 80); wheels CI on main + weekly;
 `tools/make_brakke_notebooks.py`; `tools/check_doc_snippets.py` (+ docs CI job). The
 "spurious quotient-space negative mode" was wrong: symtest.fe's volumes are comments,
-so the instability is real. 339 tests. Case 8 on defaults: 136 s, worst 2.7%.
+so the instability is real. 341 tests. Case 8 on defaults (2 threads): about 500 s,
+median 0.2%; the worst state is run-dependent (over 10% in about 1/4-1/3 of runs,
+the same before and after this work: 11 old-code runs against ~30 new).
 
 Open, for the user to pick:
 
 * **Release** 0.7.1/0.8.0 (the user said "release later").
 * **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing for
   full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient fallback
-  in `relax()` no longer rescues any test case (Newton now converges the 10-degree drop
-  directly), kept as it costs nothing when converged.
+  in `relax()` rescues no test case (Newton converges the 10-degree drop directly) and
+  1 step in 132 tries in case 8; kept, as it costs nothing when converged.
 * **Do not re-propose:** remeshing inside `relax()` for case 8 (researched 2026-10-10).
 * **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge

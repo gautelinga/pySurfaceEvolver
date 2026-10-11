@@ -103,9 +103,9 @@ Each of the 25 sample datafiles was relaxed with defaults and compared with its 
 - Drainage stress case on plain defaults, after all of the above: about 2.2x faster
   than before the last-resort backoff (at 2 threads, 4 runs each: 500 s against
   790-1210 s). Median band pressure 0.2% off as before; the worst state varies from run
-  to run (the case is path-sensitive): 3-8% in 6 runs before, mostly 3-7% now but
-  over 10% in about a quarter of some 30 runs. The last resort is never kept in this
-  case, so its acceptance rules don't change it; the cause is open.
+  to run (the case is path-sensitive, also at a fixed thread count): mostly 3-8%, but
+  over 10% in about a third of 11 runs before (once 147%) and a quarter of some 30
+  runs now, so no change in the tail.
 - The wheels workflow also runs on pushes to main and weekly (the aarch64 wheels broke
   unnoticed until the release tag built them).
 
