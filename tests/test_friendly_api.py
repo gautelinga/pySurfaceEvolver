@@ -293,7 +293,7 @@ def test_plot_and_live_view_mirror(can_render):
 def test_continuation_steps_and_records(cube):
     from pysurfaceevolver import recipes
     values = [1.0, 0.9, 0.8]
-    steps = list(recipes.continuation(cube, recipes.body_target(1), values,
+    steps = list(recipes.continuation(cube, cube.body(1), values,
                                       relax=dict(tol=1e-8, max_iter=400)))
     assert [s.value for s in steps] == values and [s.index for s in steps] == [0, 1, 2]
     for s in steps:
@@ -306,17 +306,17 @@ def test_continuation_checkpoint_and_resume(cube, tmp_path):
     from pysurfaceevolver import recipes
     values = [1.0, 0.95, 0.9, 0.85]
     prefix = str(tmp_path / "run" / "cube")
-    full = [s.energy for s in recipes.continuation(cube, recipes.body_target(1), values,
+    full = [s.energy for s in recipes.continuation(cube, cube.body(1), values,
                                                    relax=dict(tol=1e-9, max_iter=500))]
     cube.load("cube.fe")
-    for step in recipes.continuation(cube, recipes.body_target(1), values,
+    for step in recipes.continuation(cube, cube.body(1), values,
                                      relax=dict(tol=1e-9, max_iter=500), checkpoint=prefix):
         step.extra["note"] = step.index
         if step.index == 1:
             break                      # stopped after two steps (the second unsaved)
     assert [s.index for s in recipes.load_steps(prefix)] == [0]
     cube.load("cube.fe")               # whatever the engine holds: resume replaces it
-    resumed = list(recipes.continuation(cube, recipes.body_target(1), values,
+    resumed = list(recipes.continuation(cube, cube.body(1), values,
                                         relax=dict(tol=1e-9, max_iter=500), resume=prefix,
                                         checkpoint=prefix))
     assert [s.index for s in resumed] == [1, 2, 3]
@@ -332,7 +332,7 @@ def test_continuation_parameter_and_relax_callable(cube):
                                       relax=lambda ev: ev.iterate(2)))
     assert calls == [1, 2] and len(steps[0].result.energy) == 2
     with pytest.raises(TypeError):
-        next(recipes.continuation(cube, recipes.parameter("x"), [1], relax=5))
+        next(recipes.continuation(cube, "x", [1], relax=5))
 
 
 # ---- G2.3: stability ----------------------------------------------------------
@@ -441,7 +441,7 @@ def _hemisphere_drop(nr=8, nt=32):
     return ev
 
 
-def test_relax_spreads_a_flat_drop():
+def test_relax_spreads_a_flat_drop(monkeypatch):
     # spreading to a flat 10 degree drop: the last vertex averaging leaves the
     # volume a little off, and the Newton step restoring it was undone (energy
     # and residual both rose), so only the conjugate-gradient pass got there
@@ -449,7 +449,10 @@ def test_relax_spreads_a_flat_drop():
     ev.relax()
     ev.parameters["theta"] = 10.0
     snap = ev.save()
-    plain = ev.relax(cg=False)
+    from pysurfaceevolver import _evolver
+    with monkeypatch.context() as m:
+        m.setattr(_evolver, "_FALLBACK_STEPS", 0)     # no conjugate-gradient pass
+        plain = ev.relax()
     energy = ev.total_energy
     ev.restore(snap)
     r = ev.relax()
@@ -475,7 +478,8 @@ def test_relax_conjugate_gradient_pass_is_kept_only_if_it_converges(monkeypatch)
         return (0, self.residual()) if len(calls) == 1 else real(self, *args)
 
     monkeypatch.setattr(_evolver.Evolver, "_newton", first_fails)
-    r = ev.relax(stability=False, pinch=False)
+    monkeypatch.setattr(_evolver.Evolver, "_collapse", lambda self, *args: None)
+    r = ev.relax(stability=False)
     assert r.converged and len(calls) >= 2
     assert ev.eval("conj_grad") == 0               # the setting comes back
 
@@ -492,7 +496,7 @@ def test_relax_conjugate_gradient_pass_is_kept_only_if_it_converges(monkeypatch)
 
     monkeypatch.setattr(_evolver.Evolver, "_put_back", put_back)
     ev.parameters["theta"] = 70.0
-    r = ev.relax(stability=False, pinch=False)
+    r = ev.relax(stability=False)
     assert not r.converged
     ok, coords = undone[-1]
     assert ok and np.array_equal(ev.vertices, coords)
@@ -535,7 +539,7 @@ def test_relax_reports_a_healthy_surface(cube):
 def test_health_names_a_broken_surface():
     # gradient steps only, long enough for the coarse bridge to fall apart
     ev, _ = _coarse_bridge()
-    ev.relax(newton=0, energy_tol=1e-9)
+    ev.relax(newton=0)
     h = ev.health()
     assert not h.ok and any("degenerate" in s for s in h.issues)
 
@@ -579,3 +583,85 @@ def test_relax_in_the_lagrange_model(cube):
     # near its equilibrium: five settling gradient steps, then Newton (as the
     # manual's 'g 5; hessian'), no gradient rounds
     assert len(r.energy) == 5 and r.newton_steps >= 1
+
+
+def test_continuation_steps_a_quantity_target_and_a_variable(load):
+    from pysurfaceevolver import recipes
+    ev = load("qmound.fe")                      # its volume is a fixed quantity
+    steps = list(recipes.continuation(ev, ev.quantity("vol"), [1.1, 1.2],
+                                      relax=dict(stability=False)))
+    assert ev.quantity("vol").value == pytest.approx(1.2, rel=1e-6)
+    assert [s.value for s in steps] == [1.1, 1.2]
+    calls = []
+    list(recipes.continuation(ev, "gravity_constant", [0.5],
+                              relax=lambda ev: calls.append(ev.gravity)))
+    assert calls == [0.5]
+    with pytest.raises(TypeError):
+        next(recipes.continuation(ev, 3, [1]))
+
+
+def test_quantity_handle(load):
+    ev = load("qmound.fe")
+    q = ev.quantity("vol")
+    assert q.kind == "fixed" and q.target == pytest.approx(1.0)
+    q.target = 1.5
+    assert ev.quantities()["vol"].target == 1.5
+    q.target = None
+    assert q.kind == "info" and q.target is None
+    q.target = 1.25
+    assert q.kind == "fixed" and q.target == 1.25
+    ev = load("mylarcube.fe")
+    ev.quantity("stretch").modulus = 100
+    assert ev.quantities()["stretch"].modulus == 100
+    assert "stretch" in repr(ev.quantity("stretch"))
+    with pytest.raises(KeyError):
+        ev.quantity("nothing")
+
+
+def test_gravity_and_density(load):
+    ev = load("mound.fe")
+    ev.gravity = 2.5
+    ev.body(1).density = 3
+    assert ev.gravity == 2.5 and ev.eval("gravity_constant") == 2.5
+    assert ev.body(1).density == 3
+
+
+def test_saddle_steps_off_an_unstable_column():
+    ev = _column(0.25)
+    ev.relax(stability=False)
+    assert ev.saddle() > 0                     # down the unstable mode
+    cube = pyse.Evolver("cube.fe")             # fresh: Evolver needs a gradient step first
+    cube.saddle()
+    cube.relax()
+    assert cube.saddle() == pytest.approx(0, abs=1e-12)    # a minimum: nothing to do
+
+
+def test_contact_angles_approach_the_prescribed_angle():
+    ev = _hemisphere_drop()
+    ev.parameters["theta"] = 60.0
+    ev.relax()
+    coarse = ev.contact_angles(1)
+    assert len(coarse) == 32 and coarse.std() < 0.01
+    ev.relax(levels=1)
+    fine = ev.contact_angles(1)
+    # first order in the edge length (normals from the facets next to the line)
+    assert abs(fine.mean() - 60) < 2 and abs(fine.mean() - 60) < 0.6*abs(coarse.mean() - 60)
+    with pytest.raises(KeyError):
+        ev.contact_angles(7)
+
+
+def test_mesh_slice():
+    ev = _hemisphere_drop()
+    ev.relax(levels=1)
+    m = ev.mesh()
+    rings = m.slice((0, 0, 1), (0, 0, 0.5))        # one closed circle
+    assert len(rings) == 1 and np.allclose(rings[0][0], rings[0][-1])
+    r = np.hypot(rings[0][:, 0], rings[0][:, 1])
+    assert np.allclose(r, np.sqrt(1 - 0.25), rtol=0.02)
+    arcs = m.slice((0, 1, 0))                      # half-plane y = 0: an arc over the top
+    assert len(arcs) == 1 and np.allclose(np.linalg.norm(arcs[0], axis=1), 1, rtol=0.02)
+    assert m.slice((0, 0, 1), (0, 0, 5)) == []
+    cube = pyse.Evolver("cube.fe")
+    cube.relax()
+    cube.command("lagrange 2")
+    assert len(cube.mesh().slice()) == 1           # curved facets through tessellate()

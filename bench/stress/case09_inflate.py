@@ -24,7 +24,7 @@ def run(quick=False):
         track.relax(ev)
     res = Result(NAME, False, "")
     errors = []
-    for step in recipes.continuation(ev, recipes.body_target(1), np.geomspace(1, 100, 21),
+    for step in recipes.continuation(ev, ev.body(1), np.geomspace(1, 100, 21),
                                      relax=track.relax):
         err = rel(ev.total_energy, sphere(step.value))
         errors.append(err)

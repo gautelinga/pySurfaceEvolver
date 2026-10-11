@@ -51,7 +51,7 @@ def refinements(commands: str) -> int:
 
 
 def _load(name: str, setup: Optional[Callable] = None) -> pyse.Evolver:
-    ev = pyse.Evolver(examples.path(name))
+    ev = pyse.Evolver(name)
     if setup is not None:
         setup(ev)
     return ev

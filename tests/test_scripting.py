@@ -75,8 +75,8 @@ def test_refine_and_model_operations(cube):
     cube.equiangulate()
     cube.vertex_average()
     cube.iterate(2)
-    cube.hessian()
-    cube.hessian(seek=True)
+    cube.newton()
+    cube.newton(seek=True)
     cube.set_model("quadratic")
     assert cube.model == "quadratic"
     cube.set_model("lagrange", 3)
@@ -256,6 +256,21 @@ def test_body_orientation(load):
                    bodies=[{"faces": range(6), "volume": 1, "orientation": [-1] * 6}])
     ev.iterate(5)
     assert ev.eval("body[1].volume") == pytest.approx(1.0, rel=1e-6)
+
+
+def test_body_orientation_inferred_for_closed_faces():
+    # faces listed in random directions, no orientation given: outward anyway
+    rng = np.random.default_rng(3)
+    faces = [list(f) if rng.random() < 0.5 else list(reversed(f)) for f in CUBE_FACES]
+    text = make_datafile(CUBE_VERTICES, faces, bodies=[Body(faces=range(6), volume=1)])
+    ev = Evolver()
+    ev.load_string(text)
+    assert ev.bodies().volume[0] == pytest.approx(1.0)
+    ev.iterate(5)
+    assert ev.eval("body[1].volume") == pytest.approx(1.0, rel=1e-6)
+    # an open set of faces keeps +1
+    text = make_datafile(CUBE_VERTICES, faces, bodies=[Body(faces=range(5))])
+    assert "\nbodies\n1 1 2 3 4 5" in text
 
 
 def test_film_between_fixed_rings():

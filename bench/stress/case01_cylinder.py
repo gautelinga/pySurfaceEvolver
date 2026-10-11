@@ -26,7 +26,7 @@ def run(quick=False):
     rc = 1/np.pi
     first_unstable = None
     flagged = None
-    for step in recipes.continuation(ev, recipes.body_target(1),
+    for step in recipes.continuation(ev, ev.body(1),
                                      np.pi*np.linspace(r0, 0.2, 25)**2, relax=track.relax):
         r = np.sqrt(step.value/np.pi)
         neg = ev.eigen_counts().negative

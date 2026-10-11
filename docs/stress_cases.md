@@ -50,7 +50,7 @@ ev.load_string(pyse.make_datafile(
 ev.relax()
 
 # thin it at constant height: past r = 1/pi the column is a saddle (Rayleigh-Plateau)
-for step in recipes.continuation(ev, recipes.body_target(1), np.pi*np.linspace(0.5, 0.2, 25)**2):
+for step in recipes.continuation(ev, ev.body(1), np.pi*np.linspace(0.5, 0.2, 25)**2):
     if step.result.stable is False:
         print(f"unstable from r = {np.sqrt(step.value/np.pi):.4f} (theory 1/pi = {1/np.pi:.4f})")
         break
@@ -106,7 +106,7 @@ ev.load_string(pyse.make_datafile(
     v, f, constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
     vertex_constraints={1: bottom + top, 2: top, 3: bottom}, parameters={"hh": 0.3}))
 ev.relax(levels=1)
-for step in recipes.continuation(ev, recipes.parameter("hh"), np.arange(0.325, 0.76, 0.025)):
+for step in recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025)):
     ref = catenoid_area(step.value)
     if ref is not None:
         print(f"H = {step.value:.3f}: area {ev.total_energy:.6f}, catenoid {ref:.6f}, "
@@ -178,7 +178,7 @@ ev.load_string(pyse.make_datafile(
     vertex_constraints={1: rim}, parameters={"theta": 90.0},
     bodies=[pyse.Body(faces=range(len(f)), volume=2*np.pi/3)]))
 ev.relax()
-for step in recipes.continuation(ev, recipes.parameter("theta"), np.arange(100.0, 175, 10)):
+for step in recipes.continuation(ev, "theta", np.arange(100.0, 175, 10)):
     ref = cap_reference(2*np.pi/3, step.value)
     print(f"theta {step.value:5.1f}: energy error {abs(ev.total_energy/ref['energy'] - 1):.2%}, "
           f"contact radius {contact_radius(ev, 1):.4f} (exact {ref['radius']:.4f}), "
@@ -301,7 +301,7 @@ ev.load_string(pyse.make_datafile(
     bodies=[pyse.Body(faces=range(len(f)), volume=2.0)]))
 ev.relax(levels=1)
 guess = (0.78, 2.4)
-for step in recipes.continuation(ev, recipes.parameter("theta"), np.arange(20.0, 81, 10)):
+for step in recipes.continuation(ev, "theta", np.arange(20.0, 81, 10)):
     ref = barrel(2.0, 0.2, step.value, guess=guess)
     guess = (ref["equator"], ref["pressure"])
     print(f"theta {step.value:4.0f}: energy {ev.total_energy:.4f} (barrel {ref['energy']:.4f}), "
@@ -343,11 +343,11 @@ stretches tenfold. Reference: the sphere's area. The relative error must not gro
 ```python
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import examples, recipes
+from pysurfaceevolver import recipes
 
-ev = pyse.Evolver(examples.path("cube.fe"))    # the sample: a unit cube that relaxes to a sphere
+ev = pyse.Evolver("cube.fe")    # the sample: a unit cube that relaxes to a sphere
 ev.relax(levels=2)
-for step in recipes.continuation(ev, recipes.body_target(1), [1, 10, 100]):
+for step in recipes.continuation(ev, ev.body(1), [1, 10, 100]):
     sphere = (36*np.pi)**(1/3)*step.value**(2/3)
     print(f"volume {step.value:5.0f}: area {ev.total_energy:.4f}, sphere {sphere:.4f}, "
           f"error {abs(ev.total_energy/sphere - 1):.3%}")
@@ -394,7 +394,7 @@ v, f, rim = cap(c0["R"], c0["height"], nr=10, nt=48)
 ev = pyse.Evolver()
 ev.load_string(pyse.make_datafile(
     v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
-    vertex_constraints={1: rim}, header="gravity_constant 1\n",
+    vertex_constraints={1: rim}, gravity=1,
     bodies=[pyse.Body(faces=range(len(f)), volume=50.0, density=1.0)]))
 ev.relax(levels=1)
 ref = sessile(50.0, 60.0, rho_g=1.0)
@@ -443,7 +443,7 @@ ev.load_string(pyse.make_datafile(
     vertex_constraints={1: rim}, bodies=[pyse.Body(faces=range(len(f)), volume=volume)]))
 ev.relax()
 # 25 steps, each about 70% of the last (jumps of 10x are too large to follow)
-for step in recipes.continuation(ev, recipes.body_target(1), volume*np.geomspace(1, 1e-4, 25)):
+for step in recipes.continuation(ev, ev.body(1), volume*np.geomspace(1, 1e-4, 25)):
     if step.index % 6:
         continue
     ref = cap_reference(step.value, 60.0)

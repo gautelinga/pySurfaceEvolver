@@ -6,9 +6,7 @@ yields a record per step::
 
     from pysurfaceevolver import recipes
 
-    for step in recipes.continuation(ev, recipes.body_target(1),
-                                     np.linspace(1.0, 0.2, 50),
-                                     relax=dict(tidy=3, newton=3),
+    for step in recipes.continuation(ev, ev.body(1), np.linspace(1.0, 0.2, 50),
                                      checkpoint="runs/drain"):
         print(step.value, step.pressures[0])
         if something_happened(ev):
@@ -27,7 +25,7 @@ from typing import Any, Callable, Iterable, Iterator, List, Optional, Union
 
 import numpy as np
 
-__all__ = ["Step", "body_target", "parameter", "continuation", "load_steps"]
+__all__ = ["Step", "continuation", "load_steps"]
 
 
 @dataclass
@@ -43,20 +41,24 @@ class Step:
     extra: dict = field(default_factory=dict)   # yours: kept in checkpoints
 
 
-def body_target(number: int) -> Callable[[Any, float], None]:
-    """A setter for :func:`continuation`: the prescribed volume of a body."""
-    def set_value(ev, value: float) -> None:
-        ev.body(number).target = value
-    set_value.__name__ = f"body_target({number})"
-    return set_value
-
-
-def parameter(name: str) -> Callable[[Any, float], None]:
-    """A setter for :func:`continuation`: a datafile parameter."""
-    def set_value(ev, value: float) -> None:
-        ev.parameters[name] = value
-    set_value.__name__ = f"parameter({name!r})"
-    return set_value
+def _setter(what: Any) -> Callable[[Any, Any], None]:
+    """continuation()'s setter for what it steps."""
+    from ._evolver import BodyView, QuantityView
+    if isinstance(what, (BodyView, QuantityView)):
+        def set_target(ev, value) -> None:
+            what.target = value
+        return set_target
+    if isinstance(what, str):
+        def set_named(ev, value) -> None:
+            if what in ev.parameters:
+                ev.parameters[what] = value
+            else:
+                ev[what] = value
+        return set_named
+    if callable(what):
+        return what
+    raise TypeError("continuation() steps a parameter or variable name, ev.body(i), "
+                    "ev.quantity(name), or a callable(ev, value)")
 
 
 def _relax_with(relax: Union[None, dict, Callable[[Any], Any]]) -> Callable[[Any], Any]:
@@ -89,15 +91,17 @@ def load_steps(prefix: str) -> List[Step]:
         return pickle.load(f)
 
 
-def continuation(ev, set_value: Callable[[Any, Any], None], values: Iterable[Any], *,
+def continuation(ev, what: Any, values: Iterable[Any], *,
                  relax: Union[None, dict, Callable[[Any], Any]] = None,
                  checkpoint: Optional[str] = None,
                  resume: Optional[str] = None) -> Iterator[Step]:
-    """Step through ``values``: for each, ``set_value(ev, value)``, relax, and
+    """Step through ``values``: for each, set ``what`` to it, relax, and
     yield a :class:`Step`.
 
-    ``set_value``: a callable ``(ev, value)``, e.g. :func:`body_target` or
-    :func:`parameter`. ``relax``: options for :meth:`Evolver.relax` (a dict),
+    ``what``: a parameter or variable name (``"theta"``), a body's target
+    volume (``ev.body(1)``), a fixed quantity's target
+    (``ev.quantity("vol")``), or a callable ``(ev, value)`` for anything
+    else. ``relax``: options for :meth:`Evolver.relax` (a dict),
     a callable ``relax(ev)``, or None for ``ev.relax()``.
 
     ``checkpoint``: a path prefix; after every step the surface goes to
@@ -111,6 +115,7 @@ def continuation(ev, set_value: Callable[[Any, Any], None], values: Iterable[Any
     fine: the next step continues from whatever ``ev`` holds.
     """
     values = list(values)
+    set_value = _setter(what)
     relax_fn = _relax_with(relax)
     done: List[Step] = []
     if resume is not None:

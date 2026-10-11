@@ -20,7 +20,7 @@ def run(quick=False):
     ev = pyse.Evolver()
     ev.load_string(pyse.make_datafile(
         v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=THETA)},
-        vertex_constraints={1: rim}, header="gravity_constant 1\n",
+        vertex_constraints={1: rim}, gravity=1,
         bodies=[pyse.Body(faces=range(len(f)), volume=VOLUME, density=1.0)]))
     track = Tracker()
     track.relax(ev)

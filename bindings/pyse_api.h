@@ -170,6 +170,12 @@ int pyse_constraint_list(int *nums, int *attrs, const char **names, int max, int
    over its gradient's length, a signed distance to first order; NaN where the
    vertex is on that constraint or the gradient vanishes */
 int pyse_constraint_gaps(const int *nums, int ncon, double *out, long n);
+/* Per vertex, the unit gradient of constraint num's level-set function
+   (n x 3; NaN where it vanishes). */
+int pyse_constraint_normals(int num, double *out, long n);
+/* Per facet (linear soapfilm), its three corners as Evolver sees them, the
+   second and third unwrapped to the first across a torus's sides (n x 3 x 3). */
+int pyse_facet_corners(double *out, long n);
 double pyse_total_area(void);
 const char *pyse_datafilename(void);
 /* Set the name reported as the current datafile (e.g. after restoring a

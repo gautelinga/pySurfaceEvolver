@@ -139,7 +139,7 @@ cell volume to the power 2/3 compares them independently of the box."""),
 wp = bh.compare("phelanc.fe")
 
 def per_cell(name, levels):
-    ev = pyse.Evolver(pyse.examples.path(name))
+    ev = pyse.Evolver(name)
     ev.relax(levels=levels)
     n = len(ev.bodies().volume)
     V = float(np.sum(ev.bodies().volume))
@@ -162,11 +162,11 @@ stable. The instability is real: the volumes in this file's `bodies` section are
 comments (`// volume 0.500`), so its two cells have no volume constraint, and one can
 grow at the expense of the other. Moving along that mode (Evolver's `saddle`) lowers
 the energy, and relaxing from there shrinks one cell away."""),
-    code('''ev = pyse.Evolver(pyse.examples.path("symtest.fe"))
+    code('''ev = pyse.Evolver("symtest.fe")
 print(ev.bodies().fixed)                    # no volume constraints
 ev.relax(levels=1)
 e0 = ev.total_energy
-ev.command("saddle")                        # a step along the negative mode
+ev.saddle()                                 # a step along the negative mode
 print(f"energy {e0:.6f} -> {ev.total_energy:.6f}")'''),
 ])
 
@@ -190,7 +190,7 @@ The recipe's `re` refines the edges on the table first, so its mesh has more fac
 there; the energies agree to about 1e-5. The file's other recipes change the contact
 angle and gravity; `gogo2` sets 45 degrees:"""),
     code('''runs = bh.compare("mound.fe", "gogo2", levels=2,
-                  setup=lambda ev: ev.command("angle := 45"))
+                  setup=lambda ev: ev.parameters.update(angle=45))
 bh.show(runs)'''),
     md("""
 ## `addload_example.fe`: nine drops at once
@@ -272,15 +272,15 @@ recipe = bh.run_recipe("mylarcube.fe", label="recipe: gogo")
 
 def ramp(ev):
     ev.relax(levels=1)
-    ev.command("stretch.modulus := 100")
+    ev.quantity("stretch").modulus = 100
     ev.relax(levels=2)
-    ev.command("stretch.modulus := 1000")
+    ev.quantity("stretch").modulus = 1000
     ev.relax()
-    ev.command("stretch.modulus := 10000")
+    ev.quantity("stretch").modulus = 10000
     return ev.relax()
 
 import time
-ev = pyse.Evolver(pyse.examples.path("mylarcube.fe"))
+ev = pyse.Evolver("mylarcube.fe")
 t = time.perf_counter()
 r = ramp(ev)
 relaxed = bh.Run("relax() along the same ramp", ev.total_energy, r.residual,
@@ -302,7 +302,7 @@ A test of the `relaxed_elastic` energy on a single unstretched triangle (two ext
 coordinates hold its reference shape): its energy is 0. Stretched by moving a vertex,
 it gains energy, and relaxing lets it shrink back (the method gives compression no
 energy, so any shape no larger than the reference has none)."""),
-    code('''ev = pyse.Evolver(pyse.examples.path("relaxed.fe"))
+    code('''ev = pyse.Evolver("relaxed.fe")
 print("unstretched:", ev.total_energy)
 ev.command("set vertex[2] x 1.5")
 print("stretched:  ", ev.total_energy)
@@ -410,7 +410,7 @@ relax."""),
     code('''import time
 
 def ladder(name, orders, levels=2, setup=None):
-    ev = pyse.Evolver(pyse.examples.path(name))
+    ev = pyse.Evolver(name)
     if setup:
         setup(ev)
     t = time.perf_counter()

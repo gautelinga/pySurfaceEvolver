@@ -319,6 +319,27 @@ NB_MODULE(_core, m) {
   }, CALLBACK_NAMES, "data: (constraint numbers (k,), attribute bits (k,), signed "
                      "distances (n vertices, k; NaN on the constraint), names (\"\": unnamed))");
 
+  m.def("facet_corners", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long n = pyse_count(PYSE_FACET);
+    std::vector<double> corners(n > 0 ? size_t(n) * 9 : 0);
+    CallResult r = run_guarded([&] { return pyse_facet_corners(corners.data(), n); });
+    if (r.status == PYSE_OK)
+      r.data = to_numpy(std::move(corners), {size_t(n > 0 ? n : 0), size_t(3), size_t(3)});
+    return r;
+  }, CALLBACK_NAMES, "data: per facet its corners, unwrapped in a torus (n, 3, 3)");
+
+  m.def("constraint_normals", [](int num, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long n = pyse_count(PYSE_VERTEX);
+    std::vector<double> normals(n > 0 ? size_t(n) * 3 : 0);
+    CallResult r = run_guarded([&] { return pyse_constraint_normals(num, normals.data(), n); });
+    if (r.status == PYSE_OK)
+      r.data = to_numpy(std::move(normals), {size_t(n > 0 ? n : 0), size_t(3)});
+    return r;
+  }, "num"_a, CALLBACK_NAMES, "data: per vertex the unit gradient of a constraint's "
+                              "formula (n, 3; NaN where it vanishes)");
+
   m.def("values", [](int type, const std::string &expr, CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(type);

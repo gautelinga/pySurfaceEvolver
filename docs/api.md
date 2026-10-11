@@ -15,6 +15,7 @@ handle to it.
 .. autoclass:: Health
    :members: ok
 .. autoclass:: BodyView
+.. autoclass:: QuantityView
 .. autoclass:: EigenCounts
    :no-members:
 .. autoclass:: Snapshot
@@ -62,7 +63,7 @@ handle to it.
 
 ```{eval-rst}
 .. automodule:: pysurfaceevolver.recipes
-   :members: continuation, Step, body_target, parameter, load_steps
+   :members: continuation, Step, load_steps
 .. currentmodule:: pysurfaceevolver
 ```
 

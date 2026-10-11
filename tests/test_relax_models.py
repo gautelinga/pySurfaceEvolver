@@ -181,12 +181,6 @@ def test_relax_pops_junctions_against_plateau(load):
     assert ev.total_energy == pytest.approx(2.7320508, rel=1e-7)
 
 
-def test_relax_pinch_false_keeps_collapsing_edges(load):
-    ev = load("octa.fe")
-    r = ev.relax(pinch=False)
-    assert r.collapsed == 0 and r.popped > 0
-
-
 def test_relax_leaves_a_sound_surface_alone(cube):
     r = cube.relax()
     assert r.popped == 0 and r.collapsed == 0

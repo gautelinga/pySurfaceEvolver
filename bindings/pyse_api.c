@@ -1003,6 +1003,75 @@ static void gaps_body(void *arg)
   if ( row != a->n ) inconsistent("element count changed");
 }
 
+struct corners_args { double *out; long n; };
+
+static void corners_body(void *arg)
+{ struct corners_args *a = (struct corners_args *)arg;
+  facet_id f_id;
+  long row = 0;
+  int i,j;
+  MAT2D(x,FACET_VERTS+1,MAXCOORD);
+  FOR_ALL_FACETS(f_id)
+  { double *o = a->out + (size_t)row*9;
+    if ( row >= a->n ) inconsistent("too many facets");
+    get_facet_verts(f_id,x,NULL);       /* unwrapped across a torus's sides */
+    for ( i = 0 ; i < 3 ; i++ )
+      for ( j = 0 ; j < 3 ; j++ )
+        o[3*i+j] = j < SDIM ? (double)x[i][j] : 0.0;
+    row++;
+  }
+  if ( row != a->n ) inconsistent("element count changed");
+}
+
+int pyse_facet_corners(double *out, long n)
+{ struct corners_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( web.representation != SOAPFILM || web.modeltype != LINEAR )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Facet corners need linear facets.");
+  if ( n != web.skel[FACET].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Output array does not match the facet count.");
+  a.out = out; a.n = n;
+  return surface_call(corners_body,&a);
+}
+
+struct cnormals_args { int num; double *out; long n; };
+
+static void cnormals_body(void *arg)
+{ struct cnormals_args *a = (struct cnormals_args *)arg;
+  vertex_id v_id;
+  long row = 0;
+  int i;
+  if ( a->num < 0 || a->num >= web.maxcon || !(get_constraint(a->num)->attr & IN_USE) )
+    inconsistent("no such constraint");
+  FOR_ALL_VERTICES(v_id)
+  { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
+    double *o = a->out + (size_t)row*3;
+    if ( row >= a->n ) inconsistent("too many vertices");
+    for ( i = 0 ; i < MAXCOORD ; i++ ) grad[i] = 0.0;
+    eval_all(get_constraint(a->num)->formula,get_coord(v_id),SDIM,&f,grad,v_id);
+    for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
+    g = sqrt(g);
+    for ( i = 0 ; i < 3 ; i++ )
+      o[i] = (g > 0.0 && i < SDIM) ? (double)(grad[i]/g) : (g > 0.0 ? 0.0 : NAN);
+    row++;
+  }
+  if ( row != a->n ) inconsistent("element count changed");
+}
+
+int pyse_constraint_normals(int num, double *out, long n)
+{ struct cnormals_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( n != web.skel[VERTEX].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Output array does not match the vertex count.");
+  a.num = num; a.out = out; a.n = n;
+  return surface_call(cnormals_body,&a);
+}
+
 int pyse_constraint_gaps(const int *nums, int ncon, double *out, long n)
 { struct gaps_args a;
   if ( in_protected ) return PYSE_BUSY;

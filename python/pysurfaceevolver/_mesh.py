@@ -581,6 +581,84 @@ class Mesh:
             return ends[:, 0] != ends[:, 1]
         raise ValueError(f"how must be 'any', 'all' or 'one', not {how!r}")
 
+    # ---- cross-sections -----------------------------------------------------
+
+    def slice(self, normal=(0.0, 0.0, 1.0), point=(0.0, 0.0, 0.0), *,
+              n: Optional[int] = None) -> List[np.ndarray]:
+        """Where the surface crosses a plane: a list of polylines, ``(k, 3)``
+        arrays of points in order along the curve, longest first (a closed
+        curve repeats its first point at the end). Curves end where the
+        surface does, and at junctions of several films.
+
+        The plane goes through ``point`` with the given ``normal``; for
+        example ``mesh.slice((0, 1, 0))`` is the section y = 0. Curved
+        (quadratic, Lagrange) facets are cut through :meth:`tessellate` (with
+        its ``n``). Vertices lying in the plane belong to the curve, so a
+        mirror plane's own vertices come out as its curve.
+        """
+        if self.facets is None:
+            raise ValueError("slice() needs facets (the soapfilm model)")
+        if self.order == 1:
+            points, tris = _as_3d(self.vertices), self.facets
+        else:
+            points, tris = self.tessellate(n)
+            points = _as_3d(points)
+        nrm = np.asarray(normal, dtype=float)
+        if nrm.shape != (3,) or not np.linalg.norm(nrm) > 0:
+            raise ValueError("normal must be a nonzero 3-vector")
+        nrm = nrm/np.linalg.norm(nrm)
+        dist = (points - np.asarray(point, dtype=float)) @ nrm
+        above = dist >= 0
+        # the triangles' edges that cross, keyed by their crossing point: the
+        # edge, or a vertex in the plane (several edges reach it)
+        e = np.sort(np.vstack([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]]), axis=1)
+        crossing = above[e[:, 0]] != above[e[:, 1]]
+        d0, d1 = dist[e[:, 0]], dist[e[:, 1]]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            t = np.where(crossing, d0/(d0 - d1), np.nan)
+        at0, at1 = crossing & (d0 == 0), crossing & (d1 == 0)
+        npts = len(points)
+        key = np.where(at0, e[:, 0], np.where(at1, e[:, 1],
+                                              npts + e[:, 0]*npts + e[:, 1]))
+        key = np.where(crossing, key, -1).reshape(3, -1).T          # (triangles, 3)
+        where = {}
+        for k, i, j, tt in zip(key.T.ravel(), e[:, 0], e[:, 1], t):
+            if k >= 0 and k not in where:
+                where[k] = points[i] + tt*(points[j] - points[i]) if k >= npts else points[k]
+        links: Dict[int, List[int]] = {}
+        for row in key:
+            ends = sorted(set(int(k) for k in row if k >= 0))
+            if len(ends) == 2:
+                a_, b_ = ends
+                links.setdefault(a_, []).append(b_)
+                links.setdefault(b_, []).append(a_)
+        curves: List[np.ndarray] = []
+        used = set()
+
+        def walk(start: int, nxt: int) -> List[int]:
+            path = [start]
+            prev, cur = start, nxt
+            used.add((min(start, nxt), max(start, nxt)))
+            while True:
+                path.append(cur)
+                if len(links[cur]) != 2 or cur == start:
+                    return path
+                follow = links[cur][0] if links[cur][1] == prev else links[cur][1]
+                pair = (min(cur, follow), max(cur, follow))
+                if pair in used:
+                    return path
+                used.add(pair)
+                prev, cur = cur, follow
+
+        # open curves (and branches) from their ends and junctions, then loops
+        starts = [k for k, v in links.items() if len(v) != 2] + list(links)
+        for k in starts:
+            for nb in links[k]:
+                if (min(k, nb), max(k, nb)) not in used:
+                    curves.append(np.array([where[p] for p in walk(k, nb)]))
+        curves.sort(key=lambda c: -np.linalg.norm(np.diff(c, axis=0), axis=1).sum())
+        return curves
+
     # ---- tessellation -----------------------------------------------------
 
     def _default_n(self, n: Optional[int]) -> int:
@@ -879,8 +957,10 @@ class Mesh:
                 facet_of = np.arange(len(native))
             else:
                 raise ValueError("curved must be 'tessellate' or 'native'")
-            ids = self.facet_ids[facet_of]
-            front, back = self.facet_bodies[facet_of, 0], self.facet_bodies[facet_of, 1]
+            # (32-bit: PLY and others take no 64-bit integers)
+            ids = self.facet_ids[facet_of].astype(np.int32)
+            front = self.facet_bodies[facet_of, 0].astype(np.int32)
+            back = self.facet_bodies[facet_of, 1].astype(np.int32)
             cell_data = {"facet_id": [ids], "front_body": [front], "back_body": [back],
                          "gmsh:physical": [front], "gmsh:geometrical": [ids]}
         else:
@@ -898,7 +978,7 @@ class Mesh:
                 edge_of = np.arange(len(native))
             else:
                 raise ValueError("curved must be 'tessellate' or 'native'")
-            ids = self.edge_ids[edge_of]
+            ids = self.edge_ids[edge_of].astype(np.int32)
             cell_data = {"edge_id": [ids], "gmsh:physical": [np.ones_like(ids)],
                          "gmsh:geometrical": [ids]}
         return meshio.Mesh(_as_3d(points), cells, cell_data=cell_data)

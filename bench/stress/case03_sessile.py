@@ -42,7 +42,7 @@ def run(quick=False):
     for angles in (np.arange(80, 5, -10), np.arange(100, 175, 10)):
         ev = load(volume)
         track.relax(ev)
-        for step in recipes.continuation(ev, recipes.parameter("theta"), angles.astype(float),
+        for step in recipes.continuation(ev, "theta", angles.astype(float),
                                          relax=track.relax):
             ref = cap_reference(volume, step.value)
             e_err = rel(ev.total_energy, ref["energy"])

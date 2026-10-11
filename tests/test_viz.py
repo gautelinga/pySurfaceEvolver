@@ -98,3 +98,53 @@ def test_live_view_context_manager(cube, can_render):
     with cube.live_view(off_screen=True) as view:
         view.update()
     assert view.updates == 1
+
+
+def test_plot_draws_walls(load, can_render):
+    import pyvista as pv
+    from pysurfaceevolver import constraints as C
+    ev = load("cube.fe")
+    walls = [C.plane((0, 0, 1), 0.0), C.sphere((0, 0, 2), 0.5), C.cylinder((2, 0, 0), (0, 0, 1), 0.3),
+             pv.Cube(center=(-2, 0, 0))]
+    ev.plot(off_screen=True, walls=walls)
+    view = ev.live_view(off_screen=True, walls=walls[:2])
+    assert "evolver-wall-1" in view.plotter.actors
+    with pytest.raises(TypeError):
+        ev.plot(off_screen=True, walls=["z = 0"])
+
+
+def test_constraint_geometry_to_pyvista():
+    pytest.importorskip("pyvista")
+    from pysurfaceevolver import constraints as C
+    s = C.sphere((0, 0, 1), 0.5).to_pyvista()
+    assert np.allclose(np.linalg.norm(s.points - [0, 0, 1], axis=1), 0.5)
+    p = C.plane((0, 0, 2), 1.0).to_pyvista(bounds=(-1, 1, -1, 1, -1, 1))
+    assert np.allclose(p.points[:, 2], 0.5)                # 2z = 1
+    assert C.Constraint("x^2 = 1").to_pyvista() is None
+
+
+def test_write_scenes_and_ply(load, tmp_path, can_render):
+    import warnings
+    ev = load("cube.fe")
+    for ext in (".gltf", ".wrl"):
+        path = tmp_path / ("cube" + ext)
+        ev.write(path)
+        assert path.stat().st_size > 100
+    pytest.importorskip("meshio")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")              # meshio warned about 64-bit integers
+        ev.write(tmp_path / "cube.ply")
+
+
+def test_torus_facets_are_shown_whole(load):
+    pytest.importorskip("pyvista")
+    ev = load("twointor.fe")
+    m = ev.mesh()
+    a, b = m.vertices[m.facets[:, 0]], m.vertices[m.facets[:, 1]]
+    longest = ev.mesh_quality().edge_max
+    assert np.linalg.norm(b - a, axis=1).max() > 2*longest      # wrapped across the cell
+    dataset, _ = surface_dataset(ev, "area")
+    p = dataset.points.reshape(-1, 3, 3)
+    for i, j in ((0, 1), (1, 2), (2, 0)):
+        assert np.linalg.norm(p[:, j] - p[:, i], axis=1).max() <= longest*(1 + 1e-9)
+    assert dataset.n_cells == len(m.facets) and "area" in dataset.cell_data

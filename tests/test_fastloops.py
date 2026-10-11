@@ -221,7 +221,7 @@ def test_threads_limit_restores_the_setting():
 def test_threads_argument_for_one_call(load):
     ev = load("cube.fe")
     ev.relax(max_iter=5, threads=1)
-    ev.hessian(threads=1)
+    ev.newton(threads=1)
     from pysurfaceevolver import _core
     assert _core.thread_setting() == 0
 

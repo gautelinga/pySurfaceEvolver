@@ -42,8 +42,8 @@ add a constant energy; pressures don't need it).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -78,6 +78,9 @@ class Constraint:
     energy_constant: float = 0.0   # NaN when the contact angle is a parameter
     nonnegative: bool = False
     area_constant: float = 0.0     # wetted area the integrals leave out
+    # the wall's geometry, for drawing: ("plane", normal, offset),
+    # ("sphere", center, radius) or ("cylinder", point, direction, radius)
+    shape: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
 
     def text(self) -> str:
         """The constraint's body in a datafile (after ``constraint n``)."""
@@ -91,6 +94,33 @@ class Constraint:
 
     def __str__(self) -> str:
         return self.text()
+
+    def to_pyvista(self, bounds=None, resolution: int = 60) -> "Any":
+        """The wall as a PyVista surface, for drawing next to the liquid (see
+        ``walls`` in :meth:`Evolver.plot`): a sphere, a cylinder cut to
+        ``bounds`` (xmin, xmax, ymin, ymax, zmin, zmax) or a plane patch
+        covering them. None for a constraint without known geometry."""
+        if self.shape is None:
+            return None
+        import pyvista as pv
+        lo, hi = (np.array([-1.0]*3), np.array([1.0]*3)) if bounds is None else \
+            (np.asarray(bounds, float)[0::2], np.asarray(bounds, float)[1::2])
+        middle, size = (lo + hi)/2, float(np.linalg.norm(hi - lo))
+        kind = self.shape[0]
+        if kind == "sphere":
+            _, c, r = self.shape
+            return pv.Sphere(radius=r, center=c, theta_resolution=resolution,
+                             phi_resolution=resolution)
+        if kind == "cylinder":
+            _, p, d, r = self.shape
+            d = np.asarray(d, float)
+            center = np.asarray(p, float) + np.dot(middle - p, d)*d
+            return pv.Cylinder(center=center, direction=d, radius=r, height=size,
+                               resolution=resolution, capping=False)
+        _, n, offset = self.shape
+        n = np.asarray(n, float)
+        center = middle - (np.dot(middle, n) - offset)*n
+        return pv.Plane(center=center, direction=n, i_size=size, j_size=size)
 
 
 def _unit(v, what: str) -> np.ndarray:
@@ -178,7 +208,8 @@ def plane(normal, offset: float = 0.0, contact_angle: Optional[float] = None, *,
         s = _lin(u, -np.dot(u, o))
         p = f"({_n(n[2])}*({_n(o[2])}*{t} + {_n(u[2])}*{s}*{t} + {_n(v[2]/2)}*{t}^2))"
         content = [f"{_n(ui)}*{p}" if ui != 0 else "0" for ui in u]
-    return Constraint(f"{_lin(n)[1:-1]} = {float(d)!r}", energy, content)
+    return Constraint(f"{_lin(n)[1:-1]} = {float(d)!r}", energy, content,
+                      shape=("plane", tuple(n), d))
 
 
 def mirror(axis, at: float = 0.0) -> Constraint:
@@ -229,7 +260,8 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     volconst = -span*((Q(R) if north else 0.0) - (Q(-R) if south else 0.0))
     area = R*R*span*((1.0 if north else 0.0) + (1.0 if south else 0.0))
     formula = f"{X}^2 + {Y}^2 + {Z}^2 = {float(R*R)!r}"
-    return Constraint(formula, energy, content, volconst, k.energy(area), nonnegative, area)
+    return Constraint(formula, energy, content, volconst, k.energy(area), nonnegative, area,
+                      shape=("sphere", tuple(c), R))
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,
@@ -293,4 +325,5 @@ def cylinder(point, direction, radius: float, contact_angle: Optional[float] = N
         content = ([f"{_n(d[i])}*{pp}" if d[i] != 0 else "0" for i in range(3)]
                    if has_content else None)
     formula = f"{a}^2 + {b}^2 = {float(R*R)!r}"
-    return Constraint(formula, energy, content, 0.0, 0.0, nonnegative)
+    return Constraint(formula, energy, content, 0.0, 0.0, nonnegative,
+                      shape=("cylinder", tuple(p), tuple(d), R))

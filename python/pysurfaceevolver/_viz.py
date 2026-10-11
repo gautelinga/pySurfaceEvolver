@@ -47,7 +47,35 @@ def surface_dataset(ev: "Evolver", scalars: Scalars = None, element: Optional[st
     """
     mesh = ev.mesh()
     point_values, cell_values, name = _scalar_values(ev, mesh, scalars, element)
+    if _unwrap(ev, mesh):
+        return _unwrapped(ev, mesh, point_values, cell_values), name
     return mesh.to_pyvista(n, point_values=point_values, cell_values=cell_values), name
+
+
+def _unwrap(ev: "Evolver", mesh: "Mesh") -> bool:
+    """Whether to show the facets one by one, unwrapped: in a torus model
+    (linear facets), where wrapped coordinates would stretch the facets
+    across the cell."""
+    from . import _core
+    return _core.torus() and mesh.facets is not None and mesh.order == 1
+
+
+def _unwrapped(ev: "Evolver", mesh: "Mesh", point_values: dict,
+               cell_values: dict) -> "pyvista.PolyData":
+    """Each facet whole, as Evolver unwraps it from its first corner."""
+    from . import _core
+    pv = _import_pyvista()
+    _, corners = ev._call(_core.facet_corners)
+    k = len(corners.data)
+    cells = np.column_stack([np.full(k, 3), np.arange(3*k).reshape(k, 3)]).ravel()
+    poly = pv.PolyData(corners.data.reshape(-1, 3), cells)
+    assert mesh.facets is not None and mesh.facet_ids is not None
+    poly.cell_data["facet_id"] = mesh.facet_ids
+    for key, vals in point_values.items():
+        poly.point_data[key] = np.asarray(vals)[mesh.facets.ravel()]
+    for key, vals in cell_values.items():
+        poly.cell_data[key] = np.asarray(vals)
+    return poly
 
 
 def _scalar_values(ev: "Evolver", mesh: "Mesh", scalars: Scalars, element: Optional[str]
@@ -97,6 +125,27 @@ def _same_cells(a: "pyvista.PolyData", b: "pyvista.PolyData") -> bool:
     return bool(np.array_equal(a.faces, b.faces) and np.array_equal(a.lines, b.lines))
 
 
+def add_walls(plotter: "pyvista.Plotter", walls) -> None:
+    """Draw walls next to what the plotter shows: constraints from
+    :mod:`pysurfaceevolver.constraints` (planes as translucent patches around
+    it, cylinders as long, solids opaque) or PyVista meshes."""
+    if not walls:
+        return
+    box = np.asarray(plotter.bounds, float)
+    lo, hi = box[0::2], box[1::2]
+    pad = 0.25*(hi - lo).max(initial=0.0) + 1e-12
+    bounds = np.ravel(np.column_stack([lo - pad, hi + pad]))
+    for k, wall in enumerate(walls):
+        shape = getattr(wall, "shape", None)
+        mesh = wall.to_pyvista(bounds) if hasattr(wall, "to_pyvista") and shape else wall
+        if mesh is None or not hasattr(mesh, "n_points"):
+            raise TypeError(f"walls[{k}]: a constraint from pysurfaceevolver.constraints "
+                            "(plane, sphere, cylinder) or a PyVista mesh")
+        style = ({"color": "gray", "opacity": 0.2} if shape and shape[0] == "plane"
+                 else {"color": "sandybrown"})
+        plotter.add_mesh(mesh, name=f"evolver-wall-{k}", **style)
+
+
 class LiveView:
     """A PyVista window (or notebook widget) that follows the surface.
 
@@ -119,13 +168,15 @@ class LiveView:
         Render without a window (for tests and image files).
     mirror:
         Planes to show mirror images in (see :meth:`Evolver.plot`).
+    walls:
+        Walls to draw with it (see :meth:`Evolver.plot`).
     **mesh_kwargs:
         Passed to ``Plotter.add_mesh`` (``cmap``, ``show_edges``, ...).
     """
 
     def __init__(self, ev: "Evolver", scalars: Scalars = None, element: Optional[str] = None,
                  n: Optional[int] = None, plotter: Optional["pyvista.Plotter"] = None,
-                 off_screen: bool = False, mirror=None, **mesh_kwargs: Any):
+                 off_screen: bool = False, mirror=None, walls=None, **mesh_kwargs: Any):
         pv = _import_pyvista()
         self.ev = ev
         self.mirror = mirror
@@ -142,12 +193,19 @@ class LiveView:
         self.updates = 0
         self.fast_updates = 0   # updates that only moved points
         self._draw(reset_camera=True)
+        add_walls(self.plotter, walls)
         self._shown = False
         if not off_screen:
             self.show()
 
     def _draw(self, reset_camera: bool = False) -> None:
         mesh = self.ev.mesh()
+        if _unwrap(self.ev, mesh):
+            self._mesh = self._tess = None
+            self.dataset, name = surface_dataset(self.ev, self.scalars, self.element, self.n)
+            add_images(self.plotter, self.dataset, self.mirror, "evolver-surface",
+                       scalars=name, reset_camera=reset_camera, **self.mesh_kwargs)
+            return
         if not reset_camera and self._move_points(mesh):
             self.fast_updates += 1
             return

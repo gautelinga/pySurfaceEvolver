@@ -214,6 +214,11 @@ def _import_meshio():
     return meshio
 
 
+# write(): file extensions written as PyVista scenes, and the exporter
+_SCENE_FORMATS = {".gltf": "export_gltf", ".glb": "export_gltf", ".wrl": "export_vrml",
+                  ".vrml": "export_vrml"}
+
+
 def _target_format(path: str, file_format: Optional[str]) -> "tuple[Optional[str], str]":
     """meshio file format and native-cell flavor for writing path.
 
@@ -499,8 +504,6 @@ class Evolver:
             raise
         return output
 
-    __call__ = command
-
     def eval(self, expr: str) -> float:
         """Evaluate a numeric Evolver expression, like ``"body[1].volume"``.
 
@@ -562,9 +565,7 @@ class Evolver:
 
     def relax(self, tol: float = 1e-8, max_iter: int = 1000, *, levels: int = 0,
               newton: Optional[int] = None, stability: Optional[bool] = None,
-              adapt: Union[bool, float] = False,
-              cg: Union[bool, str] = "auto", tidy: int = 10, energy_tol: Optional[float] = None,
-              window: int = 3, seek: Optional[bool] = None, pinch: bool = True,
+              adapt: Union[bool, float] = False, tidy: int = 10, seek: Optional[bool] = None,
               undo_if: Optional[Callable[["Evolver"], bool]] = None,
               callback: Optional[Callable[["Evolver", int], Any]] = None,
               every: int = 1, threads: Optional[int] = None) -> IterationResult:
@@ -598,23 +599,21 @@ class Evolver:
           each followed by equiangulation and vertex averaging (``u; V``;
           only ``V`` for strings and the Lagrange model, only ``u`` in the
           simplex representation; ``tidy=0``: none), until the energy changes by less than
-          ``energy_tol`` (relative) over ``window`` rounds, or ``max_iter``
-          steps. ``energy_tol`` is 1e-5 when Newton follows (it finishes faster
-          and more reliably, and long gradient runs let slow mesh drift grow),
-          1e-9 with ``newton=0``. When Newton follows, a round that more than
+          1e-5 (relative) over three rounds when Newton follows (it finishes
+          faster and more reliably, and long gradient runs let slow mesh drift
+          grow), 1e-9 with ``newton=0``, or ``max_iter`` steps. When Newton follows, a round that more than
           doubles the residual from its lowest so far is undone and Newton
           takes over (on a coarse mesh a contact line can collapse within a
           few steps).
         * Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
           ``seek`` and ``undo_if`` as there), until the residual is below
           ``tol`` or stops falling.
-        * If that leaves the surface unconverged, ``cg="auto"`` tries once more
-          with conjugate gradients (far faster on flat or stiff shapes, such as
-          a drop at a 10 degree contact angle, but they wear the mesh down
-          where contact lines travel), then Newton, with up to 200 of the
-          steps the level left of ``max_iter``; kept only if that converges. ``cg=True`` uses
-          conjugate gradients throughout, ``cg=False`` never (your own
-          ``conj_grad`` setting is restored after).
+        * If that leaves the surface unconverged, one more try with conjugate
+          gradients (far faster on flat or stiff shapes, but they wear the mesh
+          down where contact lines travel), then Newton, with up to 200 of the
+          steps the level left of ``max_iter``; kept only if that converges.
+          Otherwise plain gradient steps (your own ``conj_grad`` setting is
+          restored after).
         * Once converged (linear model), edges leaving a contact line that are
           longer than 1.5 times the contact-line edges there are split and the
           surface relaxed again, kept only if that converges: a shrinking
@@ -623,8 +622,7 @@ class Evolver:
         * Then (linear model, films and strings) junctions that break
           Plateau's laws are popped (Evolver's ``o``: four films on an edge,
           four strings at a point, ...) and the surface relaxed again, up to
-          five times. With ``pinch`` (default), if it is still unconverged, a
-          last resort: up to 300 gradient steps without tidying (which can
+          five times. If it is still unconverged, a last resort: up to 300 gradient steps without tidying (which can
           hold a shrinking neck open), then edges that have collapsed below a
           20th of the median edge are deleted (Evolver's ``t``: a film or neck
           shrinking to nothing, as before a foam's T1 change or a pinch-off),
@@ -685,21 +683,18 @@ class Evolver:
             newton, stability = 0, False
         newton = 20 if newton is None else newton
         stability = True if stability is None else stability
-        if energy_tol is None:
-            energy_tol = 1e-5 if newton else _GRADIENT_ONLY_TOL
-        if tol <= 0 or energy_tol <= 0 or max_iter < 1 or window < 1:
-            raise ValueError("tol and energy_tol must be positive; max_iter and window at least 1")
+        energy_tol = _ENERGY_TOL if newton else _GRADIENT_ONLY_TOL
+        if tol <= 0 or max_iter < 1:
+            raise ValueError("tol must be positive and max_iter at least 1")
         if tidy < 0 or levels < 0 or newton < 0:
             raise ValueError("tidy, levels and newton must be non-negative")
-        if cg not in ("auto", True, False):
-            raise ValueError('cg must be "auto", True or False')
         self._inertia = None                # only this call's Newton steps count
-        with _threads_for_call(threads), self._conj_grad(cg is True), \
+        with _threads_for_call(threads), self._conj_grad(False), \
                 self._mesh_kept(keep_mesh):
             trace = _Trace()
             facets0 = self.counts["facets"]
             run = functools.partial(self._gradient_phase, trace, energy_tol=energy_tol,
-                                    window=window, callback=callback, every=every)
+                                    window=_WINDOW, callback=callback, every=every)
             first = self._newton_first(trace, tol, newton, seek, undo_if) \
                 if newton and levels == 0 and self.model != "linear" else None
             if first is not None:
@@ -710,10 +705,10 @@ class Evolver:
                         self.refine()
                     run(lev, max_iter, tidy, watch=newton > 0)
                 steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol,
-                                               newton, seek, undo_if, fallback=cg == "auto")
+                                               newton, seek, undo_if, fallback=True)
             if self.model == "linear" and residual < tol and not keep_mesh:
                 more, residual = self._contact_pass(trace, levels + 1, run, max_iter, tidy, tol,
-                                                    newton, seek, undo_if, cg == "auto", residual)
+                                                    newton, seek, undo_if, True, residual)
                 steps += more
             if adapt and self.model == "linear" and not elastic:
                 turn = 15.0 if adapt is True else float(adapt)
@@ -723,23 +718,23 @@ class Evolver:
                         break
                     run(lev, max_iter, tidy, watch=newton > 0)
                     more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
-                                                  seek, undo_if, fallback=cg == "auto")
+                                                  seek, undo_if, fallback=True)
                     steps += more
             popped = collapsed = 0
             if self.model == "linear" and _core.representation() != 3:
                 for _ in range(_TOPOLOGY_PASSES):
-                    pops = self._pop()
+                    pops = self.pop()
                     if not pops:
                         break
                     popped += pops
                     lev = max(trace.level, default=levels) + 1
                     run(lev, max_iter, tidy, watch=newton > 0)
                     more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
-                                                  seek, undo_if, fallback=cg == "auto")
+                                                  seek, undo_if, fallback=True)
                     steps += more
-                if pinch and not residual < tol and not keep_mesh:
+                if not residual < tol and not keep_mesh:
                     found = self._collapse(trace, run, max_iter, tidy, tol, newton, seek,
-                                           undo_if, cg == "auto", levels)
+                                           undo_if, True, levels)
                     if found is not None:
                         more, residual, pops, gone = found
                         steps += more
@@ -808,7 +803,7 @@ class Evolver:
             gone = self._delete_collapsed()
             if gone:
                 for _ in range(_TOPOLOGY_PASSES):
-                    popped += self._pop()
+                    popped += self.pop()
                     run(lev, max_iter, tidy, watch=newton > 0)
                     more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
                                                   seek, undo_if, fallback=fallback)
@@ -838,10 +833,33 @@ class Evolver:
         del trace.level[marks[3]:], trace.output[marks[4]:]
         return None
 
-    def _pop(self) -> int:
-        """Evolver's 'o': pop the junctions that break Plateau's laws; how many."""
+    def pop(self) -> int:
+        """Pop the junctions a minimal surface can't have (Evolver's ``o``:
+        four films on an edge, a cube's cone at a vertex, four strings at a
+        point, ...), so they can split into Plateau's junctions as the
+        surface relaxes. Returns how many were popped. :meth:`relax` does
+        this by default in the linear model."""
         out = self.command("o")
         return sum(int(n) for n in re.findall(r"popped:\s*(\d+)", out))
+
+    def saddle(self) -> float:
+        """Step off a saddle point (Evolver's ``saddle``): along the
+        eigenvector of the lowest Hessian eigenvalue, if it is negative, as
+        far as the energy falls. Safe far from equilibrium too (Brakke's
+        eigenvalue tutorial). Returns how much the energy fell, 0 at a
+        local minimum; follow with :meth:`relax` to settle into the minimum
+        it leads to. (Evolver needs pressures from a gradient step first:
+        one is taken if none was.)"""
+        before = _core.total_energy()
+        try:
+            self.command("saddle")
+        except EvolverError as e:
+            if e.errnum != 1606:            # "Pressures invalid": not iterated yet
+                raise
+            self.command("g 1")
+            before = _core.total_energy()
+            self.command("saddle")
+        return before - _core.total_energy()
 
     def _delete_collapsed(self) -> int:
         """Delete the edges (not fixed) that have collapsed below a 20th of the
@@ -1639,13 +1657,6 @@ class Evolver:
         """Move vertices to the average of their neighbors (Evolver's ``V``)."""
         self.command("V")
 
-    def hessian(self, seek: bool = False, *, threads: Optional[int] = None) -> None:
-        """One Newton step (``hessian``), or a Newton line search (``hessian_seek``).
-        ``threads`` sets the threads for this call only (see
-        :func:`pysurfaceevolver.threads_limit`)."""
-        with _threads_for_call(threads):
-            self.command("hessian_seek" if seek else "hessian")
-
     def set_model(self, model: str, order: Optional[int] = None) -> None:
         """Switch to the ``"linear"``, ``"quadratic"`` or ``"lagrange"`` model.
 
@@ -1819,6 +1830,52 @@ class Evolver:
             return np.zeros(0, dtype=bool)
         return self.values(name, f"on_constraint {constraint}") != 0
 
+    def contact_angles(self, constraint: Union[int, str], body: Optional[int] = None) -> np.ndarray:
+        """The contact angle (degrees, through the liquid) at each vertex where
+        the surface meets a constraint (number or name): the angle between
+        the surface's normal out of ``body`` (area-weighted over its flat
+        facets) and the constraint's normal, the gradient of its formula.
+        Vertices also on another constraint (corners) are left out.
+
+        ``body``: the liquid; needed when the surface has several bodies
+        (without bodies, facet normals are taken as they are). The gradient
+        is taken to point out of the solid, as with the walls of
+        :mod:`pysurfaceevolver.constraints` (a plane's normal into the
+        liquid; spheres and cylinders solid); otherwise the angles come out
+        as 180 degrees minus the contact angle.
+        """
+        m = self.mesh()
+        if m.facets is None:
+            raise ValueError("contact_angles() needs facets (the soapfilm model)")
+        nums, _, dist, names = self._constraint_gaps()
+        if isinstance(constraint, str):
+            if constraint not in names:
+                raise KeyError(f"no constraint named {constraint!r}")
+            constraint = int(nums[names.index(constraint)])
+        if int(constraint) not in [int(c) for c in nums]:
+            raise KeyError(f"no constraint {constraint}")
+        column = [int(c) for c in nums].index(int(constraint))
+        sign = np.ones(len(m.facets))
+        if m.facet_bodies is not None and m.facet_bodies.any():
+            if body is None:
+                found = np.unique(m.facet_bodies[m.facet_bodies > 0])
+                if len(found) != 1:
+                    raise ValueError(f"the surface has bodies {list(found)}: give body=")
+                body = int(found[0])
+            sign = np.where(m.facet_bodies[:, 0] == body, 1.0,
+                            np.where(m.facet_bodies[:, 1] == body, -1.0, 0.0))
+        xyz = m.vertices[:, :3]
+        a, b, c = (xyz[m.facets[:, i]] for i in range(3))
+        normals = np.cross(b - a, c - a)*sign[:, None]
+        vn = np.zeros_like(xyz)
+        for k in range(3):
+            np.add.at(vn, m.facets[:, k], normals)
+        on = np.isnan(dist)
+        sel = on[:, column] & (on.sum(axis=1) == 1) & (np.linalg.norm(vn, axis=1) > 0)
+        _, solid = self._call(_core.constraint_normals, int(constraint))
+        nl = vn[sel]/np.linalg.norm(vn[sel], axis=1)[:, None]
+        return np.degrees(np.arccos(np.clip((nl*solid.data[sel]).sum(axis=1), -1.0, 1.0)))
+
     def set_constraint(self, element: str, constraint: Union[int, str], where=None,
                        on: bool = True) -> None:
         """Put elements on a constraint (or take them off with ``on=False``)."""
@@ -1902,7 +1959,19 @@ class Evolver:
         XDMF needs h5py. ``.msh`` means Gmsh format 2.2 (meshio alone would pick ANSYS, and
         its Gmsh 4.1 output can't be opened by Gmsh). See
         :meth:`Mesh.to_meshio` for cell data.
+
+        Scenes for viewers and 3D printing software go through PyVista:
+        ``.gltf``/``.glb`` and ``.wrl`` (VRML; flat triangles, no cell data).
         """
+        ext = os.path.splitext(os.fspath(path))[1].lower()
+        if file_format is None and ext in _SCENE_FORMATS:
+            from ._viz import _import_pyvista
+            pv = _import_pyvista()
+            plotter = pv.Plotter(off_screen=True)
+            plotter.add_mesh(self.mesh().to_pyvista(n), color="lightskyblue")
+            getattr(plotter, _SCENE_FORMATS[ext])(os.fspath(path))
+            plotter.close()
+            return
         meshio = _import_meshio()
         file_format, flavor = _target_format(os.fspath(path), file_format)
         data = self.mesh().to_meshio(curved, n, flavor=flavor)
@@ -2025,7 +2094,8 @@ class Evolver:
 
     def plot(self, scalars: Union[None, str, np.ndarray] = None, *, element: Optional[str] = None,
              n: Optional[int] = None, off_screen: bool = False,
-             screenshot: Optional[str] = None, mirror=None, **kwargs: Any) -> Any:
+             screenshot: Optional[str] = None, mirror=None, walls=None,
+             **kwargs: Any) -> Any:
         """Show the surface with PyVista.
 
         ``scalars`` colors it: an Evolver expression evaluated per facet
@@ -2034,15 +2104,19 @@ class Evolver:
         subdivisions. ``mirror`` adds mirror images, for a symmetric piece of
         a surface: a list of planes, each ``"x"`` (x = 0), ``("x", c)`` (x = c)
         or ``(normal, point)``, applied in order, each doubling what is there
-        (an eighth of a cell: ``["z", "y", "x"]``). Other keyword arguments go
-        to ``Plotter.add_mesh``.
+        (an eighth of a cell: ``["z", "y", "x"]``). ``walls`` draws solids and
+        walls with it: constraints from :mod:`pysurfaceevolver.constraints`
+        (``C.sphere(...)``, ``C.plane(...)``; planes as translucent patches
+        around the surface) or PyVista meshes. Other keyword arguments go to
+        ``Plotter.add_mesh``.
         """
-        from ._viz import _import_pyvista, add_images, surface_dataset
+        from ._viz import _import_pyvista, add_images, add_walls, surface_dataset
         pv = _import_pyvista()
         dataset, name = surface_dataset(self, scalars, element, n)
         plotter = pv.Plotter(off_screen=off_screen)
         add_images(plotter, dataset, mirror, "evolver-surface", scalars=name,
                    **{"show_edges": True, **kwargs})
+        add_walls(plotter, walls)
         return plotter.show(screenshot=screenshot)
 
     def live_view(self, scalars: Union[None, str, np.ndarray] = None, **kwargs: Any) -> "LiveView":
@@ -2189,6 +2263,29 @@ class Evolver:
         """
         return Parameters(self)
 
+    def quantity(self, name: str) -> "QuantityView":
+        """A live handle on a named quantity from the datafile.
+
+        ``ev.quantity("stretch").modulus = 100`` changes a modulus,
+        ``ev.quantity("vol").target = 2`` sets (and fixes) a target and
+        ``= None`` frees it. For all quantities at once (a snapshot), use
+        :meth:`quantities`.
+        """
+        if name not in self.quantities():
+            raise KeyError(f"no quantity {name!r}; the datafile defines "
+                           f"{sorted(self.quantities()) or 'none'}")
+        return QuantityView(self, name)
+
+    @property
+    def gravity(self) -> float:
+        """The gravitational constant (Evolver's ``gravity_constant``; 0: no
+        gravity). Bodies weigh their ``density`` times it."""
+        return self.eval("gravity_constant")
+
+    @gravity.setter
+    def gravity(self, value: float) -> None:
+        self.command(f"gravity_constant := {_num(value, 'gravity')}")
+
     def quantities(self) -> Dict[str, Quantity]:
         """Named quantities from the datafile, recalculated now."""
         _, result = self._call(_core.quantities)
@@ -2324,6 +2421,15 @@ class BodyView:
         return self._get("pressure")
 
     @property
+    def density(self) -> float:
+        """The density, for gravity (see :attr:`Evolver.gravity`)."""
+        return self._get("density")
+
+    @density.setter
+    def density(self, value: float) -> None:
+        self._ev.command(f"set body[{self.number}] density {_num(value, 'density')}")
+
+    @property
     def fixed(self) -> bool:
         """Whether the volume is prescribed."""
         b = self._ev.bodies()
@@ -2334,6 +2440,64 @@ class BodyView:
         return (f"<body {self.number}: volume {self.volume:.6g}, "
                 f"target {'free' if target is None else format(target, '.6g')}, "
                 f"pressure {self.pressure:.6g}>")
+
+
+class QuantityView:
+    """A live handle on one named quantity; see :meth:`Evolver.quantity`.
+
+    Reading an attribute asks Evolver now; setting one changes the surface.
+    """
+
+    def __init__(self, ev: Evolver, name: str):
+        self._ev = ev
+        self.name = name
+
+    def _now(self) -> Quantity:
+        return self._ev.quantities()[self.name]
+
+    @property
+    def value(self) -> float:
+        """The current value."""
+        return self._now().value
+
+    @property
+    def kind(self) -> str:
+        """``"energy"``, ``"fixed"``, ``"info"`` or ``"conserved"``."""
+        return self._now().kind
+
+    @property
+    def target(self) -> Optional[float]:
+        """The prescribed value, or None unless the quantity is fixed.
+        Setting a number fixes it at that value; setting None frees it (it
+        becomes an info quantity, as Evolver's ``unfix``)."""
+        q = self._now()
+        return q.target if q.kind == "fixed" else None
+
+    @target.setter
+    def target(self, value: Optional[float]) -> None:
+        if value is None:
+            self._ev.command(f"unfix {self.name}")
+        else:
+            self._ev.command(f"{self.name}.target := {_num(value, 'target')}; fix {self.name}")
+
+    @property
+    def modulus(self) -> float:
+        """The factor its value enters the energy with (energy quantities)."""
+        return self._now().modulus
+
+    @modulus.setter
+    def modulus(self, value: float) -> None:
+        self._ev.command(f"{self.name}.modulus := {_num(value, 'modulus')}")
+
+    @property
+    def pressure(self) -> float:
+        """The Lagrange multiplier of a fixed quantity."""
+        return self._now().pressure
+
+    def __repr__(self) -> str:
+        q = self._now()
+        target = "" if q.kind != "fixed" else f", target {q.target:.6g}"
+        return f"<quantity {self.name} ({q.kind}): value {q.value:.6g}{target}>"
 
 
 
@@ -2457,7 +2621,9 @@ _INERTIA_NEAR = 1e-4
 # new target for Newton to meet, or a gradient round gone wrong (vertex
 # averaging alone leaves volumes about 2e-5 off)
 _TARGET_LOST = 1e-4
-_GRADIENT_ONLY_TOL = 1e-9      # energy_tol when no Newton follows
+_ENERGY_TOL = 1e-5             # relax(): gradient rounds settle at this relative change...
+_WINDOW = 3                    # ... over this many rounds
+_GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
 _FALLBACK_TIDY = 1             # the conjugate-gradient pass averages every this many rounds
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 

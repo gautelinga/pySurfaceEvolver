@@ -14,9 +14,11 @@ __all__ = ["Body", "make_datafile"]
 class Body:
     """A body for :func:`make_datafile`.
 
-    ``faces`` are 0-based face rows. ``orientation`` (+1/-1 per face, default
-    all +1) says whether each face's normal, by its vertex order, points out
-    of the body (+1) or into it (-1). ``volume`` fixes the volume; ``None``
+    ``faces`` are 0-based face rows. ``orientation`` (+1/-1 per face) says
+    whether each face's normal, by its vertex order, points out of the body
+    (+1) or into it (-1). By default it is worked out when the faces close
+    a surface (each edge on two of them): consistent across the edges and
+    outward; otherwise all +1. ``volume`` fixes the volume; ``None``
     leaves it free. ``density`` sets the body's weight density (for gravity).
     ``volconst`` is added to the computed volume (for example a solid inside
     the body; see :attr:`pysurfaceevolver.constraints.Constraint.volconst`).
@@ -27,6 +29,43 @@ class Body:
     orientation: Optional[Sequence[int]] = None
     density: Optional[float] = None
     volconst: Optional[float] = None
+
+
+def _outward(rows: List[int], face_loops: List[List[int]], edge_list: List[tuple],
+             vertices: np.ndarray) -> List[int]:
+    """Signs (+1/-1) that orient the faces ``rows`` consistently and outward,
+    if they close a surface (each edge on exactly two of them); else all +1."""
+    on: Dict[int, List[int]] = {}
+    for k, r in enumerate(rows):
+        for e in face_loops[r]:
+            on.setdefault(abs(e), []).append(k)
+    if not rows or any(len(ks) != 2 for ks in on.values()):
+        return [1]*len(rows)
+    # neighbours across an edge agree when they run along it in opposite directions
+    direction = [{abs(e): (1 if e > 0 else -1) for e in face_loops[r]} for r in rows]
+    signs = [0]*len(rows)
+    for seed in range(len(rows)):
+        if signs[seed]:
+            continue
+        signs[seed], todo = 1, [seed]
+        while todo:
+            k = todo.pop()
+            for e in direction[k]:
+                for j in on[e]:
+                    if j != k and not signs[j]:
+                        signs[j] = -signs[k]*direction[k][e]*direction[j][e]
+                        todo.append(j)
+    # outward: the enclosed volume (divergence theorem over fan triangles) positive
+    x = np.asarray(vertices, dtype=float)
+    if x.shape[1] != 3:
+        return signs
+    volume = 0.0
+    for k, r in enumerate(rows):
+        loop = [edge_list[abs(e) - 1][0 if e > 0 else 1] for e in face_loops[r]]
+        p = x[loop]
+        for i in range(1, len(p) - 1):
+            volume += signs[k]*np.dot(p[0], np.cross(p[i], p[i + 1]))/6
+    return signs if volume >= 0 else [-s for s in signs]
 
 
 def _num(x: float) -> str:
@@ -55,6 +94,7 @@ def make_datafile(
     edge_fixed=None,
     edge_constraints: Optional[Mapping[int, Iterable]] = None,
     parameters: Optional[Mapping[str, float]] = None,
+    gravity: Optional[float] = None,
     string: bool = False,
     header: str = "",
     commands: str = "",
@@ -90,6 +130,9 @@ def make_datafile(
         constraint, when both of its vertices are.
     parameters:
         ``{name: value}``, written as ``parameter name = value``.
+    gravity:
+        The gravitational constant (``gravity_constant``); bodies weigh
+        their ``density`` times it, along -z.
     string:
         Use the string model (curves; faces become 2D cells).
     header:
@@ -175,6 +218,8 @@ def make_datafile(
         out.append(f"space_dimension {sdim}\n")
     for name, value in (parameters or {}).items():
         out.append(f"parameter {name} = {_num(value)}\n")
+    if gravity is not None:
+        out.append(f"gravity_constant {float(gravity)!r}\n")
     if header:
         out.append(header.rstrip() + "\n")
     for number, spec in (constraints or {}).items():
@@ -204,7 +249,8 @@ def make_datafile(
             rows = [int(f) for f in b.faces]
             if any(r < 0 or r >= len(face_loops) for r in rows):
                 raise ValueError(f"body {i + 1} refers to a face that doesn't exist")
-            signs = [1] * len(rows) if b.orientation is None else [int(s) for s in b.orientation]
+            signs = ([int(s) for s in b.orientation] if b.orientation is not None
+                     else _outward(rows, face_loops, edge_list, vertices))
             if len(signs) != len(rows) or any(s not in (1, -1) for s in signs):
                 raise ValueError(f"body {i + 1}: orientation needs one +1/-1 per face")
             line = f"{i + 1} " + " ".join(str(s * (r + 1)) for r, s in zip(rows, signs))

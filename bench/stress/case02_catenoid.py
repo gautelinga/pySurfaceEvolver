@@ -39,7 +39,7 @@ def run(quick=False):
     track.relax(ev)
     res = Result(NAME, False, "")
     errors, past = [], []
-    for step in recipes.continuation(ev, recipes.parameter("hh"),
+    for step in recipes.continuation(ev, "hh",
                                      np.arange(0.325, 0.76, 0.025), relax=track.relax):
         ref = catenoid(step.value)
         m = ev.mesh()

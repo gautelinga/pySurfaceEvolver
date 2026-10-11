@@ -24,7 +24,7 @@ def run(quick=False):
     track.relax(ev)
     res = Result(NAME, False, "")
     errors = []
-    for step in recipes.continuation(ev, recipes.body_target(1),
+    for step in recipes.continuation(ev, ev.body(1),
                                      volume*np.geomspace(1, 1e-4, 25), relax=track.relax):
         ref = cap_reference(step.value, theta)
         err = max(rel(ev.total_energy, ref["energy"]), rel(contact_radius(ev, 1), ref["radius"]))

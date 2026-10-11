@@ -107,10 +107,6 @@ def test_command_returns_output(cube):
     assert len(lines) == 3
 
 
-def test_call_is_command(cube):
-    assert "area:" in cube("g 1")
-
-
 def test_quiet_by_default(cube, capsys):
     cube.command("g 1")
     captured = capsys.readouterr()

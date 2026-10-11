@@ -34,7 +34,7 @@ def run(quick=False):
     track.relax(ev)
     res = Result(NAME, False, "")
     errs, guess = [], (0.78, 2.4)
-    for step in recipes.continuation(ev, recipes.parameter("theta"), np.arange(20.0, 81, 10),
+    for step in recipes.continuation(ev, "theta", np.arange(20.0, 81, 10),
                                      relax=track.relax):
         try:
             ref = axisym.barrel(VOLUME, B, step.value, guess=guess)
