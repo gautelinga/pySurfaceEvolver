@@ -25,7 +25,10 @@ run with default settings) and are from October 2026.
    with equiangulation and vertex averaging (`u; V`; only `V` in the Lagrange model,
    which can't be equiangulated), which keep facets from degenerating where the
    surface stretches or vertices drift. The steps stop when the energy settles (a
-   relative change below 1e-5 over three rounds).
+   relative change below 1e-5 over three rounds). After the first step the surface is
+   also equiangulated once: a coarse start triangulated badly (Brakke's `cbga1.fe`,
+   a prism of quads split at their centres) would otherwise settle into what its
+   mesh allows before the first round ends.
 2. **A watch on the residual.** At the end of each round `relax()` measures the
    residual (how far the surface is from equilibrium, `ev.residual()`). If a round
    more than doubles it from its lowest, the round is undone and Newton takes over: on
@@ -47,10 +50,13 @@ run with default settings) and are from October 2026.
    facets next to it.
 6. **A stability check.** Once converged (or within 100 times `tol`, as when a step
    of a continuation stops just short), the Hessian's eigenvalues are counted (one
-   factorization). A saddle, such as a liquid column past its Rayleigh-Plateau limit,
+   factorization; none when the last Newton step began within a residual of 1e-2
+   and its own factorization counted no negative eigenvalue). A saddle, such as a liquid column past its Rayleigh-Plateau limit,
    is an equilibrium too, and Newton finds it as readily as a minimum; `r.stable` is
    then `False` and an `UnstableEquilibriumWarning` is raised. Exact zero modes of
-   symmetries (a drop that could slide on a plane) don't count.
+   symmetries (a drop that could slide on a plane) don't count. `ev.saddle()` steps
+   off a saddle along its unstable mode, and `ev.relax()` from there finds the
+   minimum it leads to (Brakke's `cbga2.fe`: a solder bulge leaning over).
 
 Other models change some of this. Strings are only vertex-averaged, the simplex
 representation only equiangulated. Surfaces without a Hessian get plain gradient
@@ -79,8 +85,9 @@ can't be undone, and `relax()` goes on from where it is.
 
 In the quadratic and Lagrange models (a final stage, from a mesh settled in the linear
 model) `relax()` first does what the manual recommends there, five gradient steps and
-then Newton steps (`g 5; hessian`), and keeps the result if it converges. Switching a relaxed 24k-facet cube to `lagrange 2` and relaxing takes about
-a second.
+then Newton steps (`g 5; hessian`) until the residual is below `tol`, and keeps the
+result if it converges. Switching a relaxed 98k-facet cube to `lagrange 2` and
+relaxing takes 3 to 4 seconds on 2 threads.
 
 ## Reading the result
 
@@ -160,7 +167,7 @@ Other things to know:
   can hold a shrinking neck open as a tube of slivers), then edges that have
   collapsed to a 20th of the median are deleted, junctions popped, and the surface
   relaxed, kept only if that converges, or lowers the energy on a sound mesh without
-  raising the residual (`r.collapsed`; `relax(pinch=False)` turns it off). That is how a small film in a
+  raising the residual (`r.collapsed`). That is how a small film in a
   foam shrinks away, and how a catenoid past its fold pinches off into two discs
   (`cat.fe`, stress case 2). A converged surface never loses edges. The last resort
   costs up to a few hundred gradient steps and a save and restore; after k failed

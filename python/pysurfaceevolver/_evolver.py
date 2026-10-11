@@ -1008,7 +1008,7 @@ class Evolver:
         before = self._coords()
         settled = trace.settled
         with self._conj_grad(True):
-            run(lev, budget, _FALLBACK_TIDY*tidy, watch=True, average_only=True)
+            run(lev, budget, tidy, watch=True, average_only=True)
         more, second = self._newton(newton, seek, tol, undo_if, trace.output) \
             if np.isfinite(_core.total_energy()) else (0, self.residual())
         if second < tol or not self._put_back(before):   # (not: the topology changed)
@@ -1071,7 +1071,15 @@ class Evolver:
                          else "its topology changed during the round, so it stays as it is")
                 raise EvolverError(f"relax(): the energy became {bad} during gradient steps; "
                                    + where)
-            if tidy and i % tidy and i > _FIRST_ROUND:
+            if tidy and i == 1 and self._tidy_kinds()[0] and not average_only:
+                # a coarse start triangulated badly is equiangulated before
+                # it settles into what its mesh allows (no averaging: that
+                # moves vertices, and every call would pay it)
+                trace.output.append(self.command("u"))
+                trace.energy[-1] = _core.total_energy()
+                trace.area[-1] = _core.total_area()
+                start = self._coords()
+            if tidy and i % tidy:
                 continue                  # mid-round: no convergence check
             # on a degenerate mesh Evolver's volume projection can fail without
             # an error: a round that pushes a volume off its target is undone
@@ -2627,11 +2635,6 @@ _TARGET_LOST = 1e-4
 _ENERGY_TOL = 1e-5             # relax(): gradient rounds settle at this relative change...
 _WINDOW = 3                    # ... over this many rounds
 _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
-# the first round of each gradient phase ends after this many steps: a coarse
-# start triangulated badly is equiangulated before it settles into what its
-# mesh allows (cbga1.fe: energy 11 instead of 5.3)
-_FIRST_ROUND = 1
-_FALLBACK_TIDY = 1             # the conjugate-gradient pass averages every this many rounds
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 

@@ -27,6 +27,7 @@ ev.relax(levels=2, tidy=10, newton=3)   # refine twice, equiangulate + average e
 ev.remesh(target=0.05)               # even out edge lengths (split long, delete short)
 ev.body(1).target = 1.2              # a body's volume; ev.body(1).pressure
 ev.eigen_counts().negative           # > 0: an unstable equilibrium
+ev.saddle(); ev.relax()              # step off a saddle into the minimum it leads to
 ev.set_model("lagrange", 3)
 
 snapshot = ev.save()                 # exact snapshot of the surface
@@ -44,7 +45,11 @@ ev.fix("vertex", where=ev.values("vertex", "z") > 0.9)
 ev.set_constraint("vertex", 1, where=mask)
 ev.set_flag("edge", "no_refine", where=ev.mesh().edges_touching(ev.on_constraint(1), "one"))
 ev.parameters["angle"] = 60          # parameters declared in the datafile
+ev["gravity_constant"] = 2           # any other variable; also ev.gravity = 2
 ev.quantities()                      # named quantities: value, target, modulus, ...
+ev.quantity("vol").target = 1.5      # a live handle (target None frees it)
+ev.contact_angles(1)                 # degrees, at each vertex on constraint 1
+ev.mesh().slice((0, 0, 1))           # cross-section z = 0: ordered polylines
 
 ev.command("g 5; r; u")              # anything else: plain Evolver commands
 ```
@@ -62,8 +67,10 @@ datafile = pyse.make_datafile(vertices, faces, constraints={
     parameters={"theta": 60}, vertex_constraints=...)
 ```
 
-`pyse.recipes.continuation` steps a volume or parameter through a family of
-equilibria, with checkpoints a stopped run resumes from.
+`pyse.recipes.continuation(ev, ev.body(1), volumes)` (or a parameter's name, or
+`ev.quantity(name)`) steps through a family of equilibria, with checkpoints a stopped
+run resumes from. `ev.plot(walls=[bead, ...])` draws the constraints' solids with the
+surface.
 
 There is one Evolver engine per process: every `Evolver` object is a handle to
 it, so all handles see the same surface. Use `save()`/`restore()` to keep surfaces
@@ -124,6 +131,7 @@ poly = ev.mesh().to_pyvista()                    # or work with the data
 
 ```python
 ev.write("surface.vtu")                    # STL, OBJ, PLY, VTU, Gmsh .msh, XDMF, ...
+ev.write("surface.glb")                    # glTF or VRML scenes (through PyVista)
 ev.write("surface.msh", curved="native")   # high-order cells (Gmsh, VTU; XDMF order 2)
 ev.write_bodies("body_{id}.stl")           # one closed surface per body
 ev.write_bodies("drop_{id}.stl", cap=True) # close openings where a body meets a constraint
@@ -170,7 +178,7 @@ coordinates qualify, others (user procedures, assignments, ...) run serially.
 Threads default to the number of physical cores. `pyse.set_threads(n)` /
 `pyse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`);
 `with pyse.threads_limit(n):` sets them for a block, and `ev.relax(...,
-threads=n)` / `ev.hessian(threads=n)` for one call; `pyse.map`
+threads=n)` / `ev.newton(threads=n)` for one call; `pyse.map`
 workers run single-threaded by default, since for sweeps more processes beat more
 threads. With several threads, results can differ from run to run at round-off
 level; with one thread they are reproducible bit for bit. Newton steps keep the

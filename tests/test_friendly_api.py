@@ -137,8 +137,7 @@ def test_relax_tidy_reaches_the_same_energy(cube):
     cube.restore(start)
     cube.refine()
     tidy = cube.relax(tol=1e-9, max_iter=2000, tidy=10)
-    # rounds of 10 steps after a first one of a single step
-    assert plain.converged and tidy.converged and len(tidy.energy) % 10 == 1
+    assert plain.converged and tidy.converged and len(tidy.energy) % 10 == 0
     # vertex averaging moves the vertices along the surface: a slightly
     # different discrete equilibrium
     assert tidy.energy[-1] == pytest.approx(plain.energy[-1], rel=1e-4)
