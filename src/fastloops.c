@@ -1152,6 +1152,135 @@ static int fl_calc_leftside_impl(REAL **rleftside, struct linsys *S, int fixcoun
   return 1;
 }
 
+/* Vertex normals in the plain linear film (the usual case of
+   new_calc_vertex_normal(): no triple edge at the vertex, not axial): the
+   sum of its facets' normals, each flipped to agree with the sum so far, in
+   Evolver's order around the vertex. The facets around each vertex, in that
+   order and with their orientation, are kept per topology (vn_*), and each
+   facet's normal is computed once per call instead of once per corner.
+   Results agree with new_calc_vertex_normal() to round-off (an inverted
+   facet's normal is the negated one). */
+static long *vn_start = NULL, vn_start_size = 0;   /* [n+1] into vn_fac */
+static long *vn_fac = NULL, vn_fac_size = 0;       /* +-(facet ordinal + 1) */
+static long vn_stamp = -1, vn_count = -1, vn_maxord = -1;
+static vertex_id *vn_list = NULL;
+static double (*vn_fnorm)[3] = NULL;
+static long vn_fnorm_size = 0;
+
+static int vn_applicable(void)
+{ return web.representation == SOAPFILM && web.modeltype == LINEAR
+      && !web.symmetry_flag && SDIM == 3 && !hessian_special_normal_flag
+      && !hessian_normal_one_flag;
+}
+
+/* whether new_calc_vertex_normal() takes the usual case at this vertex */
+static int vn_usual(vertex_id v_id)
+{ edge_id e_id, start_e;
+  if ( get_vattr(v_id) & (AXIAL_POINT|Q_MIDPOINT|Q_MIDEDGE|Q_MIDFACET) ) return 0;
+  e_id = start_e = get_vertex_edge(v_id);
+  if ( !valid_id(e_id) ) return 0;
+  do
+  { if ( get_edge_valence(e_id) >= 3 ) return 0;
+    e_id = get_next_tail_edge(e_id);
+  } while ( !equal_id(e_id,start_e) );
+  return valid_id(get_vertex_fe(v_id));
+}
+
+static int vn_build(vertex_id *list, long n)
+{ long k, m = 0;
+  if ( vn_list == list && vn_stamp == top_timestamp && vn_count == n
+       && vn_maxord == (long)web.skel[VERTEX].max_ord )
+    return 1;
+  if ( !ensure_size((void**)&vn_start,&vn_start_size,n + 1,sizeof(long)) ) return 0;
+  vn_stamp = -1;
+  vn_start[0] = 0;
+  for ( k = 0 ; k < n ; k++ )
+  { vertex_id v_id = list[k];
+    if ( vn_usual(v_id) )
+    { facetedge_id fe, start_fe;
+      fe = start_fe = get_vertex_first_facet(v_id);
+      do
+      { facet_id f_id = get_fe_facet(fe);
+        long o = (long)ordinal(f_id) + 1;
+        if ( m >= vn_fac_size )
+        { long want = vn_fac_size ? 2*vn_fac_size : 8*n + 64;
+          long *grown = (long*)realloc(vn_fac,(size_t)want*sizeof(long));
+          if ( !grown ) return 0;
+          vn_fac = grown; vn_fac_size = want;
+        }
+        vn_fac[m++] = inverted(f_id) ? -o : o;
+        fe = get_next_vertex_facet(v_id,fe);
+      } while ( !equal_element(fe,start_fe) );
+    }
+    vn_start[k+1] = m;
+  }
+  vn_list = list;
+  vn_count = n;
+  vn_maxord = (long)web.skel[VERTEX].max_ord;
+  vn_stamp = top_timestamp;
+  return 1;
+}
+
+/* the facet normals (length = area), by ordinal, as get_facet_normal() */
+static int vn_facet_normals(void)
+{ vertex_id *corners = fl_facet_corners();
+  facet_id *facets;
+  long nf, j;
+  if ( !corners || !(facets = fl_facet_list(&nf)) ) return 0;
+  if ( !ensure_size((void**)&vn_fnorm,&vn_fnorm_size,(long)web.skel[FACET].max_ord + 1,
+                    sizeof(double[3])) )
+    return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
+#endif
+  for ( j = 0 ; j < nf ; j++ )
+  { long o = (long)ordinal(facets[j]);
+    vertex_id *c = corners + 3*o;
+    REAL *x0 = get_coord(c[0]), *x1 = get_coord(c[1]), *x2 = get_coord(c[2]);
+    REAL s1[3], s2[3], nrm[3];
+    int i;
+    for ( i = 0 ; i < 3 ; i++ ) { s1[i] = x1[i] - x0[i]; s2[i] = x2[i] - x1[i]; }
+    cross_prod(s1,s2,nrm);
+    for ( i = 0 ; i < 3 ; i++ ) vn_fnorm[o][i] = nrm[i]/2;
+  }
+  return 1;
+}
+
+/* new_calc_vertex_normal() for the k-th vertex of the list vn_build() saw */
+static int vn_vertex_normal(long k, vertex_id v_id, REAL **norm)
+{ long j;
+  int i, d;
+  if ( vn_start[k] == vn_start[k+1] ) return new_calc_vertex_normal(v_id,norm);
+  for ( d = 0 ; d < SDIM ; d++ )
+    for ( i = 0 ; i < SDIM ; i++ ) norm[d][i] = 0.0;
+  for ( j = vn_start[k] ; j < vn_start[k+1] ; j++ )
+  { long o = vn_fac[j];
+    double *f = vn_fnorm[(o < 0 ? -o : o) - 1];
+    REAL fn[3];
+    for ( i = 0 ; i < 3 ; i++ ) fn[i] = o < 0 ? -f[i] : f[i];
+    if ( j > vn_start[k] && SDIM_dot(norm[0],fn) < 0 )
+      for ( i = 0 ; i < 3 ; i++ ) norm[0][i] -= fn[i];
+    else
+      for ( i = 0 ; i < 3 ; i++ ) norm[0][i] += fn[i];
+  }
+  if ( fl_check() )   /* against Evolver's own */
+  { MAT2D(ref,MAXCOORD,MAXCOORD);
+    int kk = new_calc_vertex_normal(v_id,ref);
+    REAL scale = sqrt(SDIM_dot(ref[0],ref[0])) + 1e-300;
+    for ( i = 0 ; i < 3 ; i++ )
+      if ( kk != 1 || fabs(ref[0][i] - norm[0][i]) > 1e-12*scale )
+      { fprintf(stderr,"vertex normal cache mismatch at vertex %ld\n",(long)ordinal(v_id));
+        abort();
+      }
+  }
+  return 1;
+}
+
+/* set up the cached normals for the vertices of list; 0: not applicable */
+static int vn_prepare(vertex_id *list, long n)
+{ return vn_applicable() && vn_build(list,n) && vn_facet_normals();
+}
+
 /* hessian_init()'s vertex normals, see fastloops.h. The normals only read
    the surface; an error (kb_error) leaves the vertex to the caller, which
    redoes it serially so Evolver reports it as usual. */
@@ -1159,11 +1288,13 @@ static int *fl_vertex_normals_impl(REAL ***v_normal, vertex_id **listp, long *np
 { vertex_id *list;
   int *dims;
   long n, k;
+  int fast;
   if ( web.representation == SIMPLEX || hessian_special_normal_flag
        || (web.symmetry_flag && !web.torus_flag) )
     return NULL;
   if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return NULL;
   if ( !(dims = (int*)malloc(n*sizeof(int))) ) return NULL;
+  fast = vn_prepare(list,n);
 #ifdef _OPENMP
   #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
 #endif
@@ -1176,7 +1307,8 @@ static int *fl_vertex_normals_impl(REAL ***v_normal, vertex_id **listp, long *np
     if ( setjmp(trap) == 0 )
     { int kk;
       fl_trap = &trap;   /* kb_error() comes back here */
-      kk = new_calc_vertex_normal(v_id,v_normal[k]);
+      kk = fast ? vn_vertex_normal(k,v_id,v_normal[k])
+                : new_calc_vertex_normal(v_id,v_normal[k]);
       dims[k] = project_vertex_normals(v_id,v_normal[k],kk);
       fl_trap = NULL;
     }
@@ -1191,10 +1323,12 @@ static int *fl_shape_normals_impl(REAL ***v_normal, vertex_id **listp, long *np)
 { vertex_id *list;
   int *dims;
   long n, k;
+  int fast;
   if ( web.representation == SIMPLEX || (web.symmetry_flag && !web.torus_flag) )
     return NULL;
   if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return NULL;
   if ( !(dims = (int*)malloc(n*sizeof(int))) ) return NULL;
+  fast = vn_prepare(list,n);
 #ifdef _OPENMP
   #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
 #endif
@@ -1208,7 +1342,8 @@ static int *fl_shape_normals_impl(REAL ***v_normal, vertex_id **listp, long *np)
     if ( setjmp(trap) == 0 )
     { int kk;
       fl_trap = &trap;   /* kb_error() comes back here */
-      kk = new_calc_vertex_normal(v_id,v_normal[k]);
+      kk = fast ? vn_vertex_normal(k,v_id,v_normal[k])
+                : new_calc_vertex_normal(v_id,v_normal[k]);
       kk = gram_schmidt(v_normal[k],kk,SDIM);
       dims[k] = kk > 0 ? kk : -1;
       fl_trap = NULL;

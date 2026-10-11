@@ -3134,7 +3134,11 @@ int rawinput()
      {
        if ( commandfd == NULL )  /* in case read after close */
        { retval = previous_char = 0; goto rawreturn; }
+#ifdef _WIN32
        c = getc(commandfd);
+#else
+       c = getc_unlocked(commandfd);  /* pySE: one thread reads it; no lock per character */
+#endif
        if ( c != -1 ) break;
        pop_commandfd();  /* EOF, so pop #include stack */
        if ( !datafile_flag ) /* EOF for a command file */

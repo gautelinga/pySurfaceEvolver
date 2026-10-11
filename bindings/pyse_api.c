@@ -1401,8 +1401,10 @@ static void quantities_body(void *arg)
 { struct quantities_args *a = (struct quantities_args *)arg;
   long row = 0;
   int i;
-  /* bring every quantity's value up to date */
-  calc_content(Q_ENERGY|Q_FIXED|Q_INFO|Q_CONSERVED);
+  /* bring every quantity's value up to date (none to report: skip it, as
+     relax() asks after every step) */
+  if ( a->n > 0 )
+    calc_content(Q_ENERGY|Q_FIXED|Q_INFO|Q_CONSERVED);
   for ( i = 0 ; i < gen_quant_count ; i++ )
   { struct gen_quant *q = GEN_QUANT(i);
     if ( !is_named_quantity(i) ) continue;

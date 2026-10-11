@@ -39,8 +39,10 @@ from pysurfaceevolver import Evolver
 out = {}
 for path in sys.argv[1:]:
     ev = Evolver(path)
+    residual = ev.residual()   # vertex normals (shape directions)
     ev.command("m 0; g 1")   # forces, without moving
     out[path] = dict(facets=ev.counts["facets"], energy=ev.eval("total_energy"),
+                     residual=residual,
                      area=ev.eval("total_area"),
                      volume=[float(v) for v in ev.bodies().volume],
                      force=[ev.values("vertex", f"v_force[{i}]").tolist() for i in (1, 2, 3)])
@@ -106,6 +108,7 @@ def test_single_evaluation_matches_original(dumps):
             got = result[path]
             assert rel(got["energy"], ref["energy"]) < 1e-12, (path, mode)
             assert rel(got["area"], ref["area"]) < 1e-12, (path, mode)
+            assert rel(got["residual"], ref["residual"]) < 1e-9, (path, mode)
             for v, w in zip(got["volume"], ref["volume"]):
                 assert rel(v, w) < 1e-12, (path, mode)
             for comp, refcomp in zip(got["force"], ref["force"]):

@@ -383,6 +383,9 @@ class Evolver:
 
     _no_hessian: bool = False      # set by _newton(): no Hessian for this surface
     _keep_mesh: bool = False       # relax(): no tidying (elastic, crystalline)
+    # set by _newton(): the coordinates a plain Newton step left, and the
+    # negative eigenvalues its factorization counted (just before the step)
+    _inertia: "tuple[_Coords, int, float] | None" = None
 
     def __init__(
         self,
@@ -690,6 +693,7 @@ class Evolver:
             raise ValueError("tidy, levels and newton must be non-negative")
         if cg not in ("auto", True, False):
             raise ValueError('cg must be "auto", True or False')
+        self._inertia = None                # only this call's Newton steps count
         with _threads_for_call(threads), self._conj_grad(cg is True), \
                 self._mesh_kept(keep_mesh):
             trace = _Trace()
@@ -746,11 +750,14 @@ class Evolver:
             # just short of tol the eigenvalues are as good as at it (a step
             # of a continuation that stops a little early still gets checked)
             if stability and residual < _STABILITY_NEAR*tol:
-                try:
-                    check = self.stability()
-                    stable, modes = check.stable, check.negative
-                except EvolverError:
-                    pass                    # no Hessian for this surface
+                if self._inertia_unchanged() == 0:
+                    stable, modes = True, 0     # the last Newton step's factorization
+                else:
+                    try:
+                        check = self.stability()
+                        stable, modes = check.stable, check.negative
+                    except EvolverError:
+                        pass                    # no Hessian for this surface
                 if stable is False:
                     lowest = check.lowest[0] if len(check.lowest) else float("nan")
                     warnings.warn(
@@ -871,12 +878,11 @@ class Evolver:
         for _ in range(_NEWTON_FIRST_SETTLE):   # as the manual's 'g 5; hessian':
             trace.step(self)                     # new high-order nodes settle first
         trace.level += [0]*_NEWTON_FIRST_SETTLE
-        # no early stop on the residual: it doesn't see an unmet volume (a new
-        # target), which the Newton steps restore
+        # stops at tol with the targets met (past it, steps in round-off cost
+        # a factorization each)
         with warnings.catch_warnings():     # an attempt; far from equilibrium the
             warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)  # Hessian is indefinite
-            steps = self._newton(newton, seek, None, undo_if, trace.output)
-        residual = self.residual()
+            steps, residual = self._newton(newton, seek, tol, undo_if, trace.output)
         if residual < tol and self._volumes_met():
             return steps, residual
         self._put_back(coords)
@@ -965,7 +971,8 @@ class Evolver:
         pass averages vertices but doesn't equiangulate, so the coordinates
         taken before it can undo it. Returns the Newton steps kept and the
         residual."""
-        steps = self._newton(newton, seek, tol, undo_if, trace.output) if newton else 0
+        steps, residual = self._newton(newton, seek, tol, undo_if, trace.output) \
+            if newton else (0, self.residual())
         if newton and self._no_hessian:
             # no Newton for this surface: plain gradient rounds instead, settled
             # as with newton=0 (the residual watch, there for Newton, is off)
@@ -976,7 +983,6 @@ class Evolver:
             if budget > 0 and not self.mesh_quality(5.0).angle_min < 1.0:
                 run(lev, budget, tidy, energy_tol=_GRADIENT_ONLY_TOL, sound=True)
             return 0, self.residual()
-        residual = self.residual()
         budget = min(max_iter - trace.level.count(lev), _FALLBACK_STEPS)
         if not (fallback and newton and budget > 0 and np.isfinite(residual)
                 and not residual < tol):
@@ -984,26 +990,29 @@ class Evolver:
         before = self._coords()
         settled = trace.settled
         with self._conj_grad(True):
-            run(lev, budget, tidy, watch=True, average_only=True)
-        more = self._newton(newton, seek, tol, undo_if, trace.output) \
-            if np.isfinite(_core.total_energy()) else 0
-        second = self.residual()
+            run(lev, budget, _FALLBACK_TIDY*tidy, watch=True, average_only=True)
+        more, second = self._newton(newton, seek, tol, undo_if, trace.output) \
+            if np.isfinite(_core.total_energy()) else (0, self.residual())
         if second < tol or not self._put_back(before):   # (not: the topology changed)
             return steps + more, second
         trace.settled = settled             # the pass is undone: as the rounds before it
         return steps, residual
 
     @contextlib.contextmanager
-    def _conj_grad(self, on: bool) -> Iterator[None]:
-        """Conjugate gradients on (or off) for a block; the setting restored after."""
-        before = self.eval("conj_grad") != 0
+    def _toggle(self, name: str, on: bool) -> Iterator[None]:
+        """One of Evolver's toggles on (or off) for a block; restored after."""
+        before = self.eval(name) != 0
         if before != on:
-            self.command(f"conj_grad {'on' if on else 'off'}")
+            self.command(f"{name} {'on' if on else 'off'}")
         try:
             yield
         finally:
             if before != on and _core.surface_valid():
-                self.command(f"conj_grad {'on' if before else 'off'}")
+                self.command(f"{name} {'on' if before else 'off'}")
+
+    def _conj_grad(self, on: bool) -> "contextlib.AbstractContextManager[None]":
+        """Conjugate gradients on (or off) for a block; the setting restored after."""
+        return self._toggle("conj_grad", on)
 
     def _edge_attributes(self) -> List[str]:
         try:
@@ -1118,18 +1127,20 @@ class Evolver:
         if steps < 0:
             raise ValueError("steps must be non-negative")
         with _threads_for_call(threads):
-            return self._newton(steps, seek, tol, undo_if, [])
+            return self._newton(steps, seek, tol, undo_if, [])[0]
 
     def _newton(self, steps: int, seek: Optional[bool], tol: Optional[float],
-                undo_if: Optional[Callable[["Evolver"], bool]], output: List[str]) -> int:
-        """Safeguarded Newton steps; see newton()."""
+                undo_if: Optional[Callable[["Evolver"], bool]],
+                output: List[str]) -> "tuple[int, float]":
+        """Safeguarded Newton steps; see newton(). Returns the steps kept and
+        the residual of the surface as it is left."""
         kept = 0
         res0 = self.residual()
         # the residual doesn't see an unmet volume or quantity target (a new
         # one): restoring it is progress, and its cost an allowed energy rise
         gap0, cost = self._target_gap()
         if tol is not None and res0 < tol and gap0 <= _TARGET_LOST:
-            return 0
+            return 0, res0
         kinds = ["hessian_seek"] if seek is True else ["hessian"] if seek is False \
             else ["hessian", "hessian_seek"]
         self._no_hessian = False
@@ -1165,6 +1176,8 @@ class Evolver:
                     self._put_back(snapshot)
                     continue
                 accepted = True
+                self._inertia = (self._coords(), int(self.eval("eigen_neg")), res0) \
+                    if kind == "hessian" and res0 < _INERTIA_NEAR else None
                 break
             if not accepted:
                 # no step at all: this surface has no Hessian (gap energies,
@@ -1179,7 +1192,18 @@ class Evolver:
                 break
             if not progress:
                 break
-        return kept
+        return kept, res0
+
+    def _inertia_unchanged(self) -> Optional[int]:
+        """The negative eigenvalues the last plain Newton step counted, if it
+        began near equilibrium and the surface is as it left it; else None."""
+        if self._inertia is None:
+            return None
+        coords, negative, _ = self._inertia
+        if coords.stamp != _core.topology_stamp() or not np.array_equal(coords.coords,
+                                                                        self.vertices):
+            return None
+        return negative
 
     def _target_gap(self) -> "tuple[float, float]":
         """How far the fixed body volumes and fixed quantities are from their
@@ -1438,7 +1462,7 @@ class Evolver:
         used[e.ravel()] = True
         # fixed vertices can't approach anything (and often draw a wall, such
         # as a table top lying in the plane of a constraint)
-        moving = used & (self.values("vertex", "fixed") == 0)
+        moving = used & ~m.fixed
         wall_gap, wall = np.inf, None
         nums, attrs, dist, names = self._constraint_gaps()
         # a contact line on one wall may meet another (a corner, or a second
@@ -1478,7 +1502,7 @@ class Evolver:
         if target_gap > _TARGET_LOST:
             issues.append(f"a fixed volume or quantity is off its target ({target_gap:.2g} "
                           "relative)")
-        junctions = self._bad_junctions()
+        junctions = self._bad_junctions(m)
         if junctions:
             issues.append(f"{junctions} {'junction breaks' if junctions == 1 else 'junctions break'} "
                           "Plateau's laws (Evolver's 'o' pops them)")
@@ -1486,7 +1510,7 @@ class Evolver:
                       int(quality.skinny), float(wall_gap), wall, crossed, float(self_gap),
                       junctions, float(target_gap), issues)
 
-    def _bad_junctions(self) -> int:
+    def _bad_junctions(self, m: Optional[Mesh] = None) -> int:
         """Junctions a minimal surface can't have, away from walls, wires and
         fixed elements: in a film, edges where four or more facets meet (not
         fixed, at least one end free) and free vertices whose tangent cone
@@ -1500,15 +1524,19 @@ class Evolver:
         free = ~np.asarray(attached.data, dtype=bool)
         if rep == 1:
             return int(((self.values("vertex", "valence") >= 4) & free).sum())
-        m = self.mesh()
+        m = self.mesh() if m is None else m
         if len(m.edges) == 0:
             return 0
-        valence = self.values("edge", "valence")
-        # along a wire or wall (both ends attached) more films may meet
-        loose = (free[m.edges[:, 0]] | free[m.edges[:, 1]]) & (self.values("edge", "fixed") == 0)
-        bad = int(((valence >= 4) & loose).sum())
+        # (in a torus two edges can join the same two vertices: Evolver counts)
+        valence = self.values("edge", "valence") if _core.symmetry() else _edge_valence(m)
         if not (valence >= 3).any():  # a film without junctions: every vertex is a disc
-            return bad
+            return 0
+        bad = 0
+        if (valence >= 4).any():
+            # along a wire or wall (both ends attached) more films may meet
+            loose = (free[m.edges[:, 0]] | free[m.edges[:, 1]]) \
+                & (self.values("edge", "fixed") == 0)
+            bad = int(((valence >= 4) & loose).sum())
         try:          # the tangent cones 'o' pops (cubes, Kraynik's, ...)
             _, cones = self._call(_core.poppable_vertices)
             return bad + int(cones.data)
@@ -1536,17 +1564,24 @@ class Evolver:
         or below zero numerically; the threshold keeps them from reading as
         instabilities, at the price of noticing a real one slightly past its
         onset.
+
+        ``lowest`` and ``threshold`` are eigenvalues with Evolver's
+        ``linear_metric`` (as its eigenvalue tutorial recommends): those of
+        the continuous surface, which don't shrink as the mesh is refined
+        (the counts are the same either way).
         """
         first = self.eigen_counts(0.0).negative
         if first == 0:
             return Stability(True, 0, np.array([]), 0.0)
-        text = self.command(f"ritz(0, {max(int(nearest), first + 4)})")
-        values = np.array(sorted(float(x) for x in re.findall(
-            r"^\s*\d+\.\s+([-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)\s*$", text, re.MULTILINE)))
-        positive = np.abs(values[values > 0])
-        scale = float(np.median(positive)) if len(positive) else float(np.abs(values).max(initial=1.0))
-        threshold = -0.01*scale
-        negative = self.eigen_counts(threshold).negative
+        with self._toggle("linear_metric", True):
+            text = self.command(f"ritz(0, {max(int(nearest), first + 4)})")
+            values = np.array(sorted(float(x) for x in re.findall(
+                r"^\s*\d+\.\s+([-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)\s*$", text, re.MULTILINE)))
+            positive = np.abs(values[values > 0])
+            scale = float(np.median(positive)) if len(positive) \
+                else float(np.abs(values).max(initial=1.0))
+            threshold = -0.01*scale
+            negative = self.eigen_counts(threshold).negative
         return Stability(negative == 0, negative, values, threshold)
 
     def eigen_counts(self, shift: float = 0.0) -> "EigenCounts":
@@ -2413,11 +2448,17 @@ _COLLAPSED = 0.05              # an edge below this times the median has collaps
 _COLLAPSE_STEPS = 300          # relax(): untidied gradient steps of the last resort
 _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative) is undone
 _STABILITY_NEAR = 100          # relax() checks stability below this many times tol
+# relax() takes stability from the last Newton step's factorization if that
+# step began this close to equilibrium (residual) and counted no negative
+# eigenvalue: a step so small can't carry one across zero (except at the
+# onset of an instability, which the threshold of stability() blurs anyway)
+_INERTIA_NEAR = 1e-4
 # a body volume or quantity this far off its target (relative) is missed: a
 # new target for Newton to meet, or a gradient round gone wrong (vertex
 # averaging alone leaves volumes about 2e-5 off)
 _TARGET_LOST = 1e-4
 _GRADIENT_ONLY_TOL = 1e-9      # energy_tol when no Newton follows
+_FALLBACK_TIDY = 1             # the conjugate-gradient pass averages every this many rounds
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 

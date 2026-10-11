@@ -472,7 +472,7 @@ def test_relax_conjugate_gradient_pass_is_kept_only_if_it_converges(monkeypatch)
 
     def first_fails(self, *args):
         calls.append(1)
-        return 0 if len(calls) == 1 else real(self, *args)
+        return (0, self.residual()) if len(calls) == 1 else real(self, *args)
 
     monkeypatch.setattr(_evolver.Evolver, "_newton", first_fails)
     r = ev.relax(stability=False, pinch=False)
@@ -481,7 +481,7 @@ def test_relax_conjugate_gradient_pass_is_kept_only_if_it_converges(monkeypatch)
 
     # no Newton at all: the pass can't converge, and the surface goes back
     # to where it began
-    monkeypatch.setattr(_evolver.Evolver, "_newton", lambda self, *args: 0)
+    monkeypatch.setattr(_evolver.Evolver, "_newton", lambda self, *args: (0, self.residual()))
     real_put_back = _evolver.Evolver._put_back
     undone = []
 
