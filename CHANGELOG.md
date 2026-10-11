@@ -1,5 +1,88 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- Removed `ev(...)` (use `ev.command(...)`) and `ev.hessian()` (an unguarded Newton
+  step; use `ev.newton()`, or `ev.command("hessian")`).
+- `relax()` no longer takes `cg`, `window`, `energy_tol` or `pinch`: the defaults
+  were the only settings worth having (the conjugate-gradient retry stays, see below).
+- `recipes.continuation(ev, what, values)`: `what` is a parameter or variable name,
+  `ev.body(i)` (its target volume), `ev.quantity(name)` (its target) or a callable;
+  `recipes.body_target()` and `recipes.parameter()` are gone.
+- `stability()` reports `lowest` and `threshold` with Evolver's `linear_metric`
+  (eigenvalues of the continuous surface, which don't shrink as the mesh is refined;
+  the counts are unchanged).
+
+### Faster
+
+- `relax()` against 0.7.1 (2 threads, same energies to 12 digits): linear cube,
+  98k facets 1.60 -> 1.09 s, 393k facets 9.7 -> 7.0 s; Lagrange 2, 98k facets
+  8.3 -> 5.4 s; Lagrange 4, 24k facets about 7 -> 4.2 s. From:
+  - the Lagrange stage's Newton steps stop once the residual is below `tol` (two or
+    three of four or five were in round-off);
+  - the stability check takes the negative-eigenvalue count of the last Newton step's
+    factorization when that step began within a residual of 1e-2 and the surface is
+    as it left it (it matched the full check in all of some 230 relaxes: stress cases,
+    tests, Brakke's samples); otherwise the full check as before;
+  - vertex normals in the plain linear film (the residual, the Hessian setup) from
+    facet normals computed once per facet and the facets around each vertex kept per
+    topology: the residual 3x faster (checked against Evolver's own normals under
+    `PYSE_CHECK_FACET_CACHE`);
+  - no second residual after Newton; `quantities()` skips its recalculation when
+    there are none; `health()` reads flags and valences from the mesh.
+- `restore()` (reading datafiles) about 20% faster: the lexer reads with
+  `getc_unlocked`.
+
+### More robust
+
+- `relax()` equiangulates once after the first gradient step of each phase: a coarse
+  start triangulated badly (Brakke's `cbga1.fe`, a prism of quads split at their
+  centres, whose recipe swaps the edges by hand) used to settle at an energy of 11
+  instead of 5.3, and `relax()` ended degenerate with the volume 49% off; it now
+  converges at every level. Stress suite: same results, fewer steps (case 6: 60 -> 44
+  Newton steps).
+- Tried and dropped: a watch on the scale factor ("a scale factor going to 0 does not
+  mean convergence", Brakke's hints) stopped `relax()` from recognising settled
+  energies (the scale legitimately falls more than 1000-fold within a phase); fewer
+  vertex averagings inside the conjugate-gradient retry rescued no more steps. The
+  retry stays: without it the drainage case is ~30% faster but its median error
+  doubles.
+- Two topology tests (octa's popping, cat's pinch-off) run with one thread: their
+  path varies at round-off with several threads (also in 0.7.1), and so, now and
+  then, the final state.
+
+### New
+
+- `ev.quantity(name)`: a live handle on a named quantity (`value`, `target` settable,
+  `None` frees it, `modulus`, `pressure`, `kind`). `ev.gravity`, `BodyView.density`,
+  `make_datafile(gravity=)`.
+- `ev.saddle()`: steps off a saddle along its unstable mode (Evolver's `saddle`, with
+  the gradient step it needs first); `ev.relax()` from there finds the minimum it
+  leads to. `ev.pop()`: Evolver's `o`, public.
+- `ev.contact_angles(constraint)`: the contact angle at each contact-line vertex, from
+  the facet normals and the constraint's gradient (first order in the edge length).
+- `Mesh.slice(normal, point)`: a cross-section as ordered polylines.
+- Constraints from `pysurfaceevolver.constraints` keep their geometry:
+  `Constraint.to_pyvista()`, and `ev.plot(walls=[...])` / `ev.live_view(walls=[...])`
+  draw them with the surface.
+- Torus models plot each facet whole, unwrapped (they were stretched across the cell).
+- `ev.write()` writes glTF (`.gltf`, `.glb`) and VRML (`.wrl`) scenes through PyVista;
+  PLY files no longer trigger meshio's 64-bit integer warning.
+- `make_datafile` orients a body's faces itself when they close a surface (consistent
+  and outward); otherwise all +1 as before.
+- Eight of Brakke's online examples ship with the samples: `cbga1.fe`, `cbga2.fe` and
+  `bga-1.fe` (solder joints), `pcell.fe`, `dcell.fe`, `IWP.fe` (periodic minimal
+  surfaces), `TwoSpheres.fe` and `TwoSpheres-explicit.fe`, with tests and notebook
+  sections. Stress case 13: Schwarz's P and D surfaces against their standard areas
+  (extrapolated to 1e-6 and 2e-5).
+
+### Docs
+
+- The notebooks use the new API instead of hand-written helpers (contact angles,
+  cross-sections, walls) and raw commands; the tutorial's bodies need no orientation.
+
 ## 0.7.1 (2026-10-11)
 
 The v0.7.0 tag's aarch64 wheels failed to build; 0.7.1 is the first release with

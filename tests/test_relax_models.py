@@ -169,9 +169,10 @@ def test_health_in_the_plane(load):
 def test_relax_pops_junctions_against_plateau(load):
     # octa.fe: a symmetric film with six edges where four films meet; popping
     # them (and deleting the small films that then shrink away) reaches the
-    # energy of Brakke's own recipe (gogo)
+    # energy of Brakke's own recipe (gogo). One thread: topology changes follow
+    # the path, which varies at round-off from run to run with several
     ev = load("octa.fe")
-    r = ev.relax()
+    r = ev.relax(threads=1)
     assert r.converged and r.popped > 0
     assert ev.total_energy == pytest.approx(22.627417, rel=1e-6)
     assert ev.health().junctions == 0
@@ -189,9 +190,10 @@ def test_relax_leaves_a_sound_surface_alone(cube):
 def test_relax_pinches_a_collapsing_neck(load):
     # cat.fe: a catenoid at its fold. The neck collapses during untidied
     # gradient steps, its ring of edges is deleted and the pinched vertex
-    # popped: two discs (the rings are 12-gons after one refinement)
+    # popped: two discs (the rings are 12-gons after one refinement). One
+    # thread, as above
     ev = load("cat.fe")
-    r = ev.relax(levels=1)
+    r = ev.relax(levels=1, threads=1)
     assert r.converged and r.collapsed > 0 and r.popped > 0
     assert ev.total_energy == pytest.approx(13.6603, rel=1e-4)
     assert r.health.ok

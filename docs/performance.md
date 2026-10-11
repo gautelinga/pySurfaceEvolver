@@ -92,5 +92,20 @@ Seconds:
 All converged and were reported stable with a healthy mesh. `relax(stability=False)`
 saves the factorization when the stability isn't needed.
 
+Since then (pySE after 0.7.1) `relax()` stops the Lagrange stage's Newton steps once
+the residual is below `tol` (two or three of four or five steps were in round-off),
+takes the stability check from the last Newton step's own factorization when that
+step began close to equilibrium, and computes vertex normals (the residual, the
+Hessian setup) from facet normals kept per topology. Against 0.7.1, the same
+`relax()` on the same surfaces (2 threads, best of two, the versions alternated,
+identical energies to 12 digits), seconds:
+
+| surface | 0.7.1 | now |
+|---|---|---|
+| cube, linear, 98k facets | 1.60 | 1.09 |
+| cube, linear, 393k facets | 9.7 | 7.0 |
+| cube, Lagrange 2, 98k facets | 8.3 | 5.4 |
+| cube, Lagrange 4, 24k facets | 6.5-7.6 | 4.0-4.4 |
+
 `bench/benchmark.py` in the repository measures pySE alone (`--threads`,
 `--levels`, `--json` to compare runs).

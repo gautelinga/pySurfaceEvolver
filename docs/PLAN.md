@@ -5,7 +5,7 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
-## Resume here (2026-10-11)
+## Resume here (2026-10-12)
 
 0.7.1 released 2026-10-11 (tag v0.7.1; wheels as workflow artifacts). 0.7.0 is tagged
 at fd9783f, whose wheel build failed (fixed in b5216d4: no fused multiply-adds on
@@ -31,12 +31,31 @@ so the instability is real. 341 tests. Case 8 on defaults (2 threads): about 500
 median 0.2%; the worst state is run-dependent (over 10% in about 1/4-1/3 of runs,
 the same before and after this work: 11 old-code runs against ~30 new).
 
+After 0.7.1 (2026-10-11/12, CHANGELOG "Unreleased"; the user asked for speed,
+simplicity and user-friendliness from Brakke's resources, chose all groups, "remove
+outright" for API breaks and "run all phases, report at end"): Lagrange-stage Newton
+stops at tol; stability from the last Newton step's inertia (cutoff 1e-2, ~230
+comparisons, none disagreed); cached vertex normals (vn_* in fastloops.c);
+getc_unlocked lexer; linear_metric in stability(); one early `u` after each phase's
+first step (cbga1.fe; with `V` too it cost case 8 accuracy); API: quantity(), gravity,
+density, pop(), saddle(), contact_angles(), Mesh.slice(), walls in plots, torus
+unwrapping (facet_corners binding), glTF/VRML export, inferred body orientation;
+removed ev(), hessian(), relax's cg/window/energy_tol/pinch, recipes setters. Eight of
+Brakke's online examples vendored (fe/, attributed in THIRD_PARTY_LICENSES.txt); stress
+case 13 (Schwarz P, D). Dropped after measuring: scale-factor watch (breaks settling
+detection), fewer averagings in the CG retry (no gain), removing the CG retry (case 8
+median error doubles), pull-based contact angles (worse than normals), a C speed-up of
+save() (not profiled; only rescue paths use it). Candidates not done: splitting
+`_evolver.py` (2700 lines) into modules; `volconst="auto"`; a BGA notebook on
+parameter optimization (bga-2..12 need their .cmd files).
+
 Open, for the user to pick:
 
+* **Release** 0.8.0 (breaking API changes since 0.7.1).
 * **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing for
-  full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient fallback
-  in `relax()` rescues no test case (Newton converges the 10-degree drop directly) and
-  1 step in 132 tries in case 8; kept, as it costs nothing when converged.
+  full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient retry
+  rescues ~1 step in 130 in case 8 but keeps its median error down; topology tests
+  are path-sensitive at several threads (run with threads=1).
 * **Do not re-propose:** remeshing inside `relax()` for case 8 (researched 2026-10-10).
 * **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
