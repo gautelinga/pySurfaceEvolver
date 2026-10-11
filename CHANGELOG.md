@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.7.1 (2026-10-11)
+
+The v0.7.0 tag's aarch64 wheels failed to build; 0.7.1 is the first release with
+wheels for all platforms, and carries the fixes below.
 
 ### relax() on all of Brakke's samples
 

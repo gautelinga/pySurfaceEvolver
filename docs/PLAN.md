@@ -7,12 +7,11 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 
 ## Resume here (2026-10-11)
 
-0.7.0 is tagged at fd9783f, whose wheel build failed (fixed in b5216d4: no fused
-multiply-adds on aarch64, render probe in a subprocess). The user chose "release later":
-the next release (0.7.1 or 0.8.0) carries everything since; the tag stays. Main is
-pushed; CI green.
+0.7.1 released 2026-10-11 (tag v0.7.1; wheels as workflow artifacts). 0.7.0 is tagged
+at fd9783f, whose wheel build failed (fixed in b5216d4: no fused multiply-adds on
+aarch64, render probe in a subprocess); its tag stays.
 
-Done since 0.7.0 (CHANGELOG "Unreleased"): stress-case figures
+In 0.7.1 (CHANGELOG): stress-case figures
 (`bench/stress/figures.py`); `relax()` and `health()` on all 25 Brakke samples (strings,
 simplex, no-Hessian fallback, 10% Newton energy cap, topology stamp for undo, elastic
 and crystalline energies keep the mesh, Plateau junctions popped by default, a guarded
@@ -34,7 +33,6 @@ the same before and after this work: 11 old-code runs against ~30 new).
 
 Open, for the user to pick:
 
-* **Release** 0.7.1/0.8.0 (the user said "release later").
 * **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing for
   full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient fallback
   in `relax()` rescues no test case (Newton converges the 10-degree drop directly) and
