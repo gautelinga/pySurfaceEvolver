@@ -901,7 +901,7 @@ class Evolver:
         with warnings.catch_warnings():     # an attempt; far from equilibrium the
             warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)  # Hessian is indefinite
             steps, residual = self._newton(newton, seek, tol, undo_if, trace.output)
-        if residual < tol and self._volumes_met():
+        if residual < tol and self._target_gap()[0] <= _TARGET_LOST:
             return steps, residual
         self._put_back(coords)
         _newton_first_failed = True
@@ -972,14 +972,6 @@ class Evolver:
         if self._tidy_kinds()[0]:
             self.command("u")
         return self.counts["vertices"] - before
-
-    def _volumes_met(self, rel: float = 1e-6) -> bool:
-        """Whether every body with a fixed volume is at its target."""
-        b = self.bodies()
-        if not len(b.ids):
-            return True
-        off = np.abs(b.volume - b.target)[b.fixed]
-        return bool((off <= rel*np.maximum(np.abs(b.target[b.fixed]), 1e-300)).all())
 
     def _finish(self, trace: "_Trace", lev: int, run: Callable[..., None], max_iter: int,
                 tidy: int, tol: float, newton: int, seek: Optional[bool],
