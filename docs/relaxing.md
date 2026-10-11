@@ -16,7 +16,7 @@ things to check. `ev.relax(levels=3)` refines and relaxes three times more.
 
 This page explains what `relax()` does, how to read its result, what to do about mesh
 resolution, and where the defaults stop working. The numbers come from the stress
-suite in `bench/stress/` (nine hard cases with exact or axisymmetric references, all
+suite in `bench/stress/` (ten hard cases with exact or axisymmetric references, all
 run with default settings) and are from October 2026.
 
 ## What `relax()` does
@@ -141,11 +141,12 @@ first damaged one of the others. The one who knows the geometry picks `h`.
 
 ## Where the defaults stop working
 
-Of the nine stress cases, seven pass with defaults alone: a liquid column past
+Of the ten stress cases, eight pass with defaults alone: a liquid column past
 Rayleigh-Plateau (the instability shows at 1.8% past its onset), a catenoid up to its
 fold, a liquid bridge with the gap closing to 1e-3, a barrel drop on a fibre (its
 roll-up reported as an instability), a cube inflated a hundredfold, a gravity puddle,
-and a drop shrinking to 1e-4 of its volume. Two don't:
+a drop shrinking to 1e-4 of its volume, and Schwarz's P and D surfaces in quotient
+spaces (to 1e-6 and 2e-5 when extrapolated). Two don't:
 
 * **A drop at 170 degrees** on a coarse starting mesh (480 facets): the implied contact
   angle is 1.7 degrees off (the case allows 1.5; up to 160 degrees it passes). More

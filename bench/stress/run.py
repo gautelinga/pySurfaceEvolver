@@ -8,7 +8,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import Result
 
 CASES = ["case01_cylinder", "case02_catenoid", "case03_sessile", "case05_bridge",
-         "case06_fibre", "case08_band", "case09_inflate", "case11_puddle", "case12_shrink"]
+         "case06_fibre", "case08_band", "case09_inflate", "case11_puddle", "case12_shrink",
+         "case13_periodic"]
 
 
 def main(argv):

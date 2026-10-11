@@ -1,6 +1,6 @@
 # Stress cases
 
-Eight hard problems with exact or axisymmetric references, each run with `relax()`'s
+Nine hard problems with exact or axisymmetric references, each run with `relax()`'s
 defaults: contact lines that travel far, surfaces that grow or shrink a
 hundredfold, wires, instabilities, gravity. They are the stress suite in
 `bench/stress/` condensed into examples (`python bench/stress/run.py` runs the full
@@ -475,3 +475,37 @@ Left, the contact radius against the exact cap over four decades of volume; the 
 
 The cap at the start, at 1e-2 and at 1e-4 of its volume, each to its own scale.
 ```
+
+## Schwarz's P and D surfaces
+
+Two triply periodic minimal surfaces from Brakke's online collection (included with
+pySE): a fundamental region of each in a quotient space, where a symmetry group, not
+a periodic box, generates the rest. Refined five times with a default `relax()` after
+each refinement; the reference is each surface's area per cubic unit cell, A/V^(2/3),
+2.3451 (P) and 3.8377 (D), the standard values.
+
+```python
+import pysurfaceevolver as pyse
+
+# fundamental regions of Schwarz's P and D surfaces, from Brakke's online
+# collection; 12 times their area is the area per cubic unit cell, A/V^(2/3)
+for name, label, reference in (("pcell.fe", "P", 2.3451), ("dcell.fe", "D", 3.8377)):
+    ev = pyse.Evolver(name)
+    ev.relax()
+    areas = []
+    for level in range(1, 6):
+        ev.refine()
+        ev.relax()
+        areas.append(12*ev.total_energy)
+    extrapolated = (4*areas[-1] - areas[-2])/3      # second order: error / 4 per level
+    print(f"{label}: {areas[-1]:.6f} after 5 refinements, extrapolated {extrapolated:.6f}, "
+          f"reference {reference}")
+```
+
+```text
+P: 2.345166 after 5 refinements, extrapolated 2.345102, reference 2.3451
+D: 3.838111 after 5 refinements, extrapolated 3.837785, reference 3.8377
+```
+
+The error falls fourfold per refinement (second order in the edge length), and the
+extrapolated areas agree with the standard values to their last digit.
