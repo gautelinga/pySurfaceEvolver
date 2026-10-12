@@ -39,11 +39,14 @@ def test_relax_without_hessian_runs_gradient_rounds(load):
 def test_relax_without_hessian_keeps_a_degenerate_mesh_from_sliding(load):
     # from 8 facets refined once, tankex's facets degenerate; plain gradient
     # rounds then slid to energy 0.03, and the last tidying lost 40% of the
-    # volume without a word
+    # volume without a word. Where it stops now is path-dependent (0.7.x stop
+    # anywhere in 1.29-1.78 depending on the thread count): the 24-vertex mesh
+    # cannot settle against the curved wall, and relax() says so
     ev = load("tankex.fe")
     r = ev.relax(levels=1)
-    assert ev.total_energy > 1.5           # the finer mesh's 1.50 is the floor
+    assert ev.total_energy > 1.0           # not the slide (0.03); level 2 gives 1.50
     assert r.health.target_gap < 1e-4
+    assert not r.converged and not r.health.ok
 
 
 def test_newton_meets_a_new_volume_target(cube):
