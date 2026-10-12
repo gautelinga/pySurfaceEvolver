@@ -37,7 +37,10 @@ of datafiles, `bga-1.fe` to `bga-10.fe` and `bga-30.fe`, shipped with pySE
 cgs: lengths in cm, the solder's surface tension 480 erg/cm², forces in dynes.
 
 This notebook follows the series with `relax()`, `derivative()` (forces),
-optimizing parameters (`ev.parameters.optimize`) and `recipes.continuation`."""),
+optimizing parameters (`ev.parameters.optimize`) and `recipes.continuation`. It loads
+Brakke's datafiles as they are, where the [liquid bridge](liquid_bridge.ipynb) builds
+its surface from arrays; it assumes [Getting started](getting_started.md) and
+[Relaxing a surface](relaxing.md)."""),
     code("""
 import warnings
 import numpy as np
@@ -210,7 +213,14 @@ print({k: round(ev.parameters[k], 6) for k in sorted(ev.parameters.optimizing)})
 `bga-10.fe` tilts the upper pad as well (a fixed tilt and 2D offset); the same tools
 apply. Brakke's `bga-11.fe` and `bga-12.fe` free the tilt too, and `bga-31.fe` adds
 contact angles to the axisymmetric model; in Evolver 2.70 they run away even with his
-own recipes, so they are not included."""),
+own recipes, so they are not included.
+
+## Next
+
+The [slit droplet](slit_droplet.ipynb) builds a liquid against several walls and mirror
+planes from arrays, and closes it face by face for a volume mesh. More of Brakke's
+solder files (`column.fe`, `cbga1.fe`, `cbga2.fe`) are in
+[Brakke's samples: drops and capillarity](brakke_capillarity.ipynb)."""),
 ]
 
 nb = nbf.v4.new_notebook()

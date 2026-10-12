@@ -29,7 +29,10 @@ shows the energy each ends with, the residual (how far from equilibrium, see
 reports: converged, stable, and any health issues. A lower energy on the same mesh
 is not always the better answer: a coarse mesh can lower its energy in ways the
 smooth surface can't, so where an exact value is known, the error against it is
-the measure. Times are from the documentation build and vary."""
+the measure. Times are from the documentation build and vary.
+
+This gallery assumes [Getting started](getting_started.md) and
+[Relaxing a surface](relaxing.md); its pages can be read in any order."""
 
 
 def md(text):
@@ -40,11 +43,13 @@ def code(text):
     return nbf.v4.new_code_cell(text.strip("\n"))
 
 
-def notebook(name, title, intro, cells):
+def notebook(name, title, intro, cells, after):
+    """``after``: the closing cell's text, where to go next."""
     nb = nbf.v4.new_notebook()
     nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3",
                                  "language": "python"}
-    nb.cells = [md(f"# {title}\n\n{intro}\n\n{INTRO_COMMON}"), code(SETUP)] + cells
+    nb.cells = [md(f"# {title}\n\n{intro}\n\n{INTRO_COMMON}"), code(SETUP)] + cells \
+        + [md(f"## Next\n\n{after.strip()}")]
     for i, cell in enumerate(nb.cells):
         cell.id = f"{name}-{i}"
     nbf.write(nb, f"{DOCS}/{name}.ipynb")
@@ -178,7 +183,10 @@ quotient space (a symmetry group generates the rest)."""),
 `relax()` agrees with the recipes of P and D to about 1e-5. On I-WP the recipe
 refines the edges along the boundary once more and stops unconverged, so the two
 end on different meshes."""),
-])
+], after="""
+Drops against walls, gravity and solder: [Brakke's samples: drops and
+capillarity](brakke_capillarity.ipynb). The [tutorial](tutorial.ipynb) builds a double
+bubble from arrays instead of a datafile.""")
 
 # ---- 2. drops and capillarity --------------------------------------------------------
 
@@ -276,7 +284,12 @@ print(f"saddle() lowers the energy by {ev.saddle():.4f}")
 r = ev.relax()
 print(f"leaning:   energy {ev.total_energy:.6f}, stable: {r.stable}")
 ev.plot(color="sandybrown", show_edges=False, smooth_shading=True)'''),
-])
+], after="""
+Energies other than surface tension: [Brakke's samples: crystals and elastic
+membranes](brakke_crystals_membranes.ipynb). The same physics built from arrays, with
+`pyse.constraints` writing the contact-angle integrals: the
+[liquid bridge](liquid_bridge.ipynb) and the [slit droplet](slit_droplet.ipynb).
+Brakke's ball grid array series in full: [solder joints](solder_joints.ipynb).""")
 
 # ---- 3. crystals and elastic membranes ---------------------------------------------
 
@@ -351,7 +364,9 @@ ev.command("set vertex[2] x 1.5")
 print("stretched:  ", ev.total_energy)
 r = ev.relax()
 print("relaxed:    ", ev.total_energy, r)'''),
-])
+], after="""
+Strings, metrics and four dimensions: [Brakke's samples: strings, metrics and other
+dimensions](brakke_strings.ipynb).""")
 
 # ---- 4. strings, metrics and higher dimensions -------------------------------------
 
@@ -420,7 +435,9 @@ bodies there (outside the Lagrange model), so `relax()` takes gradient steps onl
 there is nothing to draw in three dimensions."""),
     code('''print(bh.recipe("simplex3.fe"))
 runs = bh.compare("simplex3.fe")'''),
-])
+], after="""
+Curved elements: [Brakke's samples: quadratic and Lagrange
+elements](brakke_lagrange.ipynb).""")
 
 # ---- 5. quadratic and Lagrange elements --------------------------------------------
 
@@ -488,5 +505,8 @@ catman = [bh.run_recipe("catman.fe", "gogo3", label="recipe: gogo3"),
           ladder("catman.fe", (2, 4, 6, 8))]
 bh.table(catman, reference=exact)
 bh.show(catman)'''),
-])
+], after="""
+The [tutorial](tutorial.ipynb) uses the same Lagrange ladder as a final stage for a
+double bubble built from arrays, and [Performance](performance.md) times it on large
+surfaces. The [API reference](api.md) documents `set_model` and `relax`.""")
 print(f"written to {os.path.normpath(DOCS)}")
