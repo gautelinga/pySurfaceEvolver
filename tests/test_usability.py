@@ -214,4 +214,4 @@ def test_a_solid_inside_the_only_body_closes_its_volume():
     rim = shapes.cap(1.0, 0.6).rims["rim"]
     text = pyse.make_datafile(v, f, constraints={1: C.plane((0, 0, 1), 0.0, 60), 2: ball},
                               vertex_constraints={1: rim}, bodies=[pyse.Body(volume=1)])
-    assert f"volconst {ball.volconst!r}" in text
+    assert f"volconst {float(ball.volconst)!r}" in text
