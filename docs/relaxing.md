@@ -143,19 +143,15 @@ first damaged one of the others. The one who knows the geometry picks `h`.
 
 ## Where the defaults stop working
 
-Of the fourteen stress cases, twelve pass with defaults alone: a liquid column past
+Of the fourteen stress cases, thirteen pass with defaults alone: a liquid column past
 Rayleigh-Plateau (the instability shows at 1.8% past its onset), a catenoid up to its
-fold, a liquid bridge with the gap closing to 1e-3, a barrel drop on a fibre (its
+fold, a sessile drop from 10 to 170 degrees, a liquid bridge with the gap closing to 1e-3, a barrel drop on a fibre (its
 roll-up reported as an instability), a cube inflated a hundredfold, a gravity puddle,
 a drop shrinking to 1e-4 of its volume, Schwarz's P and D surfaces in quotient
 spaces (to 1e-6 and 2e-5 when extrapolated), a drop on a sphere from 20 to 150
 degrees, a double bubble, a solder joint's force (to 5e-5 against an axisymmetric
-model, extrapolated) and a catenoid between round wires stopped at its fold. Two
-don't:
-
-* **A drop at 170 degrees** on a coarse starting mesh (480 facets): the implied contact
-  angle is 1.7 degrees off (the case allows 1.5; up to 160 degrees it passes). More
-  resolution helps.
+model, extrapolated) and a catenoid between round wires stopped at its fold. One
+doesn't:
 * **The drainage band** ({doc}`slit_drainage`) on plain defaults: band pressures
   up to several percent off (median 0.3%). With `ev.remesh(target=h)` each step, as in the notebook, they
   agree with a finer reference to 0.02% (median). Without it the mesh breaks down at
@@ -165,6 +161,12 @@ don't:
   the pressure is within a few percent.
 
 Other things to know:
+
+* **Relax before you refine.** Every refinement multiplies the gradient steps a shape
+  change takes: `cube.fe` refined five times and then relaxed takes 10 s and doesn't
+  converge, while `relax(levels=5)` (a relax after each refinement) converges in 0.4 s
+  to the same energy. `relax()` warns when the surface was refined four or more times
+  since it last converged.
 
 * **Saddles.** `relax()` converges to saddles as readily as to minima. Check
   `r.stable`, or watch for `UnstableEquilibriumWarning`.

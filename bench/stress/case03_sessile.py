@@ -4,7 +4,8 @@ and up to 170 degrees at fixed volume. Reference: the exact spherical cap.
 Checked: the energy (to 1%), the contact angle implied by the contact radius
 at this volume (to 1.5 degrees), and that every relax() converged. (The
 contact radius itself is no fair measure at extreme angles: near 170 degrees
-a 1-degree error moves it by 12%.)"""
+a 1-degree error moves it by 12%.) Failed at 170 degrees (1.7 off) until
+relax() split long contact-line spokes repeatedly; now 1.3 off."""
 
 import numpy as np
 import pysurfaceevolver as pyse

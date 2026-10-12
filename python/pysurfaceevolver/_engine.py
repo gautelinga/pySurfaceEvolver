@@ -92,6 +92,7 @@ class _SurfaceMemory:
         self.collapse_failures = 0          # relax(): failed last-resort attempts in a row
         self.collapse_skip = 0              # relax(): calls still to skip before the next attempt
         self.walls: Dict[object, object] = {}   # load_arrays(): constraints with a shape
+        self.unrelaxed_refines = 0          # refine() calls since relax() last converged
 
 
 surface = _SurfaceMemory()
@@ -333,6 +334,7 @@ class _Engine:
             raise ValueError("times must be non-negative")
         for _ in range(times):
             self.command("r")
+            surface.unrelaxed_refines += 1
 
     def equiangulate(self) -> None:
         """Flip edges to improve triangle shapes (Evolver's ``u``)."""

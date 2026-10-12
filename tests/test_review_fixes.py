@@ -236,3 +236,20 @@ def test_popping_a_fixed_edge_between_free_facets_ends(run_python):
         print(ev.command("o").split()[-1], ev.check())
     """, timeout=60)
     assert out.returncode == 0 and out.stdout.strip().endswith("0 []")
+
+
+def test_relax_warns_about_a_surface_refined_before_it_was_relaxed(load):
+    # refined five times unrelaxed, a cube takes 25 times longer and doesn't
+    # converge; relax(levels=n) relaxes after each refinement
+    ev = load("cube.fe")
+    ev.refine(4)
+    with pytest.warns(pyse.EvolverWarning, match="refined 4 times since it last converged"):
+        ev.relax(max_iter=20, stability=False)
+    ev = load("cube.fe")
+    ev.refine(2)
+    ev.relax(stability=False)
+    ev.refine(2)                                 # counted from the last convergence
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pyse.EvolverWarning)
+        ev.relax(stability=False)
+        load("cube.fe").relax(levels=4, stability=False)

@@ -34,6 +34,7 @@ _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative
 _NEWTON_RESIDUAL_RISE = 1.1    # ... and one raising both the energy and the residual by this factor
 _NEWTON_PROGRESS = 0.9         # Newton goes on while each step cuts the residual below this factor
 _TARGET_HALFWAY = 0.5          # ... or brings an unmet target this much closer
+_UNRELAXED_REFINES = 4         # relax() warns from this many refinements since it last converged
 _NO_FREEDOM = (3004, 3005)      # Evolver: fewer degrees of freedom than constraints
 _TRIAL_KEEP = 0.01             # ... and a Newton trial there is kept below this fraction of the residual
 _SLOW_ROUND = 0.95             # a round leaving the residual above this fraction of the last's is slow
@@ -51,6 +52,7 @@ _INERTIA_NEAR = 1e-2
 _ENERGY_TOL = 1e-5             # relax(): gradient rounds settle at this relative change...
 _WINDOW = 3                    # ... over this many rounds
 _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
+_CONTACT_SPLITS = 3            # relax(): splits of long contact-line spokes, at most
 _CONTACT_PASSES = 2           # relax(): relaxes after splitting long contact-line spokes, at most
 _ROUND_BLOWUP = 2             # a gradient round more than doubling the residual or a target gap is undone
 _TURN = 15.0                  # adapt(): default turning angle (degrees) across an edge
@@ -244,6 +246,15 @@ class _Relaxing(_Analysis):
         if tidy < 0 or levels < 0 or newton < 0:
             raise ValueError("tidy, levels and newton must be non-negative")
         self._inertia = None                # only this call's Newton steps count
+        refined = surface.unrelaxed_refines
+        if refined >= _UNRELAXED_REFINES:
+            warnings.warn(
+                f"relax(): the surface was refined {refined} times since it last converged; "
+                "relaxing it this fine is slow and may not converge (every refinement "
+                "multiplies the gradient steps a shape change takes). relax(levels=n) from "
+                "the coarser surface relaxes after each refinement instead (on cube.fe five "
+                "refinements: 0.4 s converged, against 10 s unconverged).",
+                EvolverWarning, stacklevel=3)
         with _threads_for_call(threads), self._conj_grad(False), \
                 self._mesh_kept(keep_mesh):
             run = _Run(self, tol=tol, max_iter=max_iter, tidy=tidy, newton=newton, seek=seek,
@@ -318,6 +329,9 @@ class _Relaxing(_Analysis):
             except EvolverError:
                 health = None
             settled = trace.settled and not residual < tol
+        # (refinements this call made were relaxed after; a converged surface
+        # starts the count over)
+        surface.unrelaxed_refines = 0 if residual < tol else refined
         return IterationResult(np.array(trace.energy), np.array(trace.area),
                                np.array(trace.scale), "".join(trace.output),
                                bool(residual < tol or (crystalline and settled)), steps,
@@ -937,19 +951,25 @@ class _Run:
         ends up smaller than the facets next to it. Returns the Newton steps
         and the residual."""
         ev = self.ev
-        mark = _long_spokes(ev.mesh(), _SPOKE_RATIO)
-        if not mark.any():
-            return 0, residual
-        before = ev.save()
-        ev._split_marked(mark)
-        steps = 0
-        for _ in range(_CONTACT_PASSES):
-            more, second = self.level(lev)
-            steps += more
-            if second < self.tol:
-                return steps, second
-        ev.restore(before)
-        return 0, residual
+        total = 0
+        for _ in range(_CONTACT_SPLITS):    # (until no spoke is long, each kept if it converges)
+            mark = _long_spokes(ev.mesh(), _SPOKE_RATIO)
+            if not mark.any():
+                break
+            before = ev.save()
+            ev._split_marked(mark)
+            steps, converged = 0, False
+            for _ in range(_CONTACT_PASSES):
+                more, second = self.level(lev)
+                steps += more
+                if second < self.tol:
+                    converged = True
+                    break
+            if not converged:
+                ev.restore(before)
+                break
+            total, residual = total + steps, second
+        return total, residual
 
     def collapse(self, levels: int) -> "tuple[int, float, int, int] | None":
         """relax()'s last resort for an unconverged surface: gradient steps

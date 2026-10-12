@@ -161,7 +161,7 @@ A drop (no gravity) whose contact angle is stepped from 90 to 170 degrees at fix
 volume: the drop rolls up into nearly a sphere on a small contact disk. Reference: the
 exact spherical cap. The contact circle shrinks below the size of the facets next to
 it; after converging, `relax()` splits the long edges leaving the contact line and
-relaxes again (the facet count grows near the rim).
+relaxes again, while some are long (the facet count grows near the rim).
 
 ```python
 import numpy as np
@@ -192,18 +192,20 @@ theta 130.0: energy error 0.25%, contact radius 0.6351 (exact 0.6261), 608 facet
 theta 140.0: energy error 0.22%, contact radius 0.5258 (exact 0.5168), 736 facets
 theta 150.0: energy error 0.20%, contact radius 0.4088 (exact 0.3986), 864 facets
 theta 160.0: energy error 0.18%, contact radius 0.2834 (exact 0.2717), 992 facets
-theta 170.0: energy error 0.17%, contact radius 0.1609 (exact 0.1378), 1120 facets
+theta 170.0: energy error 0.17%, contact radius 0.1550 (exact 0.1378), 1376 facets
 ```
 
-Energies within 0.25%. At 170 degrees the contact disk (radius 0.14) is resolved by a
-coarse ring and the radius is 17% off: the implied contact angle is 1.7 degrees off.
-Start from a finer mesh for such angles.
+Energies within 0.25%. At 170 degrees the contact disk (radius 0.14) is small next to
+the facets around it: `relax()` splits the long edges leaving the contact line, up to
+three times per call while some are long, and the implied contact angle is 1.3
+degrees off (the radius 12% off). A finer start does better: one refinement more
+brings it within 0.3 degrees.
 
 ```{figure} _static/stress/case03.png
 :alt: Case 3: result, error and solver steps
 :width: 100%
 
-Left, the contact radius against the exact cap (log scale) and the error of the implied contact angle (limit 1.5 degrees: only 170 fails) and of the energy; the first bar of each sweep includes the first relaxation. Middle, the error against the reference. Right, what relax() did at each step.
+Left, the contact radius against the exact cap (log scale) and the error of the implied contact angle (limit 1.5 degrees) and of the energy; the first bar of each sweep includes the first relaxation. Middle, the error against the reference. Right, what relax() did at each step.
 ```
 
 ```{figure} _static/stress/case03_shapes.png
@@ -305,9 +307,9 @@ for step in recipes.continuation(ev, "theta", np.arange(20.0, 81, 10)):
 ```
 
 ```text
-theta   20: energy 5.8216 (barrel 5.8114), stable True
+theta   20: energy 5.8215 (barrel 5.8114), stable True
 theta   30: energy 6.0292 (barrel 6.0202), stable True
-theta   40: energy 6.2922 (barrel 6.2842), stable True
+theta   40: energy 6.2921 (barrel 6.2842), stable True
 theta   50: energy 6.5938 (barrel 6.5870), stable True
 theta   60: energy 6.9187 (barrel 6.9130), stable True
 theta   70: energy 7.2530 (barrel 7.2483), stable False
