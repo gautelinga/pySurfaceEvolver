@@ -237,7 +237,12 @@ quantities_only:
   }
 
   if ( gen_quant_count )
-     web.total_energy += calc_quants(Q_ENERGY);
+  { if ( fused_energy_ready() )
+       web.total_energy += fused_energy_take();
+    else
+       web.total_energy += calc_quants(Q_ENERGY);
+  }
+  content_energy_ready = 0;
 
   /* finalize web.total_area */
   for ( i = 0 ; i < MAXADDENDS ; i++ )
@@ -269,6 +274,26 @@ void calc_force()
 
 /****************************************************************
 *
+*  Function: zero_vertex_forces()
+*
+*  Purpose: zero the vertex forces (and valences) before they are summed
+*/
+
+void zero_vertex_forces(void)
+{ vertex_id v_id;
+  int i;
+
+  /* zero out vertex cumulative quantities */
+  if ( !fl_zero_forces() )  /* parallel version, fastloops.c */
+  MFOR_ALL_VERTICES(v_id)
+  { REAL *f = get_force(v_id);
+    for ( i = 0 ; i < SDIM ; i ++ ) f[i] = 0.0;
+    set_vertex_valence(v_id,0);
+  }
+}
+
+/****************************************************************
+*
 *  Function: calc_force()
 *
 *  Purpose: calculates net force at triangulation vertices due
@@ -284,13 +309,16 @@ void local_calc_force()
   int i;
   fl_sel sel;
 
-  /* zero out vertex cumulative quantities */
-  if ( !fl_zero_forces() )  /* parallel version, fastloops.c */
-  MFOR_ALL_VERTICES(v_id)
-  { REAL *f = get_force(v_id);
-    for ( i = 0 ; i < SDIM ; i ++ ) f[i] = 0.0;           
-    set_vertex_valence(v_id,0);
+  /* forces zeroed and the quantity gradients done in calc_volgrads()'s
+     pass over the elements (see calc_all_grads()) */
+  if ( grads_merged_energy && quantities_only_flag && !min_square_grad_flag
+       && (optparamcount == 0) )
+  { grads_merged_energy = 0;
+    return;
   }
+  grads_merged_energy = 0;
+
+  zero_vertex_forces();
 
   if ( min_square_grad_flag ) { square_grad_forces(); return; }
   if ( quantities_only_flag ) goto grad_quantities_only;
@@ -747,6 +775,107 @@ REAL calc_content (
 
 /*************************************************************
 *
+*  Function: calc_content_and_energy()
+*
+*  Purpose: calc_content(Q_FIXED) that, when move_vertices() asks for it
+*           (content_fuse_energy), also evaluates the energy quantities in
+*           the same pass over the elements: project_all()'s last content
+*           pass is at the coordinates move_vertices()'s calc_energy() then
+*           evaluates. The energy and its area are kept for
+*           local_calc_energy(), which takes them while content_energy_ready
+*           is set (project_all() clears it when it moves vertices again).
+*           Only with named quantities only, where the quantities are all of
+*           the energy.
+*
+*  Return value: as calc_content()
+*/
+
+static int content_extra_mode;  /* quantities local_calc_content() adds */
+static REAL fused_energy;       /* the energy quantities' total */
+static REAL fused_area_addends[MAXADDENDS];  /* and their area */
+
+REAL calc_content_and_energy(void)
+{ REAL diff;
+  REAL saved_area[MAXADDENDS];
+  int i,k;
+
+  content_energy_ready = 0;
+#ifndef MPI_EVOLVER
+  if ( !content_fuse_energy || !quantities_only_flag || !gen_quant_count
+        || web.torus_flag || web.torus_period || min_square_grad_flag
+        || (compound_quant_list_head >= 0) || calc_quant_flag )
+#endif
+    return calc_content(Q_FIXED);
+
+  /* the default area and length instances add to the total area: none may
+     belong to a fixed quantity (calc_quants(Q_ENERGY) wouldn't run it) */
+  for ( k = LOW_INST ; k < meth_inst_count ; k++ )
+  { struct method_instance *mi = METH_INSTANCE(k);
+    int j;
+    if ( (mi->flags & (Q_DELETED|BODY_INSTANCE)) || !(mi->flags & DEFAULT_INSTANCE) )
+      continue;
+    for ( j = 0 ; j < MMAXQUANTS ; j++ )
+      if ( (mi->quants[j] >= 0) && (GEN_QUANT(mi->quants[j])->flags & Q_FIXED) )
+        return calc_content(Q_FIXED);
+  }
+
+  /* keep their area apart */
+  for ( i = 0 ; i < MAXADDENDS ; i++ )
+  { saved_area[i] = web.total_area_addends[i];
+    web.total_area_addends[i] = 0.0;
+  }
+  content_extra_mode = Q_ENERGY;
+  diff = calc_content(Q_FIXED);
+  content_extra_mode = 0;
+  fused_energy = 0.0;
+  for ( k = 0 ; k < gen_quant_count ; k++ )  /* as calc_quants() */
+  { struct gen_quant *q = GEN_QUANT(k);
+    if ( q->flags & Q_ENERGY )
+      fused_energy += q->value;
+  }
+  for ( i = 0 ; i < MAXADDENDS ; i++ )
+  { fused_area_addends[i] = web.total_area_addends[i];
+    web.total_area_addends[i] = saved_area[i];
+  }
+  content_energy_ready = 1;
+  return diff;
+} // end calc_content_and_energy()
+
+/* whether local_calc_energy() can take calc_content_and_energy()'s energy:
+   nothing else has added to the total area */
+int fused_energy_ready(void)
+{ int i;
+  if ( !content_energy_ready || !quantities_only_flag ) return 0;
+  for ( i = 0 ; i < MAXADDENDS ; i++ )
+    if ( web.total_area_addends[i] != 0.0 ) return 0;
+  return 1;
+}
+
+/* calc_content_and_energy()'s energy and area, as calc_quants(Q_ENERGY)
+   would give them now */
+REAL fused_energy_take(void)
+{ int i,j,k;
+  for ( i = 0 ; i < MAXADDENDS ; i++ )
+    web.total_area_addends[i] = fused_area_addends[i];
+  for ( k = 0 ; k < gen_quant_count ; k++ )
+  { struct gen_quant *q = GEN_QUANT(k);
+    if ( q->flags & Q_DELETED ) continue;
+    if ( q->flags & Q_ENERGY )
+      q->timestamp = global_timestamp;
+  }
+  for ( k = LOW_INST ; k < meth_inst_count ; k++ )
+  { struct method_instance *mi = METH_INSTANCE(k);
+    if ( mi->flags & Q_DELETED ) continue;
+    for ( j = 0 ; j < MMAXQUANTS ; j++ )
+      if ( (mi->quants[j] >= 0) && (GEN_QUANT(mi->quants[j])->flags & Q_ENERGY) )
+        mi->timestamp = global_timestamp;
+  }
+  content_energy_ready = 0;
+  return fused_energy;
+}
+
+/*************************************************************
+*
 *  Function: local_calc_content()
 *
 *  Purpose: calculates body volumes  on local piece of surface.
@@ -772,7 +901,7 @@ void  local_calc_content (
   }
 
   if ( gen_quant_count )
-     calc_quants(mode);
+     calc_quants(mode|content_extra_mode);
 
   if ( quantities_only_flag ) return;
   if ( web.bodycount == 0 ) return;

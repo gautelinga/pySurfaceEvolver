@@ -129,8 +129,18 @@ digits), milliseconds per operation and seconds per `relax()`:
 | cube, Lagrange 4, 24k facets | residual | 195 | 129 |
 | | `relax()` | 5.1 | 4.8 |
 
-Tried and not kept: fewer evaluation passes in the Lagrange gradient step (the safe
-part is worth about 5%; the rest reorders Evolver's core), MUMPS's PORD ordering (its
+Then the gradient step with named quantities only (the Lagrange model,
+`convert_to_quantities`) makes 9 passes over the elements instead of 14: the energy
+gradients come with the volume gradients, and each line-search move evaluates the
+energy in its last volume projection pass (bit-identical results). Against the
+above (2 threads, best of three interleaved rounds, loaded machine): Lagrange 2,
+98k facets, `g 1` 330 -> 292 ms, `g 5` 1.53 -> 1.38 s; Lagrange 4, 24k facets,
+`g 1` 218 -> 196 ms, `g 5` 0.98 -> 0.92 s (instructions 17% fewer; `relax()`, with
+its five gradient steps, 3-5% faster). Merging the linear model's facet volume and
+energy loops the same way was slower (the fused loop cost more than the two) and
+was dropped.
+
+Tried and not kept: MUMPS's PORD ordering (its
 analysis costs more than it saves; METIS isn't built), storage reordering along a
 space-filling curve (gradient steps 2x slower).
 
