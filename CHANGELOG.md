@@ -1,5 +1,88 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- The 0.7.2 test of `relax()` on `tankex.fe` at one refinement level asserted a
+  stopping energy that depends on the thread count (0.7.1 failed it too, on one
+  thread); it now asserts what is guaranteed: no slide, volume met, failure
+  reported. The 0.7.2 wheels for x86 and the source distribution did not build
+  because of it.
+
+### Breaking changes
+
+- `ev["name"] = value` assigns only parameters and variables that exist (a typo
+  raised nothing and created a new variable); `ev.define(name, value)` makes a new
+  one. `continuation()` with a misspelt name raises `KeyError` with suggestions.
+- `Body(volume=..., faces=None, ...)`: `volume` comes first, and `faces` defaults to
+  all faces. `volconst` defaults to the sum of `Constraint.volconst` over the walls
+  from `pysurfaceevolver.constraints` that the body touches (explicit values win).
+- Vertices on a `boundaries=` curve are fixed (free, they bunch up along the wire).
+- `continuation()`'s `Step.energy` is `Evolver.energy` (with the walls' constants).
+
+### Fewer silent mistakes
+
+- A body whose faces point into it (negative starting volume against a positive
+  target) warns when it loads; it used to turn inside out and report "converged,
+  stable, health ok". So does a wetted plane whose normal points into the solid
+  (the drop came out at 180 degrees minus the contact angle).
+- `SharedEngineWarning`: an `Evolver` handle used after another handle loaded a
+  different surface (every handle is a view of the one engine).
+- `make_datafile` errors name the mistake: faces given 1-based, a vertex put on an
+  undefined constraint, `z == 0` for `z = 0`, a contact angle naming an undeclared
+  parameter. `refine(-1)` raises; `parameters["typo"]` suggests names;
+  `load_string` surfaces are named `surface.fe`, not a temporary path.
+- `relax()` keeps the "Hessian not positive definite" warnings of its trial Newton
+  steps to itself (it checks stability at the end); `restore()` those of loading its
+  own dump.
+
+### Simpler building and measuring
+
+- `pyse.shapes`: `cap`, `disc`, `tube`, `revolve` and `box` starting shapes with
+  named rims. The start needn't have the target volume.
+- `Evolver.energy`: the total energy plus the wetting energy the walls' line integrals
+  leave out (`Constraint.energy_constant`, also when the contact angle is a
+  parameter); `make_datafile` records it.
+- Constraints may be named (`{"table": C.plane(...)}`); `vertex_constraints` may give
+  each vertex's constraints; `boundaries=` with `constraints.circle()` or `curve()`
+  for films on curved wires (refining keeps the wire round).
+- `load_arrays` remembers its walls: `plot(walls=True)`, `live_view(walls=True)`.
+- `contact_lines(k)`: where the surface meets constraint k, as ordered polylines.
+  `BodySurface.volume`, `.area`, `.areas()`; `Mesh.facet_areas()`, `edge_lengths()`,
+  `edge_valence()`.
+- `derivative(name)`: the derivative of the equilibrium energy with respect to a
+  parameter (minus it: the force on a wall it moves; Brakke's "reconverge" method).
+- `energies()`: the energy term by term, Brakke's datafile check.
+- `continuation(stop_on="unconverged" | "unstable", halvings=k)`: stops at a fold
+  with the surface back at the last good step, after retrying in smaller steps.
+- `stability(eigenvalues=True)` reports the lowest eigenvalues when stable too.
+
+### Simpler code
+
+- `_evolver.py` (2,750 lines) is split into modules: errors, results, views,
+  geometry, engine, analysis, relax and export. `relax()` keeps its settings and
+  stages in one object per call instead of passing ten arguments around; magic
+  numbers are named constants.
+- Bulk writes (`set_flag`, `set_constraint`, `set_values` of other attributes,
+  `remesh(protect=)`) are one `set ... where` command over scratch attributes
+  instead of a statement per element (fixing half of 12k vertices: 4 ms).
+
+### Tried and dropped (Brakke's tips, measured)
+
+- Storage reordering along a space-filling curve (`reorder_storage`): Newton steps
+  10-18% and vertex averaging 40% faster, but gradient steps and the residual 1.6-2.3x
+  slower, on cubes of 98k and 393k facets.
+- Conjugate gradients in the gradient rounds, history cleared after each tidying:
+  fewer steps in several stress cases, but the catenoid case fails (degenerate
+  facets) and the bridge case is slower.
+- `sobolev_mode` Newton steps (positive definite) before the gradient rounds: the
+  catenoid case fails and most cases are slower.
+- `immediate_autopop`: coarsening of `100grain.fe` slows down a lot (1185 vertices left
+  after 20,000 steps against 712) with no sign the default does harm; not switched on.
+- Lowering `target_tolerance` for tiny volumes (`cbga1.fe` in cgs units): volumes
+  were met exactly either way.
+
 ## 0.7.2 (2026-10-12)
 
 Faster `relax()`, a simpler API (with removals, listed first) and Brakke's online

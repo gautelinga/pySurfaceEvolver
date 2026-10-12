@@ -14,6 +14,29 @@ Documentation: <https://gautelinga.github.io/pySurfaceEvolver/>, with an API
 reference, a tutorial (a double bubble, from arrays to a FEM-ready mesh), worked
 examples and performance numbers; built from `docs/` with Sphinx (see Development).
 
+## A drop on a table, end to end
+
+```python
+import pysurfaceevolver as pyse
+from pysurfaceevolver import constraints as C, shapes
+
+drop = shapes.cap(radius=1, height=0.6)          # any start: relaxing meets the volume
+ev = pyse.Evolver()
+ev.load_arrays(drop.vertices, drop.faces,
+               constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60)},  # normal into the liquid
+               vertex_constraints={1: drop.rims["rim"]},
+               bodies=[pyse.Body(volume=1.0)])   # faces: all, oriented out of the liquid
+result = ev.relax(levels=2)                      # converged? stable? health?
+print(result, ev.energy, ev.body(1).pressure)
+rim = ev.contact_lines(1)[0]                     # the contact line, in order
+ev.plot(walls=True)                              # with the table drawn
+```
+
+Conventions: facets point out of the liquid, a plane's normal into it (spheres and
+cylinders are solid); body and element numbers in Evolver (`ev.body(1)`, `vertex[5]`)
+are 1-based, array rows (`ev.mesh()`, `ev.bodies().pressure[0]`) 0-based. A body
+whose faces point into it, or a plane facing the solid, gets a warning when it loads.
+
 ## Scripting
 
 ```python
@@ -45,10 +68,15 @@ ev.fix("vertex", where=ev.values("vertex", "z") > 0.9)
 ev.set_constraint("vertex", 1, where=mask)
 ev.set_flag("edge", "no_refine", where=ev.mesh().edges_touching(ev.on_constraint(1), "one"))
 ev.parameters["angle"] = 60          # parameters declared in the datafile
-ev["gravity_constant"] = 2           # any other variable; also ev.gravity = 2
+ev["scale_limit"] = 0.01             # any existing variable (a typo raises KeyError)
+ev.define("h", 0.1)                  # a new one, for commands
+ev.gravity = 2                       # gravity_constant
+ev.energy                            # total energy + what wall integrals leave out
+ev.derivative("height")              # dE/dparameter at equilibrium (minus: the force)
 ev.quantities()                      # named quantities: value, target, modulus, ...
 ev.quantity("vol").target = 1.5      # a live handle (target None frees it)
 ev.contact_angles(1)                 # degrees, at each vertex on constraint 1
+ev.contact_lines(1)                  # where the surface meets constraint 1: polylines
 ev.mesh().slice((0, 0, 1))           # cross-section z = 0: ordered polylines
 
 ev.command("g 5; r; u")              # anything else: plain Evolver commands
@@ -61,20 +89,22 @@ from pysurfaceevolver import constraints as C
 
 bead = C.sphere((0, 0, 0), 0.48, contact_angle=40, wet_poles=("north",), span=np.pi/2)
 datafile = pyse.make_datafile(vertices, faces, constraints={
-    1: C.plane((0, 0, -1), point=(0, 0, 0.5), contact_angle="theta"),   # a parameter
-    2: bead, 3: C.mirror("x"), 4: C.mirror("y")},
-    bodies=[pyse.Body(faces=range(len(faces)), volume=0.1, volconst=bead.volconst)],
-    parameters={"theta": 60}, vertex_constraints=...)
+    "ceiling": C.plane((0, 0, -1), point=(0, 0, 0.5), contact_angle="theta"),  # a parameter
+    "bead": bead, "mx": C.mirror("x"), "my": C.mirror("y")},
+    bodies=[pyse.Body(volume=0.1)],          # volconst from the bead, as it touches it
+    parameters={"theta": 60}, vertex_constraints={"bead": on_bead, ...})
+# films on curved wires: boundaries={1: C.circle(radius=1)}, vertex_boundaries={1: rim}
 ```
 
 `pyse.recipes.continuation(ev, ev.body(1), volumes)` (or a parameter's name, or
 `ev.quantity(name)`) steps through a family of equilibria, with checkpoints a stopped
-run resumes from. `ev.plot(walls=[bead, ...])` draws the constraints' solids with the
-surface.
+run resumes from; `stop_on="unconverged"` ends it at a fold, back at the last good
+step. `ev.plot(walls=True)` draws the constraints' solids with the surface.
 
 There is one Evolver engine per process: every `Evolver` object is a handle to
-it, so all handles see the same surface. Use `save()`/`restore()` to keep surfaces
-around, and separate processes to work on several at once. `ev.mesh()` is cached
+it, so all handles see the same surface (a handle used after another one loaded a
+different surface warns). Use `save()`/`restore()` to keep surfaces around, and
+separate processes to work on several at once. `ev.mesh()` is cached
 until the surface changes, so its arrays are read-only. The sample datafiles and
 command scripts are in `pysurfaceevolver.examples`.
 
@@ -87,7 +117,7 @@ def run(volume):
     ev = pyse.Evolver("cube.fe")
     ev.body(1).target = volume
     ev.relax(tol=1e-10)
-    return ev.eval("total_area")
+    return ev.total_area
 
 if __name__ == "__main__":   # needed in scripts: workers re-import them
     areas = pyse.map(run, [0.5, 1, 2, 4], processes=4)   # one engine per worker process
@@ -107,9 +137,10 @@ from pysurfaceevolver import Body
 
 ev = Evolver()
 ev.load_arrays(vertices, faces,                  # triangles or polygons
-               bodies=[Body(faces=range(len(faces)), volume=1.0)],
+               bodies=[Body(volume=1.0)],        # all faces unless faces= is given
                constraints={1: "z = 0"}, vertex_constraints={1: on_floor},
                fixed=wire_vertices, parameters={"angle": 90})
+box = pyse.shapes.box(open_bottom=True, n=4)     # also cap, disc, tube, revolve
 
 ev.load_mesh_file("part.stl", volume="current")  # any meshio format
 ```
