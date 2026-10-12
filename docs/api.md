@@ -19,6 +19,7 @@ handle to it.
 .. autoclass:: QuantityView
 .. autoclass:: EigenCounts
    :no-members:
+.. autoclass:: Stability
 .. autoclass:: Snapshot
 .. autoclass:: Parameters
    :members: optimizing
@@ -46,11 +47,19 @@ handle to it.
    :no-members:
 ```
 
-### Walls and mirrors
+### Starting shapes
+
+```{eval-rst}
+.. automodule:: pysurfaceevolver.shapes
+   :members: cap, disc, tube, revolve, box, Shape
+.. currentmodule:: pysurfaceevolver
+```
+
+### Walls, mirrors and wires
 
 ```{eval-rst}
 .. automodule:: pysurfaceevolver.constraints
-   :members: plane, mirror, sphere, cylinder, Constraint
+   :members: plane, mirror, sphere, cylinder, Constraint, circle, curve, Boundary
 .. currentmodule:: pysurfaceevolver
 ```
 
@@ -101,6 +110,7 @@ handle to it.
 .. autoexception:: EvolverWarning
 .. autoexception:: LargeTessellationWarning
 .. autoexception:: UnstableEquilibriumWarning
+.. autoexception:: SharedEngineWarning
 ```
 
 ## Sample files
