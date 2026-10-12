@@ -68,7 +68,7 @@ def run_recipe(name: str, commands: str = "gogo", setup: Optional[Callable] = No
                label: Optional[str] = None) -> Run:
     """Load a sample and run Evolver commands on it (by default its gogo)."""
     ev = _load(name, setup)
-    with warnings.catch_warnings():
+    with warnings.catch_warnings():     # Evolver's own messages along the recipe
         warnings.simplefilter("ignore")
         t = time.perf_counter()
         ev.command(commands)
@@ -82,8 +82,8 @@ def run_relax(name: str, levels: int = 0, setup: Optional[Callable] = None,
               label: Optional[str] = None, **kwargs) -> Run:
     """Load a sample and relax it with defaults (and ``levels`` refinements)."""
     ev = _load(name, setup)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+    with warnings.catch_warnings():     # the table says whether it is stable
+        warnings.simplefilter("ignore", pyse.UnstableEquilibriumWarning)
         t = time.perf_counter()
         r = ev.relax(levels=levels, **kwargs)
         seconds = time.perf_counter() - t

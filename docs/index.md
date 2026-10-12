@@ -12,6 +12,7 @@ pip install ".[all]"     # + PyVista (also in Jupyter) and meshio
 ```{toctree}
 :maxdepth: 2
 
+getting_started
 tutorial
 liquid_bridge
 slit_droplet
@@ -28,5 +29,7 @@ performance
 ```
 
 The README has a
-compact overview of the API; the tutorial works through one problem from datafile to
+compact overview of the API; *Getting started* puts a drop on a table and sets out the
+conventions (orientation, energies, surface tension, contact-angle accuracy, numbering);
+the tutorial works through one problem from datafile to
 FEM mesh; the liquid-bridge example adds contact angles on curved solids, the slit example walls and mirror planes; *Relaxing a surface* explains what `relax()` does, how to read its result and where the defaults stop working, and *Stress cases* runs nine hard problems against exact references; the API reference documents every public class and function.

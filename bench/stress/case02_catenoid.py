@@ -6,9 +6,9 @@ reported converged."""
 
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import recipes
+from pysurfaceevolver import recipes, shapes
 
-from common import Result, Tracker, tube, rel
+from common import Result, Tracker, rel
 
 NAME = "2 catenoid to its fold"
 X_FOLD = 1.19967864     # x tanh x = 1
@@ -28,11 +28,12 @@ def catenoid(H):
 
 def run(quick=False):
     H0 = 0.3
-    v, f, bottom, top = tube(1.0, -H0, H0, nz=8, nt=32)
+    film = shapes.tube(1.0, -H0, H0, nz=8, nt=32)
+    bottom, top = film.rims["bottom"], film.rims["top"]
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
-        vertex_constraints={1: bottom + top, 2: top, 3: bottom}, parameters={"hh": H0}))
+    ev.load_arrays(
+        film.vertices, film.faces, constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
+        vertex_constraints={1: bottom + top, 2: top, 3: bottom}, parameters={"hh": H0})
     track = Tracker()
     track.relax(ev)
     ev.refine()

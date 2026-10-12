@@ -17,7 +17,8 @@
   one. `continuation()` with a misspelt name raises `KeyError` with suggestions.
 - `Body(volume=..., faces=None, ...)`: `volume` comes first, and `faces` defaults to
   all faces. `volconst` defaults to the sum of `Constraint.volconst` over the walls
-  from `pysurfaceevolver.constraints` that the body touches (explicit values win).
+  from `pysurfaceevolver.constraints` that the body touches, and with a single body
+  over untouched ones too (a solid immersed in the liquid); explicit values win.
 - Vertices on a `boundaries=` curve are fixed (free, they bunch up along the wire).
 - `continuation()`'s `Step.energy` is `Evolver.energy` (with the walls' constants).
 
@@ -82,6 +83,27 @@
   after 20,000 steps against 712) with no sign the default does harm; not switched on.
 - Lowering `target_tolerance` for tiny volumes (`cbga1.fe` in cgs units): volumes
   were met exactly either way.
+
+### Documentation and examples
+
+- A *Getting started* page: a drop on a table end to end, and the conventions
+  (normals out of the liquid, plane normals into it, spheres and cylinders solid;
+  `ev.energy` against `ev.total_energy`; a surface tension other than 1; contact
+  angles first order in the edge length; 1-based Evolver numbers against 0-based array
+  rows). The API reference lists `pyse.shapes`, `constraints.circle`/`curve`/`Boundary`,
+  `Stability` and `SharedEngineWarning`.
+- The notebooks, their helpers, the stress cases page and the stress suite use the
+  new API: starting shapes from `pyse.shapes` (the copies of `cap`, `tube` and
+  `revolve` in `docs/stress_helpers.py` and `bench/stress/common.py` are gone),
+  `Body(volume=...)` without face lists or hand-summed `volconst`, `ev.energy` instead
+  of adding wall energy constants by hand, `load_arrays` with `walls=True` in plots,
+  per-vertex constraint sets, `BodySurface.volume`/`areas()`. Starts are no longer
+  fitted to the target volume by bisection (the liquid bridge, the slit droplet, the
+  drainage, stress case 5): relaxing meets it. Results agree with before to the
+  discretization error (the bridge's forces within 0.3%).
+- The Brakke notebooks no longer silence `EvolverWarning` globally; `brakke_helpers`
+  silences only the instability warning of `relax()` (its table reports stability)
+  and Evolver's messages during a sample's own recipe.
 
 ## 0.7.2 (2026-10-12)
 

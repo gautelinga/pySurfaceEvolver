@@ -14,14 +14,12 @@ import nbformat as nbf
 DOCS = sys.argv[1] if len(sys.argv) > 1 else \
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs")
 
-SETUP = '''import warnings
-import numpy as np
+SETUP = '''import numpy as np
 import pyvista as pv
 import pysurfaceevolver as pyse
 import brakke_helpers as bh
 
-pv.set_jupyter_backend("static")
-warnings.simplefilter("ignore", pyse.EvolverWarning)'''
+pv.set_jupyter_backend("static")'''
 
 INTRO_COMMON = """Each sample is run twice from its datafile: once with the recipe Brakke wrote into
 it (its `gogo` command, or the usage its comments describe), once with a default

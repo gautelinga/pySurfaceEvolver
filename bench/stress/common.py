@@ -1,4 +1,5 @@
-"""Shared parts of the stress suite: results, shapes, helpers.
+"""Shared parts of the stress suite: results, exact caps, helpers (starting
+shapes come from ``pysurfaceevolver.shapes``).
 
 Every case runs with pySE's default settings: ``ev.relax()`` without options,
 stepped with ``recipes.continuation``. No case may tune the solver; anything a
@@ -84,39 +85,7 @@ class Tracker:
         return result
 
 
-# ---- shapes --------------------------------------------------------------------
-
-def cap(r: float = 1.0, h: float = 1.0, nr: int = 8, nt: int = 32, z0: float = 0.0):
-    """A spherical cap of sphere radius r and height h on the plane z = z0,
-    normals outward; returns vertices, faces, rim rows."""
-    a = np.sqrt(h*(2*r - h))
-    t_max = np.arcsin(a/r) if h <= r else np.pi - np.arcsin(a/r)
-    v, f = [[0, 0, z0 + h]], []
-    for i in range(1, nr + 1):
-        t = t_max*i/nr
-        v += [[r*np.sin(t)*np.cos(p), r*np.sin(t)*np.sin(p), z0 + h - r + r*np.cos(t)]
-              for p in 2*np.pi*np.arange(nt)/nt]
-    ring = lambda i, j: 1 + (i - 1)*nt + j % nt
-    f += [[0, ring(1, j), ring(1, j + 1)] for j in range(nt)]
-    for i in range(1, nr):
-        for j in range(nt):
-            f += [[ring(i, j), ring(i + 1, j), ring(i + 1, j + 1)],
-                  [ring(i, j), ring(i + 1, j + 1), ring(i, j + 1)]]
-    return np.array(v), f, [ring(nr, j) for j in range(nt)]
-
-
-def tube(radius: float, z0: float, z1: float, nz: int = 8, nt: int = 24):
-    """A cylinder r = radius from z0 to z1, normals outward; returns vertices,
-    faces, bottom-ring rows, top-ring rows."""
-    v = [[radius*np.cos(p), radius*np.sin(p), z]
-         for z in np.linspace(z0, z1, nz + 1) for p in 2*np.pi*np.arange(nt)/nt]
-    f = []
-    for i in range(nz):
-        for j in range(nt):
-            a, b = i*nt + j, i*nt + (j + 1) % nt
-            f += [[a, b, b + nt], [a, b + nt, a + nt]]
-    return np.array(v), f, list(range(nt)), list(range(nz*nt, (nz + 1)*nt))
-
+# ---- references ----------------------------------------------------------------
 
 def cap_reference(volume: float, theta_deg: float) -> Dict[str, float]:
     """A sessile spherical cap (no gravity) of given volume and contact angle:
@@ -139,18 +108,3 @@ def contact_radius(ev, constraint: int) -> float:
 
 def rel(a: float, b: float) -> float:
     return abs(a/b - 1)
-
-
-def revolve(r, z, nt: int = 24):
-    """A surface of revolution about the z axis through the meridian points
-    (r_i, z_i), i from the bottom ring to the top ring; normals point away from
-    the axis. Returns vertices, faces, bottom-ring rows, top-ring rows."""
-    r, z = np.asarray(r, float), np.asarray(z, float)
-    phis = 2*np.pi*np.arange(nt)/nt
-    v = [[ri*np.cos(p), ri*np.sin(p), zi] for ri, zi in zip(r, z) for p in phis]
-    f = []
-    for i in range(len(r) - 1):
-        for j in range(nt):
-            a, b = i*nt + j, i*nt + (j + 1) % nt
-            f += [[a, b, b + nt], [a, b + nt, a + nt]]
-    return np.array(v), f, list(range(nt)), list(range((len(r) - 1)*nt, len(r)*nt))
