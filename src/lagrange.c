@@ -12,6 +12,11 @@
 #include "include.h"
 #include "fastloops.h"
 
+/* pySE: the tangents' metric for 2D facets in 3D without the generic dot();
+   same sums in the same order */
+#define LG_DOT(x,y) ( SDIM == 3 ? (x)[0]*(y)[0] + (x)[1]*(y)[1] + (x)[2]*(y)[2] \
+                                : SDIM_dot(x,y) )
+
 /*********************************************************************
 **********************************************************************
                      Lagrange model quantities
@@ -254,6 +259,15 @@ REAL lagrange_facet_tension_value(struct qinfo *f_info)
   struct gauss_lag *gl = &gauss_lagrange[dim][web.gauss2D_order];
   MAT2D(mat,MAXCOORD,MAXCOORD);
 
+  if ( dim == 2 )  /* pySE: det_adjoint()'s 2x2 case inline */
+    for ( m = 0 ; m < gl->gnumpts ; m++ )
+    { REAL *t0 = f_info->sides[m][0], *t1 = f_info->sides[m][1];
+      REAL a = LG_DOT(t0,t0), b = LG_DOT(t1,t0), c = LG_DOT(t1,t1);
+      det = a*c - b*b;
+      if ( det <= 0.0 ) continue;
+      value += gl->gausswt[m]*sqrt(det);
+    }
+  else
   for ( m = 0 ; m < gl->gnumpts ; m++ )  /*  integration point number */
   { tang = f_info->sides[m];
      for ( i = 0 ; i < dim ; i++ )
@@ -305,20 +319,29 @@ REAL lagrange_facet_tension_grad(struct qinfo *f_info)
      /* calculate tangents and det */ 
      for ( i = 0 ; i < dim ; i++ )
         for ( j = 0 ; j <= i ; j++ )
-          mat[i][j] = mat[j][i] = SDIM_dot(tang[i],tang[j]);
+          mat[i][j] = mat[j][i] = LG_DOT(tang[i],tang[j]);
      det = det_adjoint(mat,dim);
      if ( det <= 0.0 ) continue;
      value += gl->gausswt[m]*sqrt(det);
      /* gradients */
      fudge = density*gl->gausswt[m]/sqrt(det)/factorial[dim];
-     for ( k = 0 ; k < gl->lagpts ; k++ )
-        for ( j = 0 ; j < SDIM ; j++ )
-        { REAL sum = 0.0;
-          for ( i = 0 ; i < dim ; i++ )
-             for ( ii = 0 ; ii < dim ; ii++ )
-                sum += tang[i][j]*gl->gpolypart[m][ii][k]*mat[i][ii];
-          f_info->grad[k][j] += fudge*sum;
-        }
+     /* pySE: grad[k] += fudge sum_ii gpolypart[ii][k] (adj(mat) tang)[ii],
+        with the adjoint-tangent products formed once per Gauss point */
+     { REAL A[MAXCOORD][MAXCOORD];
+       for ( ii = 0 ; ii < dim ; ii++ )
+         for ( j = 0 ; j < SDIM ; j++ )
+         { REAL sum = 0.0;
+           for ( i = 0 ; i < dim ; i++ ) sum += mat[i][ii]*tang[i][j];
+           A[ii][j] = fudge*sum;
+         }
+       for ( k = 0 ; k < gl->lagpts ; k++ )
+       { REAL *gr = f_info->grad[k];
+         for ( ii = 0 ; ii < dim ; ii++ )
+         { REAL c = gl->gpolypart[m][ii][k];
+           for ( j = 0 ; j < SDIM ; j++ ) gr[j] += c*A[ii][j];
+         }
+       }
+     }
   }
 
   return density*value/factorial[dim];
@@ -1022,6 +1045,12 @@ REAL lagrange_facet_volume(struct qinfo *f_info)
   REAL sign = (dim&1) ? -1.0 : 1.0;
   struct gauss_lag *gl = &gauss_lagrange[dim][web.gauss2D_order];
 
+  if ( dim == 2 )  /* pySE: det_adjoint()'s 2x2 case inline */
+    for ( m = 0 ; m < gl->gnumpts ; m++ )
+    { REAL *t0 = f_info->sides[m][0], *t1 = f_info->sides[m][1];
+      value += gl->gausswt[m]*(t0[0]*t1[1] - t0[1]*t1[0])*f_info->gauss_pt[m][2];
+    }
+  else
   for ( m = 0 ; m < gl->gnumpts ; m++ )
   { for ( i = 0 ; i < dim ; i++ )
         for ( j = 0 ; j < dim ; j++ )
@@ -1056,12 +1085,20 @@ REAL lagrange_facet_volume_grad(struct qinfo *f_info)
      z = f_info->gauss_pt[m][dim];
      det = det_adjoint(mat,dim);
      value += weight*det*z;
-     for ( k = 0 ; k < gl->lagpts; k++ )
-      for ( j = 0 ; j < dim ; j++ ) 
-        for ( i = 0 ; i < dim ; i++ )
-          f_info->grad[k][j] += weight*z*gl->gpolypart[m][i][k]*mat[j][i];
-     for ( k = 0 ; k < gl->lagpts ; k++ )
-        f_info->grad[k][dim] += weight*gl->gpoly[m][k]*det;
+     /* pySE: the Gauss point's factors formed once */
+     { REAL wz = weight*z, wd = weight*det;
+       REAL W[MAXCOORD][MAXCOORD];  /* W[i][j] = wz mat[j][i] */
+       for ( i = 0 ; i < dim ; i++ )
+         for ( j = 0 ; j < dim ; j++ ) W[i][j] = wz*mat[j][i];
+       for ( k = 0 ; k < gl->lagpts; k++ )
+       { REAL *gr = f_info->grad[k];
+         for ( i = 0 ; i < dim ; i++ )
+         { REAL c = gl->gpolypart[m][i][k];
+           for ( j = 0 ; j < dim ; j++ ) gr[j] += c*W[i][j];
+         }
+         gr[dim] += wd*gl->gpoly[m][k];
+       }
+     }
   }
   return value;  
 } // end lagrange_facet_volume_grad()
