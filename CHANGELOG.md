@@ -22,6 +22,32 @@
 - Vertices on a `boundaries=` curve are fixed (free, they bunch up along the wire).
 - `continuation()`'s `Step.energy` is `Evolver.energy` (with the walls' constants).
 
+### Found in review
+
+- Two more Evolver bugs fixed. Popping a fixed edge between two free facets divided
+  it and retried without end, so `relax()` (which pops by default) hung; it was so in
+  0.7.1 too. Trimming the warning-message buffer could read past its text.
+- Vertex averaging's new ring cache moved vertices fixed after it was built;
+  `energies()` counted an instance's modulus twice; the fused Lagrange energy pass
+  ran before the pressures were recomputed, which mattered for an energy reading a
+  pressure (now skipped there).
+- Bulk writes on a second element type failed (Evolver's attribute names are
+  global): the scratch attributes are now per type (`pyse_vertex_mark`, ...); they
+  are written into dumps.
+- `make_datafile`: a closing wall that several bodies touch (or, with several bodies,
+  none) is no longer added to each body's `volconst`, with a warning; several bodies
+  must each give their faces; `optimizing_parameter` angles and exponents in angle
+  expressions pass the parameter check; per-vertex constraints take numpy integers
+  (0: none); single-letter names are refused; string-model bodies are oriented
+  counterclockwise.
+- `health()` checks walls no vertex is on again (only constraints that only fixed
+  vertices are on are skipped).
+- `continuation(stop_on=...)` also stops where `relax()` pinches the surface off.
+- `restore()` brings back the snapshot's walls and name; relax()'s memory of failed
+  attempts only for the same load.
+- Warnings from `relax()` callbacks keep their location, and `-W error` no longer
+  replaces an error from `relax()`.
+
 ### Solder joints (Brakke's ball grid array series)
 
 - Vendored `bga-2.fe` to `bga-10.fe`, `bga-30.fe` and Brakke's force command files
@@ -68,7 +94,7 @@
   stable, health ok". So does a wetted plane whose normal points into the solid
   (the drop came out at 180 degrees minus the contact angle).
 - `SharedEngineWarning`: an `Evolver` handle used after another handle loaded a
-  different surface (every handle is a view of the one engine).
+  surface (every handle is a view of the one engine).
 - `make_datafile` errors name the mistake: faces given 1-based, a vertex put on an
   undefined constraint, `z == 0` for `z = 0`, a contact angle naming an undeclared
   parameter. `refine(-1)` raises; `parameters["typo"]` suggests names;
