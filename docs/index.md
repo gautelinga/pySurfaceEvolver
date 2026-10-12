@@ -1,36 +1,69 @@
 # pySurfaceEvolver
 
-A Python frontend to Ken Brakke's [Surface Evolver](https://kenbrakke.com/evolver/evolver.html):
-the engine runs in-process, surfaces come back as NumPy arrays, and they can be
-plotted with PyVista and written for finite-element meshing.
+A Python frontend to Ken Brakke's [Surface Evolver](https://kenbrakke.com/evolver/evolver.html).
+Surface Evolver finds surfaces of least energy: soap films, bubbles, drops on walls,
+liquid bridges, solder joints. pySE runs the engine in-process. Surfaces are built
+from NumPy arrays and come back as NumPy arrays, `ev.relax()` takes them to an
+equilibrium and says how it went, and the results can be plotted with PyVista and
+written out for finite-element meshing.
 
-```bash
-pip install .            # core
-pip install ".[all]"     # + PyVista (also in Jupyter) and meshio
-```
+## Where to start
+
+* New here? {doc}`getting_started` installs pySE, puts a drop on a table and sets out
+  the conventions every other page uses. The {doc}`tutorial` then takes one problem,
+  a double bubble, from arrays to a finite-element mesh.
+* {doc}`relaxing` explains what `relax()` does, how to read its result, and where its
+  defaults stop working. Read it before the examples, or when a result looks wrong.
+* The examples add one thing at a time: contact angles on curved solids
+  ({doc}`liquid_bridge`), forces and optimizing parameters from Brakke's datafiles
+  ({doc}`solder_joints`), several walls and mirror planes ({doc}`slit_droplet`), and a
+  long quasi-static run ({doc}`slit_drainage`).
+* Brakke's sample datafiles run as they come, each with his own recipe and with
+  `relax()` side by side: a gallery of what Evolver can model.
+* The reference has the API, nine stress cases with exact references, and performance
+  numbers.
 
 ```{toctree}
+:caption: Getting started
 :maxdepth: 2
 
 getting_started
 tutorial
+```
+
+```{toctree}
+:caption: Guides
+:maxdepth: 2
+
+relaxing
+```
+
+```{toctree}
+:caption: Examples
+:maxdepth: 2
+
 liquid_bridge
 solder_joints
 slit_droplet
 slit_drainage
-relaxing
-stress_cases
+```
+
+```{toctree}
+:caption: Brakke's samples
+:maxdepth: 1
+
 brakke_films
 brakke_capillarity
 brakke_crystals_membranes
 brakke_strings
 brakke_lagrange
-api
-performance
 ```
 
-The README has a
-compact overview of the API; *Getting started* puts a drop on a table and sets out the
-conventions (orientation, energies, surface tension, contact-angle accuracy, numbering);
-the tutorial works through one problem from datafile to
-FEM mesh; the liquid-bridge example adds contact angles on curved solids, the slit example walls and mirror planes; *Relaxing a surface* explains what `relax()` does, how to read its result and where the defaults stop working, and *Stress cases* runs nine hard problems against exact references; the API reference documents every public class and function.
+```{toctree}
+:caption: Reference
+:maxdepth: 1
+
+api
+stress_cases
+performance
+```

@@ -36,6 +36,7 @@ nb_execution_timeout = 600
 nb_execution_raise_on_error = True
 nb_execution_show_tb = True       # a failing cell's traceback in the build log
 myst_enable_extensions = ["colon_fence", "dollarmath"]
+myst_heading_anchors = 2           # links to sections: getting_started.md#conventions
 
 html_theme = "furo"
 html_static_path = ["_static"]     # the drainage movies and stored runs
