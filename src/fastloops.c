@@ -1796,11 +1796,230 @@ static int quantity_area_is_plain(void)
          && basic_gen_methods[mi->gen_method].value == q_facet_tension_value;
 }
 
+/* find_vertex_average() for the plain vertex of a linear film, from a ring
+   kept per topology (va_*): a vertex that is not fixed, axial, constrained
+   or on a boundary, whose edges all have exactly two facets (no bare,
+   single or triple edges) and which has a facet ring for its normal. For
+   each of its edges in Evolver's order around the vertex (tail edges) the
+   ring holds the head vertex and the edge's two facets in the order the
+   search adds their areas; then the vertex's facets with their orientation,
+   in new_calc_vertex_normal()'s order. The sums, the facet normals (as
+   get_facet_normal() computes them, for either orientation) and the
+   projection are Evolver's, in the same order: the result is the same bit
+   for bit, which PYSE_CHECK_FACET_CACHE=1 checks vertex by vertex. */
+typedef struct { vertex_id head; long fa, fb; } av_edge;   /* facet ordinals */
+static long *av_estart = NULL, av_estart_size = 0;   /* [n+1] into av_e */
+static av_edge *av_e = NULL;
+static long av_e_size = 0;
+static long *av_fstart = NULL, av_fstart_size = 0;   /* [n+1] into av_f */
+static long *av_f = NULL, av_f_size = 0;              /* +-(facet ordinal + 1) */
+static long av_stamp = -1, av_count = -1, av_maxord = -1;
+static vertex_id *av_list = NULL;
+static double *av_area = NULL;           /* by facet ordinal: the stored area */
+static long av_area_size = 0;
+static double (*av_norm)[2][3] = NULL;   /* by facet ordinal: normal, as is and inverted */
+static long av_norm_size = 0;
+
+static int av_grow(void **p, long *size, long want, size_t item)
+{ void *q;
+  if ( want <= *size ) return 1;
+  want = want < 2*(*size) ? 2*(*size) : want;
+  if ( !(q = realloc(*p,(size_t)want*item)) ) return 0;
+  *p = q; *size = want;
+  return 1;
+}
+
+/* the ring of a plain vertex into e and f (growing them); 0 if it isn't
+   one, -1 out of memory */
+static int av_vertex_ring(vertex_id v_id, av_edge **e, long *e_size, long *me,
+                          long **f, long *f_size, long *mf)
+{ edge_id e_id, start_e;
+  facetedge_id fe, start_fe;
+  if ( get_vattr(v_id) & (FIXED|AXIAL_POINT|CONSTRAINT|BOUNDARY|Q_MIDPOINT|Q_MIDEDGE|Q_MIDFACET) )
+    return 0;
+  e_id = start_e = get_vertex_edge(v_id);
+  if ( !valid_id(e_id) || !valid_id(get_vertex_fe(v_id)) ) return 0;
+  do
+  { av_edge *ve;
+    fe = get_edge_fe(e_id);
+    if ( !valid_id(fe) || (get_eattr(e_id) & BARE_NAKED) || get_edge_valence(e_id) != 2
+         || equal_id(fe,get_next_facet(fe))
+         || !equal_id(get_next_facet(fe),get_prev_facet(fe))
+         || !equal_id(get_edge_tailv(e_id),v_id) )
+      return 0;
+    if ( !av_grow((void**)e,e_size,*me + 1,sizeof(av_edge)) ) return -1;
+    ve = *e + (*me)++;
+    ve->head = get_edge_headv(e_id);
+    ve->fa = (long)ordinal(get_fe_facet(fe));
+    ve->fb = (long)ordinal(get_fe_facet(get_next_facet(fe)));
+    e_id = get_next_tail_edge(e_id);
+  } while ( !equal_id(e_id,start_e) );
+  fe = start_fe = get_vertex_first_facet(v_id);
+  do
+  { facet_id f_id = get_fe_facet(fe);
+    long o = (long)ordinal(f_id) + 1;
+    if ( !av_grow((void**)f,f_size,*mf + 1,sizeof(long)) ) return -1;
+    (*f)[(*mf)++] = inverted(f_id) ? -o : o;
+    fe = get_next_vertex_facet(v_id,fe);
+  } while ( !equal_element(fe,start_fe) );
+  return 1;
+}
+
+/* the rings, built in parallel: each thread walks a block of the list into
+   buffers of its own, which are then joined in list order */
+#define AV_MAXT 256
+static int av_build(vertex_id *list, long n)
+{ static av_edge *te[AV_MAXT];
+  static long *tf[AV_MAXT];
+  static long te_size[AV_MAXT], tf_size[AV_MAXT];
+  long tme[AV_MAXT], tmf[AV_MAXT];
+  int threads = loop_threads(n), t, failed = 0;
+  long k, me, mf;
+  if ( av_list == list && av_stamp == top_timestamp && av_count == n
+       && av_maxord == (long)web.skel[VERTEX].max_ord )
+    return 1;
+  if ( threads > AV_MAXT ) threads = AV_MAXT;
+  if ( !ensure_size((void**)&av_estart,&av_estart_size,n + 1,sizeof(long))
+       || !ensure_size((void**)&av_fstart,&av_fstart_size,n + 1,sizeof(long)) )
+    return 0;
+  av_stamp = -1;
+#ifdef _OPENMP
+  #pragma omp parallel num_threads(threads)
+#endif
+  { int me_t = 0, nt = 1;
+    long lo, hi, j, m_e = 0, m_f = 0;
+#ifdef _OPENMP
+    me_t = omp_get_thread_num(); nt = omp_get_num_threads();
+#endif
+    lo = n*me_t/nt; hi = n*(me_t + 1)/nt;
+    for ( j = lo ; j < hi ; j++ )
+    { long me0 = m_e, mf0 = m_f;
+      int r = av_vertex_ring(list[j],&te[me_t],&te_size[me_t],&m_e,
+                             &tf[me_t],&tf_size[me_t],&m_f);
+      if ( r < 0 )
+      {
+#ifdef _OPENMP
+        #pragma omp atomic write
+#endif
+        failed = 1;
+        break;
+      }
+      if ( r == 0 ) { m_e = me0; m_f = mf0; }
+      av_estart[j+1] = m_e;   /* within the thread's block for now */
+      av_fstart[j+1] = m_f;
+    }
+    tme[me_t] = m_e; tmf[me_t] = m_f;
+    if ( me_t == 0 ) threads = nt;
+  }
+  if ( failed ) return 0;
+  for ( t = 0, me = mf = 0 ; t < threads ; t++ ) { me += tme[t]; mf += tmf[t]; }
+  if ( !av_grow((void**)&av_e,&av_e_size,me + 1,sizeof(av_edge))
+       || !av_grow((void**)&av_f,&av_f_size,mf + 1,sizeof(long)) )
+    return 0;
+  av_estart[0] = av_fstart[0] = 0;
+  for ( t = 0, me = mf = 0 ; t < threads ; t++ )
+  { long lo = n*t/threads, hi = n*(t + 1)/threads;
+    if ( tme[t] ) memcpy(av_e + me,te[t],(size_t)tme[t]*sizeof(av_edge));
+    if ( tmf[t] ) memcpy(av_f + mf,tf[t],(size_t)tmf[t]*sizeof(long));
+    for ( k = lo ; k < hi ; k++ ) { av_estart[k+1] += me; av_fstart[k+1] += mf; }
+    me += tme[t]; mf += tmf[t];
+  }
+  av_list = list;
+  av_count = n;
+  av_maxord = (long)web.skel[VERTEX].max_ord;
+  av_stamp = top_timestamp;
+  return 1;
+}
+
+/* get_facet_normal() of the facet with corners c in its loop order */
+static void av_facet_normal(vertex_id c0, vertex_id c1, vertex_id c2, double *out)
+{ REAL *x0 = get_coord(c0), *x1 = get_coord(c1), *x2 = get_coord(c2);
+  REAL side1[MAXCOORD], side2[MAXCOORD], normal[MAXCOORD];
+  int i;
+  for ( i = 0 ; i < SDIM ; i++ )
+  { side1[i] = x1[i] - x0[i];
+    side2[i] = x2[i] - x1[i];
+  }
+  cross_prod(side1,side2,normal);
+  for ( i = 0 ; i < SDIM ; i++ ) out[i] = normal[i]/2;
+}
+
+/* find_vertex_average() of the k-th vertex of the list, a plain one */
+static int av_average(long k, vertex_id v_id, REAL *vx, int mode)
+{ REAL *oldx = get_coord(v_id);
+  REAL xsum[MAXCOORD], x[MAXCOORD];
+  REAL weight, total_weight = 0.0;
+  long j;
+  int i, cnt = 0;
+  for ( i = 0 ; i < SDIM ; i++ ) { vx[i] = oldx[i]; xsum[i] = 0.0; }
+  for ( j = av_estart[k] ; j < av_estart[k+1] ; j++ )
+  { av_edge *ve = av_e + j;
+    REAL *z;
+    weight = 0.0;
+    weight += av_area[ve->fa];
+    weight += av_area[ve->fb];
+    if ( weight == 0.0 ) continue;
+    z = get_coord(ve->head);
+    for ( i = 0 ; i < SDIM ; i++ ) x[i] = z[i] - oldx[i];
+    for ( i = 0 ; i < SDIM ; i++ ) xsum[i] += weight*weight*x[i];
+    total_weight += weight*weight;
+    cnt++;
+  }
+  if ( cnt <= 1 ) return 0;
+  if ( mode == VOLKEEP )   /* new_calc_vertex_normal()'s usual case */
+  { MAT2D(norm,MAXCOORD,MAXCOORD);
+    int d, n, dm;
+    for ( d = 0 ; d < SDIM ; d++ )
+      for ( i = 0 ; i < SDIM ; i++ ) norm[d][i] = 0.0;
+    for ( j = av_fstart[k] ; j < av_fstart[k+1] ; j++ )
+    { long o = av_f[j];
+      double *fn = av_norm[(o < 0 ? -o : o) - 1][o < 0];
+      if ( j > av_fstart[k] && SDIM_dot(norm[0],fn) < 0 )
+        for ( i = 0 ; i < SDIM ; i++ ) norm[0][i] -= fn[i];
+      else
+        for ( i = 0 ; i < SDIM ; i++ ) norm[0][i] += fn[i];
+    }
+    dm = gram_schmidt(norm,1,SDIM);
+    for ( n = 0 ; n < dm ; n++ )
+    { REAL c = SDIM_dot(xsum,norm[n]);
+      for ( i = 0 ; i < SDIM ; i++ )
+        xsum[i] -= c*norm[n][i];
+    }
+  }
+  for ( i = 0 ; i < SDIM ; i++ )
+    vx[i] += 0.25*xsum[i]/total_weight;
+  return 1;
+}
+
+/* set up the rings and per-facet data; 0: search everything as before */
+static int av_prepare(vertex_id *list, long n, facet_id *facets, long nf, int mode)
+{ vertex_id *corners;
+  long j;
+  if ( web.symmetry_flag || SDIM != 3 || FACET_VERTS != 3 || hessian_normal_one_flag
+       || !(corners = fl_facet_corners()) )
+    return 0;
+  if ( !av_build(list,n) ) return 0;
+  if ( mode != VOLKEEP ) return 1;
+  if ( !ensure_size((void**)&av_norm,&av_norm_size,(long)web.skel[FACET].max_ord + 1,
+                    sizeof(double[2][3])) )
+    return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
+#endif
+  for ( j = 0 ; j < nf ; j++ )
+  { long o = (long)ordinal(facets[j]);
+    vertex_id *c = corners + 3*o;
+    av_facet_normal(c[0],c[1],c[2],av_norm[o][0]);
+    av_facet_normal(c[1],c[0],c[2],av_norm[o][1]);   /* inverted: corners 1, 0, 2 */
+  }
+  return 1;
+}
+
 static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t stride)
 { vertex_id *list;
   facet_id *facets;
   long n, nf, k;
-  int failed = 0;
+  int failed = 0, ring;
   if ( fast_mesh_disabled() || web.modeltype != LINEAR || web.representation != SOAPFILM
        || web.metric_flag || (everything_quantities_flag && !quantity_area_is_plain())
        || (!everything_quantities_flag && calc_facet_energy != facet_energy_l)
@@ -1808,11 +2027,18 @@ static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t st
     return 0;
   if ( !(list = vertex_list(&n)) || n < FL_PARALLEL_MIN ) return 0;
   if ( !(facets = fl_facet_list(&nf)) ) return 0;
+  if ( !ensure_size((void**)&av_area,&av_area_size,(long)web.skel[FACET].max_ord + 1,
+                    sizeof(double)) )
+    return 0;
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
 #endif
   for ( k = 0 ; k < nf ; k++ )
-    set_facet_area(facets[k],fl_facet_area(facets[k]));
+  { REAL a = fl_facet_area(facets[k]);
+    set_facet_area(facets[k],a);
+    av_area[ordinal(facets[k])] = a;
+  }
+  ring = av_prepare(list,n,facets,nf,mode);
 #ifdef _OPENMP
   #pragma omp parallel for schedule(dynamic,256) num_threads(loop_threads(n))
 #endif
@@ -1821,6 +2047,24 @@ static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t st
     long o = loc_ordinal(v_id);
     jmp_buf trap;
     if ( get_vattr(v_id) & (CONSTRAINT|BOUNDARY) ) continue;
+    if ( ring && av_estart[k] < av_estart[k+1] )
+    { REAL *vx = (REAL*)(xbase + o*stride);
+      int st = av_average(k,v_id,vx,mode);
+      *(int*)(sbase + o*stride) = st;
+      if ( fl_check() )   /* against Evolver's own, bit for bit */
+      { REAL ref[MAXCOORD];
+        int i, rst;
+        va_active = 1;
+        rst = find_vertex_average(v_id,ref,mode);
+        va_active = 0;
+        for ( i = 0 ; i < SDIM ; i++ )
+          if ( rst != st || ref[i] != vx[i] )
+          { fprintf(stderr,"vertex average ring mismatch at vertex %ld\n",(long)ordinal(v_id));
+            abort();
+          }
+      }
+      continue;
+    }
     if ( setjmp(trap) == 0 )
     { fl_trap = &trap;   /* kb_error() comes back here */
       va_active = 1;

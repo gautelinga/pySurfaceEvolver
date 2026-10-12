@@ -95,3 +95,48 @@ def test_lagrange_vertex_normals_match_evolver(lagrange_dumps):
             assert rel(residual, ref[1]) < 1e-10, (key, threads)
             assert index == ref[2], (key, threads)
             assert rel(energy, ref[3]) < 1e-12 or energy == ref[3], (key, threads)
+
+
+# V's plain vertices from rings kept per topology (fastloops.c, av_*), bit
+# for bit as find_vertex_average(): checked vertex by vertex under
+# PYSE_CHECK_FACET_CACHE=1 (a mismatch aborts) and against the serial V
+# (PYSE_NO_FAST_MESH=1) by the meshes' digests. Equiangulation and
+# refinement between the averagings change the topology (the rings must be
+# rebuilt); constraints, boundary wires, triple lines, bare edges and fixed
+# vertices keep Evolver's search.
+AVERAGES = r"""
+import hashlib, json, sys, warnings
+warnings.simplefilter("ignore")
+import numpy as np
+from pysurfaceevolver import Evolver
+out = {}
+for name, commands in zip(sys.argv[1::2], sys.argv[2::2]):
+    ev = Evolver(name)
+    for c in commands.split(";"):
+        ev.command(c)
+    mesh = ev.mesh()
+    out[name] = hashlib.sha1(np.ascontiguousarray(mesh.vertices).tobytes()
+                             + np.ascontiguousarray(mesh.facets).tobytes()).hexdigest()
+print(json.dumps(out))
+"""
+
+JIGGLE = "set vertex x x+0.004*(random-0.5); set vertex y y+0.004*(random-0.5)"
+AVERAGE_SAMPLES = {
+    "cube.fe": f"g 5; r; r; r; r; r; {JIGGLE}; V; V; u; V; r; V; rawv; rawestv; V",
+    "mound.fe": f"g 5; r; r; r; r; {JIGGLE}; V; u; V; V",
+    "addload_example.fe": f"g 5; r; r; r; {JIGGLE}; V; u; V",
+    "catbody.fe": "g 5; r; r; r; r; r; V; u; V",
+    # quantity mode (gap energy): the parallel search's facet areas differ
+    # from the serial one's at round-off, so only the vertex-by-vertex check
+    "tankex.fe": "g 5; r; r; r; r; r; V; V",
+}
+
+
+def test_vertex_average_rings_match_serial():
+    args = [x for item in AVERAGE_SAMPLES.items() for x in item]
+    serial = run(AVERAGES, args, {"PYSE_NO_FAST_MESH": "1"})
+    for threads in ("1", "2"):
+        fast = run(AVERAGES, args, {"OMP_NUM_THREADS": threads, "PYSE_CHECK_FACET_CACHE": "1"})
+        for name in AVERAGE_SAMPLES:
+            if name != "tankex.fe":
+                assert fast[name] == serial[name], (name, threads)
