@@ -157,5 +157,5 @@ something smoother (the contact radius, the pressure).
 * {doc}`relaxing` explains what `relax()` did above and how to read its result.
 * {doc}`liquid_bridge` puts contact angles on curved solids, and is the first of the
   worked examples.
-* The README on [GitHub](https://github.com/gautelinga/pySurfaceEvolver) lists the
-  API in brief, and the {doc}`api` documents all of it.
+* {doc}`tour` lists the main calls on one page, and the {doc}`api` documents all of
+  them.

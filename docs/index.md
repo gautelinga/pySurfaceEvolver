@@ -11,7 +11,8 @@ written out for finite-element meshing.
 
 * New here? {doc}`getting_started` installs pySE, puts a drop on a table and sets out
   the conventions every other page uses. The {doc}`tutorial` then takes one problem,
-  a double bubble, from arrays to a finite-element mesh.
+  a double bubble, from arrays to a finite-element mesh, and {doc}`tour` lists the
+  main calls on one page.
 * {doc}`relaxing` explains what `relax()` does, how to read its result, and where its
   defaults stop working. Read it before the examples, or when a result looks wrong.
 * The examples add one thing at a time: contact angles on curved solids
@@ -20,8 +21,8 @@ written out for finite-element meshing.
   long quasi-static run ({doc}`slit_drainage`).
 * Brakke's sample datafiles run as they come, each with his own recipe and with
   `relax()` side by side: a gallery of what Evolver can model.
-* The reference has the API, fourteen stress cases with exact references, and performance
-  numbers.
+* The reference has the API, fourteen stress cases with exact references, performance
+  numbers, and how to build and test pySE ({doc}`development`).
 
 ```{toctree}
 :caption: Getting started
@@ -29,6 +30,7 @@ written out for finite-element meshing.
 
 getting_started
 tutorial
+tour
 ```
 
 ```{toctree}
@@ -66,4 +68,5 @@ brakke_lagrange
 api
 stress_cases
 performance
+development
 ```

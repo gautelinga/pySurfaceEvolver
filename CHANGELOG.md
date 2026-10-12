@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Documentation
+
+- A shorter README (92 lines, was 261): what pySE is, a picture of four relaxed
+  surfaces, install, one example with its output, and where to read on, with badges.
+  Its API tour moved to the docs as "A tour of the API" (`docs/tour.md`), and building,
+  testing and the code layout to "Development" (`docs/development.md`).
+  `tools/readme_figure.py` redraws the picture.
+
 ### Fixes
 
 - `continuation()`'s warning when it stops names the step as a plain number; with
