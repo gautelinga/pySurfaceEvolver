@@ -11,6 +11,7 @@ handle to it.
 
 ```{eval-rst}
 .. autoclass:: Evolver
+   :inherited-members:
 .. autoclass:: IterationResult
 .. autoclass:: Health
    :members: ok

@@ -10,7 +10,7 @@ from ._mesh import _as_3d
 
 if TYPE_CHECKING:
     import pyvista
-    from ._evolver import Evolver
+    from ._engine import _Engine as Evolver
     from ._mesh import Mesh, _Tessellation
 
 __all__ = ["LiveView", "surface_dataset"]

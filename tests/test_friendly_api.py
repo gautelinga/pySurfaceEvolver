@@ -449,9 +449,9 @@ def test_relax_spreads_a_flat_drop(monkeypatch):
     ev.relax()
     ev.parameters["theta"] = 10.0
     snap = ev.save()
-    from pysurfaceevolver import _evolver
+    from pysurfaceevolver import _relax
     with monkeypatch.context() as m:
-        m.setattr(_evolver, "_FALLBACK_STEPS", 0)     # no conjugate-gradient pass
+        m.setattr(_relax, "_FALLBACK_STEPS", 0)     # no conjugate-gradient pass
         plain = ev.relax()
     energy = ev.total_energy
     ev.restore(snap)
