@@ -5,101 +5,42 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
-## Resume here (2026-10-12)
+## Resume here (2026-10-13)
 
-0.7.4 released 2026-10-12 (tag v0.7.4): stress cases 14-17 and figures for all cases,
-the slow-rounds Newton trial, repeated contact-line spoke splits, the refine-first
-warning, case 8 run with remeshing (all 14 pass).
-0.7.3 released 2026-10-12 (tag v0.7.3): everything below since 0.7.2, after a three-pillar
-review (speed, simplicity, friendliness) whose findings were all fixed.
-0.7.2 released 2026-10-12 (tag v0.7.2; the user chose 0.7.2 despite the API removals).
-Its CI failed on one test (tankex at one level asserted a thread-dependent energy; 0.7.1
-failed it too on one thread), so its x86 wheels and sdist didn't build; fixed in c6068eb.
+**Released:** 0.7.4 (2026-10-12, tag v0.7.4; wheels as workflow artifacts, not on PyPI).
+What each release changed is in CHANGELOG.md; how we got there (measurements, dropped
+experiments) in git: `git log -p docs/PLAN.md`, and the 0.7.0 condensation at
+`git show e8f7434:docs/PLAN.md`.
 
-After 0.7.2 (2026-10-12, CHANGELOG "Unreleased"; research by four agents, then the user
-asked to fix every correctness/friendliness, speed and simplicity finding and try
-Brakke's tips): `_evolver.py` split into `_errors`, `_results`, `_views`, `_geometry`,
-`_engine` (`surface` memory: relax's failed attempts, walls, load generation),
-`_analysis`, `_relax` (`_Run` holds one relax() call's settings and stages) and
-`_export`; Evolver = _Relaxing(_Analysis(_Engine)) + _Export. Bulk writes through
-scratch attributes (`pyse_mark`, `pyse_value`) and one `set ... where`. New: `shapes`,
-orientation/plane warnings at load, typo-proof `ev[...] =` (`define()`),
-`SharedEngineWarning`, `Body(volume, faces=None)` with automatic volconst,
-`Evolver.energy` (a datafile function `pyse_energy_constant()`), named constraints,
-per-vertex constraint sets, curved wires (`boundaries=`; wire vertices fixed: free
-ones bunch up, real negative modes), `contact_lines`, `energies` (energy_terms
-binding), `derivative`, `continuation(stop_on, halvings)`, `stability(eigenvalues=)`.
-C speed: Hessian setup slant only on constrained vertices, Lagrange kernels, Lagrange
-normals in the vn cache, V from per-topology rings. Tried and dropped (CHANGELOG):
-reorder_storage, CG in the rounds, sobolev_mode steps, immediate_autopop,
-target_tolerance; fewer Lagrange line-search passes, PORD.
-Then (same day, user: "do 3 and 4"): Brakke's BGA series vendored (bga-2..10, 30; 11, 12,
-31 diverge with his own recipes) with docs/solder_joints.ipynb (tools/make_solder_notebook.py);
-residual counts optimizing-parameter forces; Evolver fixes in lexinit2.c (pressures reset
-by energy quantities on load -> Newton refused after restore) and userio.c (warning
-buffer memcpy overlap); _Coords carries optimizing parameters; derivative(move, method);
-relax refines past a start without freedom; health ignores placement-only constraints;
-relax groups Evolver warnings. Lagrange g step: 9 element passes instead of 14 (agent;
-bit-identical, g 1 10-20% faster, relax 3-5%). Case 8 on old and new code
-alike: worst 3-6%, ~120 unconverged steps of ~120 states, 240-280 s.
-0.7.1 released 2026-10-11 (tag v0.7.1; wheels as workflow artifacts). 0.7.0 is tagged
-at fd9783f, whose wheel build failed (fixed in b5216d4: no fused multiply-adds on
-aarch64, render probe in a subprocess); its tag stays.
+**On main since 0.7.4** (CHANGELOG "Unreleased"): `continuation()`'s stop warning prints
+plain numbers (NumPy 2 printed `np.float64(1.4)` and failed the snippet check on the
+v0.7.4 tag; main is green); a short README with a picture (`tools/readme_figure.py`),
+its API tour moved to `docs/tour.md` and the development notes to `docs/development.md`.
 
-In 0.7.1 (CHANGELOG): stress-case figures
-(`bench/stress/figures.py`); `relax()` and `health()` on all 25 Brakke samples (strings,
-simplex, no-Hessian fallback, 10% Newton energy cap, topology stamp for undo, elastic
-and crystalline energies keep the mesh, Plateau junctions popped by default, a guarded
-last resort that lets collapsing necks/films pinch off); edge deletion refuses only
-merges that duplicate facets (studied on an instrumented 2.70a: cat.fe pinches as in
-the original); five notebooks `docs/brakke_*.ipynb` (recipe vs relax per sample).
+**State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 439 tests.
 
-Also done (2026-10-11, "Found afterwards" in CHANGELOG): newton() meets new volume
-targets (safeguard counts a missed target > 1e-4); last-resort backoff (2^k - 1 calls
-skipped after k failures); `health().junctions` via a cone_analyze binding (matches `o`
-on all 25 samples); volume guards for degenerate meshes and `health().target_gap`;
-`IterationResult.settled`; crystalline converged by energy settling; stability checked
-within 100*tol (barrel roll-up now reported at 70 and 80); wheels CI on main + weekly;
-`tools/make_brakke_notebooks.py`; `tools/check_doc_snippets.py` (+ docs CI job). The
-"spurious quotient-space negative mode" was wrong: symtest.fe's volumes are comments,
-so the instability is real. 341 tests. Case 8 on defaults (2 threads): about 500 s,
-median 0.2%; the worst state is run-dependent (over 10% in about 1/4-1/3 of runs,
-the same before and after this work: 11 old-code runs against ~30 new).
+Open, for the user to pick (proposed 2026-10-13):
 
-In 0.7.2 (2026-10-11/12, CHANGELOG; the user asked for speed,
-simplicity and user-friendliness from Brakke's resources, chose all groups, "remove
-outright" for API breaks and "run all phases, report at end"): Lagrange-stage Newton
-stops at tol; stability from the last Newton step's inertia (cutoff 1e-2, ~230
-comparisons, none disagreed); cached vertex normals (vn_* in fastloops.c);
-getc_unlocked lexer; linear_metric in stability(); one early `u` after each phase's
-first step (cbga1.fe; with `V` too it cost case 8 accuracy); API: quantity(), gravity,
-density, pop(), saddle(), contact_angles(), Mesh.slice(), walls in plots, torus
-unwrapping (facet_corners binding), glTF/VRML export, inferred body orientation;
-removed ev(), hessian(), relax's cg/window/energy_tol/pinch, recipes setters. Eight of
-Brakke's online examples vendored (fe/, attributed in THIRD_PARTY_LICENSES.txt); stress
-case 13 (Schwarz P, D). Dropped after measuring: scale-factor watch (breaks settling
-detection), fewer averagings in the CG retry (no gain), removing the CG retry (case 8
-median error doubles), pull-based contact angles (worse than normals), a C speed-up of
-save() (not profiled; only rescue paths use it). Candidates not done: splitting
-`_evolver.py` (2700 lines) into modules; `volconst="auto"`; a BGA notebook on
-parameter optimization (bga-2..12 need their .cmd files).
-
-Open, for the user to pick:
-
+* **PyPI (as 0.7.5):** a publish job in `wheels.yml` on `v*` tags (trusted publishing,
+  environment `pypi` with the user as reviewer; the user sets up the pending publisher
+  on PyPI); cp314 wheels and CI; whether to drop Python 3.9 is the user's call. The name
+  `pysurfaceevolver` was free on 2026-10-12.
+* **macOS wheels** (OpenMP, MUMPS with gfortran, Intel and ARM); Windows later.
 * **Candidates:** `newton()` returning a result object; Evolver's finite-difference
-  parameter Hessian limits relax to ~1e-7 with optimizing parameters (bga-5).
-
-* **Known limits:** case 8 is run with explicit remeshing (on defaults alone the mesh breaks down at the bead-wall corner); for
-  full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient retry
-  rescues ~1 step in 130 in case 8 but keeps its median error down; topology tests
-  are path-sensitive at several threads (run with threads=1).
-* **Do not re-propose:** remeshing inside `relax()` for case 8 (researched 2026-10-10).
+  parameter Hessian limits relax to ~1e-7 with optimizing parameters (bga-5);
+  `volconst="auto"`.
+* **Known limits:** on defaults alone case 8's mesh breaks down where the bead's
+  receding contact line meets the mid-plane (slivers; docs/relaxing.md); mylarcube ends
+  0.1% above its recipe; topology tests are path-sensitive at several threads (run
+  with threads=1).
+* **Do not re-propose:** remeshing inside `relax()` for case 8 (researched 2026-10-10,
+  and sliver merging/moving again 2026-10-12: worse over repeated runs).
 * **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
-* **Scripts:** run benchmarks and tests with OMP_NUM_THREADS=4 or less.
 
-Ask the user before each step.
+Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
 
 ## Decisions (agreed with the user)
 
@@ -139,17 +80,17 @@ Ask the user before each step.
 | D | live view, tessellation limit, HTML reprs, busy timeout, Sphinx docs + tutorial | 0.6.0 |
 | F | friendlier API: `relax(levels, tidy, newton)`, `ev.newton`, `ev.remesh`, `ev.body(i)`, mask selections, constraint builders, continuations, diagnostics as values | |
 | G, G2 | stress suite, `ev.residual()`, safeguarded Newton, stability check, conjugate-gradient fallback, contact-line spoke pass, Newton-first in Lagrange, `ev.adapt()` with the guarded collapse in C, `ev.health()` | 0.7.0; suite 1 -> 7 of 9 on defaults |
+| H | Brakke's samples and BGA series as notebooks, module split of `_evolver.py`, `shapes`, named walls, curved wires, stress cases 13-17, slow-rounds Newton trial, repeated spoke splits | 0.7.1-0.7.4; 14 of 14 stress cases |
 
 Numbers: docs/performance.md (engine and `relax()` at scale). What `relax()` does and
 where it stops working: docs/relaxing.md. The stress cases as examples:
 docs/stress_cases.md.
 
-**Stress suite** (`.venv/bin/python bench/stress/run.py [case numbers]`, about 3 min,
-results in bench/stress/results.json): 7 of 9 pass on defaults (1 column past
-Rayleigh-Plateau, 2 catenoid to its fold, 5 bridge, 6 barrel, 9 inflated cube, 11
-puddle, 12 shrinking cap). Case 3 (sessile drop) fails only at 170 degrees; case 8
-(drainage band) needs `ev.remesh(target=h)` each step. Liquid-bridge notebook grid:
-25 of 25 on `relax(levels=3)`.
+**Stress suite** (`.venv/bin/python bench/stress/run.py [case numbers]`, about 6 min,
+results in bench/stress/results.json; `bench/stress/figures.py` redraws the docs'
+figures): 14 cases, all passing, 13 on defaults and case 8 with explicit remeshing.
+Case 8 varies a lot between identical runs: judge changes on it with three or more
+paired runs and the median. Liquid-bridge notebook grid: 25 of 25 on `relax(levels=3)`.
 
 **Lessons from G/G2 that still constrain design:**
 - Thresholds layered on Evolver's mesh operations (`V`, `l`, `t`, `K`, `conj_grad`)
@@ -195,12 +136,14 @@ puddle, 12 shrinking cap). Case 3 (sessile drop) fails only at 170 degrees; case
 
 - The local `.venv` install is not editable: `pip install .` after every edit, or the
   tests run the old package.
-- The local `.venv` has numpy 1.26, CI numpy 2 (numpy floats formatted with `!r` break
-  Evolver commands). A CI-like venv: `python -m venv <dir>; <dir>/bin/pip install ".[docs]"`.
+- The local `.venv` has numpy 1.26 and old PyVista, CI the latest (numpy floats
+  formatted with `!r` break Evolver commands and change printed text). A CI-like venv:
+  `python -m venv <dir>; <dir>/bin/pip install ".[test]" mypy scipy`.
 - CI runs `python -m mypy -p pysurfaceevolver`; run it before pushing.
 - Docs: `sphinx-build -W docs <out>`; notebooks execute in the build (600 s each,
-  drainage 900 s). docs/stress_cases.md is not executed: rerun its snippets by hand
-  when relax() changes.
+  drainage 900 s). docs/stress_cases.md is not executed in the build:
+  `OMP_NUM_THREADS=2 python tools/check_doc_snippets.py` runs and compares its snippets
+  (also a CI job; `--update` rewrites the outputs).
 - Tests: `pytest`. Benchmark: `python bench/benchmark.py --levels 6 8 --threads 1 4`.
 - Profiling build: `pip install . -C build-dir=<dir> -C cmake.define.PYSE_NOSTRIP=ON
   -C install.strip=false -C cmake.define.CMAKE_C_FLAGS="-g -fno-omit-frame-pointer"`.
@@ -209,6 +152,8 @@ puddle, 12 shrinking cap). Case 3 (sessile drop) fails only at 170 degrees; case
   (`fastloops.c/h`, `fasthess.c`, bindings, Python) are LF.
 - Don't `pkill -f` a pattern that also appears in the same shell command (it kills the
   shell); kill by PID in a separate command.
-- Release: bump `__version__` in `python/pysurfaceevolver/__init__.py`, date the
+- Release: first replicate every CI job in a fresh CI-like venv (tests with
+  `PYSE_CHECK_FACET_CACHE=1`, mypy from the repo root, the docs build, the snippet
+  check). Then bump `__version__` in `python/pysurfaceevolver/__init__.py`, date the
   CHANGELOG section, annotated tag `vX.Y.Z` ("pySurfaceEvolver X.Y.Z (see
   CHANGELOG.md)"); the tag builds wheels as workflow artifacts.
