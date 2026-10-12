@@ -23,6 +23,7 @@ _CROSS_TOL = 0.01
 # new target for Newton to meet, or a gradient round gone wrong (vertex
 # averaging alone leaves volumes about 2e-5 off)
 _TARGET_LOST = 1e-4
+_DEGENERATE = 1.0              # a facet with an angle below this (degrees) is degenerate
 
 # Evolver's methods whose in-plane forces are physical (membranes)
 _ELASTIC_METHODS = frozenset({
@@ -52,6 +53,10 @@ class _Analysis(_Engine):
                 gaps.append(abs(q.target - q.value)/(abs(q.target) if q.target else 1.0))
                 cost += abs(q.pressure*(q.target - q.value))
         return max(gaps, default=0.0), cost
+
+    def _degenerate(self) -> bool:
+        """Whether a facet is degenerate (an angle below 1 degree)."""
+        return self.mesh_quality(5.0).angle_min < _DEGENERATE
 
     def _elastic(self) -> bool:
         """Whether an energy quantity uses one of Evolver's elastic methods
@@ -163,7 +168,7 @@ class _Analysis(_Engine):
             issues.append(f"not in equilibrium (residual {residual:.2g})")
         if stable is False:
             issues.append(f"unstable: {modes} direction(s) lower the energy")
-        if quality.angle_min < 1.0:
+        if quality.angle_min < _DEGENERATE:
             issues.append(f"degenerate facets (smallest angle {quality.angle_min:.2g} degrees, "
                           f"{quality.skinny} below 5)")
         for c, k in crossed.items():

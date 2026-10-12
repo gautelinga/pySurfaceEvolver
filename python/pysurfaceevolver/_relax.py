@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import functools
 import re
 import warnings
 from typing import (TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union,
@@ -31,6 +30,9 @@ _TOPOLOGY_PASSES = 5          # relax(): pop / delete collapsed edges, relax aga
 _COLLAPSED = 0.05              # an edge below this times the median has collapsed
 _COLLAPSE_STEPS = 300          # relax(): untidied gradient steps of the last resort
 _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative) is undone
+_NEWTON_RESIDUAL_RISE = 1.1    # ... and one raising both the energy and the residual by this factor
+_NEWTON_PROGRESS = 0.9         # Newton goes on while each step cuts the residual below this factor
+_TARGET_HALFWAY = 0.5          # ... or brings an unmet target this much closer
 _STABILITY_NEAR = 100          # relax() checks stability below this many times tol
 # relax() takes stability from the last Newton step's factorization if that
 # step began this close to equilibrium (residual) and counted no negative
@@ -43,6 +45,9 @@ _INERTIA_NEAR = 1e-2
 _ENERGY_TOL = 1e-5             # relax(): gradient rounds settle at this relative change...
 _WINDOW = 3                    # ... over this many rounds
 _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
+_CONTACT_PASSES = 2           # relax(): relaxes after splitting long contact-line spokes, at most
+_ROUND_BLOWUP = 2             # a gradient round more than doubling the residual or a target gap is undone
+_TURN = 15.0                  # adapt(): default turning angle (degrees) across an edge
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 class _Relaxing(_Analysis):
@@ -50,9 +55,9 @@ class _Relaxing(_Analysis):
 
     _no_hessian: bool = False      # set by _newton(): no Hessian for this surface
     _keep_mesh: bool = False       # relax(): no tidying (elastic, crystalline)
-    # set by _newton(): the coordinates a Newton step left, the negative
-    # eigenvalues its factorization counted (where it began) and the residual there
-    _inertia: "tuple[_Coords, int, float] | None" = None
+    # set by _newton(): the coordinates a Newton step left and the negative
+    # eigenvalues its factorization counted (where it began)
+    _inertia: "tuple[_Coords, int] | None" = None
 
     def iterate(self, n: int = 1, *, callback: Optional[Callable[["Evolver", int], Any]] = None,
                 every: int = 1) -> IterationResult:
@@ -201,34 +206,30 @@ class _Relaxing(_Analysis):
         self._inertia = None                # only this call's Newton steps count
         with _threads_for_call(threads), self._conj_grad(False), \
                 self._mesh_kept(keep_mesh):
-            trace = _Trace()
+            run = _Run(self, tol=tol, max_iter=max_iter, tidy=tidy, newton=newton, seek=seek,
+                       undo_if=undo_if, energy_tol=energy_tol, callback=callback, every=every)
+            trace = run.trace
             facets0 = self.counts["facets"]
-            run = functools.partial(self._gradient_phase, trace, energy_tol=energy_tol,
-                                    window=_WINDOW, callback=callback, every=every)
-            first = self._newton_first(trace, tol, newton, seek, undo_if) \
-                if newton and levels == 0 and self.model != "linear" else None
+            first = run.newton_first() if newton and levels == 0 and self.model != "linear" \
+                else None
             if first is not None:
                 steps, residual = first
             else:
                 for lev in range(levels + 1):
                     if lev:
                         self.refine()
-                    run(lev, max_iter, tidy, watch=newton > 0)
-                steps, residual = self._finish(trace, levels, run, max_iter, tidy, tol,
-                                               newton, seek, undo_if, fallback=True)
+                    run.settle(lev)
+                steps, residual = run.finish(levels)
             if self.model == "linear" and residual < tol and not keep_mesh:
-                more, residual = self._contact_pass(trace, levels + 1, run, max_iter, tidy, tol,
-                                                    newton, seek, undo_if, True, residual)
+                more, residual = run.contact_pass(levels + 1, residual)
                 steps += more
             if adapt and self.model == "linear" and not elastic:
-                turn = 15.0 if adapt is True else float(adapt)
-                first_lev = max(trace.level, default=levels) + 1
+                turn = _TURN if adapt is True else float(adapt)
+                first_lev = run.next_level(levels)
                 for lev in range(first_lev, first_lev + _ADAPT_PASSES):
                     if self.counts["facets"] > _ADAPT_GROWTH*facets0 or not self.adapt(turn):
                         break
-                    run(lev, max_iter, tidy, watch=newton > 0)
-                    more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
-                                                  seek, undo_if, fallback=True)
+                    more, residual = run.level(lev)
                     steps += more
             popped = collapsed = 0
             if self.model == "linear" and _core.representation() != 3:
@@ -237,14 +238,10 @@ class _Relaxing(_Analysis):
                     if not pops:
                         break
                     popped += pops
-                    lev = max(trace.level, default=levels) + 1
-                    run(lev, max_iter, tidy, watch=newton > 0)
-                    more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
-                                                  seek, undo_if, fallback=True)
+                    more, residual = run.level(run.next_level(levels))
                     steps += more
                 if not residual < tol and not keep_mesh:
-                    found = self._collapse(trace, run, max_iter, tidy, tol, newton, seek,
-                                           undo_if, True, levels)
+                    found = run.collapse(levels)
                     if found is not None:
                         more, residual, pops, gone = found
                         steps += more
@@ -280,68 +277,6 @@ class _Relaxing(_Analysis):
                                bool(residual < tol or (crystalline and settled)), steps,
                                np.array(trace.level, dtype=int), residual, stable, modes,
                                health, popped, collapsed, settled)
-
-    def _collapse(self, trace: "_Trace", run: Callable[..., None], max_iter: int, tidy: int,
-                  tol: float, newton: int, seek: Optional[bool],
-                  undo_if: Optional[Callable[["Evolver"], bool]], fallback: bool,
-                  levels: int) -> "tuple[int, float, int, int] | None":
-        """relax()'s last resort for an unconverged surface: gradient steps
-        without tidying (which can hold a shrinking neck open as a tube of
-        slivers), up to a few hundred, then delete what collapsed, pop and
-        relax again. Kept if that converges, or lowers the energy without
-        leaving degenerate facets; else the surface and the trace go back
-        (None). Returns the Newton steps,
-        residual, pops and deleted edges.
-
-        After k failed attempts in a row the next 2**k - 1 calls skip it (a
-        continuation that stays unconverged pays for a few attempts, not one
-        per call); a kept attempt starts the count over."""
-        memory = relax_memory
-        if memory.collapse_skip:
-            memory.collapse_skip -= 1
-            return None
-        snapshot = self.save()
-        energy = _core.total_energy()
-        residual0 = self.residual()
-        marks = (len(trace.energy), len(trace.area), len(trace.scale), len(trace.level),
-                 len(trace.output))
-        lev = max(trace.level, default=levels) + 1
-        steps = popped = gone = 0
-        residual = float("inf")
-        try:
-            run(lev, _COLLAPSE_STEPS, 0, energy_tol=_GRADIENT_ONLY_TOL)
-            gone = self._delete_collapsed()
-            if gone:
-                for _ in range(_TOPOLOGY_PASSES):
-                    popped += self.pop()
-                    run(lev, max_iter, tidy, watch=newton > 0)
-                    more, residual = self._finish(trace, lev, run, max_iter, tidy, tol, newton,
-                                                  seek, undo_if, fallback=fallback)
-                    steps += more
-                    extra = self._delete_collapsed() if not residual < tol else 0
-                    gone += extra
-                    if not extra:
-                        break
-        except EvolverError:
-            gone = 0
-        # a lower energy counts only on a sound mesh no farther from
-        # equilibrium: a coarse one can lower it by collapsing facets into
-        # what the mesh allows (tankex from 8 facets: energy 1.77 -> 0.24,
-        # residual 0.94 -> 1.38).
-        try:
-            sound = gone and not self.mesh_quality(5.0).angle_min < 1.0
-        except EvolverError:        # a facet left without its three edges
-            sound, residual = False, float("inf")
-        if gone and (residual < tol or (_core.total_energy() < energy and sound
-                                        and residual <= residual0)):
-            memory.collapse_failures = 0
-            return steps, residual, popped, gone
-        memory.collapse_failures += 1
-        memory.collapse_skip = 2**memory.collapse_failures - 1
-        self.restore(snapshot)
-        del trace.energy[marks[0]:], trace.area[marks[1]:], trace.scale[marks[2]:]
-        del trace.level[marks[3]:], trace.output[marks[4]:]
-        return None
 
     def pop(self) -> int:
         """Pop the junctions a minimal surface can't have (Evolver's ``o``:
@@ -386,63 +321,6 @@ class _Relaxing(_Analysis):
         found = re.search(r"Deleted edges:\s*(\d+)", out)
         return int(found.group(1)) if found else 0
 
-    def _newton_first(self, trace: "_Trace", tol: float, newton: int, seek: Optional[bool],
-                      undo_if: Optional[Callable[["Evolver"], bool]]) -> "tuple[int, float] | None":
-        """Five gradient steps, then safeguarded Newton steps as long as each
-        cuts the residual by at least 10% (up to ``newton``), before the usual
-        gradient rounds (relax() in the quadratic and Lagrange models; the
-        manual's 'lagrange n; g 5; hessian'): the Newton steps and residual
-        if they converge, else None with the coordinates put back. Skipped
-        (None) right after a failed attempt on this surface, so a run where
-        Newton rarely wins pays for every other attempt only. (Not in the
-        linear model: Newton moves vertices only along the normal, so over a
-        continuation the mesh doesn't follow a travelling contact line the way
-        gradient rounds make it, and accuracy drops.)"""
-        if relax_memory.newton_first_failed:
-            relax_memory.newton_first_failed = False
-            return None
-        coords = self._coords()
-        for _ in range(_NEWTON_FIRST_SETTLE):   # as the manual's 'g 5; hessian':
-            trace.step(self)                     # new high-order nodes settle first
-        trace.level += [0]*_NEWTON_FIRST_SETTLE
-        # stops at tol with the targets met (past it, steps in round-off cost
-        # a factorization each)
-        with warnings.catch_warnings():     # an attempt; far from equilibrium the
-            warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)  # Hessian is indefinite
-            steps, residual = self._newton(newton, seek, tol, undo_if, trace.output)
-        if residual < tol and self._target_gap()[0] <= _TARGET_LOST:
-            return steps, residual
-        self._put_back(coords)
-        relax_memory.newton_first_failed = True
-        return None
-
-    def _contact_pass(self, trace: "_Trace", lev: int, run: Callable[..., None], max_iter: int,
-                      tidy: int, tol: float, newton: int, seek: Optional[bool],
-                      undo_if: Optional[Callable[["Evolver"], bool]], fallback: bool,
-                      residual: float) -> "tuple[int, float]":
-        """After convergence (linear model): split the edges leaving a contact
-        line (an edge on one facet only) that are longer than 1.5 times the
-        contact-line edges at their end, and relax again, up to twice; kept
-        only if that converges, else the converged surface comes back. A
-        contact circle that shrinks (a drop at a high contact angle) otherwise
-        ends up smaller than the facets next to it. Returns the Newton steps
-        and the residual."""
-        mark = _long_spokes(self.mesh(), _SPOKE_RATIO)
-        if not mark.any():
-            return 0, residual
-        before = self.save()
-        self._split_marked(mark)
-        steps = 0
-        for _ in range(2):
-            run(lev, max_iter, tidy, watch=newton > 0)
-            more, second = self._finish(trace, lev, run, max_iter, tidy, tol, newton, seek,
-                                        undo_if, fallback=fallback)
-            steps += more
-            if second < tol:
-                return steps, second
-        self.restore(before)
-        return 0, residual
-
     @contextlib.contextmanager
     def _mesh_kept(self, on: bool) -> Iterator[None]:
         """No tidying commands in the gradient rounds for a block."""
@@ -475,41 +353,6 @@ class _Relaxing(_Analysis):
             self.command("u")
         return self.counts["vertices"] - before
 
-    def _finish(self, trace: "_Trace", lev: int, run: Callable[..., None], max_iter: int,
-                tidy: int, tol: float, newton: int, seek: Optional[bool],
-                undo_if: Optional[Callable[["Evolver"], bool]], fallback: bool) -> "tuple[int, float]":
-        """Newton steps, then (``fallback``) one conjugate-gradient pass and
-        Newton again if still unconverged, kept only if that converges. The
-        pass averages vertices but doesn't equiangulate, so the coordinates
-        taken before it can undo it. Returns the Newton steps kept and the
-        residual."""
-        steps, residual = self._newton(newton, seek, tol, undo_if, trace.output) \
-            if newton else (0, self.residual())
-        if newton and self._no_hessian:
-            # no Newton for this surface: plain gradient rounds instead, settled
-            # as with newton=0 (the residual watch, there for Newton, is off)
-            # only on a sound mesh: on degenerate facets a long gradient run
-            # slides into what the mesh allows rather than the shape (tankex
-            # from 8 facets: energy 1.6 -> 0.03)
-            budget = max_iter - trace.level.count(lev)
-            if budget > 0 and not self.mesh_quality(5.0).angle_min < 1.0:
-                run(lev, budget, tidy, energy_tol=_GRADIENT_ONLY_TOL, sound=True)
-            return 0, self.residual()
-        budget = min(max_iter - trace.level.count(lev), _FALLBACK_STEPS)
-        if not (fallback and newton and budget > 0 and np.isfinite(residual)
-                and not residual < tol):
-            return steps, residual
-        before = self._coords()
-        settled = trace.settled
-        with self._conj_grad(True):
-            run(lev, budget, tidy, watch=True, average_only=True)
-        more, second = self._newton(newton, seek, tol, undo_if, trace.output) \
-            if np.isfinite(_core.total_energy()) else (0, self.residual())
-        if second < tol or not self._put_back(before):   # (not: the topology changed)
-            return steps + more, second
-        trace.settled = settled             # the pass is undone: as the rounds before it
-        return steps, residual
-
     def _conj_grad(self, on: bool) -> "contextlib.AbstractContextManager[None]":
         """Conjugate gradients on (or off) for a block; the setting restored after."""
         return self._toggle("conj_grad", on)
@@ -520,92 +363,6 @@ class _Relaxing(_Analysis):
             return ["pyse_mark"]
         except EvolverError:
             return []
-
-    def _gradient_phase(self, trace: "_Trace", lev: int, max_iter: int, tidy: int, *,
-                        energy_tol: float, window: int,
-                        callback: Optional[Callable[["Evolver", int], Any]], every: int,
-                        watch: bool = False, average_only: bool = False,
-                        sound: bool = False) -> None:
-        """Gradient steps until the energy settles (see relax()). With tidy=k,
-        'u; V' (``average_only``: 'V') every k steps and the energy compared
-        round to round. With ``watch`` (Newton follows), also the residual at
-        the end of each round, before the tidying (which disturbs it): a round
-        that more than doubles it from its lowest is undone and ends the
-        phase. The coordinates at the start of each round also undo a round
-        whose energy turns non-finite (then EvolverError), or one that pushes
-        a met volume or quantity off its target (which ends the phase). With
-        ``sound``, the phase ends once a round leaves degenerate facets
-        (below 1 degree)."""
-        previous = _core.total_energy()
-        quiet = 0
-        best = np.inf
-        first = len(trace.energy)
-        watch = watch and tidy > 0
-        start = self._coords()
-        gap, _ = self._target_gap()
-        for i in range(1, max_iter + 1):
-            trace.step(self)
-            if callback is not None and i % every == 0:
-                callback(cast("Evolver", self), i)
-            if not np.isfinite(trace.energy[-1]):
-                bad = trace.energy[-1]
-                where = ("the surface is back where that round began" if self._put_back(start)
-                         else "its topology changed during the round, so it stays as it is")
-                raise EvolverError(f"relax(): the energy became {bad} during gradient steps; "
-                                   + where)
-            if tidy and i == 1 and self._tidy_kinds()[0] and not average_only:
-                # a coarse start triangulated badly is equiangulated before
-                # it settles into what its mesh allows (no averaging: that
-                # moves vertices, and every call would pay it)
-                trace.output.append(self.command("u"))
-                trace.energy[-1] = _core.total_energy()
-                trace.area[-1] = _core.total_area()
-                start = self._coords()
-            if tidy and i % tidy:
-                continue                  # mid-round: no convergence check
-            # on a degenerate mesh Evolver's volume projection can fail without
-            # an error: a round that pushes a volume off its target is undone
-            # (a new target, still being approached, only counts if it grows)
-            now, _ = self._target_gap()
-            if now > _TARGET_LOST and now > 2*gap:
-                if tidy and self._put_back(start):
-                    trace.energy[-1] = _core.total_energy()
-                    trace.area[-1] = _core.total_area()
-                break
-            gap = min(gap, now)
-            if watch:
-                res = self.residual()
-                if res > 2*best:            # the round went wrong: undo it, hand over
-                    self._put_back(start)       # (unless autopop etc. changed the topology)
-                    trace.energy[-1] = _core.total_energy()
-                    trace.area[-1] = _core.total_area()
-                    break
-                best = min(best, res)
-            if tidy:
-                equi, avg = self._tidy_kinds()
-                cmd = "; ".join(c for c, on in (("u", equi and not average_only), ("V", avg)) if on)
-                if cmd:
-                    trace.output.append(self.command(cmd))
-                trace.energy[-1] = _core.total_energy()
-                trace.area[-1] = _core.total_area()
-                start = self._coords()
-                if sound and self.mesh_quality(5.0).angle_min < 1.0:
-                    break
-            change = abs(trace.energy[-1] - previous) / max(1.0, abs(trace.energy[-1]))
-            previous = trace.energy[-1]
-            quiet = quiet + 1 if change < energy_tol else 0
-            if quiet >= window:
-                break
-        # vertex averaging moves volumes a little (on a degenerate mesh a lot),
-        # and the next round's steps would project them back: at the end, one
-        # step does
-        if tidy and len(trace.energy) > first and self._target_gap()[0] > _TARGET_LOST:
-            trace.step(self)
-        trace.settled = quiet >= window
-        steps = len(trace.energy) - first
-        trace.level += [lev]*steps
-        if callback is not None and steps % every != 0:
-            callback(cast("Evolver", self), steps)
 
     def newton(self, steps: int = 1, *, seek: Optional[bool] = None, tol: Optional[float] = None,
                undo_if: Optional[Callable[["Evolver"], bool]] = None,
@@ -669,14 +426,14 @@ class _Relaxing(_Analysis):
                 e1 = _core.total_energy()
                 res1 = self.residual()
                 gap1, _ = self._target_gap()
-                closer = gap0 > _TARGET_LOST and gap1 < 0.5*gap0
+                closer = gap0 > _TARGET_LOST and gap1 < _TARGET_HALFWAY*gap0
                 # with constraints the energy alone is no merit (restoring a
                 # volume can cost energy): reject what got worse on both, or
                 # raised the energy by more than a volume correction could (far
                 # from equilibrium a step can run off to a tangled surface
                 # whose residual is small)
                 bad = (not np.isfinite(e1) or not np.isfinite(res1)
-                       or (e1 > e0 + 1e-12*max(1.0, abs(e0)) and res1 > 1.1*res0
+                       or (e1 > e0 + 1e-12*max(1.0, abs(e0)) and res1 > _NEWTON_RESIDUAL_RISE*res0
                            and not closer)
                        or e1 > e0 + _NEWTON_MAX_RISE*abs(e0) + cost
                        or (undo_if is not None and undo_if(cast("Evolver", self))))
@@ -685,7 +442,7 @@ class _Relaxing(_Analysis):
                     continue
                 accepted = True
                 # (both kinds factor the Hessian where the step begins)
-                self._inertia = (self._coords(), int(self.eval("eigen_neg")), res0) \
+                self._inertia = (self._coords(), int(self.eval("eigen_neg"))) \
                     if res0 < _INERTIA_NEAR else None
                 break
             if not accepted:
@@ -694,7 +451,7 @@ class _Relaxing(_Analysis):
                 self._no_hessian = step == 0 and failed == len(kinds)
                 break
             kept += 1
-            progress = res1 < 0.9*res0 or closer
+            progress = res1 < _NEWTON_PROGRESS*res0 or closer
             res0 = res1
             gap0, cost = self._target_gap()
             if tol is not None and res1 < tol and gap0 <= _TARGET_LOST:
@@ -708,7 +465,7 @@ class _Relaxing(_Analysis):
         began near equilibrium and the surface is as it left it; else None."""
         if self._inertia is None:
             return None
-        coords, negative, _ = self._inertia
+        coords, negative = self._inertia
         if coords.stamp != _core.topology_stamp() or not np.array_equal(coords.coords,
                                                                         self.vertices):
             return None
@@ -802,7 +559,7 @@ class _Relaxing(_Analysis):
             self.command("V")
         return counts
 
-    def adapt(self, max_turn: float = 15.0, *, coarsen: bool = True) -> int:
+    def adapt(self, max_turn: float = _TURN, *, coarsen: bool = True) -> int:
         """Fit the mesh to the curvature: split the edges along which the
         surface turns by more than ``max_turn`` degrees (the angle between the
         vertex normals at its ends), such as on the strongly curved rim of a
@@ -834,11 +591,10 @@ class _Relaxing(_Analysis):
         bulk = float(np.percentile(lengths, 75))
         return self._remesh_pass(merge_below=0.75*bulk if coarsen else None,
                                  flat=max_turn/3, tilt=max_turn/2, longest=4/3*bulk,
-                                 split_turn=max_turn, split_above=None)
+                                 split_turn=max_turn)
 
     def _remesh_pass(self, *, merge_below: Optional[float], flat: float, tilt: float,
-                     longest: float, split_turn: Optional[float],
-                     split_above: Optional[float]) -> int:
+                     longest: float, split_turn: float) -> int:
         """Merge interior edges shorter than ``merge_below`` along which the
         surface turns by less than ``flat`` degrees (refused by the engine if a
         facet would tilt by more than ``tilt`` or flip, or an edge grow longer
@@ -865,12 +621,263 @@ class _Relaxing(_Analysis):
                     self.command("collapse_max_tilt := 0; collapse_max_edge := 0")
                 merged = before - self.counts["vertices"]
                 m = self.mesh()
-        mark = np.zeros(len(m.edges), dtype=bool)
-        if split_turn is not None:
-            mark |= _edge_turn(m, _edge_valence(m))[0] > split_turn
-        if split_above is not None:
-            mark |= _edge_lengths(m) > split_above
+        mark = _edge_turn(m, _edge_valence(m))[0] > split_turn
         split = self._split_marked(mark) if mark.any() else 0
         if merged and not split and self._tidy_kinds()[0]:
             self.command("u")
         return merged + split
+
+
+class _Run:
+    """One relax() call: its settings, the trace of its gradient steps, and
+    the stages it is made of (gradient rounds, Newton with its fallback, the
+    contact-line pass, the last resort)."""
+
+    def __init__(self, ev: _Relaxing, *, tol: float, max_iter: int, tidy: int, newton: int,
+                 seek: Optional[bool], undo_if: Optional[Callable[["Evolver"], bool]],
+                 energy_tol: float, callback: Optional[Callable[["Evolver", int], Any]],
+                 every: int):
+        self.ev = ev
+        self.tol, self.max_iter, self.tidy, self.newton = tol, max_iter, tidy, newton
+        self.seek, self.undo_if = seek, undo_if
+        self.energy_tol, self.callback, self.every = energy_tol, callback, every
+        self.trace = _Trace()
+
+    def next_level(self, levels: int) -> int:
+        """The level after the last one with gradient steps (adaptive passes,
+        pops and the last resort count as further levels)."""
+        return max(self.trace.level, default=levels) + 1
+
+    def level(self, lev: int) -> "tuple[int, float]":
+        """Gradient rounds, then Newton (see finish): the Newton steps and residual."""
+        self.settle(lev)
+        return self.finish(lev)
+
+    def settle(self, lev: int) -> None:
+        """The level's gradient rounds, the residual watched when Newton follows."""
+        self.rounds(lev, self.max_iter, self.tidy, watch=self.newton > 0)
+
+    def newton_steps(self) -> "tuple[int, float]":
+        return self.ev._newton(self.newton, self.seek, self.tol, self.undo_if, self.trace.output)
+
+    def newton_first(self) -> "tuple[int, float] | None":
+        """Five gradient steps, then safeguarded Newton steps as long as each
+        cuts the residual by at least 10% (up to ``newton``), before the usual
+        gradient rounds (relax() in the quadratic and Lagrange models; the
+        manual's 'lagrange n; g 5; hessian'): the Newton steps and residual
+        if they converge, else None with the coordinates put back. Skipped
+        (None) right after a failed attempt on this surface, so a run where
+        Newton rarely wins pays for every other attempt only. (Not in the
+        linear model: Newton moves vertices only along the normal, so over a
+        continuation the mesh doesn't follow a travelling contact line the way
+        gradient rounds make it, and accuracy drops.)"""
+        ev, trace = self.ev, self.trace
+        if relax_memory.newton_first_failed:
+            relax_memory.newton_first_failed = False
+            return None
+        coords = ev._coords()
+        for _ in range(_NEWTON_FIRST_SETTLE):   # as the manual's 'g 5; hessian':
+            trace.step(ev)                       # new high-order nodes settle first
+        trace.level += [0]*_NEWTON_FIRST_SETTLE
+        # stops at tol with the targets met (past it, steps in round-off cost
+        # a factorization each)
+        with warnings.catch_warnings():     # an attempt; far from equilibrium the
+            warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)  # Hessian is indefinite
+            steps, residual = self.newton_steps()
+        if residual < self.tol and ev._target_gap()[0] <= _TARGET_LOST:
+            return steps, residual
+        ev._put_back(coords)
+        relax_memory.newton_first_failed = True
+        return None
+
+    def finish(self, lev: int) -> "tuple[int, float]":
+        """Newton steps, then one conjugate-gradient pass and Newton again if
+        still unconverged, kept only if that converges. The pass averages
+        vertices but doesn't equiangulate, so the coordinates taken before it
+        can undo it. Returns the Newton steps kept and the residual."""
+        ev, trace, tol = self.ev, self.trace, self.tol
+        steps, residual = self.newton_steps() if self.newton else (0, ev.residual())
+        if self.newton and ev._no_hessian:
+            # no Newton for this surface: plain gradient rounds instead, settled
+            # as with newton=0 (the residual watch, there for Newton, is off)
+            # only on a sound mesh: on degenerate facets a long gradient run
+            # slides into what the mesh allows rather than the shape (tankex
+            # from 8 facets: energy 1.6 -> 0.03)
+            budget = self.max_iter - trace.level.count(lev)
+            if budget > 0 and not ev._degenerate():
+                self.rounds(lev, budget, self.tidy, energy_tol=_GRADIENT_ONLY_TOL, sound=True)
+            return 0, ev.residual()
+        budget = min(self.max_iter - trace.level.count(lev), _FALLBACK_STEPS)
+        if not (self.newton and budget > 0 and np.isfinite(residual) and not residual < tol):
+            return steps, residual
+        before = ev._coords()
+        settled = trace.settled
+        with ev._conj_grad(True):
+            self.rounds(lev, budget, self.tidy, watch=True, average_only=True)
+        more, second = self.newton_steps() if np.isfinite(_core.total_energy()) \
+            else (0, ev.residual())
+        if second < tol or not ev._put_back(before):   # (not: the topology changed)
+            return steps + more, second
+        trace.settled = settled             # the pass is undone: as the rounds before it
+        return steps, residual
+
+    def contact_pass(self, lev: int, residual: float) -> "tuple[int, float]":
+        """After convergence (linear model): split the edges leaving a contact
+        line (an edge on one facet only) that are longer than 1.5 times the
+        contact-line edges at their end, and relax again, up to twice; kept
+        only if that converges, else the converged surface comes back. A
+        contact circle that shrinks (a drop at a high contact angle) otherwise
+        ends up smaller than the facets next to it. Returns the Newton steps
+        and the residual."""
+        ev = self.ev
+        mark = _long_spokes(ev.mesh(), _SPOKE_RATIO)
+        if not mark.any():
+            return 0, residual
+        before = ev.save()
+        ev._split_marked(mark)
+        steps = 0
+        for _ in range(_CONTACT_PASSES):
+            more, second = self.level(lev)
+            steps += more
+            if second < self.tol:
+                return steps, second
+        ev.restore(before)
+        return 0, residual
+
+    def collapse(self, levels: int) -> "tuple[int, float, int, int] | None":
+        """relax()'s last resort for an unconverged surface: gradient steps
+        without tidying (which can hold a shrinking neck open as a tube of
+        slivers), up to a few hundred, then delete what collapsed, pop and
+        relax again. Kept if that converges, or lowers the energy without
+        leaving degenerate facets; else the surface and the trace go back
+        (None). Returns the Newton steps, residual, pops and deleted edges.
+
+        After k failed attempts in a row the next 2**k - 1 calls skip it (a
+        continuation that stays unconverged pays for a few attempts, not one
+        per call); a kept attempt starts the count over."""
+        ev, trace, tol = self.ev, self.trace, self.tol
+        memory = relax_memory
+        if memory.collapse_skip:
+            memory.collapse_skip -= 1
+            return None
+        snapshot = ev.save()
+        energy = _core.total_energy()
+        residual0 = ev.residual()
+        mark = trace.mark()
+        lev = self.next_level(levels)
+        steps = popped = gone = 0
+        residual = float("inf")
+        try:
+            self.rounds(lev, _COLLAPSE_STEPS, 0, energy_tol=_GRADIENT_ONLY_TOL)
+            gone = ev._delete_collapsed()
+            if gone:
+                for _ in range(_TOPOLOGY_PASSES):
+                    popped += ev.pop()
+                    more, residual = self.level(lev)
+                    steps += more
+                    extra = ev._delete_collapsed() if not residual < tol else 0
+                    gone += extra
+                    if not extra:
+                        break
+        except EvolverError:
+            gone = 0
+        # a lower energy counts only on a sound mesh no farther from
+        # equilibrium: a coarse one can lower it by collapsing facets into
+        # what the mesh allows (tankex from 8 facets: energy 1.77 -> 0.24,
+        # residual 0.94 -> 1.38).
+        try:
+            sound = gone and not ev._degenerate()
+        except EvolverError:        # a facet left without its three edges
+            sound, residual = False, float("inf")
+        if gone and (residual < tol or (_core.total_energy() < energy and sound
+                                        and residual <= residual0)):
+            memory.collapse_failures = 0
+            return steps, residual, popped, gone
+        memory.collapse_failures += 1
+        memory.collapse_skip = 2**memory.collapse_failures - 1
+        ev.restore(snapshot)
+        trace.rewind(mark)
+        return None
+
+    def rounds(self, lev: int, max_iter: int, tidy: int, *, watch: bool = False,
+               energy_tol: Optional[float] = None, average_only: bool = False,
+               sound: bool = False) -> None:
+        """Gradient steps until the energy settles (see relax()). With tidy=k,
+        'u; V' (``average_only``: 'V') every k steps and the energy compared
+        round to round. With ``watch`` (Newton follows), also the residual at
+        the end of each round, before the tidying (which disturbs it): a round
+        that more than doubles it from its lowest is undone and ends the
+        phase. The coordinates at the start of each round also undo a round
+        whose energy turns non-finite (then EvolverError), or one that pushes
+        a met volume or quantity off its target (which ends the phase). With
+        ``sound``, the phase ends once a round leaves degenerate facets
+        (below 1 degree)."""
+        ev, trace = self.ev, self.trace
+        energy_tol = self.energy_tol if energy_tol is None else energy_tol
+        callback, every = self.callback, self.every
+        previous = _core.total_energy()
+        quiet = 0
+        best = np.inf
+        first = len(trace.energy)
+        watch = watch and tidy > 0
+        start = ev._coords()
+        gap, _ = ev._target_gap()
+        for i in range(1, max_iter + 1):
+            trace.step(ev)
+            if callback is not None and i % every == 0:
+                callback(cast("Evolver", ev), i)
+            if not np.isfinite(trace.energy[-1]):
+                bad = trace.energy[-1]
+                where = ("the surface is back where that round began" if ev._put_back(start)
+                         else "its topology changed during the round, so it stays as it is")
+                raise EvolverError(f"relax(): the energy became {bad} during gradient steps; "
+                                   + where)
+            if tidy and i == 1 and ev._tidy_kinds()[0] and not average_only:
+                # a coarse start triangulated badly is equiangulated before
+                # it settles into what its mesh allows (no averaging: that
+                # moves vertices, and every call would pay it)
+                trace.output.append(ev.command("u"))
+                trace.refresh()
+                start = ev._coords()
+            if tidy and i % tidy:
+                continue                  # mid-round: no convergence check
+            # on a degenerate mesh Evolver's volume projection can fail without
+            # an error: a round that pushes a volume off its target is undone
+            # (a new target, still being approached, only counts if it grows)
+            now, _ = ev._target_gap()
+            if now > _TARGET_LOST and now > _ROUND_BLOWUP*gap:
+                if tidy and ev._put_back(start):
+                    trace.refresh()
+                break
+            gap = min(gap, now)
+            if watch:
+                res = ev.residual()
+                if res > _ROUND_BLOWUP*best:    # the round went wrong: undo it, hand over
+                    ev._put_back(start)          # (unless autopop etc. changed the topology)
+                    trace.refresh()
+                    break
+                best = min(best, res)
+            if tidy:
+                equi, avg = ev._tidy_kinds()
+                cmd = "; ".join(c for c, on in (("u", equi and not average_only), ("V", avg)) if on)
+                if cmd:
+                    trace.output.append(ev.command(cmd))
+                trace.refresh()
+                start = ev._coords()
+                if sound and ev._degenerate():
+                    break
+            change = abs(trace.energy[-1] - previous) / max(1.0, abs(trace.energy[-1]))
+            previous = trace.energy[-1]
+            quiet = quiet + 1 if change < energy_tol else 0
+            if quiet >= _WINDOW:
+                break
+        # vertex averaging moves volumes a little (on a degenerate mesh a lot),
+        # and the next round's steps would project them back: at the end, one
+        # step does
+        if tidy and len(trace.energy) > first and ev._target_gap()[0] > _TARGET_LOST:
+            trace.step(ev)
+        trace.settled = quiet >= _WINDOW
+        steps = len(trace.energy) - first
+        trace.level += [lev]*steps
+        if callback is not None and steps % every != 0:
+            callback(cast("Evolver", ev), steps)

@@ -466,7 +466,7 @@ def test_relax_conjugate_gradient_pass_is_kept_only_if_it_converges(monkeypatch)
     # once in 130 steps): make the first Newton pass fail and check that the
     # pass, then Newton, converges and is kept, and that an unconverged one
     # goes back
-    from pysurfaceevolver import _evolver
+    from pysurfaceevolver import _evolver, _relax
     ev = _hemisphere_drop()
     ev.relax()
     ev.parameters["theta"] = 60.0
@@ -478,7 +478,7 @@ def test_relax_conjugate_gradient_pass_is_kept_only_if_it_converges(monkeypatch)
         return (0, self.residual()) if len(calls) == 1 else real(self, *args)
 
     monkeypatch.setattr(_evolver.Evolver, "_newton", first_fails)
-    monkeypatch.setattr(_evolver.Evolver, "_collapse", lambda self, *args: None)
+    monkeypatch.setattr(_relax._Run, "collapse", lambda self, *args: None)
     r = ev.relax(stability=False)
     assert r.converged and len(calls) >= 2
     assert ev.eval("conj_grad") == 0               # the setting comes back

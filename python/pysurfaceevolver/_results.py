@@ -131,6 +131,22 @@ class _Trace:
         self.area.append(_core.total_area())
         self.scale.append(ev.eval("scale"))
 
+    def refresh(self) -> None:
+        """The last step's energy and area as they are now (after tidying it,
+        or undoing a round)."""
+        self.energy[-1] = _core.total_energy()
+        self.area[-1] = _core.total_area()
+
+    def mark(self) -> "tuple[int, ...]":
+        """Where the trace stands, for :meth:`rewind`."""
+        return tuple(len(x) for x in (self.energy, self.area, self.scale, self.level, self.output))
+
+    def rewind(self, mark: "tuple[int, ...]") -> None:
+        """Forget what came after :meth:`mark`."""
+        lists: "tuple[list, ...]" = (self.energy, self.area, self.scale, self.level, self.output)
+        for x, n in zip(lists, mark):
+            del x[n:]
+
 @dataclass(frozen=True)
 class Snapshot:
     """A saved surface from :meth:`Evolver.save`, as exact datafile text."""
