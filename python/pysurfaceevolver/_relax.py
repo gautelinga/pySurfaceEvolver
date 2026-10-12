@@ -35,6 +35,8 @@ _NEWTON_RESIDUAL_RISE = 1.1    # ... and one raising both the energy and the res
 _NEWTON_PROGRESS = 0.9         # Newton goes on while each step cuts the residual below this factor
 _TARGET_HALFWAY = 0.5          # ... or brings an unmet target this much closer
 _NO_FREEDOM = (3004, 3005)      # Evolver: fewer degrees of freedom than constraints
+_TRIAL_KEEP = 0.01             # ... and a Newton trial there is kept below this fraction of the residual
+_SLOW_ROUND = 0.95             # a round leaving the residual above this fraction of the last's is slow
 _NEWTON_STEPS = 20             # derivative(): Newton steps to reconverge, at most
 _DERIVATIVE_TOL = 1e-10        # ... down to this residual
 _STABILITY_NEAR = 100          # relax() checks stability below this many times tol
@@ -129,7 +131,13 @@ class _Relaxing(_Analysis):
           grow), 1e-9 with ``newton=0``, or ``max_iter`` steps. When Newton follows, a round that more than
           doubles the residual from its lowest so far is undone and Newton
           takes over (on a coarse mesh a contact line can collapse within a
-          few steps).
+          few steps). Rounds that have used half of ``max_iter`` and keep
+          slowing without settling (the residual falling by less than 5% a
+          round, three rounds running: a contact line creeping over a curved
+          wall) get a trial of Newton steps,
+          kept if they converge or cut the residual a hundredfold; otherwise
+          the surface goes back and the rounds go on (a neck shrinking toward
+          a pinch-off creeps the same way).
         * Then up to ``newton`` safeguarded Newton steps (see :meth:`newton`;
           ``seek`` and ``undo_if`` as there), until the residual is below
           ``tol`` or stops falling.
@@ -534,7 +542,7 @@ class _Relaxing(_Analysis):
 
     def _newton(self, steps: int, seek: Optional[bool], tol: Optional[float],
                 undo_if: Optional[Callable[["Evolver"], bool]],
-                output: List[str]) -> "tuple[int, float]":
+                output: List[str], grace: bool = False) -> "tuple[int, float]":
         """Safeguarded Newton steps; see newton(). Returns the steps kept and
         the residual of the surface as it is left."""
         kept = 0
@@ -595,6 +603,8 @@ class _Relaxing(_Analysis):
             if tol is not None and res1 < tol and gap0 <= _TARGET_LOST:
                 break
             if not progress:
+                if grace and step == 0:     # (a trial: one slow first step allowed)
+                    continue
                 break
         return kept, res0
 
@@ -802,6 +812,8 @@ class _Run:
         self.seek, self.undo_if = seek, undo_if
         self.energy_tol, self.callback, self.every = energy_tol, callback, every
         self.trace = _Trace()
+        self.slowed = False         # the last rounds ended slowing down (see settle)
+        self.early_newton = 0       # Newton steps a trial in settle() kept
 
     def next_level(self, levels: int) -> int:
         """The level after the last one with gradient steps (adaptive passes,
@@ -814,16 +826,41 @@ class _Run:
         return self.finish(lev)
 
     def settle(self, lev: int) -> None:
-        """The level's gradient rounds, the residual watched when Newton follows."""
-        self.rounds(lev, self.max_iter, self.tidy, watch=self.newton > 0)
+        """The level's gradient rounds, the residual watched when Newton
+        follows. When the rounds have used half of ``max_iter`` and are
+        slowing down without settling (a contact line creeping over a curved
+        wall: the residual falling by less than 5% a round, three rounds
+        running), Newton is tried there; kept if it
+        converges or cuts the residual a hundredfold, else the surface goes
+        back and the rounds carry on as before (a neck shrinking toward a pinch-off creeps the same way, and
+        there the rounds must go on)."""
+        ev, watch = self.ev, self.newton > 0
+        self.slowed = False
+        self.rounds(lev, self.max_iter, self.tidy, watch=watch, slow_exit=watch)
+        if not self.slowed:
+            return
+        coords = ev._coords()
+        before = ev.residual()
+        kept, residual = self.newton_steps(grace=True)
+        # kept if it converged, or got well on the way (the level's Newton
+        # carries on from there; a soft mode can make Newton slow)
+        keep = (residual < self.tol or residual < _TRIAL_KEEP*before) \
+            and ev._target_gap()[0] <= _TARGET_LOST
+        if keep:
+            self.early_newton += kept
+            return
+        ev._put_back(coords)
+        used = self.trace.level.count(lev)
+        if used < self.max_iter:
+            self.rounds(lev, self.max_iter - used, self.tidy, watch=watch)
 
-    def newton_steps(self) -> "tuple[int, float]":
+    def newton_steps(self, grace: bool = False) -> "tuple[int, float]":
         # far from equilibrium the Hessian is indefinite, which Evolver
         # prints at every step; relax() checks stability itself at the end
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
             return self.ev._newton(self.newton, self.seek, self.tol, self.undo_if,
-                                   self.trace.output)
+                                   self.trace.output, grace)
 
     def newton_first(self) -> "tuple[int, float] | None":
         """Five gradient steps, then safeguarded Newton steps as long as each
@@ -854,6 +891,13 @@ class _Run:
         return None
 
     def finish(self, lev: int) -> "tuple[int, float]":
+        """Newton steps, and the conjugate-gradient fallback (see _finish);
+        counting the steps a trial in settle() kept."""
+        steps, residual = self._finish(lev)
+        early, self.early_newton = self.early_newton, 0
+        return steps + early, residual
+
+    def _finish(self, lev: int) -> "tuple[int, float]":
         """Newton steps, then one conjugate-gradient pass and Newton again if
         still unconverged, kept only if that converges. The pass averages
         vertices but doesn't equiangulate, so the coordinates taken before it
@@ -964,7 +1008,7 @@ class _Run:
 
     def rounds(self, lev: int, max_iter: int, tidy: int, *, watch: bool = False,
                energy_tol: Optional[float] = None, average_only: bool = False,
-               sound: bool = False) -> None:
+               sound: bool = False, slow_exit: bool = False) -> None:
         """Gradient steps until the energy settles (see relax()). With tidy=k,
         'u; V' (``average_only``: 'V') every k steps and the energy compared
         round to round. With ``watch`` (Newton follows), also the residual at
@@ -985,6 +1029,7 @@ class _Run:
         watch = watch and tidy > 0
         start = ev._coords()
         gap, _ = ev._target_gap()
+        slow, last_res = 0, 0.0
         for i in range(1, max_iter + 1):
             trace.step(ev)
             if callback is not None and i % every == 0:
@@ -1020,6 +1065,10 @@ class _Run:
                     trace.refresh()
                     break
                 best = min(best, res)
+                if slow_exit:                   # falling, but slowly (see settle)
+                    slow = slow + 1 if last_res and _SLOW_ROUND*last_res < res < last_res \
+                        else 0
+                    last_res = res
             if tidy:
                 equi, avg = ev._tidy_kinds()
                 cmd = "; ".join(c for c, on in (("u", equi and not average_only), ("V", avg)) if on)
@@ -1033,6 +1082,11 @@ class _Run:
             previous = trace.energy[-1]
             quiet = quiet + 1 if change < energy_tol else 0
             if quiet >= _WINDOW:
+                break
+            # slowing down without settling, with half the budget gone (a
+            # surface that settles normally never gets here)
+            if slow >= _WINDOW and i >= max_iter//2:
+                self.slowed = True
                 break
         # vertex averaging moves volumes a little (on a degenerate mesh a lot),
         # and the next round's steps would project them back: at the end, one

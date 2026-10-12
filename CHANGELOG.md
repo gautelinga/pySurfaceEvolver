@@ -7,13 +7,8 @@
 - Four new cases (`bench/stress/`, and sections in the stress cases page), each on
   `relax()`'s defaults against an exact or converged reference:
   - 14, a drop on a sphere, its contact angle swept from 20 to 150 degrees as a
-    parameter (exact spherical caps): energies within 0.3%, but most steps end
-    unconverged. The contact line creeps over the curved wall, the gradient rounds
-    use up `max_iter`, and Newton stops after a first step that lowers the energy
-    while barely cutting the residual (a second `relax()` or a few `newton()` steps
-    then converge). Two fixes were tried and dropped: counting the energy drop as
-    progress broke the catenoid past its fold (case 2), and a budget of its own for
-    the conjugate-gradient fallback broke `max_iter`.
+    parameter (exact spherical caps): energies within 0.2%. It found the defect
+    fixed below.
   - 15, a double bubble from two boxes, the second volume shrunk to 0.2 (the standard
     double bubble): area and pressures within 0.2%.
   - 16, a solder joint's force on its pad (Brakke's bga-3) against his axisymmetric
@@ -24,7 +19,29 @@
 - `docs/stress_helpers.py` has the exact references (`drop_on_sphere`,
   `double_bubble`).
 
+### relax()
+
+- Gradient rounds that creep without settling (a contact line moving slowly over a
+  curved wall) used up `max_iter`, and Newton then gave up after one slow step:
+  stress case 14 ended most steps unconverged. Now, once the rounds have used half of
+  `max_iter` with the residual falling by less than 5% a round (three rounds
+  running), Newton is tried there; kept if it converges or cuts the residual a
+  hundredfold, otherwise the surface goes back and the rounds go on (a neck
+  shrinking toward a pinch-off creeps the same way, and must go on: case 2). Case 14
+  now converges at every step, in half the time; every other case gives the results
+  it gave before. Tried and dropped on the way: counting an energy drop as Newton
+  progress (case 2 failed past its fold), a budget of its own for the
+  conjugate-gradient fallback (it broke `max_iter`), and the trial without the
+  half-budget condition (fewer tidying rounds cost accuracy: the gravity puddle
+  went from 0.22% to 0.54%).
+- Stress case 8's unconverged states traced: in a typical band state 95% of the
+  residual (squared) sits in ten vertices at the corner where a bead's contact line
+  meets the wall, with facets under a degree and vertices pushed into the bead. A
+  local mesh breakdown, which only remeshing there fixes (not done by `relax()`).
+
 ### Documentation
+
+- Figures for stress cases 13 to 17.
 
 - The site reads as one path: grouped navigation (getting started, guides,
   examples, Brakke's samples, reference), every page saying what it adds and

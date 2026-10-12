@@ -7,15 +7,10 @@ minus cos(theta) times the wetted area) and pressure. Checked: Evolver.energy
 the line integrals leave out come from the constraint, with the angle a
 parameter) and the pressure to 0.5%, every step converged; the contact angles
 measured on the mesh within 3 degrees (first order in the edge length).
-Each sweep starts from the 90 degree drop.
-
-Fails on defaults (October 2026): as the contact line creeps over the sphere,
-the gradient rounds never settle (1e-5 per round) and use up max_iter; the
-first Newton step then lowers the energy but cuts the residual by less than
-10%, so Newton stops and the step ends unconverged, although plain Newton
-steps from there converge quadratically. Counting such an energy drop as
-progress broke case 2 past its fold; giving the conjugate-gradient fallback
-its own budget broke max_iter. Energies stay within 0.3% regardless."""
+Each sweep starts from the 90 degree drop. (As the contact line creeps over
+the sphere the gradient rounds slow down without settling; past half of
+max_iter relax() then tries Newton, and this case is what that rule was made for: before it, the
+rounds used up max_iter and most steps ended unconverged.)"""
 
 import os
 import sys

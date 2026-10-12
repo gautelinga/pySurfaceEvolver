@@ -399,7 +399,7 @@ print(f"height {ev.mesh().vertices[:, 2].max():.4f} (reference {ref['height']:.4
 ```
 
 ```text
-height 1.0738 (reference 1.0714), energy 62.6159 (reference 62.5967)
+height 1.0740 (reference 1.0714), energy 62.6181 (reference 62.5967)
 ```
 
 Height and energy within 0.25%.
@@ -558,25 +558,25 @@ for step in recipes.continuation(ev, "theta", [75, 60, 45, 30]):
 ```
 
 ```text
-theta 75: energy 2.46377 (exact 2.46113), pressure 3.4789 (exact 3.4772), angle on the mesh 72.6, NOT converged
-theta 60: energy 2.17858 (exact 2.17580), pressure 3.1790 (exact 3.1767), angle on the mesh 57.3, NOT converged
-theta 45: energy 1.85078 (exact 1.84797), pressure 2.8287 (exact 2.8250), angle on the mesh 41.9, NOT converged
-theta 30: energy 1.50555 (exact 1.50271), pressure 2.4575 (exact 2.4508), angle on the mesh 26.2, NOT converged
+theta 75: energy 2.46376 (exact 2.46113), pressure 3.4788 (exact 3.4772), angle on the mesh 72.9, converged
+theta 60: energy 2.17851 (exact 2.17580), pressure 3.1781 (exact 3.1767), angle on the mesh 58.7, converged
+theta 45: energy 1.85060 (exact 1.84797), pressure 2.8262 (exact 2.8250), angle on the mesh 43.8, converged
+theta 30: energy 1.50512 (exact 1.50271), pressure 2.4525 (exact 2.4508), angle on the mesh 28.3, converged
 ```
 
-The energies and pressures stay within 0.3% of the exact cap's at 1,700 facets; the
-contact angle measured on the mesh lags the set one by a degree or more (it is first
-order in the edge length). But this case shows a limit of the defaults: as the contact
-line creeps over the sphere the gradient rounds never settle, use up `max_iter`, and
-Newton stops after a first step that lowers the energy without cutting the residual
-much, so most steps end unconverged (`step.result.converged` is False). A few more
-`ev.newton()` steps converge from there, quadratically.
+The energies and pressures are within 0.2% of the exact cap's at 1,700 facets; the
+contact angle measured on the mesh lags the set one by a degree or two (it is first
+order in the edge length). As the contact line creeps over the sphere, gradient steps
+make slow progress: once the rounds have used half of `max_iter` with the residual
+falling by less than 5% a round, `relax()` tries Newton there, which converges in a
+few steps. (Before that rule, the rounds used up `max_iter` and most steps ended
+unconverged.)
 
 ```{figure} _static/stress/case14.png
 :alt: Case 14: result, error and solver steps
 :width: 100%
 
-Left, the energy against the exact cap. Middle, the errors in energy and pressure (limit 0.5%). Right, what relax() did, in the order run: most steps use the full 1,000 gradient steps and end unconverged.
+Left, the energy against the exact cap. Middle, the errors in energy and pressure (limit 0.5%). Right, what relax() did, in the order run.
 ```
 
 ```{figure} _static/stress/case14_shapes.png

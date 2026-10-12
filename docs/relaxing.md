@@ -143,26 +143,26 @@ first damaged one of the others. The one who knows the geometry picks `h`.
 
 ## Where the defaults stop working
 
-Of the fourteen stress cases, eleven pass with defaults alone: a liquid column past
+Of the fourteen stress cases, twelve pass with defaults alone: a liquid column past
 Rayleigh-Plateau (the instability shows at 1.8% past its onset), a catenoid up to its
 fold, a liquid bridge with the gap closing to 1e-3, a barrel drop on a fibre (its
 roll-up reported as an instability), a cube inflated a hundredfold, a gravity puddle,
 a drop shrinking to 1e-4 of its volume, Schwarz's P and D surfaces in quotient
-spaces (to 1e-6 and 2e-5 when extrapolated), a double bubble, a solder joint's force
-(to 5e-5 against an axisymmetric model, extrapolated) and a catenoid between round
-wires stopped at its fold. Three don't:
+spaces (to 1e-6 and 2e-5 when extrapolated), a drop on a sphere from 20 to 150
+degrees, a double bubble, a solder joint's force (to 5e-5 against an axisymmetric
+model, extrapolated) and a catenoid between round wires stopped at its fold. Two
+don't:
 
 * **A drop at 170 degrees** on a coarse starting mesh (480 facets): the implied contact
   angle is 1.7 degrees off (the case allows 1.5; up to 160 degrees it passes). More
   resolution helps.
-* **A drop on a sphere** with its contact angle swept: the contact line creeps over
-  the curved wall, the gradient rounds use up `max_iter` without settling, and Newton
-  stops after one step that lowers the energy but barely cuts the residual. Most
-  steps end unconverged, although energies stay within 0.3% and a few `ev.newton()`
-  steps converge from there.
 * **The drainage band** ({doc}`slit_drainage`) on plain defaults: band pressures
   up to several percent off (median 0.3%). With `ev.remesh(target=h)` each step, as in the notebook, they
-  agree with a finer reference to 0.02% (median).
+  agree with a finer reference to 0.02% (median). Without it the mesh breaks down at
+  the corner where a bead's contact line meets the wall: in a typical band state 95%
+  of the residual (squared) sits in ten vertices there, with facets under a degree
+  and vertices pushed into the bead, so nearly every state ends unconverged although
+  the pressure is within a few percent.
 
 Other things to know:
 
