@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import numpy as np
 
@@ -141,8 +141,8 @@ def add_walls(plotter: "pyvista.Plotter", walls) -> None:
         if mesh is None or not hasattr(mesh, "n_points"):
             raise TypeError(f"walls[{k}]: a constraint from pysurfaceevolver.constraints "
                             "(plane, sphere, cylinder) or a PyVista mesh")
-        style = ({"color": "gray", "opacity": 0.2} if shape and shape[0] == "plane"
-                 else {"color": "sandybrown"})
+        style: Dict[str, Any] = ({"color": "gray", "opacity": 0.2}
+                                 if shape and shape[0] == "plane" else {"color": "sandybrown"})
         plotter.add_mesh(mesh, name=f"evolver-wall-{k}", **style)
 
 

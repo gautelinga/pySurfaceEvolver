@@ -160,9 +160,9 @@ class _Analysis(_Engine):
         # one no vertex is on still is (the surface may come close)
         def placement(c: int) -> bool:
             on = np.isnan(dist[:, c]) & used
-            return not attrs[c] & 3 and on.any() and not (on & moving).any()
+            return bool(not attrs[c] & 3 and on.any() and not (on & moving).any())
         active = np.array([not placement(c) for c in range(len(nums))], dtype=bool)
-        for c in np.flatnonzero(active):
+        for c in np.flatnonzero(active).tolist():
             d = dist[:, c]
             on = np.isnan(d) & used
             off = ~np.isnan(d) & free
