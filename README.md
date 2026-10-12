@@ -1,6 +1,6 @@
 # pySurfaceEvolver
 
-A Python frontend to Ken Brakke's [Surface Evolver](http://www.susqu.edu/brakke/evolver)
+A Python frontend to Ken Brakke's [Surface Evolver](https://kenbrakke.com/evolver/evolver.html)
 (version 2.70a). Evolver runs in-process as a compiled extension module built with
 [nanobind](https://github.com/wjakob/nanobind); the mesh comes back as NumPy arrays.
 
@@ -10,9 +10,12 @@ pip install ".[all]"     # + PyVista (visualization, also in Jupyter) and meshio
 pip install ".[jupyter]" # PyVista with its notebook backend only
 ```
 
-Documentation: <https://gautelinga.github.io/pySurfaceEvolver/>, with an API
-reference, a tutorial (a double bubble, from arrays to a FEM-ready mesh), worked
-examples and performance numbers; built from `docs/` with Sphinx (see Development).
+Documentation: <https://gautelinga.github.io/pySurfaceEvolver/>. Start with
+[Getting started](https://gautelinga.github.io/pySurfaceEvolver/getting_started.html)
+(installing, a drop on a table, the conventions), then the tutorial (a double bubble,
+from arrays to a FEM-ready mesh), the guide to `relax()`, worked examples, Brakke's
+sample datafiles, the API reference, stress cases and performance numbers. The site is
+built from `docs/` with Sphinx (see Development).
 
 ## A drop on a table, end to end
 
@@ -32,10 +35,10 @@ rim = ev.contact_lines(1)[0]                     # the contact line, in order
 ev.plot(walls=True)                              # with the table drawn
 ```
 
-Conventions: facets point out of the liquid, a plane's normal into it (spheres and
-cylinders are solid); body and element numbers in Evolver (`ev.body(1)`, `vertex[5]`)
-are 1-based, array rows (`ev.mesh()`, `ev.bodies().pressure[0]`) 0-based. A body
-whose faces point into it, or a plane facing the solid, gets a warning when it loads.
+Facets point out of the liquid, a plane's normal into it; Evolver's numbers start at
+1, array rows at 0. The
+[conventions](https://gautelinga.github.io/pySurfaceEvolver/getting_started.html#conventions)
+say it in full, and what `ev.energy` counts.
 
 ## Scripting
 
@@ -193,46 +196,14 @@ more rows in the docs' performance page):
 | Newton step, Lagrange 6, 24k facets | 22.9 | 4.2 | 1.8 | 1.42 |
 | `u` + `V`, 393k facets | 1.23 | 0.73 | 0.24 | 0.14 |
 
-For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature
-energies), the facet volume, energy and force loops and the body volume
-gradients use a cached facet topology and run in parallel (OpenMP): each thread
-sums its share of the facets, and the partial sums are merged in thread order. Results agree with Evolver's original
-loops to round-off (about 1e-15 per evaluation; runs that stop short of
-equilibrium can drift further apart, equilibria agree) and are reproducible for a
-given thread count.
-
-Named quantities (the Lagrange model, `convert_to_quantities`, quantity integrals
-on facets, edges and vertices) run in parallel too, for methods known to be
-thread-safe; integrands that use only arithmetic, math functions, parameters and
-coordinates qualify, others (user procedures, assignments, ...) run serially.
-
-Threads default to the number of physical cores. `pyse.set_threads(n)` /
-`pyse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`);
-`with pyse.threads_limit(n):` sets them for a block, and `ev.relax(...,
-threads=n)` / `ev.newton(threads=n)` for one call; `pyse.map`
-workers run single-threaded by default, since for sweeps more processes beat more
-threads. With several threads, results can differ from run to run at round-off
-level; with one thread they are reproducible bit for bit. Newton steps keep the
-matrix's sparsity pattern from one step to the next while the topology is unchanged,
-and add entries into it in parallel (`PYSE_NO_PATTERN=1` turns that off).
-`PYSE_NO_FAST_LOOPS=1` switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
-facet corner against Evolver's own topology (CI runs with it).
-
-Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.org/)
-(sequential, LDL^T with pivoting, inertia for the Hessian index) when pySE is built
-with it: wheels are; a source build downloads and builds MUMPS if a Fortran compiler
-and LAPACK/BLAS are found (use an optimized BLAS such as OpenBLAS: the reference BLAS
-makes MUMPS several times slower), and otherwise uses Evolver's own factoring.
-Use the OpenMP build of OpenBLAS: a pthreads OpenBLAS runs single-threaded inside
-MUMPS's threads, and large Newton steps are up to 2x slower (1.6M facets: 3.8 s against
-2.7 s). The build looks for one (Debian/Ubuntu: `libopenblas-openmp-dev`; Fedora:
-`openblas-openmp`, with `openblas-static`) and links its static library into pySE with
-private symbols, so it is used whatever BLAS NumPy loads; without one it warns at build
-time and at the first Newton step. Wheels bundle their own.
-`pyse.set_solver("evolver")`
-(or `PYSE_SOLVER=evolver`) switches back to Evolver's minimal-degree factoring;
-`pyse.solver()` tells which is in use. For the Lagrange model, the Hessian is also
-assembled in parallel.
+Iterations, Newton steps, equiangulation and vertex averaging run in parallel
+(OpenMP), and Newton steps factor the Hessian with [MUMPS](https://mumps-solver.org/).
+Threads default to the number of physical cores; `pyse.set_threads(n)`,
+`with pyse.threads_limit(n):` or `OMP_NUM_THREADS` change that. With one thread
+results are reproducible bit for bit, with several they can differ at round-off. The
+[performance page](https://gautelinga.github.io/pySurfaceEvolver/performance.html)
+says what runs in parallel, how to control threads and the solver, and how to build
+with an optimized BLAS.
 
 ## Errors and interrupts
 

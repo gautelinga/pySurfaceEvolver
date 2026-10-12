@@ -1,5 +1,11 @@
 # Performance
 
+How fast pySE is against Brakke's original program, what a default `relax()` costs on
+large surfaces, and how to control threads and the Newton solver. For setting up and
+relaxing surfaces, start with {doc}`getting_started` and {doc}`relaxing`.
+
+## Against the original Evolver
+
 A rough comparison with Brakke's original Surface Evolver 2.70a, measured on
 2026-10-08. The original was built from the unmodified sources with its own Linux
 settings (`gcc -O3 -DLINUX`, no graphics; one empty stub function had to be added
@@ -144,5 +150,52 @@ Tried and not kept: MUMPS's PORD ordering (its
 analysis costs more than it saves; METIS isn't built), storage reordering along a
 space-filling curve (gradient steps 2x slower).
 
+## Threads and the Newton solver
+
+For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature
+energies), the facet volume, energy and force loops and the body volume
+gradients use a cached facet topology and run in parallel (OpenMP): each thread
+sums its share of the facets, and the partial sums are merged in thread order. Results agree with Evolver's original
+loops to round-off (about 1e-15 per evaluation; runs that stop short of
+equilibrium can drift further apart, equilibria agree) and are reproducible for a
+given thread count.
+
+Named quantities (the Lagrange model, `convert_to_quantities`, quantity integrals
+on facets, edges and vertices) run in parallel too, for methods known to be
+thread-safe; integrands that use only arithmetic, math functions, parameters and
+coordinates qualify, others (user procedures, assignments, ...) run serially.
+
+Threads default to the number of physical cores. `pyse.set_threads(n)` /
+`pyse.threads()` control them (also `OMP_NUM_THREADS`, or `PYSE_THREADS`);
+`with pyse.threads_limit(n):` sets them for a block, and `ev.relax(...,
+threads=n)` / `ev.newton(threads=n)` for one call; `pyse.map`
+workers run single-threaded by default, since for sweeps more processes beat more
+threads. With several threads, results can differ from run to run at round-off
+level; with one thread they are reproducible bit for bit. Newton steps keep the
+matrix's sparsity pattern from one step to the next while the topology is unchanged,
+and add entries into it in parallel (`PYSE_NO_PATTERN=1` turns that off).
+`PYSE_NO_FAST_LOOPS=1` switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
+facet corner against Evolver's own topology (CI runs with it).
+
+Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.org/)
+(sequential, LDL^T with pivoting, inertia for the Hessian index) when pySE is built
+with it: wheels are; a source build downloads and builds MUMPS if a Fortran compiler
+and LAPACK/BLAS are found (use an optimized BLAS such as OpenBLAS: the reference BLAS
+makes MUMPS several times slower), and otherwise uses Evolver's own factoring.
+Use the OpenMP build of OpenBLAS: a pthreads OpenBLAS runs single-threaded inside
+MUMPS's threads, and large Newton steps are up to 2x slower (1.6M facets: 3.8 s against
+2.7 s). The build looks for one (Debian/Ubuntu: `libopenblas-openmp-dev`; Fedora:
+`openblas-openmp`, with `openblas-static`) and links its static library into pySE with
+private symbols, so it is used whatever BLAS NumPy loads; without one it warns at build
+time and at the first Newton step. Wheels bundle their own.
+`pyse.set_solver("evolver")`
+(or `PYSE_SOLVER=evolver`) switches back to Evolver's minimal-degree factoring;
+`pyse.solver()` tells which is in use. For the Lagrange model, the Hessian is also
+assembled in parallel.
+
 `bench/benchmark.py` in the repository measures pySE alone (`--threads`,
 `--levels`, `--json` to compare runs).
+
+See also: {doc}`relaxing` (what `relax()` does at each stage, and its cost at 400k
+facets) and the {doc}`api` for {func}`~pysurfaceevolver.set_threads` and
+{func}`~pysurfaceevolver.set_solver`.

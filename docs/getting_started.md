@@ -1,9 +1,24 @@
 # Getting started
 
-A drop on a table, end to end, and the conventions every surface built from arrays
-follows: which way normals point, what `ev.energy` counts, how to change the surface
-tension, how accurate the measured contact angles are, and how Evolver's numbers
-relate to array rows.
+Install pySE, put a drop on a table, and learn the conventions every other page
+follows: which way normals point, how Evolver's numbers relate to array rows, what
+`ev.energy` counts, how to change the surface tension, and how accurate measured
+contact angles are. No knowledge of Surface Evolver is needed; some NumPy is.
+
+## Install
+
+From a clone of the repository (a C and C++ compiler is needed; builds and CI cover
+Linux):
+
+```bash
+pip install .            # core
+pip install ".[all]"     # + PyVista (plots, also in Jupyter) and meshio (mesh files)
+pip install ".[jupyter]" # PyVista with its notebook backend only
+```
+
+`volume_mesh` (tetrahedra from a closed surface) needs `pip install gmsh` too. For fast
+Newton steps a source build downloads and builds MUMPS when it finds a Fortran compiler
+and LAPACK/BLAS; use the OpenMP build of OpenBLAS ({doc}`performance` has the details).
 
 ## A drop on a table
 
@@ -59,6 +74,12 @@ a surface, `make_datafile` orients them outward itself; otherwise it takes their
 order (or `Body(orientation=...)`). A body whose faces point into it, or a plane facing
 the solid, gets a warning when it loads.
 
+**Contact angles** are in degrees, measured through the liquid (below 90: the liquid
+wets the wall). Given as a datafile parameter's name (`contact_angle="theta"`, with
+`parameters={"theta": 60}`), an angle can be changed on a loaded surface:
+`ev.parameters["theta"] = 50`, then relax. Mirror planes (`C.mirror`) carry no
+wetting energy: the surface meets them at 90 degrees by itself.
+
 **Numbers and rows.** Evolver numbers elements and bodies from 1: `ev.body(1)`,
 constraint 1 in `vertex_constraints`, `ev.on_constraint(1)`, and commands such as
 `ev.eval("vertex[5].z")`. Arrays are NumPy rows from 0: `ev.mesh().vertices[0]`,
@@ -68,7 +89,11 @@ or remeshing, rows and numbers no longer differ by one, so map through these.
 Constraints may also be named (`constraints={"table": C.plane(...)}`, avoiding
 Evolver's reserved words such as `floor`), and then referred to by name.
 
-## Energies: `ev.energy` and `ev.total_energy`
+## Energies
+
+Use `ev.energy`, the energy to compare with a reference; `ev.total_energy` is
+Evolver's own. They differ only where a wall's contact-line integrals can't cover the
+wetted region.
 
 A wall's wetting energy, $-\gamma\cos\theta$ per wetted area, and its part of the
 liquid's volume are line integrals along the contact line, which `pyse.constraints`
@@ -124,3 +149,13 @@ The energy converges much faster (second order). A degree off on a mesh of a few
 thousand facets is normal and doesn't mean the contact angle is wrong in the model:
 it is imposed through the energy, exactly. Compare refined meshes, or measure
 something smoother (the contact radius, the pressure).
+
+## Where next
+
+* The {doc}`tutorial` builds a double bubble from arrays, relaxes it, finishes it with
+  high-order elements and writes a mesh for a finite-element code.
+* {doc}`relaxing` explains what `relax()` did above and how to read its result.
+* {doc}`liquid_bridge` puts contact angles on curved solids, and is the first of the
+  worked examples.
+* The README on [GitHub](https://github.com/gautelinga/pySurfaceEvolver) lists the
+  API in brief, and the {doc}`api` documents all of it.
