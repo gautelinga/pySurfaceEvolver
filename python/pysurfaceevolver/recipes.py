@@ -188,7 +188,8 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
             ev.restore(good)
             why = ("unconverged" if getattr(result, "converged", True) is False else
                    "pinched off" if getattr(result, "collapsed", 0) else "unstable")
-            warnings.warn(f"continuation() stopped before {value!r}: relax() came out {why} "
+            at = np.asarray(value).tolist()     # plain numbers, not np.float64(...)
+            warnings.warn(f"continuation() stopped before {at}: relax() came out {why} "
                           "there; the surface is back at the last good step",
                           UserWarning, stacklevel=2)
             return

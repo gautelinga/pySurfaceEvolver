@@ -178,6 +178,13 @@ def test_continuation_stops_at_the_first_failed_step_and_halves(cube):
     assert [s.value for s in steps] == [0.2, 0.4] and cube["pp"] == 0.4
     last["pp"] = 0.0
     cube["pp"] = 0.0
+    # numpy steps: the warning names the value as a plain number (numpy 2's repr
+    # would say np.float64(1.0))
+    with pytest.warns(UserWarning, match=r"stopped before 1\.0:"):
+        list(recipes.continuation(cube, "pp", np.array([0.2, 0.4, 1.0]), relax=relax,
+                                  stop_on="unconverged"))
+    last["pp"] = 0.0
+    cube["pp"] = 0.0
     steps = list(recipes.continuation(cube, "pp", [0.2, 0.4, 1.0], relax=relax,
                                       stop_on="unconverged", halvings=2))
     assert [s.substeps for s in steps] == [1, 1, 4] and cube["pp"] == 1.0

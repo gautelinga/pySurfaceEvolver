@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- `continuation()`'s warning when it stops names the step as a plain number; with
+  NumPy 2 and NumPy steps it said `np.float64(1.4)`.
+
 ## 0.7.4 (2026-10-12)
 
 Four new stress cases, all fourteen passing; `relax()` converges where gradient rounds
