@@ -1511,49 +1511,75 @@ long fl_lagrange_tables_version = 0;
 #define LG_MAXCTRL 64
 
 /* out_k[r] = sum_l col_l[r] x_k[l], k = 0..2, summed over l in order; an AVX2
-   version is picked at run time where available (no FMA: same rounding) */
+   version is picked at run time where available (no FMA: same rounding).
+   Blocks of four rows keep their sums in registers over all control points
+   (the packed columns are padded to a multiple of four rows). */
+#if defined(__GNUC__)
+typedef double lg_v4 __attribute__((vector_size(32)));
+#endif
 #if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
 __attribute__((target_clones("avx2","default")))
 #endif
-static void lg_kernel(const double *packed, int stride, int rows, int ctrl,
+static void lg_kernel(const double *restrict packed, int stride, int rows, int ctrl,
                       double X[3][LG_MAXCTRL], double out[3][LG_MAXROWS])
 { int l, r;
-  double *o0 = out[0], *o1 = out[1], *o2 = out[2];
-  for ( r = 0 ; r < rows ; r++ ) o0[r] = o1[r] = o2[r] = 0.0;
-  for ( l = 0 ; l < ctrl ; l++ )
-  { const double *col = packed + (long)l*stride;
-    double x0 = X[0][l], x1 = X[1][l], x2 = X[2][l];
-    for ( r = 0 ; r < rows ; r++ )
-    { double c = col[r];
-      o0[r] += c*x0;
-      o1[r] += c*x1;
-      o2[r] += c*x2;
+#if defined(__GNUC__)
+  for ( r = 0 ; r < rows ; r += 4 )
+  { lg_v4 a0 = {0.0,0.0,0.0,0.0}, a1 = a0, a2 = a0;
+    for ( l = 0 ; l < ctrl ; l++ )
+    { lg_v4 c;
+      memcpy(&c,packed + (long)l*stride + r,sizeof c);
+      a0 += c*X[0][l];
+      a1 += c*X[1][l];
+      a2 += c*X[2][l];
     }
+    memcpy(out[0] + r,&a0,sizeof a0);
+    memcpy(out[1] + r,&a1,sizeof a1);
+    memcpy(out[2] + r,&a2,sizeof a2);
   }
+#else
+  int q;
+  for ( r = 0 ; r < rows ; r += 4 )
+  { double a0[4] = {0.0,0.0,0.0,0.0}, a1[4] = {0.0,0.0,0.0,0.0},
+           a2[4] = {0.0,0.0,0.0,0.0};
+    for ( l = 0 ; l < ctrl ; l++ )
+    { const double *col = packed + (long)l*stride + r;
+      for ( q = 0 ; q < 4 ; q++ )
+      { a0[q] += col[q]*X[0][l];
+        a1[q] += col[q]*X[1][l];
+        a2[q] += col[q]*X[2][l];
+      }
+    }
+    for ( q = 0 ; q < 4 ; q++ )
+    { out[0][r+q] = a0[q]; out[1][r+q] = a1[q]; out[2][r+q] = a2[q]; }
+  }
+#endif
 }
 
 int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
                             REAL **x, REAL **gauss_pt, REAL ***sides, int need_side)
-{ int rows, l, g, d, k;
+{ int rows, l, g, d, k, stride;
   double X[3][LG_MAXCTRL];
   double out[3][LG_MAXROWS];
 
   if ( fl_disabled() || SDIM != 3 ) return 0;
   rows = gl->gnumpts*(1 + dim);
-  if ( rows > LG_MAXROWS || ctrl > LG_MAXCTRL || ctrl != gl->lagpts ) return 0;
+  stride = (rows + 3) & ~3;
+  if ( stride > LG_MAXROWS || ctrl > LG_MAXCTRL || ctrl != gl->lagpts ) return 0;
 
   if ( lg_gpoly != gl->gpoly || lg_ctrl != ctrl || lg_gnumpts != gl->gnumpts
        || lg_dim != dim || lg_version != fl_lagrange_tables_version )
-  { if ( !ensure_size((void**)&lg_packed,&lg_packed_size,(long)ctrl*rows,
+  { if ( !ensure_size((void**)&lg_packed,&lg_packed_size,(long)ctrl*stride,
                       sizeof(double)) )
       return 0;
     for ( l = 0 ; l < ctrl ; l++ )
-    { double *col = lg_packed + (long)l*rows;
+    { double *col = lg_packed + (long)l*stride;
       for ( g = 0 ; g < gl->gnumpts ; g++ )
       { col[g] = gl->gpoly[g][l];
         for ( d = 0 ; d < dim ; d++ )
           col[gl->gnumpts + g*dim + d] = gl->gpolypart[g][d][l];
       }
+      for ( g = rows ; g < stride ; g++ ) col[g] = 0.0;
     }
     lg_gpoly = gl->gpoly;
     lg_version = fl_lagrange_tables_version;
@@ -1566,7 +1592,7 @@ int fl_lagrange_facet_setup(struct gauss_lag *gl, int dim, int ctrl,
   for ( l = 0 ; l < ctrl ; l++ )
     for ( k = 0 ; k < 3 ; k++ )
       X[k][l] = x[l][k];
-  lg_kernel(lg_packed,lg_gnumpts*(1 + dim),rows,ctrl,X,out);
+  lg_kernel(lg_packed,stride,rows,ctrl,X,out);
   for ( g = 0 ; g < gl->gnumpts ; g++ )
     for ( k = 0 ; k < 3 ; k++ )
       gauss_pt[g][k] = out[k][g];
