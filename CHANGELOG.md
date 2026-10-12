@@ -31,6 +31,10 @@
   in the Hessian setup for vertices on no constraint; Lagrange gradient and value
   kernels with their per-point factors computed once; Lagrange vertex normals from
   the per-topology normal cache; vertex averaging from per-topology rings (bit-identical).
+- Gradient steps with named quantities only (Lagrange model, `convert_to_quantities`):
+  9 passes over the elements instead of 14 (energy gradients with the volume
+  gradients, the energy with the last volume projection pass; bit-identical).
+  Lagrange 2, 98k facets: `g 1` 330 -> 292 ms; Lagrange 4, 24k facets: 218 -> 196 ms.
 
 ### Fewer silent mistakes
 
