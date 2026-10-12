@@ -107,5 +107,32 @@ identical energies to 12 digits), seconds:
 | cube, Lagrange 2, 98k facets | 8.3 | 5.4 |
 | cube, Lagrange 4, 24k facets | 6.5-7.6 | 4.0-4.4 |
 
+After 0.7.2 the Hessian setup skips Evolver's serial per-vertex normal for
+vertices that are on no constraint (their factor is 1), the Lagrange gradient and
+value kernels compute their per-Gauss-point factors once, Lagrange vertex normals
+come from the per-topology normal cache too, and vertex averaging (`V`) uses
+per-topology vertex rings built in parallel (bit-identical to Evolver's). Against
+0.7.2 (2 threads, best of three interleaved rounds, energies identical to 15
+digits), milliseconds per operation and seconds per `relax()`:
+
+| surface | operation | 0.7.2 | now |
+|---|---|---|---|
+| cube, linear, 98k facets | Newton step | 313 | 197 |
+| | `V` | 41 | 26 |
+| | `relax()` | 1.14 | 0.96 |
+| cube, linear, 393k facets | Newton step | 1460 | 1140 |
+| | `relax()` | 7.0 | 6.5 |
+| cube, Lagrange 2, 98k facets | `g 1` | 373 | 313 |
+| | Newton step | 1440 | 1190 |
+| | residual | 255 | 205 |
+| | `relax()` | 5.25 | 4.09 |
+| cube, Lagrange 4, 24k facets | residual | 195 | 129 |
+| | `relax()` | 5.1 | 4.8 |
+
+Tried and not kept: fewer evaluation passes in the Lagrange gradient step (the safe
+part is worth about 5%; the rest reorders Evolver's core), MUMPS's PORD ordering (its
+analysis costs more than it saves; METIS isn't built), storage reordering along a
+space-filling curve (gradient steps 2x slower).
+
 `bench/benchmark.py` in the repository measures pySE alone (`--threads`,
 `--levels`, `--json` to compare runs).

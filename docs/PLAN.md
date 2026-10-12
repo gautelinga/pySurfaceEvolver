@@ -8,6 +8,27 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 ## Resume here (2026-10-12)
 
 0.7.2 released 2026-10-12 (tag v0.7.2; the user chose 0.7.2 despite the API removals).
+Its CI failed on one test (tankex at one level asserted a thread-dependent energy; 0.7.1
+failed it too on one thread), so its x86 wheels and sdist didn't build; fixed in c6068eb.
+
+After 0.7.2 (2026-10-12, CHANGELOG "Unreleased"; research by four agents, then the user
+asked to fix every correctness/friendliness, speed and simplicity finding and try
+Brakke's tips): `_evolver.py` split into `_errors`, `_results`, `_views`, `_geometry`,
+`_engine` (`surface` memory: relax's failed attempts, walls, load generation),
+`_analysis`, `_relax` (`_Run` holds one relax() call's settings and stages) and
+`_export`; Evolver = _Relaxing(_Analysis(_Engine)) + _Export. Bulk writes through
+scratch attributes (`pyse_mark`, `pyse_value`) and one `set ... where`. New: `shapes`,
+orientation/plane warnings at load, typo-proof `ev[...] =` (`define()`),
+`SharedEngineWarning`, `Body(volume, faces=None)` with automatic volconst,
+`Evolver.energy` (a datafile function `pyse_energy_constant()`), named constraints,
+per-vertex constraint sets, curved wires (`boundaries=`; wire vertices fixed: free
+ones bunch up, real negative modes), `contact_lines`, `energies` (energy_terms
+binding), `derivative`, `continuation(stop_on, halvings)`, `stability(eigenvalues=)`.
+C speed: Hessian setup slant only on constrained vertices, Lagrange kernels, Lagrange
+normals in the vn cache, V from per-topology rings. Tried and dropped (CHANGELOG):
+reorder_storage, CG in the rounds, sobolev_mode steps, immediate_autopop,
+target_tolerance; fewer Lagrange line-search passes, PORD. Case 8 on old and new code
+alike: worst 3-6%, ~120 unconverged steps of ~120 states, 240-280 s.
 0.7.1 released 2026-10-11 (tag v0.7.1; wheels as workflow artifacts). 0.7.0 is tagged
 at fd9783f, whose wheel build failed (fixed in b5216d4: no fused multiply-adds on
 aarch64, render probe in a subprocess); its tag stays.
@@ -51,6 +72,11 @@ save() (not profiled; only rescue paths use it). Candidates not done: splitting
 parameter optimization (bga-2..12 need their .cmd files).
 
 Open, for the user to pick:
+
+* **Release** 0.7.3 (0.7.2's x86 wheels and sdist are missing).
+* **Candidates:** a BGA parameter-optimization notebook (bga-2..12 need their .cmd
+  files, in Brakke's archives); `optimizing_parameter` settings in `Parameters`;
+  `newton()` returning a result object.
 
 * **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing for
   full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient retry

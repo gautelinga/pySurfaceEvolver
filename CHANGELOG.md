@@ -22,6 +22,16 @@
 - Vertices on a `boundaries=` curve are fixed (free, they bunch up along the wire).
 - `continuation()`'s `Step.energy` is `Evolver.energy` (with the walls' constants).
 
+### Faster
+
+- Against 0.7.2 (2 threads, energies identical to 15 digits): a Newton step on a
+  linear cube of 98k facets 313 -> 197 ms (393k: 1.46 -> 1.14 s), `relax()` 1.14 ->
+  0.96 s; Lagrange 2, 98k facets: gradient step 373 -> 313 ms, Newton step 1.44 ->
+  1.19 s, residual 255 -> 205 ms, `relax()` 5.25 -> 4.09 s. From: no serial normal
+  in the Hessian setup for vertices on no constraint; Lagrange gradient and value
+  kernels with their per-point factors computed once; Lagrange vertex normals from
+  the per-topology normal cache; vertex averaging from per-topology rings (bit-identical).
+
 ### Fewer silent mistakes
 
 - A body whose faces point into it (negative starting volume against a positive
