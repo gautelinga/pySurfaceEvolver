@@ -5,9 +5,8 @@ with `relax()`'s defaults alone and one with explicit remeshing: contact lines t
 travel far, surfaces that grow or shrink a hundredfold, wires, instabilities, gravity. They are the stress suite in
 `bench/stress/` condensed into examples (`python bench/stress/run.py` runs the full
 versions and checks them). The code below is not run when the documentation is built;
-the outputs are from running it in October 2026 (pySE 0.7.3 and the development
-version after it, 2 threads), and they vary in
-the last digits with the thread count.
+the outputs are from running it in October 2026 (pySE 0.7.3 and 0.7.4, 2 threads),
+and they vary in the last digits with the thread count.
 
 The starting shapes come from `pysurfaceevolver.shapes`, the reference solutions from
 [`docs/stress_helpers.py`](https://github.com/gautelinga/pySurfaceEvolver/blob/main/docs/stress_helpers.py)

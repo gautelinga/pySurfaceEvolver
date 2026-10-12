@@ -7,6 +7,9 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 
 ## Resume here (2026-10-12)
 
+0.7.4 released 2026-10-12 (tag v0.7.4): stress cases 14-17 and figures for all cases,
+the slow-rounds Newton trial, repeated contact-line spoke splits, the refine-first
+warning, case 8 run with remeshing (all 14 pass).
 0.7.3 released 2026-10-12 (tag v0.7.3): everything below since 0.7.2, after a three-pillar
 review (speed, simplicity, friendliness) whose findings were all fixed.
 0.7.2 released 2026-10-12 (tag v0.7.2; the user chose 0.7.2 despite the API removals).
