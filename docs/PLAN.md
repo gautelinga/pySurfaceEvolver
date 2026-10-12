@@ -27,7 +27,15 @@ binding), `derivative`, `continuation(stop_on, halvings)`, `stability(eigenvalue
 C speed: Hessian setup slant only on constrained vertices, Lagrange kernels, Lagrange
 normals in the vn cache, V from per-topology rings. Tried and dropped (CHANGELOG):
 reorder_storage, CG in the rounds, sobolev_mode steps, immediate_autopop,
-target_tolerance; fewer Lagrange line-search passes, PORD. Case 8 on old and new code
+target_tolerance; fewer Lagrange line-search passes, PORD.
+Then (same day, user: "do 3 and 4"): Brakke's BGA series vendored (bga-2..10, 30; 11, 12,
+31 diverge with his own recipes) with docs/solder_joints.ipynb (tools/make_solder_notebook.py);
+residual counts optimizing-parameter forces; Evolver fixes in lexinit2.c (pressures reset
+by energy quantities on load -> Newton refused after restore) and userio.c (warning
+buffer memcpy overlap); _Coords carries optimizing parameters; derivative(move, method);
+relax refines past a start without freedom; health ignores placement-only constraints;
+relax groups Evolver warnings. Lagrange g step: 9 element passes instead of 14 (agent;
+bit-identical, g 1 10-20% faster, relax 3-5%). Case 8 on old and new code
 alike: worst 3-6%, ~120 unconverged steps of ~120 states, 240-280 s.
 0.7.1 released 2026-10-11 (tag v0.7.1; wheels as workflow artifacts). 0.7.0 is tagged
 at fd9783f, whose wheel build failed (fixed in b5216d4: no fused multiply-adds on
@@ -74,9 +82,8 @@ parameter optimization (bga-2..12 need their .cmd files).
 Open, for the user to pick:
 
 * **Release** 0.7.3 (0.7.2's x86 wheels and sdist are missing).
-* **Candidates:** a BGA parameter-optimization notebook (bga-2..12 need their .cmd
-  files, in Brakke's archives); `optimizing_parameter` settings in `Parameters`;
-  `newton()` returning a result object.
+* **Candidates:** `newton()` returning a result object; Evolver's finite-difference
+  parameter Hessian limits relax to ~1e-7 with optimizing parameters (bga-5).
 
 * **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing for
   full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient retry
