@@ -7,6 +7,8 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 
 ## Resume here (2026-10-12)
 
+0.7.3 released 2026-10-12 (tag v0.7.3): everything below since 0.7.2, after a three-pillar
+review (speed, simplicity, friendliness) whose findings were all fixed.
 0.7.2 released 2026-10-12 (tag v0.7.2; the user chose 0.7.2 despite the API removals).
 Its CI failed on one test (tankex at one level asserted a thread-dependent energy; 0.7.1
 failed it too on one thread), so its x86 wheels and sdist didn't build; fixed in c6068eb.
@@ -81,7 +83,6 @@ parameter optimization (bga-2..12 need their .cmd files).
 
 Open, for the user to pick:
 
-* **Release** 0.7.3 (0.7.2's x86 wheels and sdist are missing).
 * **Candidates:** `newton()` returning a result object; Evolver's finite-difference
   parameter Hessian limits relax to ~1e-7 with optimizing parameters (bga-5).
 

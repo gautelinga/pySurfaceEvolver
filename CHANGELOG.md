@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.7.3 (2026-10-12)
+
+Replaces 0.7.2, whose x86 wheels and source distribution did not build. Faster
+Newton steps and Lagrange stages, fewer silent mistakes when building surfaces, Brakke's
+solder-joint series, and fixes to three bugs in Evolver itself.
 
 ### Fixes
 
