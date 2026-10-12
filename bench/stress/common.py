@@ -32,6 +32,7 @@ class Result:
     notes: List[str] = field(default_factory=list)
     rows: List[Dict[str, Any]] = field(default_factory=list)   # per step, for plots
     calls: List[Dict[str, Any]] = field(default_factory=list)  # Tracker.calls
+    extra: Dict[str, Any] = field(default_factory=dict)        # case-specific, for figures
 
 
 class Tracker:

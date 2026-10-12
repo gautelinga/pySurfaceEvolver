@@ -18,7 +18,7 @@ DATA = os.path.join(HERE, "figdata")
 OUT = os.path.join(HERE, "..", "..", "docs", "_static", "stress")
 
 CASES = {1: "case01_cylinder", 2: "case02_catenoid", 3: "case03_sessile", 5: "case05_bridge",
-         6: "case06_fibre", 9: "case09_inflate", 11: "case11_puddle", 12: "case12_shrink",
+         6: "case06_fibre", 8: "case08_band", 9: "case09_inflate", 11: "case11_puddle", 12: "case12_shrink",
          13: "case13_periodic", 14: "case14_sphere_drop", 15: "case15_double_bubble",
          16: "case16_pad_force", 17: "case17_wire_catenoid"}
 
@@ -37,7 +37,7 @@ def run_case(n):
     os.makedirs(DATA, exist_ok=True)
     with gzip.open(os.path.join(DATA, f"case{n:02d}.pkl.gz"), "wb") as fh:
         pickle.dump(dict(name=r.case, passed=r.passed, summary=r.summary, rows=r.rows,
-                         calls=r.calls), fh)
+                         calls=r.calls, extra=r.extra), fh)
 
 
 def load_case(n):
@@ -359,6 +359,60 @@ def case6(d):
            labels=[f"{th[i]:.0f} degrees" for i in picks], view=(1.0, -1.0, 0.3))
 
 
+def case8(d):
+    rows, extra = d["rows"], d["extra"]
+    V = np.array([x["volume"] for x in rows])
+    order = np.argsort(V)
+    fig, (a, b, c) = three_panels("8. The drainage band (ell = 1.1), remeshed each step as in "
+                                  "its notebook")
+    rv, rp = extra["reference"]
+    a.plot(rv, rp, color=GREY, lw=2, label="finer run (level 3)")
+    a.plot(V[order], np.array([x["pressure"] for x in rows])[order], ".", color=BLUE, ms=4,
+           label="remesh + relax()")
+    a.axvline(extra["snap"], color=RED, ls="--", lw=1, label=f"snap ({extra['snap']:.5f})")
+    a.axvline(extra["snap_ref"], color=GREY, ls=":", lw=1, label=f"stored snap ({extra['snap_ref']:.5f})")
+    a.set_xlabel("liquid volume per eighth cell")
+    a.set_ylabel("pressure")
+    a.legend(fontsize=7)
+    a.set_title("result against the reference", fontsize=10)
+    err = np.array([x["error"] for x in rows])
+    b.semilogy(V[order], np.maximum(err[order], 1e-16), ".", color=BLUE, ms=4)
+    b.axhline(float(np.median(err)), color=ORANGE, lw=1.5,
+              label=f"median {np.median(err):.3%} (limit 0.1%)")
+    b.axhline(1e-3, color=RED, ls="--", lw=1)
+    b.set_xscale("log")
+    b.set_xlabel("liquid volume per eighth cell")
+    b.set_ylabel("relative error, band pressure")
+    b.legend(fontsize=7)
+    b.set_title("error against the reference", fontsize=10)
+    calls = [d["calls"][i] for i in extra["band_calls"]]
+    pos = np.arange(len(calls))
+    grad = np.array([k["gradient"] for k in calls])
+    newton = np.array([k["newton"] for k in calls])
+    c.bar(pos, grad, color=BLUE, alpha=0.75, width=1.0, label="gradient steps")
+    c.bar(pos, newton, bottom=grad, color=ORANGE, width=1.0, label="Newton steps")
+    top = max(1, (grad + newton).max())
+    bad = [i for i, k in enumerate(calls) if not k["converged"]]
+    c.plot(bad, [-0.05*top]*len(bad), "x", color=RED, ms=5, mew=1.5, clip_on=False,
+           label=f"not converged ({len(bad)} of {len(calls)}, below the axis)")
+    c.set_ylim(0, top*1.05)
+    c.set_xlabel("band step")
+    c.set_ylabel("steps")
+    c.legend(fontsize=7, loc="upper left")
+    c.set_title("what relax() did, per band step", fontsize=10)
+    save(fig, "case08.png")
+    idx = extra["band_calls"]
+    picks = [idx[0], idx[len(idx)//2], idx[-1]]
+    fake = dict(rows=[dict(call=i) for i in picks], calls=d["calls"])
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "docs"))
+    import drainage_helpers as dh
+    bead = dh.Cell(1.1).radius
+    render(fake, [0, 1, 2], "case08_shapes.png",
+           context=lambda p, row: sphere(p, (0, 0, 0), bead, opacity=0.5),
+           labels=["first band step", "half way", "just before the snap"],
+           view=(0.9, -0.6, 0.7), same_scale=True)
+
+
 def case9(d):
     rows = d["rows"]
     V = np.array([x["volume"] for x in rows])
@@ -600,7 +654,7 @@ def case17(d):
            labels=[f"{h[i]:.2f} apart" for i in picks], view=(0.0, -1.0, 0.15))
 
 
-PLOTS = {1: case1, 2: case2, 3: case3, 5: case5, 6: case6, 9: case9, 11: case11, 12: case12,
+PLOTS = {1: case1, 2: case2, 3: case3, 5: case5, 6: case6, 8: case8, 9: case9, 11: case11, 12: case12,
          13: case13, 14: case14, 15: case15, 16: case16, 17: case17}
 
 

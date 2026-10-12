@@ -38,6 +38,7 @@ class TrackedCell(dh.Cell):
         super().__init__(*args, **kw)
         self.track = track
         self.band_calls = []
+        self.band_index = []        # the band steps' relax() calls (for the figures)
 
     def relax(self, ev, remesh=False):
         if remesh:
@@ -47,6 +48,7 @@ class TrackedCell(dh.Cell):
         r = self.track.relax(ev, stability=False)
         if remesh:
             self.band_calls.append(bool(r.converged))
+            self.band_index.append(self.track.last)
 
 
 def run(quick=False):
@@ -78,6 +80,8 @@ def run(quick=False):
     # helper's local Evolver, so the tracker reports on the engine's current one
     import pysurfaceevolver as pyse
     track.finish(pyse.Evolver(), res, eigen=False)
+    res.extra = dict(band_calls=cell.band_index, snap=snap[0] if snap else None,
+                     snap_ref=snap_ref, reference=(band_v[order], band_p[order]))
     median = float(np.median(errs)) if errs else float("inf")
     worst = max(errs) if errs else float("inf")
     converged = (sum(cell.band_calls)/len(cell.band_calls)) if cell.band_calls else 0.0

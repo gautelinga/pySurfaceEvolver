@@ -1,8 +1,8 @@
 # Stress cases
 
-Thirteen hard problems with exact or axisymmetric references, each run with `relax()`'s
-defaults: contact lines that travel far, surfaces that grow or shrink a
-hundredfold, wires, instabilities, gravity. They are the stress suite in
+Fourteen hard problems with exact, axisymmetric or finer-mesh references, thirteen run
+with `relax()`'s defaults alone and one with explicit remeshing: contact lines that
+travel far, surfaces that grow or shrink a hundredfold, wires, instabilities, gravity. They are the stress suite in
 `bench/stress/` condensed into examples (`python bench/stress/run.py` runs the full
 versions and checks them). The code below is not run when the documentation is built;
 the outputs are from running it in October 2026 (pySE 0.7.3 and the development
@@ -11,7 +11,8 @@ the last digits with the thread count.
 
 The starting shapes come from `pysurfaceevolver.shapes`, the reference solutions from
 [`docs/stress_helpers.py`](https://github.com/gautelinga/pySurfaceEvolver/blob/main/docs/stress_helpers.py)
-(they need SciPy); run the examples from the `docs` directory, or put it on
+(they need SciPy; the drainage band's come from
+[`docs/drainage_helpers.py`](https://github.com/gautelinga/pySurfaceEvolver/blob/main/docs/drainage_helpers.py)); run the examples from the `docs` directory, or put it on
 `sys.path`. `recipes.continuation` steps a parameter or a volume and relaxes after
 each step; `step.result` is that relaxation's result.
 
@@ -21,11 +22,8 @@ reference, the error per step with the case's pass limit, and what `relax()` did
 step (gradient and Newton steps, seconds, and marks where it didn't converge or reported
 an unstable equilibrium); and the surface at a few steps.
 
-A fourteenth case in the suite, the drainage band of [slit_drainage](slit_drainage.ipynb),
-is run the way that notebook runs it: `ev.remesh(target=h)` before each step's
-`relax()`. It passes that way (median band-pressure error 0.02%, the snap within 0.4%
-of a finer reference, nearly nine in ten steps converged). With `relax()` alone it
-doesn't: see [Relaxing a surface](relaxing.md) for why, and why that is not automatic.
+The drainage band is the exception: on defaults alone it fails, so it is run the way
+its notebook runs it, remeshed before each step; its section says why.
 
 ## A liquid column past Rayleigh-Plateau
 
@@ -332,6 +330,78 @@ Left, the equator radius against the axisymmetric barrel; from 70 degrees relax(
 :width: 100%
 
 The barrel at 20, 50 and 80 degrees.
+```
+
+## A drainage band, remeshed
+
+The band of [slit_drainage](slit_drainage.ipynb) at bead spacing 1.1: beads in a slit
+drained from immersed, past the moment the beads emerge, along the band that forms
+between them, to its snap at the mid-plane. Reference: a run on a finer mesh (one more
+refinement, steps of 1%) stored with the notebook. This is the one case not run on
+`relax()`'s defaults alone: as the dry patch on the bead grows, its contact line runs
+ahead of the free vertices behind it and squeezes them into slivers, so the band is
+remeshed by edge length before each step, as in the notebook. Without that, nearly every
+step ends unconverged and the worst pressure is off by 3% to over 50%, depending on the
+run ([Relaxing a surface](relaxing.md) has why that is not automatic).
+
+```python
+import numpy as np
+import drainage_helpers as dh
+
+class Cell(dh.Cell):
+    """The notebook's cell, recording whether each band step's relax() converges."""
+    band = []
+
+    def relax(self, ev, remesh=False):
+        if remesh:      # a band step: remesh by edge length first (h: the first median edge)
+            if self.edge_h is None:
+                self.edge_h = ev.mesh_quality().edge_median
+            ev.remesh(target=self.edge_h)
+        result = ev.relax(stability=False)  # no stability check: the band is unstable near its snap
+        if remesh:
+            self.band.append(result.converged)
+
+cell = Cell(1.1)
+cell.band_step = 0.03
+states, events = dh.drain(cell, cell.meniscus_exact(0.55)[0], 0.004, levels=2)
+ref = np.load("_static/drainage_runs.npz")
+on_band = ref["l1.1_stage"] == 1
+v, p = ref["l1.1_volume"][on_band], ref["l1.1_pressure"][on_band]
+order = np.argsort(v)
+errors = [abs(s["pressure"]/np.interp(s["volume"], v[order], p[order]) - 1)
+          for s in states if s["stage"] == 1 and v.min() < s["volume"] < 0.08]
+for e in events:
+    print(f"{e['kind']} at volume {e['volume']:.4f}")
+print(f"band pressure: median error {np.median(errors):.2%} over {len(errors)} states")
+print(f"share of band steps converged: {np.mean(Cell.band):.1f}")
+```
+
+```text
+bead emerges at volume 0.0860
+snap at volume 0.0071
+band pressure: median error 0.01% over 119 states
+share of band steps converged: 0.9
+```
+
+The snap lands within 0.4% of the finer run's (0.00707), and the median band pressure
+within 0.02% of it. A few steps near the snap stay unconverged, and single states can
+be off by a few percent there.
+
+```{figure} _static/stress/case08.png
+:alt: Case 8: result, error and solver steps
+:width: 100%
+
+Left, the band pressure against the finer run, down to the snap. Middle, the error
+against it, with the median and its limit. Right, what relax() did after each band
+step's remeshing (crosses below the axis: not converged).
+```
+
+```{figure} _static/stress/case08_shapes.png
+:alt: Case 8: shapes
+:width: 100%
+
+The band (blue) on the bead (grey) at the first band step, half way, and just before
+the snap.
 ```
 
 ## A cube inflated a hundredfold

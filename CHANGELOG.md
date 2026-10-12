@@ -49,6 +49,8 @@
   On defaults alone its worst state scattered from 3% to 52% between identical runs,
   too noisy to catch regressions; the failure itself is documented in the guide.
   All 14 stress cases now pass.
+- Stress case 8 has its figures and a section with a runnable snippet on the stress page, so
+  every case there now has both.
 - Stress case 8's unconverged states traced: in a typical band state 95% of the
   residual (squared) sits in ten vertices at the corner where a bead's contact line
   meets the wall, with facets under a degree and vertices pushed into the bead. A
