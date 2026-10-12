@@ -21,10 +21,11 @@ reference, the error per step with the case's pass limit, and what `relax()` did
 step (gradient and Newton steps, seconds, and marks where it didn't converge or reported
 an unstable equilibrium); and the surface at a few steps.
 
-A fourteenth case, the drainage band of [slit_drainage](slit_drainage.ipynb), needs the mesh
-remeshed explicitly at each step (`ev.remesh(target=h)`, as in that notebook); with
-`relax()` alone its band pressures are off by up to several percent. See
-[Relaxing a surface](relaxing.md) for why that is not automatic.
+A fourteenth case in the suite, the drainage band of [slit_drainage](slit_drainage.ipynb),
+is run the way that notebook runs it: `ev.remesh(target=h)` before each step's
+`relax()`. It passes that way (median band-pressure error 0.02%, the snap within 0.4%
+of a finer reference, nearly nine in ten steps converged). With `relax()` alone it
+doesn't: see [Relaxing a surface](relaxing.md) for why, and why that is not automatic.
 
 ## A liquid column past Rayleigh-Plateau
 

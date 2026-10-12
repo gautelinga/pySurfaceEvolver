@@ -86,7 +86,7 @@ Open, for the user to pick:
 * **Candidates:** `newton()` returning a result object; Evolver's finite-difference
   parameter Hessian limits relax to ~1e-7 with optimizing parameters (bga-5).
 
-* **Known limits:** case 8 needs explicit remeshing (a mesh breakdown at the bead-wall corner) for
+* **Known limits:** case 8 is run with explicit remeshing (on defaults alone the mesh breaks down at the bead-wall corner); for
   full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient retry
   rescues ~1 step in 130 in case 8 but keeps its median error down; topology tests
   are path-sensitive at several threads (run with threads=1).

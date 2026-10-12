@@ -43,6 +43,12 @@
 - `relax()` warns when the surface was refined four or more times since it last
   converged: relaxing that fine is slow and may not converge (`cube.fe` refined five
   times: 10 s unconverged, against 0.4 s converged with `relax(levels=5)`).
+- Stress case 8 (the drainage band) is now run as its notebook runs it, with
+  `ev.remesh(target=h)` before each band step, and passes (over three runs: median
+  band-pressure error 0.017-0.022%, snap 0.1-0.4% off, 87-89% of steps converged).
+  On defaults alone its worst state scattered from 3% to 52% between identical runs,
+  too noisy to catch regressions; the failure itself is documented in the guide.
+  All 14 stress cases now pass.
 - Stress case 8's unconverged states traced: in a typical band state 95% of the
   residual (squared) sits in ten vertices at the corner where a bead's contact line
   meets the wall, with facets under a degree and vertices pushed into the bead. A

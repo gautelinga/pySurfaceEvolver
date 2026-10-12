@@ -143,22 +143,28 @@ first damaged one of the others. The one who knows the geometry picks `h`.
 
 ## Where the defaults stop working
 
-Of the fourteen stress cases, thirteen pass with defaults alone: a liquid column past
+Of the fourteen stress cases, thirteen are run and pass with defaults alone: a liquid column past
 Rayleigh-Plateau (the instability shows at 1.8% past its onset), a catenoid up to its
 fold, a sessile drop from 10 to 170 degrees, a liquid bridge with the gap closing to 1e-3, a barrel drop on a fibre (its
 roll-up reported as an instability), a cube inflated a hundredfold, a gravity puddle,
 a drop shrinking to 1e-4 of its volume, Schwarz's P and D surfaces in quotient
 spaces (to 1e-6 and 2e-5 when extrapolated), a drop on a sphere from 20 to 150
 degrees, a double bubble, a solder joint's force (to 5e-5 against an axisymmetric
-model, extrapolated) and a catenoid between round wires stopped at its fold. One
-doesn't:
-* **The drainage band** ({doc}`slit_drainage`) on plain defaults: band pressures
-  up to several percent off (median 0.3%). With `ev.remesh(target=h)` each step, as in the notebook, they
-  agree with a finer reference to 0.02% (median). Without it the mesh breaks down at
-  the corner where a bead's contact line meets the wall: in a typical band state 95%
-  of the residual (squared) sits in ten vertices there, with facets under a degree
-  and vertices pushed into the bead, so nearly every state ends unconverged although
-  the pressure is within a few percent.
+model, extrapolated) and a catenoid between round wires stopped at its fold. The
+fourteenth, the drainage band ({doc}`slit_drainage`), is run with `ev.remesh(target=h)`
+before each step, as in the notebook, and passes that way: band pressures within 0.02%
+of a finer reference (median), the snap within 0.4%, nearly nine in ten steps converged.
+On defaults alone it fails, and why is worth knowing:
+
+* **A contact line receding over a curved solid.** As the dry patch on the bead grows,
+  the contact line moves faster than the free vertices just behind it, which are
+  squeezed into slivers where it meets the mid-plane, from the first step on; a few
+  vertices end up inside the bead. In a typical band state 95% of the residual
+  (squared) sits in ten vertices there, so nearly every relaxation ends unconverged,
+  although the pressure is within a few percent. Merging or moving the squeezed
+  vertices inside `relax()` was tried and made things worse over repeated runs; the
+  edges this case needs merged look, locally, like edges other surfaces need kept. Remesh
+  explicitly where a contact line travels far over a curved wall.
 
 Other things to know:
 
