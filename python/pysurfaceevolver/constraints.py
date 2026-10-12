@@ -35,9 +35,11 @@ also runs along a mirror plane, the integrands are chosen so that those parts
 contribute nothing (for spheres and cylinders: mirror planes through the axis,
 and for spheres the plane through the centre normal to the axis). A sphere's
 wetted region may contain a pole (where the azimuth is undefined); say so with
-``wet_poles``, and add :attr:`Constraint.volconst` to the body's ``volconst``
-and :attr:`Constraint.energy_constant` to the energy you report (Evolver can't
-add a constant energy; pressures don't need it).
+``wet_poles``. :func:`pysurfaceevolver.make_datafile` then adds
+:attr:`Constraint.volconst` to the volume of the body touching the wall (or of
+the only body), and :attr:`Constraint.energy_constant` to
+:attr:`pysurfaceevolver.Evolver.energy` (Evolver can't add a constant energy;
+pressures don't need it).
 """
 
 from __future__ import annotations

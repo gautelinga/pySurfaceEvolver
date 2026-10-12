@@ -28,7 +28,8 @@ class Body:
     the computed volume (for example a solid inside the body); by default
     it is the sum of :attr:`pysurfaceevolver.constraints.Constraint.volconst`
     over the walls from :mod:`pysurfaceevolver.constraints` that the body's
-    vertices touch.
+    vertices touch, and, with a single body, over the walls no vertex
+    touches too (a solid immersed in the liquid).
     """
 
     volume: Optional[float] = None
@@ -319,6 +320,10 @@ def make_datafile(
     # ---- bodies ------------------------------------------------------------
     body_list = [b if isinstance(b, Body) else Body(**b) for b in (bodies or [])]
     body_lines: List[str] = []
+    # walls with a volume closure that no body touches (a solid inside the
+    # liquid, the meniscus off it): the one body gets it; with several, say so
+    closing = {c for c, spec in cons.items() if getattr(spec, "volconst", 0.0)}
+    touched_any: set = set()
     for i, b in enumerate(body_list):
         rows = list(range(len(face_loops))) if b.faces is None else [int(f) for f in b.faces]
         if any(r < 0 or r >= len(face_loops) for r in rows):
@@ -332,9 +337,12 @@ def make_datafile(
             for e in face_loops[r]:
                 corners[list(edge_list[abs(e) - 1])] = True
         touched = [c for c, m in vcons.items() if (m & corners).any()]
+        touched_any |= set(touched)
         _check_walls(i + 1, touched, cons, vertices[corners])
         volconst = b.volconst
         if volconst is None:
+            if len(body_list) == 1:
+                touched = sorted(set(touched) | closing, key=str)
             volconst = sum(float(getattr(cons.get(c), "volconst", 0.0) or 0.0) for c in touched)
         line = f"{i + 1} " + " ".join(str(s * (r + 1)) for r, s in zip(rows, signs))
         if b.volume is not None:
@@ -344,6 +352,12 @@ def make_datafile(
         if volconst:
             line += f" volconst {_num(volconst)}"
         body_lines.append(line + "\n")
+
+    stray = sorted(closing - touched_any, key=str)
+    if stray and len(body_list) > 1 and any(b.volconst is None for b in body_list):
+        warnings.warn(f"constraints {stray} close a volume (Constraint.volconst) but no body "
+                      "touches them: with several bodies, give the right body's volconst "
+                      "yourself", UserWarning, stacklevel=2)
 
     # ---- text --------------------------------------------------------------
     out: List[str] = ["// written by pysurfaceevolver.make_datafile\n"]

@@ -204,3 +204,14 @@ def test_energies_add_up_and_leave_the_surface_alone(load):
     assert terms["default_area_inst"] > 0 and "gap_energy" in terms
     assert np.array_equal(ev.vertices, before)
     assert ev.quantities().keys() == {"arb_grav"}     # not converted for good
+
+
+def test_a_solid_inside_the_only_body_closes_its_volume():
+    # a sphere around the origin inside a drop that never touches it: the
+    # one body still gets its volconst (and a second body would warn)
+    ball = C.sphere((0, 0, 0.3), 0.1, contact_angle=50, wet_poles=("north", "south"))
+    v, f = _cap_arrays()
+    rim = shapes.cap(1.0, 0.6).rims["rim"]
+    text = pyse.make_datafile(v, f, constraints={1: C.plane((0, 0, 1), 0.0, 60), 2: ball},
+                              vertex_constraints={1: rim}, bodies=[pyse.Body(volume=1)])
+    assert f"volconst {ball.volconst!r}" in text
