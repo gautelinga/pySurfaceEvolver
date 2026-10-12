@@ -15,9 +15,11 @@ energy) and `r.health` (facets, walls, the surface itself; see below) are the th
 things to check. `ev.relax(levels=3)` refines and relaxes three times more.
 
 This page explains what `relax()` does, how to read its result, what to do about mesh
-resolution, and where the defaults stop working. The numbers come from the stress
-suite in `bench/stress/` (ten hard cases with exact or axisymmetric references, all
-run with default settings) and are from October 2026.
+resolution, and where the defaults stop working. It assumes the drop of
+{doc}`getting_started`; the {doc}`tutorial` shows `relax()` at work on a double bubble.
+The numbers come from the stress suite in `bench/stress/` (ten hard cases
+with exact or axisymmetric references, all run with default settings;
+{doc}`stress_cases` has condensed versions) and are from October 2026.
 
 ## What `relax()` does
 
@@ -130,7 +132,7 @@ the number of facets. Three tools do:
   longer at 15 degrees and loses accuracy on some cases at 25 to 30.
 * `ev.remesh(target=h)`: splits edges longer than 1.6 h and deletes those shorter than
   0.5 h, then equiangulates. Call it each step where a moving contact line squeezes the
-  mesh into a corner, as the drainage example does (`docs/drainage_helpers.py`).
+  mesh into a corner, as the {doc}`drainage example <slit_drainage>` does.
 
 That last one is not automatic, and that is deliberate. The drainage band needs
 squeezed edges merged in the corner where a contact line meets a mirror plane; edges
@@ -151,7 +153,7 @@ spaces (to 1e-6 and 2e-5 when extrapolated). Two don't:
 * **A drop at 170 degrees** on a coarse starting mesh (480 facets): the implied contact
   angle is 1.7 degrees off (the case allows 1.5; up to 160 degrees it passes). More
   resolution helps.
-* **The drainage band** (`docs/slit_drainage.ipynb`) on plain defaults: band pressures
+* **The drainage band** ({doc}`slit_drainage`) on plain defaults: band pressures
   up to several percent off (median 0.3%). With `ev.remesh(target=h)` each step, as in the notebook, they
   agree with a finer reference to 0.02% (median).
 
@@ -193,3 +195,9 @@ Other things to know:
 * **Large surfaces.** At 400k facets a default `relax()` near equilibrium takes about
   4 s with 8 threads (a raw `g 5` and three Newton steps: 2.8 s); the stability check
   is one factorization of the Hessian.
+
+## Next
+
+The worked examples use `relax()` throughout, starting with {doc}`liquid_bridge`.
+{doc}`stress_cases` runs the hard cases above against their references, and
+{doc}`performance` has timings of `relax()` on large surfaces.

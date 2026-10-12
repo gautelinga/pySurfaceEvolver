@@ -1,5 +1,8 @@
 # API reference
 
+Every public class and function, from the docstrings. For how the pieces fit
+together, start with {doc}`getting_started` (the conventions) and {doc}`relaxing`.
+
 ```{eval-rst}
 .. currentmodule:: pysurfaceevolver
 ```
