@@ -44,16 +44,18 @@ class Tracker:
         self.unconverged = 0
         self.calls: List[Dict[str, Any]] = []   # per relax(), with the mesh after it
 
-    def relax(self, ev) -> Any:
+    def relax(self, ev, **options) -> Any:
+        """ev.relax(**options) (no options: the defaults), recorded."""
         t = time.perf_counter()
-        r = ev.relax()
+        r = ev.relax(**options)
         seconds = time.perf_counter() - t
         self.add(r)
         m = ev.mesh()
         self.calls.append(dict(seconds=seconds, gradient=len(r.energy), newton=r.newton_steps,
                                converged=bool(r.converged), stable=r.stable,
                                negative_modes=r.negative_modes, residual=float(r.residual),
-                               vertices=m.vertices.copy(), facets=m.facets.copy()))
+                               vertices=m.vertices.copy(),
+                               facets=None if m.facets is None else m.facets.copy()))
         return r
 
     @property

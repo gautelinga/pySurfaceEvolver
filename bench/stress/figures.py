@@ -18,7 +18,9 @@ DATA = os.path.join(HERE, "figdata")
 OUT = os.path.join(HERE, "..", "..", "docs", "_static", "stress")
 
 CASES = {1: "case01_cylinder", 2: "case02_catenoid", 3: "case03_sessile", 5: "case05_bridge",
-         6: "case06_fibre", 9: "case09_inflate", 11: "case11_puddle", 12: "case12_shrink"}
+         6: "case06_fibre", 9: "case09_inflate", 11: "case11_puddle", 12: "case12_shrink",
+         13: "case13_periodic", 14: "case14_sphere_drop", 15: "case15_double_bubble",
+         16: "case16_pad_force", 17: "case17_wire_catenoid"}
 
 BLUE, ORANGE, RED, GREY = "#1f77b4", "#ff7f0e", "#d62728", "#7f7f7f"
 
@@ -94,6 +96,8 @@ def solver_panel(ax, d, x, xlabel):
 
 
 def fmt(v):
+    if isinstance(v, str):
+        return v
     v = float(v)
     if v != 0 and (abs(v) < 0.01 or abs(v) >= 1000):
         return f"{v:.0e}"
@@ -445,7 +449,159 @@ def case12(d):
            view=(0.0, -1.0, 0.5), same_scale=False)
 
 
-PLOTS = {1: case1, 2: case2, 3: case3, 5: case5, 6: case6, 9: case9, 11: case11, 12: case12}
+def sphere(p, center, radius, opacity=0.3):
+    import pyvista as pv
+    p.add_mesh(pv.Sphere(radius=radius, center=center, theta_resolution=48, phi_resolution=48),
+               color=GREY, opacity=opacity)
+
+
+def ring(p, z, radius=1.0):
+    import pyvista as pv
+    t = np.linspace(0, 2*np.pi, 97)
+    pts = np.c_[radius*np.cos(t), radius*np.sin(t), np.full_like(t, z)]
+    p.add_mesh(pv.lines_from_points(pts), color="k", line_width=3)
+
+
+def case13(d):
+    import matplotlib.pyplot as plt
+    rows = d["rows"]
+    fig, (a, b, c) = three_panels("13. Schwarz's P and D surfaces, refined five times")
+    for label, colour in (("P", BLUE), ("D", ORANGE)):
+        rr = [x for x in rows if x["surface"] == label]
+        lev = np.array([x["level"] for x in rr])
+        area = np.array([x["area"] for x in rr])
+        a.plot(lev, area/rr[0]["reference"], "o-", color=colour, ms=4,
+               label=f"{label} (reference {rr[0]['reference']})")
+        b.semilogy(lev, [x["error"] for x in rr], "o-", color=colour, ms=4, label=label)
+    a.axhline(1.0, color=GREY, lw=1)
+    a.set_xlabel("refinements")
+    a.set_ylabel("area per cell / reference")
+    a.legend(fontsize=7)
+    a.set_title("result against the reference", fontsize=10)
+    lev = np.arange(1, 6)
+    b.semilogy(lev, 2e-3*4.0**-(lev - 1), ":", color=GREY, label="second order (1/4 per level)")
+    b.set_xlabel("refinements")
+    b.set_ylabel("relative error")
+    b.legend(fontsize=7)
+    b.set_title("error against the reference", fontsize=10)
+    solver_panel(c, d, [f"{x['surface']}{x['level']}" for x in rows], "surface, refinements")
+    save(fig, "case13.png")
+    last = [max(i for i, x in enumerate(rows) if x["surface"] == s) for s in ("P", "D")]
+    render(d, last, "case13_shapes.png", labels=["P, fundamental region", "D, fundamental region"],
+           view=(1.0, -0.8, 0.6), same_scale=False)
+
+
+def case14(d):
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "docs"))
+    from stress_helpers import drop_on_sphere
+    rows = sorted(d["rows"], key=lambda x: x["theta"])
+    th = np.array([x["theta"] for x in rows])
+    fig, (a, b, c) = three_panels("14. A drop of volume 0.5 on a sphere, contact angle "
+                                  "20-150 degrees")
+    tt = np.linspace(th.min(), th.max(), 200)
+    a.plot(tt, [drop_on_sphere(0.5, x)["energy"] for x in tt], color=GREY, lw=2,
+           label="exact cap")
+    a.plot(th, [x["energy"] for x in rows], "o", color=BLUE, ms=4, label="relax()")
+    a.set_xlabel("contact angle (degrees)")
+    a.set_ylabel("energy (free area - cos theta wetted)")
+    a.legend(fontsize=7)
+    a.set_title("result against the reference", fontsize=10)
+    b.semilogy(th, [x["error"] for x in rows], "o-", color=BLUE, ms=4, label="energy")
+    b.semilogy(th, [x["pressure_error"] for x in rows], "s-", color=ORANGE, ms=4,
+               label="pressure")
+    b.axhline(5e-3, color=RED, ls="--", lw=1, label="pass limit 0.5%")
+    b.set_xlabel("contact angle (degrees)")
+    b.set_ylabel("relative error")
+    b.legend(fontsize=7)
+    b.set_title("error against the reference", fontsize=10)
+    solver_panel(c, d, [x["theta"] for x in d["rows"]], "contact angle, in the order run")
+    save(fig, "case14.png")
+    picks = [next(i for i, x in enumerate(d["rows"]) if x["theta"] == t) for t in (20, 90, 150)]
+    render(d, picks, "case14_shapes.png", context=lambda p, row: sphere(p, (0, 0, 0), 1.0),
+           labels=["20 degrees", "90 degrees", "150 degrees"], view=(0.0, -1.0, 0.3))
+
+
+def case15(d):
+    sys.path.insert(0, os.path.join(HERE, "..", "..", "docs"))
+    from stress_helpers import double_bubble
+    rows = d["rows"]
+    v2 = np.array([x["v2"] for x in rows])
+    fig, (a, b, c) = three_panels("15. A double bubble, the second volume from 1 to 0.2")
+    vv = np.linspace(v2.min(), v2.max(), 100)
+    a.plot(vv, [double_bubble(1.0, x)["area"] for x in vv], color=GREY, lw=2,
+           label="standard double bubble")
+    a.plot(v2, [x["area"] for x in rows], "o", color=BLUE, ms=4, label="relax()")
+    a.set_xlabel("second volume (first: 1)")
+    a.set_ylabel("total area")
+    a.legend(fontsize=7)
+    a.set_title("result against the reference", fontsize=10)
+    b.semilogy(v2, [x["error"] for x in rows], "o-", color=BLUE, ms=4, label="area")
+    b.semilogy(v2, [x["pressure_error"] for x in rows], "s-", color=ORANGE, ms=4,
+               label="pressures (worst)")
+    b.axhline(5e-3, color=RED, ls="--", lw=1, label="pass limit 0.5%")
+    b.set_xlabel("second volume")
+    b.set_ylabel("relative error")
+    b.legend(fontsize=7)
+    b.set_title("error against the reference", fontsize=10)
+    solver_panel(c, d, v2, "second volume")
+    save(fig, "case15.png")
+    picks = nearest(v2, [1.0, 0.6, 0.2])
+    render(d, picks, "case15_shapes.png", labels=[f"volumes 1 and {v2[i]:g}" for i in picks],
+           view=(0.2, -1.0, 0.4))
+
+
+def case16(d):
+    rows = d["rows"]
+    n = np.array([x["facets"] for x in rows])
+    F = np.array([x["force"] for x in rows])
+    ref = rows[0]["reference"]
+    fig, (a, b, c) = three_panels("16. A solder joint's force on its pad: 3D (bga-3) against "
+                                  "axisymmetric (bga-30)")
+    a.semilogx(n, F, "o-", color=BLUE, ms=4, label="3D, derivative of the energy")
+    a.axhline(ref, color=GREY, lw=2, label=f"axisymmetric, extrapolated ({ref:.4f} dyn)")
+    a.set_xlabel("facets")
+    a.set_ylabel("force on the upper pad (dyn)")
+    a.legend(fontsize=7)
+    a.set_title("result against the reference", fontsize=10)
+    err = np.abs(F/ref - 1)
+    b.loglog(n, err, "o-", color=BLUE, ms=4, label="3D")
+    b.loglog(n, err[0]*(n/n[0])**-1.0, ":", color=GREY, label="second order in the edge length")
+    b.set_xlabel("facets")
+    b.set_ylabel("relative error")
+    b.legend(fontsize=7)
+    b.set_title("error against the reference", fontsize=10)
+    solver_panel(c, d, n, "facets")
+    save(fig, "case16.png")
+    render(d, [0, len(rows) - 1], "case16_shapes.png",
+           labels=[f"{n[0]} facets", f"{n[-1]} facets"], view=(0.0, -1.0, 0.25))
+
+
+def case17(d):
+    sys.path.insert(0, HERE)
+    from case02_catenoid import H_FOLD, catenoid
+    rows = d["rows"]
+    h = np.array([x["height"] for x in rows])
+    fig, (a, b, c) = three_panels("17. A catenoid between round wires, pulled to its fold")
+    hh = np.linspace(h.min(), 2*H_FOLD*0.9999, 200)
+    a.plot(hh, [catenoid(x/2) for x in hh], color=GREY, lw=2, label="exact catenoid")
+    a.plot(h, [x["area"] for x in rows], "o", color=BLUE, ms=4, label="relax()")
+    a.axvline(2*H_FOLD, color=RED, ls="--", lw=1, label="fold (no catenoid beyond)")
+    a.set_xlabel("distance between the wires")
+    a.set_ylabel("area")
+    a.legend(fontsize=7)
+    a.set_title("result against the reference (the run stops at the fold)", fontsize=10)
+    error_panel(b, h, np.array([x["error"] for x in rows]), limit=1e-3,
+                xlabel="distance between the wires")
+    solver_panel(c, d, h, "distance between the wires")
+    save(fig, "case17.png")
+    picks = nearest(h, [h.min(), 1.0, h.max()])
+    render(d, picks, "case17_shapes.png",
+           context=lambda p, row: (ring(p, 0.0), ring(p, row["height"])),
+           labels=[f"{h[i]:.2f} apart" for i in picks], view=(0.0, -1.0, 0.15))
+
+
+PLOTS = {1: case1, 2: case2, 3: case3, 5: case5, 6: case6, 9: case9, 11: case11, 12: case12,
+         13: case13, 14: case14, 15: case15, 16: case16, 17: case17}
 
 
 def main(argv):

@@ -506,6 +506,20 @@ D: 3.838111 after 5 refinements, extrapolated 3.837785, reference 3.8377
 The error falls fourfold per refinement (second order in the edge length), and the
 extrapolated areas agree with the standard values to their last digit.
 
+```{figure} _static/stress/case13.png
+:alt: Case 13: result, error and solver steps
+:width: 100%
+
+Left, the area per unit cell against the standard value at each refinement. Middle, the error, falling fourfold per refinement. Right, what relax() did.
+```
+
+```{figure} _static/stress/case13_shapes.png
+:alt: Case 13: shapes
+:width: 100%
+
+The fundamental regions after five refinements.
+```
+
 ## A drop on a sphere
 
 A drop of volume 0.5 resting on a solid sphere of radius 1, its contact angle swept as
@@ -558,6 +572,20 @@ Newton stops after a first step that lowers the energy without cutting the resid
 much, so most steps end unconverged (`step.result.converged` is False). A few more
 `ev.newton()` steps converge from there, quadratically.
 
+```{figure} _static/stress/case14.png
+:alt: Case 14: result, error and solver steps
+:width: 100%
+
+Left, the energy against the exact cap. Middle, the errors in energy and pressure (limit 0.5%). Right, what relax() did, in the order run: most steps use the full 1,000 gradient steps and end unconverged.
+```
+
+```{figure} _static/stress/case14_shapes.png
+:alt: Case 14: shapes
+:width: 100%
+
+The drop at 20, 90 and 150 degrees.
+```
+
 ## A double bubble
 
 Two unit boxes sharing a face relax to the standard double bubble: three spherical
@@ -602,6 +630,20 @@ for v2 in [1.0, 0.6, 0.2]:
 volumes 1 and 1.0: area 9.15253 (exact 9.13942), pressures 3.0507, 3.0507 (exact 3.0465, 3.0465)
 volumes 1 and 0.6: area 7.84328 (exact 7.83166), pressures 3.0985, 3.5491 (exact 3.0938, 3.5456)
 volumes 1 and 0.2: area 6.21830 (exact 6.20805), pressures 3.1698, 4.8730 (exact 3.1640, 4.8735)
+```
+
+```{figure} _static/stress/case15.png
+:alt: Case 15: result, error and solver steps
+:width: 100%
+
+Left, the total area against the standard double bubble. Middle, the errors in area and pressures. Right, what relax() did.
+```
+
+```{figure} _static/stress/case15_shapes.png
+:alt: Case 15: shapes
+:width: 100%
+
+The double bubble at volume ratios 1, 0.6 and 0.2.
 ```
 
 ## The force of a solder joint
@@ -657,6 +699,20 @@ axisymmetric: 16.70464 dyn at 515 edges, extrapolated 16.70370
 Brakke's starting meshes give a force nearly twice the converged one; both models
 then converge at second order, to the same force.
 
+```{figure} _static/stress/case16.png
+:alt: Case 16: result, error and solver steps
+:width: 100%
+
+Left, the 3D force against the axisymmetric reference. Middle, its error, second order in the edge length. Right, what relax() did at each refinement.
+```
+
+```{figure} _static/stress/case16_shapes.png
+:alt: Case 16: shapes
+:width: 100%
+
+The joint on Brakke's starting mesh and refined three times.
+```
+
 ## A catenoid between round wires, to its fold
 
 A soap film between two round wires of radius 1, pulled apart. The wires are Evolver
@@ -702,4 +758,18 @@ wires 1.1 apart: area 6.51062 (exact 6.51167)
 wires 1.2 apart: area 6.99884 (exact 6.99964)
 wires 1.3 apart: area 7.43941 (exact 7.43978)
 ['continuation() stopped before 1.4: relax() came out unconverged there']
+```
+
+```{figure} _static/stress/case17.png
+:alt: Case 17: result, error and solver steps
+:width: 100%
+
+Left, the area against the exact catenoid, with the fold. Middle, the error. Right, what relax() did; the run stops at the first step past the fold.
+```
+
+```{figure} _static/stress/case17_shapes.png
+:alt: Case 17: shapes
+:width: 100%
+
+The film between the wires at three separations.
 ```

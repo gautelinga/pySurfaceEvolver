@@ -35,12 +35,12 @@ def run(quick=False):
         axial.append(_force(axi, 1))
     reference = (4*axial[-1] - axial[-2])/3
     ev = pyse.Evolver("bga-3.fe")
-    ev.relax(levels=2)
+    track.relax(ev, levels=2)
     res = Result(NAME, False, "")
     forces = []
     for level in range(2, 6):
         if level > 2:
-            track.add(ev.relax(levels=1))
+            track.relax(ev, levels=1)       # (a refinement, then the defaults)
         forces.append(_force(ev, 2))
         res.rows.append(dict(facets=ev.counts["facets"], force=forces[-1], reference=reference,
                              error=rel(forces[-1], reference), call=track.last))

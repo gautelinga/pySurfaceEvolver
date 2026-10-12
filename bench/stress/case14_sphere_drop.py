@@ -42,7 +42,7 @@ def start(volume=VOLUME, R=1.0):
     return shapes.revolve(rho*np.sin(t), d + rho*np.cos(t), nt=24)
 
 
-def drop_at_90():
+def drop_at_90(track=None):
     drop = start()
     ev = pyse.Evolver()
     ev.load_arrays(drop.vertices, drop.faces,
@@ -50,7 +50,10 @@ def drop_at_90():
                                             wet_poles=("north",))},
                    vertex_constraints={1: drop.rims["bottom"]}, parameters={"theta": 90.0},
                    bodies=[pyse.Body(volume=VOLUME)])
-    ev.relax(levels=2)
+    if track is None:
+        ev.relax(levels=2)
+    else:
+        track.relax(ev, levels=2)
     return ev
 
 
@@ -59,7 +62,7 @@ def run(quick=False):
     res = Result(NAME, False, "")
     worst = worst_p = worst_angle = 0.0
     for sweep in ([90, 75, 60, 45, 30, 20], [105, 120, 135, 150]):
-        ev = drop_at_90()                        # each way from the exact 90 degree drop
+        ev = drop_at_90(track)                   # each way from the exact 90 degree drop
         for step in recipes.continuation(ev, "theta", sweep, relax=track.relax):
             ref = drop_on_sphere(VOLUME, step.value)
             e, p = rel(step.energy, ref["energy"]), rel(ev.body(1).pressure, ref["pressure"])
