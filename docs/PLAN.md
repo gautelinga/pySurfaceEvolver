@@ -7,6 +7,7 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 
 ## Resume here (2026-10-12)
 
+0.7.2 released 2026-10-12 (tag v0.7.2; the user chose 0.7.2 despite the API removals).
 0.7.1 released 2026-10-11 (tag v0.7.1; wheels as workflow artifacts). 0.7.0 is tagged
 at fd9783f, whose wheel build failed (fixed in b5216d4: no fused multiply-adds on
 aarch64, render probe in a subprocess); its tag stays.
@@ -31,7 +32,7 @@ so the instability is real. 341 tests. Case 8 on defaults (2 threads): about 500
 median 0.2%; the worst state is run-dependent (over 10% in about 1/4-1/3 of runs,
 the same before and after this work: 11 old-code runs against ~30 new).
 
-After 0.7.1 (2026-10-11/12, CHANGELOG "Unreleased"; the user asked for speed,
+In 0.7.2 (2026-10-11/12, CHANGELOG; the user asked for speed,
 simplicity and user-friendliness from Brakke's resources, chose all groups, "remove
 outright" for API breaks and "run all phases, report at end"): Lagrange-stage Newton
 stops at tol; stability from the last Newton step's inertia (cutoff 1e-2, ~230
@@ -51,7 +52,6 @@ parameter optimization (bga-2..12 need their .cmd files).
 
 Open, for the user to pick:
 
-* **Release** 0.8.0 (breaking API changes since 0.7.1).
 * **Known limits:** stress case 3 at 170 degrees; case 8 needs explicit remeshing for
   full accuracy; mylarcube ends 0.1% above its recipe; the conjugate-gradient retry
   rescues ~1 step in 130 in case 8 but keeps its median error down; topology tests

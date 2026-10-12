@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.7.2 (2026-10-12)
+
+Faster `relax()`, a simpler API (with removals, listed first) and Brakke's online
+examples.
 
 ### Breaking changes
 
