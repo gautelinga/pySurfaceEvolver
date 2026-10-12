@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, List, Optional
 
 
 from . import _core, _html
@@ -139,6 +139,14 @@ class QuantityView:
         target = "" if q.kind != "fixed" else f", target {q.target:.6g}"
         return f"<quantity {self.name} ({q.kind}): value {q.value:.6g}{target}>"
 
+def _unknown(name: str, names: List[str]) -> str:
+    import difflib
+    close = difflib.get_close_matches(name, names, 3)
+    return (f"{name!r} is not a parameter of this datafile"
+            + (f"; did you mean {' or '.join(map(repr, close))}?" if close else
+               f" (it has {', '.join(map(repr, names))})" if names else " (it has none)"))
+
+
 class Parameters(MutableMapping):
     """Live view of the parameters declared in the loaded datafile.
 
@@ -153,14 +161,15 @@ class Parameters(MutableMapping):
         return result.data
 
     def __getitem__(self, name: str) -> float:
-        for key, value, _ in self._snapshot():
+        snapshot = self._snapshot()
+        for key, value, _ in snapshot:
             if key == name:
                 return value
-        raise KeyError(name)
+        raise KeyError(_unknown(name, [key for key, _, _ in snapshot]))
 
     def __setitem__(self, name: str, value: float) -> None:
         if name not in self:
-            raise KeyError(f"{name!r} is not a parameter of this datafile")
+            raise KeyError(_unknown(name, list(self)))
         self._evolver.command(f"{name} := {float(value)!r}")
 
     def __delitem__(self, name: str) -> None:

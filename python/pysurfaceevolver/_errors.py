@@ -80,6 +80,11 @@ class EvolverWarning(UserWarning):
     """A warning printed by Surface Evolver."""
 
 
+class SharedEngineWarning(UserWarning):
+    """An Evolver handle was used after another handle loaded a different
+    surface: every handle is a view of the one engine in the process."""
+
+
 class UnstableEquilibriumWarning(UserWarning):
     """relax() converged to an equilibrium that some motion makes lower in energy
     (a saddle): see :meth:`Evolver.stability`."""

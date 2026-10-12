@@ -47,7 +47,7 @@ from typing import Any, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
-__all__ = ["Constraint", "plane", "mirror", "sphere", "cylinder"]
+__all__ = ["Constraint", "Boundary", "plane", "mirror", "sphere", "cylinder", "circle", "curve"]
 
 
 def _n(x: float) -> str:
@@ -78,6 +78,12 @@ class Constraint:
     energy_constant: float = 0.0   # NaN when the contact angle is a parameter
     nonnegative: bool = False
     area_constant: float = 0.0     # wetted area the integrals leave out
+    # the left-out energy as a datafile expression, when the contact angle
+    # is a parameter (make_datafile adds it to Evolver.energy)
+    energy_constant_text: Optional[str] = field(default=None, compare=False, repr=False)
+    # datafile parameters the contact angle refers to (make_datafile checks
+    # that they are declared)
+    parameters: Tuple[str, ...] = field(default=(), compare=False, repr=False)
     # the wall's geometry, for drawing: ("plane", normal, offset),
     # ("sphere", center, radius) or ("cylinder", point, direction, radius)
     shape: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
@@ -142,9 +148,17 @@ class _Coefficient:
     """tension*cos(contact_angle): a number, or a datafile expression when the
     angle is given as a parameter name or expression (e.g. ``"theta"``)."""
 
+    _KNOWN = {"pi", "e", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt", "exp",
+              "log", "abs", "sinh", "cosh", "tanh", "pow", "floor", "ceil", "minimum", "maximum"}
+
     def __init__(self, contact_angle, tension: float):
         self.value: Optional[float] = None
         self.expr: Optional[str] = None
+        self.names: Tuple[str, ...] = ()
+        if isinstance(contact_angle, str):
+            import re
+            self.names = tuple(sorted(set(re.findall(r"[A-Za-z_]\w*", contact_angle))
+                                      - self._KNOWN))
         if contact_angle is None:
             self.value = 0.0
         elif isinstance(contact_angle, str):
@@ -209,7 +223,7 @@ def plane(normal, offset: float = 0.0, contact_angle: Optional[float] = None, *,
         p = f"({_n(n[2])}*({_n(o[2])}*{t} + {_n(u[2])}*{s}*{t} + {_n(v[2]/2)}*{t}^2))"
         content = [f"{_n(ui)}*{p}" if ui != 0 else "0" for ui in u]
     return Constraint(f"{_lin(n)[1:-1]} = {float(d)!r}", energy, content,
-                      shape=("plane", tuple(n), d))
+                      shape=("plane", tuple(n), d), parameters=k.names)
 
 
 def mirror(axis, at: float = 0.0) -> Constraint:
@@ -261,7 +275,9 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     area = R*R*span*((1.0 if north else 0.0) + (1.0 if south else 0.0))
     formula = f"{X}^2 + {Y}^2 + {Z}^2 = {float(R*R)!r}"
     return Constraint(formula, energy, content, volconst, k.energy(area), nonnegative, area,
-                      shape=("sphere", tuple(c), R))
+                      shape=("sphere", tuple(c), R),
+                      energy_constant_text=(f"-{k.expr}*{_n(area)}" if k.expr and area else None),
+                      parameters=k.names)
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,
@@ -326,4 +342,48 @@ def cylinder(point, direction, radius: float, contact_angle: Optional[float] = N
                    if has_content else None)
     formula = f"{a}^2 + {b}^2 = {float(R*R)!r}"
     return Constraint(formula, energy, content, 0.0, 0.0, nonnegative,
-                      shape=("cylinder", tuple(p), tuple(d), R))
+                      shape=("cylinder", tuple(p), tuple(d), R), parameters=k.names)
+
+
+@dataclass(frozen=True)
+class Boundary:
+    """A curve for :func:`make_datafile` (Evolver's ``boundary``): refining
+    puts new vertices on it, so a film keeps a curved wire however much it
+    is refined (a wire of fixed vertices alone stays the polygon it started
+    as).
+
+    ``formulas`` give x, y, z in terms of the parameter ``p1``;
+    ``parameter(xyz)`` gives each vertex's parameter from its coordinates
+    (an ``(n, 3)`` array in, ``n`` values out).
+    """
+
+    formulas: Tuple[str, str, str]
+    parameter: Any = field(compare=False)
+
+    def text(self) -> str:
+        """The boundary's body in a datafile (after ``boundary n parameters 1``)."""
+        return "".join(f"x{i + 1}: {f}\n" for i, f in enumerate(self.formulas))
+
+
+def curve(x: str, y: str, z: str, parameter) -> Boundary:
+    """A curve x(p1), y(p1), z(p1) given as datafile expressions, with
+    ``parameter(xyz)`` mapping vertex coordinates to p1 (see :class:`Boundary`)."""
+    return Boundary((x, y, z), parameter)
+
+
+def circle(center=(0.0, 0.0, 0.0), radius: float = 1.0, normal=(0.0, 0.0, 1.0)) -> Boundary:
+    """A circular wire of ``radius`` about ``center`` in the plane normal to
+    ``normal``, parametrized by the angle p1 (radians)."""
+    c = np.asarray(center, dtype=float)
+    n = _unit(normal, "normal")
+    u, v = _frame(n)
+    R = float(radius)
+    if c.shape != (3,) or R <= 0:
+        raise ValueError("center must be a 3-vector and radius positive")
+    formulas = tuple(f"{_n(c[i])} + {_n(R*u[i])}*cos(p1) + {_n(R*v[i])}*sin(p1)"
+                     for i in range(3))
+
+    def parameter(xyz):
+        d = np.asarray(xyz, dtype=float)[:, :3] - c
+        return np.arctan2(d @ v, d @ u)
+    return Boundary(formulas, parameter)  # type: ignore[arg-type]

@@ -257,6 +257,33 @@ class BodySurface:
     cap_constraints: Dict[int, Optional[int]] = field(default_factory=dict)
     # the constraint cap k lies on (None: a flat cap)
 
+    def _triangles(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+        if self.cell_type != "triangle":
+            raise ValueError("needs flat triangles: body_surfaces(curved='tessellate')")
+        p = _as_3d(self.points)
+        return p[self.cells[:, 0]], p[self.cells[:, 1]], p[self.cells[:, 2]]
+
+    @property
+    def area(self) -> float:
+        """The area of the surface (caps included; see :meth:`areas`)."""
+        return float(self.areas().sum())
+
+    def areas(self) -> np.ndarray:
+        """The area of each part: index 0 the body's own facets, k cap k."""
+        a, b, c = self._triangles()
+        each = 0.5*np.linalg.norm(np.cross(b - a, c - a), axis=1)
+        ids = self.cap_ids if self.cap_ids is not None else np.zeros(len(each), dtype=np.int64)
+        return np.bincount(ids, weights=each, minlength=int(ids.max(initial=0)) + 1)
+
+    @property
+    def volume(self) -> float:
+        """The volume enclosed, from the outward-oriented triangles; NaN
+        unless the surface is closed (``watertight``, e.g. with caps)."""
+        if not self.watertight:
+            return float("nan")
+        a, b, c = self._triangles()
+        return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum()/6)
+
     def to_meshio(self, flavor: str = "gmsh") -> "meshio.Mesh":
         """As a meshio mesh; ``flavor`` picks high-order cell names (see
         :func:`native_cell_name`)."""

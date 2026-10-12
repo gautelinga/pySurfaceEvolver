@@ -126,7 +126,7 @@ def test_set_parameter(load):
 
 def test_parameters_exclude_command_variables(load):
     ev = load("mound.fe")
-    ev["my_variable"] = 3
+    ev.define("my_variable", 3)
     assert "my_variable" not in ev.parameters
     assert list(ev.parameters) == ["angle"]
 

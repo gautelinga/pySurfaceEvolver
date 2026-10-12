@@ -129,9 +129,20 @@ def test_eval(cube):
 
 
 def test_getitem_and_setitem(cube):
-    cube["my_parameter"] = 2.5
+    cube.define("my_parameter", 2.5)
     assert cube["my_parameter"] == 2.5
     assert cube.eval("my_parameter * 2") == 5.0
+    cube["my_parameter"] = 3.0               # exists now
+    cube["scale_limit"] = 0.5                # Evolver's own
+    assert cube["my_parameter"] == 3.0 and cube["scale_limit"] == 0.5
+
+
+def test_setitem_refuses_unknown_names(load):
+    ev = load("mound.fe")
+    with pytest.raises(KeyError, match="did you mean 'angle'"):
+        ev["angel"] = 60
+    with pytest.raises(KeyError, match="'angle'"):
+        ev.parameters["angel"]
 
 
 def test_total_energy_matches_area_without_other_energies(cube):
@@ -426,8 +437,10 @@ def test_set_vertices_wrong_ndim_raises(cube):
 def test_handles_share_the_engine(load):
     first = load("cube.fe")
     second = load("mound.fe")
-    # both handles keep working, and see the surface loaded last
-    assert first.datafile.endswith("mound.fe")
+    # both handles keep working, and see the surface loaded last; the first
+    # one says so once
+    with pytest.warns(pyse.SharedEngineWarning, match="another handle has since loaded"):
+        assert first.datafile.endswith("mound.fe")
     assert first.counts == second.counts
     first.iterate(2)
     assert second.eval("total_energy") == first.total_energy
@@ -457,9 +470,10 @@ def test_save_and_restore_are_exact(load):
     assert ev.eval("total_energy") == energy
     # and it carries on exactly like the original would have
     ev.iterate(3)
+    carried_on = ev.vertices
     reference = load("cube.fe")
     reference.command("g 5; r; g 5; g 3")
-    np.testing.assert_array_equal(ev.vertices, reference.vertices)
+    np.testing.assert_array_equal(carried_on, reference.vertices)
 
 
 def test_snapshot_keeps_lagrange_model_and_parameters(load, tmp_path):

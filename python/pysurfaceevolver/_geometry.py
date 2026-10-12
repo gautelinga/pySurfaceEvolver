@@ -153,3 +153,31 @@ def _long_spokes(m: Mesh, ratio: float) -> np.ndarray:
     spoke = (valence >= 2) & (on[e[:, 0]] != on[e[:, 1]])
     ref = np.where(on[e[:, 0]], mean[e[:, 0]], mean[e[:, 1]])
     return spoke & (lengths > ratio*ref)
+
+
+def _chains(edges: np.ndarray) -> "list[list[int]]":
+    """The edges (vertex pairs) joined into paths of vertices, longest first;
+    a closed loop repeats its first vertex. Paths end at junctions."""
+    links: Dict[int, list] = {}
+    for a, b in edges.tolist():
+        links.setdefault(a, []).append(b)
+        links.setdefault(b, []).append(a)
+    used: set = set()
+    paths = []
+    for start in [k for k, v in links.items() if len(v) != 2] + list(links):
+        for nxt in links[start]:
+            if (min(start, nxt), max(start, nxt)) in used:
+                continue
+            path, prev, cur = [start], start, nxt
+            used.add((min(start, nxt), max(start, nxt)))
+            while True:
+                path.append(cur)
+                if len(links[cur]) != 2 or cur == start:
+                    break
+                follow = links[cur][0] if links[cur][1] == prev else links[cur][1]
+                if (min(cur, follow), max(cur, follow)) in used:
+                    break
+                used.add((min(cur, follow), max(cur, follow)))
+                prev, cur = cur, follow
+            paths.append(path)
+    return sorted(paths, key=len, reverse=True)

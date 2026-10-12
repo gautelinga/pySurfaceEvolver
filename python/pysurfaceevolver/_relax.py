@@ -284,6 +284,45 @@ class _Relaxing(_Analysis):
                                np.array(trace.level, dtype=int), residual, stable, modes,
                                health, popped, collapsed, settled)
 
+    def derivative(self, name: str, step: Optional[float] = None, *,
+                   relax: Union[bool, Dict[str, Any]] = True) -> float:
+        """The derivative of the equilibrium energy (:attr:`energy`) with
+        respect to a parameter, by central differences: the parameter set
+        to its value plus and minus ``step`` (default 1e-4 times its size,
+        at least 1e-4), the surface relaxed each time, then put back as it
+        was. With a parameter that moves a wall or plate, minus this is the
+        force on it (Brakke's "reconverge" method, the most reliable of his
+        seven on bga-4: volume constraints and contact angles are accounted
+        for by relaxing). ``relax``: options for :meth:`relax` (a dict), or
+        False to keep the vertices where they are (only the explicit
+        dependence on the parameter; vertices on a moved constraint don't
+        follow it).
+        """
+        if name not in self.parameters:
+            raise KeyError(f"{name!r} is not a parameter of this datafile")
+        value = self.parameters[name]
+        h = 1e-4*max(abs(value), 1.0) if step is None else float(step)
+        if not h > 0:
+            raise ValueError("step must be positive")
+        options = {"stability": False, **relax} if isinstance(relax, dict) else {"stability": False}
+        snapshot = self.save()
+        energies = []
+        try:
+            for sign in (1, -1):
+                self.parameters[name] = value + sign*h
+                if relax is not False:
+                    result = self.relax(**options)
+                    if not result.converged:
+                        warnings.warn(f"derivative(): relax() didn't converge at {name} = "
+                                      f"{value + sign*h:.6g}", EvolverWarning, stacklevel=2)
+                else:
+                    self.recalc()
+                energies.append(self.energy)
+                self.restore(snapshot)
+        finally:
+            self.restore(snapshot)
+        return (energies[0] - energies[1])/(2*h)
+
     def pop(self) -> int:
         """Pop the junctions a minimal surface can't have (Evolver's ``o``:
         four films on an edge, a cube's cone at a vertex, four strings at a
@@ -655,7 +694,12 @@ class _Run:
         self.rounds(lev, self.max_iter, self.tidy, watch=self.newton > 0)
 
     def newton_steps(self) -> "tuple[int, float]":
-        return self.ev._newton(self.newton, self.seek, self.tol, self.undo_if, self.trace.output)
+        # far from equilibrium the Hessian is indefinite, which Evolver
+        # prints at every step; relax() checks stability itself at the end
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
+            return self.ev._newton(self.newton, self.seek, self.tol, self.undo_if,
+                                   self.trace.output)
 
     def newton_first(self) -> "tuple[int, float] | None":
         """Five gradient steps, then safeguarded Newton steps as long as each
@@ -678,9 +722,7 @@ class _Run:
         trace.level += [0]*_NEWTON_FIRST_SETTLE
         # stops at tol with the targets met (past it, steps in round-off cost
         # a factorization each)
-        with warnings.catch_warnings():     # an attempt; far from equilibrium the
-            warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)  # Hessian is indefinite
-            steps, residual = self.newton_steps()
+        steps, residual = self.newton_steps()
         if residual < self.tol and ev._target_gap()[0] <= _TARGET_LOST:
             return steps, residual
         ev._put_back(coords)

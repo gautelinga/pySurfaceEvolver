@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import difflib
 import os
 import re
 import sys
@@ -16,7 +17,7 @@ import numpy as np
 from . import _core, _html
 from ._errors import (EvolverBusyError, EvolverError, EvolverExit,
                       EvolverFatalError, EvolverWarning, InvalidSurfaceError,
-                      _command_hints, _hide_capture_wrapper, _num)
+                      SharedEngineWarning, _command_hints, _hide_capture_wrapper, _num)
 from ._mesh import Bodies, Mesh, Quantity
 from ._results import Snapshot
 from ._views import BodyView, Parameters, QuantityView
@@ -48,6 +49,8 @@ _ELEMENT_NAMES = {_core.VERTEX: "vertex", _core.EDGE: "edge",
                   _core.FACET: "facet", _core.BODY: "body"}
 
 
+
+
 def _element_type(element: str) -> int:
     try:
         return _ELEMENT_TYPES[element]
@@ -60,20 +63,29 @@ def _element_type(element: str) -> int:
 _mesh_cache: "tuple[int, Mesh] | None" = None
 _mesh_cache_lock = threading.Lock()
 
-class _RelaxMemory:
-    """relax()'s memory of failed attempts on the loaded surface: reset when
-    a surface is loaded, kept by restore() (the same surface)."""
+
+
+class _SurfaceMemory:
+    """What pySE remembers about the loaded surface: reset when a surface is
+    loaded, kept by restore() (the same surface)."""
 
     def __init__(self) -> None:
+        self.generation = 0                 # surfaces loaded so far in this process
+        self.name = ""                      # the loaded datafile, as given
         self.reset()
 
     def reset(self) -> None:
-        self.newton_first_failed = False    # the next call skips the Newton-first attempt
-        self.collapse_failures = 0          # failed last-resort attempts in a row
-        self.collapse_skip = 0              # calls still to skip before the next attempt
+        self.newton_first_failed = False    # relax(): the next call skips the Newton-first attempt
+        self.collapse_failures = 0          # relax(): failed last-resort attempts in a row
+        self.collapse_skip = 0              # relax(): calls still to skip before the next attempt
+        self.walls: Dict[object, object] = {}   # load_arrays(): constraints with a shape
 
 
-relax_memory = _RelaxMemory()
+surface = _SurfaceMemory()
+relax_memory = surface      # (relax() reads its fields under this name)
+
+
+
 
 def _read_only(*arrays: Optional[np.ndarray]) -> None:
     for a in arrays:
@@ -105,6 +117,7 @@ class _Engine:
         The output buffers are local to the call and the callbacks travel
         with it, so concurrent calls from other threads can't mix them up.
         """
+        self._check_handle()
         out: list = []
         err: list = []
         echo = self.echo
@@ -143,6 +156,20 @@ class _Engine:
                 result.errnum, output)
         raise EvolverError(message, result.errnum, output)
 
+    def _check_handle(self) -> None:
+        """Warn (once) when this handle loaded a surface and another has
+        loaded a different one since."""
+        mine = self.__dict__.get("_generation")
+        if mine is not None and mine != surface.generation \
+                and self.__dict__.get("_warned") != surface.generation:
+            self._warned = surface.generation
+            warnings.warn(
+                f"this Evolver handle loaded {self.__dict__.get('_name', '')!r}, but another "
+                f"handle has since loaded {surface.name!r}: every handle is a view of the one "
+                "engine in this process, so this one now shows that surface too (keep "
+                "surfaces with save()/restore(), or work on several at once with pyse.map)",
+                SharedEngineWarning, stacklevel=4)
+
     def load(self, datafile: str | os.PathLike) -> str:
         """Load a ``.fe`` datafile, replacing the current surface.
 
@@ -153,8 +180,15 @@ class _Engine:
         If the datafile has errors, this raises :class:`EvolverError`, and
         there is no valid surface until a datafile loads successfully.
         """
-        relax_memory.reset()
-        path = os.fspath(datafile)
+        output = self._load(os.fspath(datafile))
+        self._check_bodies()
+        return output
+
+    def _load(self, path: str) -> str:
+        surface.reset()
+        surface.generation += 1
+        surface.name = path
+        self._generation, self._name = surface.generation, path
         try:
             output, _ = self._call(_core.load, path)
         except EvolverError as e:
@@ -162,6 +196,20 @@ class _Engine:
                 raise FileNotFoundError(f"Cannot open datafile {path!r}") from None
             raise
         return output
+
+    def _check_bodies(self) -> None:
+        """Warn about bodies that start inside out: a negative volume against
+        a positive target (faces oriented into the body)."""
+        if not _core.count(_core.BODY):
+            return
+        b = self.bodies()
+        for i, v, t, fixed in zip(b.ids, b.volume, b.target, b.fixed):
+            if fixed and t > 0 and v < 0:
+                warnings.warn(
+                    f"body {i} starts with volume {v:.4g} against its target {t:.4g}: its "
+                    "faces are probably oriented into it, and relaxing would turn it inside "
+                    "out. Reverse their vertex order, or give the body's orientation "
+                    "(Body(orientation=...), -face in a datafile).", UserWarning, stacklevel=3)
 
     def load_string(self, text: str, name: str = "surface.fe") -> str:
         """Load a datafile given as a string.
@@ -173,7 +221,11 @@ class _Engine:
             path = os.path.join(tmp, name)
             with open(path, "w") as f:
                 f.write(text)
-            return self.load(path)
+            output = self._load(path)
+        _core.set_datafile(name)            # not the temporary path
+        surface.name = self._name = name
+        self._check_bodies()
+        return output
 
     def command(self, text: str) -> str:
         """Run Evolver commands, such as ``"g 10; r; hessian"``.
@@ -227,8 +279,25 @@ class _Engine:
         return self.eval(name)
 
     def __setitem__(self, name: str, value: float) -> None:
-        """``ev["gravity"] = 0.5`` assigns a variable or parameter."""
-        self.command(f"{name} := {float(value)!r}")
+        """``ev["scale_limit"] = 0.5`` assigns a parameter or a variable that
+        exists already (Evolver's own, or one from the datafile or
+        :meth:`define`): a misspelt name raises ``KeyError`` instead of
+        quietly creating a new variable."""
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise KeyError(f"not a variable name: {name!r}")
+        if self.eval(f'is_defined("{name}")') == 0:
+            close = difflib.get_close_matches(name, list(self.parameters), 3)
+            raise KeyError(f"{name!r} is not a parameter or variable of this surface"
+                           + (f"; did you mean {' or '.join(map(repr, close))}?" if close
+                              else "") + " (ev.define(name, value) makes a new variable)")
+        self.command(f"{name} := {_num(value, name)}")
+
+    def define(self, name: str, value: float) -> None:
+        """Make a new variable (or set one), for use in commands and
+        expressions: ``ev.define("h", 0.1)``, then ``ev.command("t h")``."""
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise ValueError(f"not a variable name: {name!r}")
+        self.command(f"{name} := {_num(value, name)}")
 
     @contextlib.contextmanager
     def _toggle(self, name: str, on: bool) -> Iterator[None]:
@@ -244,6 +313,8 @@ class _Engine:
 
     def refine(self, times: int = 1) -> None:
         """Refine the surface: split every edge and facet (Evolver's ``r``)."""
+        if times < 0:
+            raise ValueError("times must be non-negative")
         for _ in range(times):
             self.command("r")
 
@@ -301,14 +372,18 @@ class _Engine:
     def restore(self, snapshot: Snapshot) -> None:
         """Replace the surface with a snapshot from :meth:`save`."""
         # the same surface, not a new one: relax()'s memory of failed attempts stays
-        kept = dict(vars(relax_memory))
-        with tempfile.TemporaryDirectory() as tmp:
+        kept = dict(vars(surface))
+        with tempfile.TemporaryDirectory() as tmp, warnings.catch_warnings():
+            # what loading pySE's own dump prints is no news (edges with the
+            # same endpoints in a torus, ...)
+            warnings.simplefilter("ignore", EvolverWarning)
             path = os.path.join(tmp, "snapshot.fe")
             with open(path, "w") as f:
                 f.write(snapshot.text)
-            self.load(path)
+            self._load(path)
         _core.set_datafile(snapshot.datafile)
-        vars(relax_memory).update(kept)
+        vars(surface).update(kept)
+        self._generation, self._name = surface.generation, surface.name
 
     @staticmethod
     def _mask(element_type: int, where, n: int) -> np.ndarray:
@@ -439,6 +514,7 @@ class _Engine:
     @property
     def datafile(self) -> str:
         """Name of the loaded datafile, or ``""`` if none."""
+        self._check_handle()
         return _core.datafile()
 
     @property
@@ -473,16 +549,30 @@ class _Engine:
     @property
     def total_energy(self) -> float:
         """Total energy as of the last iteration or recalculation."""
+        self._check_handle()
         return _core.total_energy()
+
+    @property
+    def energy(self) -> float:
+        """The total energy including what the walls' line integrals leave
+        out (:attr:`pysurfaceevolver.constraints.Constraint.energy_constant`,
+        added by :func:`make_datafile`; Evolver can't add a constant):
+        :attr:`total_energy` plus that constant."""
+        from ._build import ENERGY_CONSTANT
+        if self.eval(f'is_defined("{ENERGY_CONSTANT}")') == 0:
+            return _core.total_energy()
+        return _core.total_energy() + self.eval(f"{ENERGY_CONSTANT}()")
 
     @property
     def total_area(self) -> float:
         """Total area as of the last iteration or recalculation."""
+        self._check_handle()
         return _core.total_area()
 
     @property
     def counts(self) -> dict:
         """Number of vertices, edges, facets and bodies."""
+        self._check_handle()
         return {
             "vertices": _core.count(_core.VERTEX),
             "edges": _core.count(_core.EDGE),

@@ -10,6 +10,7 @@ import numpy as np
 
 from ._build import Body, make_datafile
 from ._engine import _Engine
+from ._engine import surface as _surface
 from ._mesh import BodySurface, is_watertight
 
 _PROJECT_BATCH = 200            # points projected per Evolver command (body_surfaces caps)
@@ -101,8 +102,13 @@ class _Export(_Engine):
     # ------------------------------------------------------------------
     # Building surfaces
     def load_arrays(self, vertices, faces=None, **kwargs: Any) -> str:
-        """Load a surface given as arrays; see :func:`make_datafile` for options."""
-        return self.load_string(make_datafile(vertices, faces, **kwargs))
+        """Load a surface given as arrays; see :func:`make_datafile` for options.
+        The walls among ``constraints`` (from :mod:`pysurfaceevolver.constraints`)
+        are remembered for ``plot(walls=True)``."""
+        output = self.load_string(make_datafile(vertices, faces, **kwargs))
+        _surface.walls = {k: c for k, c in (kwargs.get("constraints") or {}).items()
+                         if getattr(c, "shape", None) is not None}
+        return output
 
     def load_mesh_file(self, path: Union[str, os.PathLike], *,
                        volume: Union[None, float, str] = None,
@@ -314,7 +320,8 @@ class _Export(_Engine):
         (an eighth of a cell: ``["z", "y", "x"]``). ``walls`` draws solids and
         walls with it: constraints from :mod:`pysurfaceevolver.constraints`
         (``C.sphere(...)``, ``C.plane(...)``; planes as translucent patches
-        around the surface) or PyVista meshes. Other keyword arguments go to
+        around the surface) or PyVista meshes; ``walls=True`` draws those
+        given to :meth:`load_arrays`. Other keyword arguments go to
         ``Plotter.add_mesh``.
         """
         from ._viz import _import_pyvista, add_images, add_walls, surface_dataset
@@ -323,7 +330,7 @@ class _Export(_Engine):
         plotter = pv.Plotter(off_screen=off_screen)
         add_images(plotter, dataset, mirror, "evolver-surface", scalars=name,
                    **{"show_edges": True, **kwargs})
-        add_walls(plotter, walls)
+        add_walls(plotter, self._walls(walls))
         return plotter.show(screenshot=screenshot)
 
     def live_view(self, scalars: Union[None, str, np.ndarray] = None, **kwargs: Any) -> "LiveView":
@@ -332,4 +339,10 @@ class _Export(_Engine):
         Typical use: ``ev.iterate(200, callback=ev.live_view().update, every=10)``.
         """
         from ._viz import LiveView
+        if "walls" in kwargs:
+            kwargs["walls"] = self._walls(kwargs["walls"])
         return LiveView(self, scalars, **kwargs)
+
+    def _walls(self, walls):
+        """``walls`` for drawing: True means those given to load_arrays()."""
+        return list(_surface.walls.values()) if walls is True else walls

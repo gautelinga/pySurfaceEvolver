@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from ._errors import (EvolverBusyError, EvolverError, EvolverExit, EvolverFatalError,
-                      EvolverWarning, InvalidSurfaceError, UnstableEquilibriumWarning)
+                      EvolverWarning, InvalidSurfaceError, SharedEngineWarning,
+                      UnstableEquilibriumWarning)
 from ._export import _Export
 from ._relax import _Relaxing
 from ._results import EigenCounts, Health, IterationResult, Snapshot, Stability
@@ -11,7 +12,7 @@ from ._views import BodyView, Parameters, QuantityView
 
 __all__ = [
     "BodyView", "EigenCounts", "Health", "QuantityView", "Stability",
-    "UnstableEquilibriumWarning",
+    "SharedEngineWarning", "UnstableEquilibriumWarning",
     "Evolver",
     "IterationResult",
     "Parameters",

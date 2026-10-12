@@ -10,7 +10,7 @@ import numpy as np
 from . import _core
 from ._engine import _Engine
 from ._errors import EvolverError, _num
-from ._geometry import _crossed, _grow, _self_gap
+from ._geometry import _chains, _crossed, _grow, _self_gap
 from ._mesh import Mesh, MeshQuality
 from ._results import EigenCounts, Health, Stability
 
@@ -226,7 +226,7 @@ class _Analysis(_Engine):
             count = np.bincount(m.edges[triple].ravel(), minlength=len(free))
             return bad + int(((count > 4) & free).sum())
 
-    def stability(self, nearest: int = 6) -> Stability:
+    def stability(self, nearest: int = 6, *, eigenvalues: bool = False) -> Stability:
         """Whether the surface sits at a stable equilibrium (a minimum, as far as
         second order tells; call it once converged, see :meth:`residual`).
 
@@ -243,15 +243,20 @@ class _Analysis(_Engine):
         ``lowest`` and ``threshold`` are eigenvalues with Evolver's
         ``linear_metric`` (as its eigenvalue tutorial recommends): those of
         the continuous surface, which don't shrink as the mesh is refined
-        (the counts are the same either way).
+        (the counts are the same either way). On a stable surface ``lowest``
+        is empty unless ``eigenvalues=True`` (then ``ritz`` runs anyway: the
+        lowest eigenvalue falling toward zero over a continuation shows a
+        fold or instability coming).
         """
         first = self.eigen_counts(0.0).negative
-        if first == 0:
+        if first == 0 and not eigenvalues:
             return Stability(True, 0, np.array([]), 0.0)
         with self._toggle("linear_metric", True):
             text = self.command(f"ritz(0, {max(int(nearest), first + 4)})")
             values = np.array(sorted(float(x) for x in re.findall(
                 r"^\s*\d+\.\s+([-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)\s*$", text, re.MULTILINE)))
+            if first == 0:
+                return Stability(True, 0, values, 0.0)
             positive = np.abs(values[values > 0])
             scale = float(np.median(positive)) if len(positive) \
                 else float(np.abs(values).max(initial=1.0))
@@ -300,6 +305,21 @@ class _Analysis(_Engine):
         return MeshQuality(*edges, float(smallest.min()), float(np.median(smallest)),
                            int((smallest < skinny_angle).sum()),
                            int((area < 1e-12*np.median(area)).sum()), skinny_angle)
+
+    def contact_lines(self, constraint: Union[int, str]) -> List[np.ndarray]:
+        """Where the surface meets a constraint (number or name): the edges on
+        it that bound the surface (on one facet only; for strings, the
+        vertices' chain on it), joined into polylines of vertex positions,
+        longest first; a closed line repeats its first point. Curved models:
+        through the corner vertices. For a drop's contact radius, say,
+        ``np.linalg.norm(line[:-1, :2] - line[:-1, :2].mean(axis=0), axis=1).mean()``."""
+        m = self.mesh()
+        on = self.on_constraint(constraint)
+        e = m.edges
+        mask = on[e[:, 0]] & on[e[:, 1]]
+        if m.facets is not None and len(m.facets):
+            mask &= m.edge_valence() == 1
+        return [m.vertices[path] for path in _chains(e[mask])]
 
     def contact_angles(self, constraint: Union[int, str], body: Optional[int] = None) -> np.ndarray:
         """The contact angle (degrees, through the liquid) at each vertex where
