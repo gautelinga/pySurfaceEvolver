@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
@@ -155,6 +155,11 @@ class Snapshot:
 
     text: str
     datafile: str
+    # what pySE remembers with the surface: its walls (plot(walls=True)) and
+    # which load it came from (restoring into the same one keeps relax()'s
+    # memory of failed attempts and doesn't count as a new surface)
+    walls: Dict[object, object] = field(default_factory=dict, compare=False, repr=False)
+    generation: int = field(default=-1, compare=False, repr=False)
 
     def write(self, path: Union[str, os.PathLike]) -> None:
         """Write the snapshot as a ``.fe`` datafile."""

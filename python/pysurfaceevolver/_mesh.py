@@ -475,7 +475,7 @@ class MeshQuality:
     skinny_angle: float       # the threshold used, degrees
 
 
-@dataclass
+@dataclass(frozen=True)
 class Mesh:
     """A snapshot of the surface geometry.
 

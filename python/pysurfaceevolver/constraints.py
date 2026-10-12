@@ -159,7 +159,8 @@ class _Coefficient:
         self.names: Tuple[str, ...] = ()
         if isinstance(contact_angle, str):
             import re
-            self.names = tuple(sorted(set(re.findall(r"[A-Za-z_]\w*", contact_angle))
+            # identifiers, not exponents (the "e3" of 1e3)
+            self.names = tuple(sorted(set(re.findall(r"(?<![\w.])[A-Za-z_]\w*", contact_angle))
                                       - self._KNOWN))
         if contact_angle is None:
             self.value = 0.0
@@ -167,6 +168,8 @@ class _Coefficient:
             self.expr = f"({_n(tension)}*cos(({contact_angle})*pi/180))"
         else:
             self.value = float(tension)*float(np.cos(np.radians(contact_angle)))
+            if abs(self.value) < 1e-12*abs(float(tension)):
+                self.value = 0.0            # 90 degrees (cos is 6e-17 in floats)
 
     def __bool__(self) -> bool:
         return self.expr is not None or self.value != 0

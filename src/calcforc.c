@@ -790,6 +790,18 @@ REAL calc_content (
 *  Return value: as calc_content()
 */
 
+/* whether an expression reads a pressure or multiplier: such an energy must
+   be taken after move_vertices()' calc_pressure(), not in the content pass */
+static int expr_reads_pressure(struct expnode *e)
+{ struct treenode *n;
+  if ( !e || !e->start || !e->root ) return 0;
+  for ( n = e->start ; n <= e->root ; n++ )
+    if ( n->type == GET_PRESSURE_NODE || n->type == PUSHQPRESSURE_NODE
+          || n->type == AMBIENT_PRESSURE_NODE )
+      return 1;
+  return 0;
+}
+
 static int content_extra_mode;  /* quantities local_calc_content() adds */
 static REAL fused_energy;       /* the energy quantities' total */
 static REAL fused_area_addends[MAXADDENDS];  /* and their area */
@@ -812,6 +824,15 @@ REAL calc_content_and_energy(void)
   for ( k = LOW_INST ; k < meth_inst_count ; k++ )
   { struct method_instance *mi = METH_INSTANCE(k);
     int j;
+    if ( !(mi->flags & Q_DELETED) )   /* an energy reading a pressure: after it */
+    { int energy = 0;
+      for ( j = 0 ; j < MMAXQUANTS ; j++ )
+        if ( (mi->quants[j] >= 0) && (GEN_QUANT(mi->quants[j])->flags & Q_ENERGY) )
+          energy = 1;
+      for ( j = 0 ; energy && j < MAXMEXPR ; j++ )
+        if ( expr_reads_pressure(mi->expr[j]) )
+          return calc_content(Q_FIXED);
+    }
     if ( (mi->flags & (Q_DELETED|BODY_INSTANCE)) || !(mi->flags & DEFAULT_INSTANCE) )
       continue;
     for ( j = 0 ; j < MMAXQUANTS ; j++ )

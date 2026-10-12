@@ -725,7 +725,8 @@ void add_warning_message(char *message)
          room for the new message even if it is longer than what went) */
       char *c;
       size_t keep;
-      for ( c = warning_messages + 1000 ; *c && *c != '\n' ; c++ ) ;
+      c = warning_messages + ( strlen(warning_messages) < 1000 ? strlen(warning_messages) : 1000 );
+      for ( ; *c && *c != '\n' ; c++ ) ;
       keep = strlen(c) + 1;
       memmove(warning_messages,c,keep);
       needed = keep + strlen(message) + 10;

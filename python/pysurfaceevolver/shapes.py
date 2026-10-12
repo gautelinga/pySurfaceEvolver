@@ -2,7 +2,7 @@
 
 Each builder returns a :class:`Shape`: vertices, triangles (normals outward,
 away from the axis or up), and its rims by name (rows of the vertices along
-each open edge), ready for ``vertex_constraints``::
+each open edge, in order around it), ready for ``vertex_constraints``::
 
     from pysurfaceevolver import shapes, constraints as C
     drop = shapes.cap(radius=1, height=0.6)
@@ -53,6 +53,8 @@ def revolve(r, z, nt: int = 24) -> Shape:
     r, z = np.asarray(r, float), np.asarray(z, float)
     if r.shape != z.shape or r.ndim != 1 or len(r) < 2:
         raise ValueError("r and z must be 1-D arrays of the same length (at least 2)")
+    if nt < 3:
+        raise ValueError("nt must be at least 3")
     phis = 2*np.pi*np.arange(nt)/nt
     v: List[List[float]] = []
     f: List[List[int]] = []
@@ -60,6 +62,8 @@ def revolve(r, z, nt: int = 24) -> Shape:
     pole = np.abs(r) <= 1e-12*np.abs(r).max(initial=1.0)
     lo = 1 if pole[0] else 0
     hi = len(r) - 1 if pole[-1] else len(r)
+    if hi - lo < 1 or pole[lo:hi].any():
+        raise ValueError("r may be 0 only at the ends (poles), with at least one ring between")
     if lo:
         v.append([0.0, 0.0, z[0]])
     first = len(v)
@@ -96,6 +100,8 @@ def cap(radius: float = 1.0, height: float = 1.0, *, nr: int = 8, nt: int = 32,
 def disc(radius: float = 1.0, *, nr: int = 4, nt: int = 24, z: float = 0.0) -> Shape:
     """A flat disc in the plane z = ``z`` (a film's start), normal +z; rim
     ``"rim"``."""
+    if nr < 1:
+        raise ValueError("nr must be at least 1")
     rr = float(radius)*np.arange(nr + 1)[::-1]/nr
     shape = revolve(rr, np.full(nr + 1, float(z)), nt)     # (normal up)
     shape.rims = {"rim": shape.rims["bottom"]}
@@ -146,6 +152,9 @@ def box(size=(1.0, 1.0, 1.0), *, open_bottom: bool = False, n: int = 1) -> Shape
                 q = [vid(p00), vid(p10), vid(p11), vid(p01)]
                 f += [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]
     rims = {}
-    if open_bottom:
-        rims["rim"] = [i for i, p in enumerate(v) if p[2] == 0]
+    if open_bottom:              # in order around the rim
+        rim = [i for i, p in enumerate(v) if p[2] == 0]
+        x = np.array(v)[rim]
+        angle = np.arctan2(x[:, 1] - sy/2, x[:, 0] - sx/2)
+        rims["rim"] = [rim[k] for k in np.argsort(angle, kind="stable")]
     return Shape(np.array(v), np.array(f, dtype=np.int64), rims)

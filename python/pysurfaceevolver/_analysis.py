@@ -156,9 +156,12 @@ class _Analysis(_Engine):
         free = moving & ~np.isnan(dist).any(axis=1) if dist.size else moving
         label = {int(c): f"constraint {nm or c}" for c, nm in zip(nums, names)}
         # an equality constraint only fixed vertices are on just places them
-        # (a pad's rim, a solid drawn for display): not a wall to the surface
-        active = np.array([bool(attrs[c] & 3) or bool((np.isnan(dist[:, c]) & moving).any())
-                           for c in range(len(nums))], dtype=bool)
+        # (a pad's rim, a solid drawn for display): not a wall to the surface;
+        # one no vertex is on still is (the surface may come close)
+        def placement(c: int) -> bool:
+            on = np.isnan(dist[:, c]) & used
+            return not attrs[c] & 3 and on.any() and not (on & moving).any()
+        active = np.array([not placement(c) for c in range(len(nums))], dtype=bool)
         for c in np.flatnonzero(active):
             d = dist[:, c]
             on = np.isnan(d) & used
@@ -318,8 +321,9 @@ class _Analysis(_Engine):
     def energies(self) -> Dict[str, float]:
         """What the energy is made of, term by term: ``{name: energy}`` for
         every energy method instance once Evolver has converted everything to
-        named quantities (``default_area`` for the facets' tension,
-        ``constraint_1_energy`` for a wall's line integral, gravity, ...).
+        named quantities (``default_area_inst`` for the facets' tension,
+        ``constraint_1_energy_inst`` for a wall's line integral,
+        ``gravity_inst``, ...).
         Brakke's way of checking a datafile (``convert_to_quantities;
         show_all_quantities; Q``): a term with the wrong sign or size points
         at the mistake. The terms add up to :attr:`total_energy`. Works on

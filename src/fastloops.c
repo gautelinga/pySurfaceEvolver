@@ -2047,7 +2047,9 @@ static int fl_vertex_averages_impl(int mode, char *xbase, char *sbase, size_t st
     long o = loc_ordinal(v_id);
     jmp_buf trap;
     if ( get_vattr(v_id) & (CONSTRAINT|BOUNDARY) ) continue;
-    if ( ring && av_estart[k] < av_estart[k+1] )
+    /* (fixed now but not when the rings were built, which only a topology
+       change rebuilds: Evolver's own routine, which leaves it alone) */
+    if ( ring && av_estart[k] < av_estart[k+1] && !(get_vattr(v_id) & (FIXED|AXIAL_POINT)) )
     { REAL *vx = (REAL*)(xbase + o*stride);
       int st = av_average(k,v_id,vx,mode);
       *(int*)(sbase + o*stride) = st;

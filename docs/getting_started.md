@@ -75,10 +75,11 @@ liquid's volume are line integrals along the contact line, which `pyse.constrain
 writes. Where those integrals can't cover the whole wetted region (a sphere's wetted
 pole, say), the constraint knows the rest: the volume goes into the body's `volconst`
 automatically, summed over the walls the body's vertices touch, and the energy into a
-constant that Evolver can't add itself. A solid that sits inside the liquid without
-touching the surface (a bead under a meniscus) is not seen that way: give its
-`volconst` yourself (`Body(volume=..., volconst=bead.volconst)`; an explicit value
-wins).
+constant that Evolver can't add itself. With a single body, a solid that sits inside the
+liquid without touching the surface (a bead under a meniscus) counts too. With several
+bodies, a wall that several of them touch, or that none touches, is left to you, with a
+warning: give each body's share yourself (`Body(volume=..., faces=..., volconst=...)`;
+an explicit value wins).
 
 * `ev.total_energy` is Evolver's own total: without that constant.
 * `ev.energy` is `ev.total_energy` plus the constant: the energy of the wetted

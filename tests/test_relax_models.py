@@ -68,7 +68,7 @@ def test_health_reports_a_missed_target(cube):
 
 
 def test_last_resort_backs_off_after_failures(cube):
-    from pysurfaceevolver._engine import relax_memory as memory
+    from pysurfaceevolver._engine import surface as memory
     r = cube.relax(newton=0, max_iter=5, tol=1e-14, stability=False)     # unconverged, nothing collapses
     assert not r.converged and r.collapsed == 0
     assert (memory.collapse_failures, memory.collapse_skip) == (1, 1)

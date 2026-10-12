@@ -188,6 +188,8 @@ int facet_degfree(facet_id f_id)
 
 REAL new_displacement[MAXCOORD]; /* one normal of splittin wedge */
 
+static int pop_refine_depth;  /* pySE: retries after dividing an edge */
+
 int pop_one_edge(edge_id e_id)
 {
   int facet_count = 0;
@@ -429,10 +431,15 @@ int pop_one_edge(edge_id e_id)
   }
 
   /* if can't split forward or backward, divide edge and split */
-  if ( !didsplit )
+  /* (pySE: not for an edge with no freedom, and a few times at most: a
+     fixed edge between two free facets, which can split neither way, was
+     divided again and again, its new edges popped in turn, without end) */
+  if ( !didsplit && degfree > 0 && pop_refine_depth < 3 )
   {
     edge_refine(e_id);
+    pop_refine_depth++;
     popped += pop_one_edge(e_id);  /* try again */
+    pop_refine_depth--;
   }
 
   return popped;

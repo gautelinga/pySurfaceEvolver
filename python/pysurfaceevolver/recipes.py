@@ -93,10 +93,28 @@ def load_steps(prefix: str) -> List[Step]:
         return pickle.load(f)
 
 
+def _current(ev, what: Any) -> Any:
+    """What ``what`` is now, as the start of a halved first step (None if
+    unknown)."""
+    from ._views import BodyView, QuantityView
+    try:
+        if isinstance(what, (BodyView, QuantityView)):
+            return what.target
+        if isinstance(what, str):
+            return ev.parameters[what] if what in ev.parameters else ev[what]
+    except Exception:
+        return None
+    return None
+
+
 def _failed(result: Any, stop_on: Optional[str]) -> bool:
     if stop_on is None:
         return False
     if getattr(result, "converged", True) is False:
+        return True
+    # past a fold relax() can pinch the surface off (deleting collapsed edges)
+    # and converge on the pieces: another branch, not the next step of this one
+    if getattr(result, "collapsed", 0):
         return True
     return stop_on == "unstable" and getattr(result, "stable", None) is False
 
@@ -127,9 +145,9 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
 
     ``stop_on="unconverged"`` (or ``"unstable"``: also a converged but
     unstable equilibrium) ends the run at the first step whose relax result
-    says so, with the surface put back to the last good step and a warning:
-    past a fold of the branch (a bridge stretched until it breaks, say)
-    every later step would start from a wreck. ``halvings=k`` first retries
+    says so, or whose relax pinched the surface off (``collapsed`` edges: a
+    film or bridge breaking past a fold, then converged on as pieces), with
+    the surface put back to the last good step and a warning. ``halvings=k`` first retries
     such a step from the last good one in 2, 4, ... 2**k smaller steps
     (numeric values only); ``Step.substeps`` says how many it took.
     """
@@ -146,7 +164,7 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
     if resume is not None:
         ev.load(resume + ".dmp")
         done = load_steps(resume)
-    previous = values[len(done) - 1] if done else None
+    previous = values[len(done) - 1] if done else _current(ev, what)
     for index in range(len(done), len(values)):
         value = values[index]
         good = ev.save() if stop_on is not None else None
@@ -168,9 +186,10 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
             substeps = n
         if _failed(result, stop_on):
             ev.restore(good)
-            warnings.warn(f"continuation() stopped before {value!r}: relax() came out "
-                          f"{'unstable' if getattr(result, 'converged', True) else 'unconverged'}"
-                          " there; the surface is back at the last good step",
+            why = ("unconverged" if getattr(result, "converged", True) is False else
+                   "pinched off" if getattr(result, "collapsed", 0) else "unstable")
+            warnings.warn(f"continuation() stopped before {value!r}: relax() came out {why} "
+                          "there; the surface is back at the last good step",
                           UserWarning, stacklevel=2)
             return
         previous = value

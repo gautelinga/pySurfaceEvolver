@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import sys
 import warnings
 from typing import (TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union,
                     cast)
@@ -12,7 +13,7 @@ import numpy as np
 
 from . import _core
 from ._analysis import _TARGET_LOST, _Analysis
-from ._engine import _threads_for_call, relax_memory
+from ._engine import _threads_for_call, surface
 from ._errors import EvolverError, EvolverWarning, UnstableEquilibriumWarning, _num
 from ._geometry import _edge_turn, _long_spokes
 from ._results import Health, IterationResult, _Coords, _Trace
@@ -186,12 +187,20 @@ class _Relaxing(_Analysis):
         try:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                return self._relax(tol, max_iter, levels, newton, stability, adapt, tidy, seek,
-                                   undo_if, callback, every, threads)
-        finally:
-            _reemit(caught)         # (after the block: outside it they'd be recorded again)
+                return self._relax(tol=tol, max_iter=max_iter, levels=levels, newton=newton,
+                                   stability=stability, adapt=adapt, tidy=tidy, seek=seek,
+                                   undo_if=undo_if, callback=callback, every=every,
+                                   threads=threads)
+        finally:                    # (after the block: inside it they'd be recorded again)
+            if sys.exc_info()[0] is None:
+                _reemit(caught)
+            else:                   # an error is on its way: -W error mustn't replace it
+                try:
+                    _reemit(caught)
+                except Warning:
+                    pass
 
-    def _relax(self, tol: float, max_iter: int, levels: int, newton: Optional[int],
+    def _relax(self, *, tol: float, max_iter: int, levels: int, newton: Optional[int],
                stability: Optional[bool], adapt: Union[bool, float], tidy: int,
                seek: Optional[bool], undo_if: Optional[Callable[["Evolver"], bool]],
                callback: Optional[Callable[["Evolver", int], Any]], every: int,
@@ -313,7 +322,7 @@ class _Relaxing(_Analysis):
         """The derivative of the equilibrium energy (:attr:`energy`) with
         respect to a parameter, by central differences: the parameter set to
         its value plus and minus ``step`` (default 1e-5 times its size, at
-        least 1e-5), the energy found each time, the surface put back as it
+        least 1e-5; 1e-3 with ``method="relax"``), the energy found each time, the surface put back as it
         was. With a parameter that moves a wall or a pad, minus this is the
         force on it (Brakke's bga-4 tutorial compares seven ways).
 
@@ -328,8 +337,8 @@ class _Relaxing(_Analysis):
           change), as Brakke's preferred ``zforce4``: as accurate, and far
           cheaper on a large surface, but it needs ``move``.
         * ``"relax"``: :meth:`relax` each time; it tidies the mesh too, which
-          changes the energy by more than a small step does: give a larger
-          ``step`` (1e-3 of the size, say).
+          changes the energy by more than a small step does, hence its
+          larger default step.
 
         ``move(xyz)``: how the vertices follow a unit change of the
         parameter, an ``(n, sdim)`` array (a pad at height ``h``:
@@ -337,7 +346,8 @@ class _Relaxing(_Analysis):
         it); the surface is moved that way before the energy is taken, which
         also gives Newton a close start. An optimizing parameter is held
         fixed meanwhile: at its optimum the derivative is zero (with a load
-        in the energy, the joint's force balances it).
+        in the energy, the joint's force balances it). (A parameter that only
+        enters a quantity's ``modulus``, which Evolver evaluates once, gives 0.)
         """
         if method not in ("newton", "fixed", "relax"):
             raise ValueError("method must be 'newton', 'fixed' or 'relax'")
@@ -346,7 +356,10 @@ class _Relaxing(_Analysis):
         if name not in self.parameters:
             raise KeyError(f"{name!r} is not a parameter of this datafile")
         value = self.parameters[name]
-        h = 1e-5*max(abs(value), 1.0) if step is None else float(step)
+        # relax() tidies the mesh too, which moves the energy by more than a
+        # tiny step would: a larger default step there
+        h = (1e-3 if method == "relax" else 1e-5)*max(abs(value), 1.0) if step is None \
+            else float(step)
         if not h > 0:
             raise ValueError("step must be positive")
         snapshot = self.save()
@@ -382,13 +395,14 @@ class _Relaxing(_Analysis):
                 energies.append(self.energy - (self._constraint_change() if method == "fixed"
                                                else 0.0))
                 self.parameters[name] = value
-                # (Newton and relax() change the multipliers too: all back)
-                if method != "fixed" or not self._put_back(start):
-                    self.restore(snapshot)
-                    if optimizing:
-                        self.parameters.optimize(name, False)
-                else:
-                    self.recalc()
+                if sign == 1:       # back for the other side (the last: below)
+                    # (Newton and relax() change the multipliers too: all back)
+                    if method != "fixed" or not self._put_back(start):
+                        self.restore(snapshot)
+                        if optimizing:
+                            self.parameters.optimize(name, False)
+                    else:
+                        self.recalc()
         finally:
             if method != "fixed" or not self._put_back(start):
                 self.restore(snapshot)
@@ -767,8 +781,8 @@ def _reemit(caught) -> None:
             code = re.match(r"\s*(WARNING \d+)", str(w.message))
             key = code.group(1) if code else str(w.message)
             seen.setdefault(key, [w, 0])[1] += 1
-        else:
-            warnings.warn(w.message, w.category, stacklevel=3)
+        else:                       # where it was raised (a callback, a library)
+            warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
     for w, count in seen.values():
         more = f" (and {count - 1} more like it during relax())" if count > 1 else ""
         warnings.warn(f"{w.message}{more}", w.category, stacklevel=3)
@@ -823,8 +837,8 @@ class _Run:
         continuation the mesh doesn't follow a travelling contact line the way
         gradient rounds make it, and accuracy drops.)"""
         ev, trace = self.ev, self.trace
-        if relax_memory.newton_first_failed:
-            relax_memory.newton_first_failed = False
+        if surface.newton_first_failed:
+            surface.newton_first_failed = False
             return None
         coords = ev._coords()
         for _ in range(_NEWTON_FIRST_SETTLE):   # as the manual's 'g 5; hessian':
@@ -836,7 +850,7 @@ class _Run:
         if residual < self.tol and ev._target_gap()[0] <= _TARGET_LOST:
             return steps, residual
         ev._put_back(coords)
-        relax_memory.newton_first_failed = True
+        surface.newton_first_failed = True
         return None
 
     def finish(self, lev: int) -> "tuple[int, float]":
@@ -905,7 +919,7 @@ class _Run:
         continuation that stays unconverged pays for a few attempts, not one
         per call); a kept attempt starts the count over."""
         ev, trace, tol = self.ev, self.trace, self.tol
-        memory = relax_memory
+        memory = surface
         if memory.collapse_skip:
             memory.collapse_skip -= 1
             return None

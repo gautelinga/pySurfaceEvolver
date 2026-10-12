@@ -38,11 +38,25 @@ class Body:
     density: Optional[float] = None
     volconst: Optional[float] = None
 
+    def __post_init__(self) -> None:
+        if self.volume is not None and not isinstance(self.volume, (int, float, np.number)):
+            raise TypeError(f"Body(volume=...) must be a number, not {type(self.volume).__name__} "
+                            "(the arguments are Body(volume, faces, ...): give faces= by name)")
+
 
 def _outward(rows: List[int], face_loops: List[List[int]], edge_list: List[tuple],
              vertices: np.ndarray) -> List[int]:
     """Signs (+1/-1) that orient the faces ``rows`` consistently and outward,
     if they close a surface (each edge on exactly two of them); else all +1."""
+    x = np.asarray(vertices, dtype=float)
+    if x.ndim == 2 and x.shape[1] == 2:
+        # (string model) each region counterclockwise: its area positive
+        out = []
+        for r in rows:
+            p = x[[edge_list[abs(e) - 1][0 if e > 0 else 1] for e in face_loops[r]]]
+            area = float(np.sum(p[:, 0]*np.roll(p[:, 1], -1) - np.roll(p[:, 0], -1)*p[:, 1]))
+            out.append(1 if area >= 0 else -1)
+        return out
     on: Dict[int, List[int]] = {}
     for k, r in enumerate(rows):
         for e in face_loops[r]:
@@ -64,7 +78,6 @@ def _outward(rows: List[int], face_loops: List[List[int]], edge_list: List[tuple
                         signs[j] = -signs[k]*direction[k][e]*direction[j][e]
                         todo.append(j)
     # outward: the enclosed volume (divergence theorem over fan triangles) positive
-    x = np.asarray(vertices, dtype=float)
     if x.shape[1] != 3:
         return signs
     volume = 0.0
@@ -103,10 +116,19 @@ def _key(k: Any, what: str) -> Union[int, str]:
 
 
 def _per_vertex(sets, nv: int) -> Dict[Any, List[int]]:
-    """{constraint: rows} from one collection of constraints per vertex."""
+    """{constraint: rows} from one entry per vertex: a constraint, a set of
+    them, or None (or 0: none)."""
     out: Dict[Any, List[int]] = {}
     for row, cons in enumerate(sets):
-        for c in ([] if cons is None else [cons] if isinstance(cons, (int, str)) else cons):
+        if isinstance(cons, (bool, np.bool_)):
+            raise TypeError("vertex_constraints as a sequence gives each vertex's constraint "
+                            "(a number, name, set or None); for a mask use {constraint: mask}")
+        if isinstance(cons, (np.integer, np.str_)):
+            cons = cons.item()
+        if cons is None or (isinstance(cons, int) and cons == 0):
+            continue                    # 0 or None: on none
+        for c in ([cons] if isinstance(cons, (int, str)) else cons):
+            c = c.item() if isinstance(c, (np.integer, np.str_)) else c
             out.setdefault(c, []).append(row)
     return out
 
@@ -277,8 +299,13 @@ def make_datafile(
             raise ValueError(f"vertices or edges are put on constraint {c!r}, which isn't "
                              "defined (in constraints= or header=)"
                              + (f"; did you mean {hint[0]!r}?" if hint else ""))
-    declared = set(parameters or {}) | set(re.findall(r"^\s*parameter\s+(\w+)", header,
-                                                       re.MULTILINE | re.I))
+    for name in list(parameters or {}) + [k for k in cons if isinstance(k, str)]:
+        if not re.fullmatch(r"[A-Za-z_]\w*", name):
+            raise ValueError(f"{name!r} is not a name Evolver accepts")
+        if len(name) == 1:
+            raise ValueError(f"{name!r}: single letters are Evolver commands; use a longer name")
+    declared = set(parameters or {}) | set(re.findall(
+        r"^\s*(?:optimizing_)?parameter\s+(\w+)", header, re.MULTILINE | re.I))
     for c, spec in cons.items():
         missing = [n for n in getattr(spec, "parameters", ()) if n not in declared]
         if missing:
@@ -319,31 +346,43 @@ def make_datafile(
 
     # ---- bodies ------------------------------------------------------------
     body_list = [b if isinstance(b, Body) else Body(**b) for b in (bodies or [])]
+    if len(body_list) > 1 and any(b.faces is None for b in body_list):
+        raise ValueError("with several bodies, give each its faces (Body(faces=...)): "
+                         "the default, all faces, fits a single body only")
     body_lines: List[str] = []
-    # walls with a volume closure that no body touches (a solid inside the
-    # liquid, the meniscus off it): the one body gets it; with several, say so
+    # walls with a volume closure (Constraint.volconst) go to the body that
+    # touches them; with one body, untouched ones too (a solid immersed in the
+    # liquid); a wall several bodies touch is split between them in a way the
+    # contact lines alone don't tell, so it is left to the user
     closing = {c for c, spec in cons.items() if getattr(spec, "volconst", 0.0)}
-    touched_any: set = set()
+    info = []
     for i, b in enumerate(body_list):
         rows = list(range(len(face_loops))) if b.faces is None else [int(f) for f in b.faces]
         if any(r < 0 or r >= len(face_loops) for r in rows):
             raise ValueError(f"body {i + 1} refers to a face that doesn't exist")
-        signs = ([int(s) for s in b.orientation] if b.orientation is not None
-                 else _outward(rows, face_loops, edge_list, vertices))
-        if len(signs) != len(rows) or any(s not in (1, -1) for s in signs):
-            raise ValueError(f"body {i + 1}: orientation needs one +1/-1 per face")
         corners = np.zeros(nv, dtype=bool)
         for r in rows:
             for e in face_loops[r]:
                 corners[list(edge_list[abs(e) - 1])] = True
-        touched = [c for c, m in vcons.items() if (m & corners).any()]
-        touched_any |= set(touched)
+        info.append((rows, corners, [c for c, m in vcons.items() if (m & corners).any()]))
+    toucher_count: Dict[Any, int] = {}
+    for _, _, touched in info:
+        for c in set(touched) & closing:
+            toucher_count[c] = toucher_count.get(c, 0) + 1
+    shared = sorted((c for c, k in toucher_count.items() if k > 1), key=str)
+    stray = sorted(closing - set(toucher_count), key=str)
+    for i, (b, (rows, corners, touched)) in enumerate(zip(body_list, info)):
+        signs = ([int(s) for s in b.orientation] if b.orientation is not None
+                 else _outward(rows, face_loops, edge_list, vertices))
+        if len(signs) != len(rows) or any(s not in (1, -1) for s in signs):
+            raise ValueError(f"body {i + 1}: orientation needs one +1/-1 per face")
         _check_walls(i + 1, touched, cons, vertices[corners])
         volconst = b.volconst
         if volconst is None:
+            mine = [c for c in touched if c in closing and toucher_count.get(c) == 1]
             if len(body_list) == 1:
-                touched = sorted(set(touched) | closing, key=str)
-            volconst = sum(float(getattr(cons.get(c), "volconst", 0.0) or 0.0) for c in touched)
+                mine += stray
+            volconst = sum(float(cons[c].volconst) for c in mine)
         line = f"{i + 1} " + " ".join(str(s * (r + 1)) for r, s in zip(rows, signs))
         if b.volume is not None:
             line += f" volume {_num(b.volume)}"
@@ -352,12 +391,11 @@ def make_datafile(
         if volconst:
             line += f" volconst {_num(volconst)}"
         body_lines.append(line + "\n")
-
-    stray = sorted(closing - touched_any, key=str)
-    if stray and len(body_list) > 1 and any(b.volconst is None for b in body_list):
-        warnings.warn(f"constraints {stray} close a volume (Constraint.volconst) but no body "
-                      "touches them: with several bodies, give the right body's volconst "
-                      "yourself", UserWarning, stacklevel=2)
+    if any(b.volconst is None for b in body_list) and len(body_list) > 1 and (shared or stray):
+        warnings.warn(f"constraints {shared + stray} close a volume (Constraint.volconst) and "
+                      f"{'several bodies touch' if shared else 'no body touches'} them: give "
+                      "the bodies' volconst yourself (each body's share)", UserWarning,
+                      stacklevel=2)
 
     # ---- text --------------------------------------------------------------
     out: List[str] = ["// written by pysurfaceevolver.make_datafile\n"]

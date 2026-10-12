@@ -1561,7 +1561,7 @@ struct energy_terms_args
   int max; int count; };
 
 /* each energy quantity's method instances with what they add to the energy
-   (quantity modulus * instance modulus * instance value) */
+   (quantity modulus * instance value, which includes the instance's modulus) */
 static void energy_terms_body(void *arg)
 { struct energy_terms_args *a = (struct energy_terms_args *)arg;
   int i,j;
@@ -1576,7 +1576,7 @@ static void energy_terms_body(void *arg)
       { snprintf(a->names[a->count],PYSE_NAME_SIZE,"%s",mi->name);
         snprintf(a->methods[a->count],PYSE_NAME_SIZE,"%s",
                  basic_gen_methods[mi->gen_method].name);
-        a->energy[a->count] = (double)(q->modulus*mi->modulus*mi->value);
+        a->energy[a->count] = (double)(q->modulus*mi->value);  /* (value has its modulus) */
       }
       a->count++;
     }

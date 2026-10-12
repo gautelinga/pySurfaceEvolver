@@ -51,6 +51,19 @@ _ELEMENT_NAMES = {_core.VERTEX: "vertex", _core.EDGE: "edge",
 
 
 
+# Evolver's own variables people set most, for suggestions on a typo
+_COMMON_VARIABLES = ["scale_limit", "target_tolerance", "gravity_constant", "scale",
+                     "constraint_tolerance", "brightness", "background", "diffusion",
+                     "hessian_epsilon", "hessian_slant_cutoff", "jiggle_temperature",
+                     "autochop_length", "random_seed", "thickness"]
+
+
+def _scratch_name(element_type: int, what: str) -> str:
+    """A scratch attribute's name: one per element type, since Evolver's
+    attribute names are global (defining one on a second type fails)."""
+    return f"pyse_{_ELEMENT_NAMES[element_type]}_{what}"
+
+
 def _element_type(element: str) -> int:
     try:
         return _ELEMENT_TYPES[element]
@@ -82,7 +95,6 @@ class _SurfaceMemory:
 
 
 surface = _SurfaceMemory()
-relax_memory = surface      # (relax() reads its fields under this name)
 
 
 
@@ -156,7 +168,7 @@ class _Engine:
                 result.errnum, output)
         raise EvolverError(message, result.errnum, output)
 
-    def _check_handle(self) -> None:
+    def _check_handle(self, stacklevel: int = 4) -> None:
         """Warn (once) when this handle loaded a surface and another has
         loaded a different one since."""
         mine = self.__dict__.get("_generation")
@@ -168,7 +180,7 @@ class _Engine:
                 f"handle has since loaded {surface.name!r}: every handle is a view of the one "
                 "engine in this process, so this one now shows that surface too (keep "
                 "surfaces with save()/restore(), or work on several at once with pyse.map)",
-                SharedEngineWarning, stacklevel=4)
+                SharedEngineWarning, stacklevel=stacklevel)
 
     def load(self, datafile: str | os.PathLike) -> str:
         """Load a ``.fe`` datafile, replacing the current surface.
@@ -221,7 +233,11 @@ class _Engine:
             path = os.path.join(tmp, name)
             with open(path, "w") as f:
                 f.write(text)
-            output = self._load(path)
+            try:
+                output = self._load(path)
+            except EvolverError as e:       # name the text, not the temporary file
+                e.args = (str(e).replace(path, name),) + e.args[1:]
+                raise
         _core.set_datafile(name)            # not the temporary path
         surface.name = self._name = name
         self._check_bodies()
@@ -286,7 +302,7 @@ class _Engine:
         if not re.fullmatch(r"[A-Za-z_]\w*", name):
             raise KeyError(f"not a variable name: {name!r}")
         if self.eval(f'is_defined("{name}")') == 0:
-            close = difflib.get_close_matches(name, list(self.parameters), 3)
+            close = difflib.get_close_matches(name, list(self.parameters) + _COMMON_VARIABLES, 3)
             raise KeyError(f"{name!r} is not a parameter or variable of this surface"
                            + (f"; did you mean {' or '.join(map(repr, close))}?" if close
                               else "") + " (ev.define(name, value) makes a new variable)")
@@ -367,11 +383,14 @@ class _Engine:
             path = os.path.join(tmp, "snapshot.fe")
             self.dump(path)
             with open(path) as f:
-                return Snapshot(f.read(), name)
+                return Snapshot(f.read(), name, dict(surface.walls), surface.generation)
 
     def restore(self, snapshot: Snapshot) -> None:
         """Replace the surface with a snapshot from :meth:`save`."""
-        # the same surface, not a new one: relax()'s memory of failed attempts stays
+        # back into the load it came from: the same surface, whose memory
+        # (relax()'s failed attempts, the load count) stays; otherwise it is
+        # a new surface to the other handles
+        same = snapshot.generation == surface.generation
         kept = dict(vars(surface))
         with tempfile.TemporaryDirectory() as tmp, warnings.catch_warnings():
             # what loading pySE's own dump prints is no news (edges with the
@@ -382,7 +401,10 @@ class _Engine:
                 f.write(snapshot.text)
             self._load(path)
         _core.set_datafile(snapshot.datafile)
-        vars(surface).update(kept)
+        if same:
+            vars(surface).update(kept)
+        surface.walls = dict(snapshot.walls)
+        surface.name = snapshot.datafile
         self._generation, self._name = surface.generation, surface.name
 
     @staticmethod
@@ -400,14 +422,15 @@ class _Engine:
 
     def _mark(self, element_type: int, where) -> str:
         """Mark the elements ``where`` selects (a mask or rows) in the scratch
-        attribute ``pyse_mark``, for one ``set ... where`` command instead of
+        attribute ``pyse_<type>_mark``, for one ``set ... where`` command instead of
         a statement per element. Returns the where clause ("" for all)."""
         if where is None:
             return ""
         n = _core.count(element_type)
         mask = self._mask(element_type, where, n)
-        self._scratch(element_type, "pyse_mark", mask.astype(float), "integer")
-        return " where pyse_mark == 1"
+        name = _scratch_name(element_type, "mark")
+        self._scratch(element_type, name, mask.astype(float), "integer")
+        return f" where {name} == 1"
 
     def _scratch(self, element_type: int, name: str, values: np.ndarray, dtype: str) -> None:
         """Write a scratch attribute (defined on first use), one value per element."""
@@ -427,8 +450,8 @@ class _Engine:
 
         Coordinates and scalar extra attributes are written directly in C;
         other attributes through one Evolver ``set`` command (the values
-        and selection go in scratch attributes, ``pyse_value`` and
-        ``pyse_mark``).
+        and selection go in scratch attributes, ``pyse_<type>_value`` and
+        ``pyse_<type>_mark``).
         """
         element_type = _element_type(element)
         if _core.fast_attribute(element_type, attribute):
@@ -443,9 +466,10 @@ class _Engine:
         if n == 0:
             return
         clause = self._mark(element_type, where)
-        self._scratch(element_type, "pyse_value",
+        value = _scratch_name(element_type, "value")
+        self._scratch(element_type, value,
                       np.broadcast_to(np.asarray(values, dtype=float), (n,)).astype(float), "real")
-        self.command(f"set {_ELEMENT_NAMES[element_type]} {attribute} pyse_value{clause}")
+        self.command(f"set {_ELEMENT_NAMES[element_type]} {attribute} {value}{clause}")
 
     def set_flag(self, element: str, flag: str, where=None, on: bool = True) -> None:
         """Set (or with ``on=False`` clear) a yes/no attribute such as ``fixed``
@@ -478,6 +502,13 @@ class _Engine:
         :meth:`mesh` row of that element type."""
         if isinstance(constraint, str) and not re.fullmatch(r"[A-Za-z_]\w*", constraint):
             raise ValueError(f"not a constraint name: {constraint!r}")
+        nums, _, _, names = self._constraint_gaps()
+        known = [int(c) for c in nums] + [n for n in names if n]
+        if (constraint if isinstance(constraint, str) else int(constraint)) not in known:
+            close = difflib.get_close_matches(str(constraint), [str(k) for k in known], 2)
+            raise KeyError(f"no constraint {constraint!r}"
+                           + (f"; did you mean {' or '.join(map(repr, close))}?" if close else
+                              f" (the surface has {known})"))
         name = _ELEMENT_NAMES[_element_type(element)]
         if _core.count(_element_type(element)) == 0:
             return np.zeros(0, dtype=bool)
@@ -514,7 +545,7 @@ class _Engine:
     @property
     def datafile(self) -> str:
         """Name of the loaded datafile, or ``""`` if none."""
-        self._check_handle()
+        self._check_handle(3)
         return _core.datafile()
 
     @property
@@ -549,7 +580,7 @@ class _Engine:
     @property
     def total_energy(self) -> float:
         """Total energy as of the last iteration or recalculation."""
-        self._check_handle()
+        self._check_handle(3)
         return _core.total_energy()
 
     @property
@@ -566,13 +597,13 @@ class _Engine:
     @property
     def total_area(self) -> float:
         """Total area as of the last iteration or recalculation."""
-        self._check_handle()
+        self._check_handle(3)
         return _core.total_area()
 
     @property
     def counts(self) -> dict:
         """Number of vertices, edges, facets and bodies."""
-        self._check_handle()
+        self._check_handle(3)
         return {
             "vertices": _core.count(_core.VERTEX),
             "edges": _core.count(_core.EDGE),
