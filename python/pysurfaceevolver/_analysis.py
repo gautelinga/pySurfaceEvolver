@@ -24,6 +24,7 @@ _CROSS_TOL = 0.01
 # averaging alone leaves volumes about 2e-5 off)
 _TARGET_LOST = 1e-4
 _DEGENERATE = 1.0              # a facet with an angle below this (degrees) is degenerate
+_NEAR = 0.1                    # health(): a gap below this many median edges is an issue
 
 # Evolver's methods whose in-plane forces are physical (membranes)
 _ELASTIC_METHODS = frozenset({
@@ -173,10 +174,10 @@ class _Analysis(_Engine):
                           f"{quality.skinny} below 5)")
         for c, k in crossed.items():
             issues.append(f"{k} {'vertex' if k == 1 else 'vertices'} on the far side of {label[c]}")
-        if wall_gap < 0.1:
+        if wall_gap < _NEAR:
             issues.append(f"the surface nearly touches {label.get(wall or 0, 'a constraint')} "
                           f"({wall_gap:.2g} edge lengths away)")
-        if self_gap < 0.1:
+        if self_gap < _NEAR:
             issues.append(f"the surface nearly touches itself ({self_gap:.2g} edge lengths)")
         target_gap, _ = self._target_gap()
         if target_gap > _TARGET_LOST:

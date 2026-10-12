@@ -48,6 +48,12 @@ _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
 _CONTACT_PASSES = 2           # relax(): relaxes after splitting long contact-line spokes, at most
 _ROUND_BLOWUP = 2             # a gradient round more than doubling the residual or a target gap is undone
 _TURN = 15.0                  # adapt(): default turning angle (degrees) across an edge
+_ADAPT_SHORT = 0.75           # adapt() merges edges shorter than this times the bulk length,
+_ADAPT_FLAT = 1/3              # ... turning by less than this times max_turn,
+_ADAPT_TILT = 1/2              # ... unless a facet tilts more than this times max_turn
+_ADAPT_LONGEST = 4/3           # ... or an edge grows longer than this times the bulk length
+_SPLIT_ABOVE = 1.6             # remesh(target=h) splits edges longer than this times h
+_MERGE_UNDER = 0.5             # ... and deletes those shorter than this times h
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
 
 class _Relaxing(_Analysis):
@@ -513,8 +519,8 @@ class _Relaxing(_Analysis):
             raise ValueError("remesh() needs the linear model (Evolver's 't' doesn't "
                              "delete edges in the quadratic or Lagrange model)")
         if target is not None:
-            max_edge = 1.6*float(target) if max_edge is None else max_edge
-            min_edge = 0.5*float(target) if min_edge is None else min_edge
+            max_edge = _SPLIT_ABOVE*float(target) if max_edge is None else max_edge
+            min_edge = _MERGE_UNDER*float(target) if min_edge is None else min_edge
         if max_edge is not None and min_edge is not None and not 2*min_edge <= max_edge:
             raise ValueError("max_edge must be at least 2*min_edge: split halves "
                              "shorter than min_edge would be deleted again")
@@ -581,8 +587,9 @@ class _Relaxing(_Analysis):
             return 0
         lengths = m.edge_lengths()
         bulk = float(np.percentile(lengths, 75))
-        return self._remesh_pass(merge_below=0.75*bulk if coarsen else None,
-                                 flat=max_turn/3, tilt=max_turn/2, longest=4/3*bulk,
+        return self._remesh_pass(merge_below=_ADAPT_SHORT*bulk if coarsen else None,
+                                 flat=_ADAPT_FLAT*max_turn, tilt=_ADAPT_TILT*max_turn,
+                                 longest=_ADAPT_LONGEST*bulk,
                                  split_turn=max_turn)
 
     def _remesh_pass(self, *, merge_below: Optional[float], flat: float, tilt: float,

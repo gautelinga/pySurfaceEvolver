@@ -8,6 +8,11 @@ import numpy as np
 
 from ._mesh import Mesh
 
+# a few vertices (this fraction at most) on the other side of an equality
+# constraint than all the others have crossed it
+_FEW_CROSSED = 0.05
+_CLOSE_PAIRS = 5000             # _self_gap() looks through this many nearest pairs, at most
+
 
 def _crossed(nums: np.ndarray, attrs: np.ndarray, dist: np.ndarray, used: np.ndarray,
              eps: float) -> Dict[int, int]:
@@ -25,7 +30,7 @@ def _crossed(nums: np.ndarray, attrs: np.ndarray, dist: np.ndarray, used: np.nda
             bad = int((d[off] > eps).sum())
         else:
             pos, neg = int((d[off] > eps).sum()), int((d[off] < -eps).sum())
-            bad = min(pos, neg) if min(pos, neg) <= 0.05*(pos + neg) else 0
+            bad = min(pos, neg) if min(pos, neg) <= _FEW_CROSSED*(pos + neg) else 0
         if bad:
             out[int(nums[c])] = bad
     return out
@@ -92,7 +97,7 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
     a, b = a[order], b[order]
     start = np.searchsorted(a, np.arange(len(x)), "left")
     stop = np.searchsorted(a, np.arange(len(x)), "right")
-    for k in np.argsort(d)[:5000]:
+    for k in np.argsort(d)[:_CLOSE_PAIRS]:
         ni = b[start[i[k]]:stop[i[k]]]
         nj = b[start[j[k]]:stop[j[k]]]
         if j[k] in ni or np.intersect1d(ni, nj).size:

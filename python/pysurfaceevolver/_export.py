@@ -12,6 +12,8 @@ from ._build import Body, make_datafile
 from ._engine import _Engine
 from ._mesh import BodySurface, is_watertight
 
+_PROJECT_BATCH = 200            # points projected per Evolver command (body_surfaces caps)
+
 if TYPE_CHECKING:
     from ._viz import LiveView
 
@@ -264,9 +266,9 @@ class _Export(_Engine):
                  "vertex[pse_tmp_v].y, vertex[pse_tmp_v].z; dissolve vertex[pse_tmp_v]"
                  for x, y, z in np.asarray(points, float)[:, :3].tolist()]
         out = []
-        for i in range(0, len(lines), 200):
-            out += [line for line in self.command("; ".join(lines[i:i + 200])).splitlines()
-                    if line.startswith("@pse ")]
+        for i in range(0, len(lines), _PROJECT_BATCH):
+            text = self.command("; ".join(lines[i:i + _PROJECT_BATCH]))
+            out += [line for line in text.splitlines() if line.startswith("@pse ")]
         return np.array([[float(v) for v in line.split()[1:]] for line in out])
 
     def write_bodies(self, pattern: str = "body_{id}.stl", *, curved: str = "tessellate",
