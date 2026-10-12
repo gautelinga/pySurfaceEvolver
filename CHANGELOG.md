@@ -22,6 +22,31 @@
 - Vertices on a `boundaries=` curve are fixed (free, they bunch up along the wire).
 - `continuation()`'s `Step.energy` is `Evolver.energy` (with the walls' constants).
 
+### Solder joints (Brakke's ball grid array series)
+
+- Vendored `bga-2.fe` to `bga-10.fe`, `bga-30.fe` and Brakke's force command files
+  (`zforce.cmd`, ...); a *Solder joints* notebook: the force on a pad (three ways,
+  against Brakke's variational integral), force against height with the unstable
+  range, the height a loaded chip floats at, and a chip pulling itself into line.
+  (`bga-11.fe`, `bga-12.fe` and `bga-31.fe` run away even with Brakke's own
+  recipes in Evolver 2.70, so they are left out.)
+- `residual()` counts the force on optimizing parameters, so `relax()` balances
+  them; `Parameters.optimize(name, on=True)` frees or fixes one.
+- An Evolver bug fixed: reading a datafile reset the pressures for every named
+  quantity without a Lagrange multiplier, energies included, so after a restore
+  Newton refused to run ("Pressures invalid") on surfaces with an energy quantity
+  and fixed volumes, inside `relax()` too.
+- `relax()` undoing a step puts optimizing parameters back with the coordinates.
+- `derivative(name, move=..., method="newton" | "fixed" | "relax")`: with `move`
+  (how the vertices follow the parameter) Brakke's `zforce5` (Newton re-converged,
+  the default) or `zforce4` (no relaxing, pressure-corrected); they agree with his
+  variational integral to 8 digits. The surface, multipliers included, comes back.
+- `relax(levels=n)` refines past a start with nothing free to move.
+- `health()` no longer reports pad rims or display solids (equality constraints only
+  fixed vertices are on) as walls, nor fixed vertices as crossing them.
+- `relax()` passes on each kind of Evolver warning once, with how often it came up
+  (19,430 "doesn't converge to constraint" lines became one).
+
 ### Faster
 
 - Against 0.7.2 (2 threads, energies identical to 15 digits): a Newton step on a
