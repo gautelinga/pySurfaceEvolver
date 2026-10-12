@@ -721,10 +721,18 @@ void add_warning_message(char *message)
       warning_messages_max = needed+1000;
     }
     else
-    { /* delete early messages */
+    { /* delete early messages (pySE: memmove, the ranges overlap; and
+         room for the new message even if it is longer than what went) */
       char *c;
-      for ( c = warning_messages + 1000 ; *c != '\n' ; c++ ) ;
-      memcpy(warning_messages,c,warning_messages_max-(c-warning_messages));
+      size_t keep;
+      for ( c = warning_messages + 1000 ; *c && *c != '\n' ; c++ ) ;
+      keep = strlen(c) + 1;
+      memmove(warning_messages,c,keep);
+      needed = keep + strlen(message) + 10;
+      if ( warning_messages_max < needed )
+      { warning_messages = (char*)kb_realloc(warning_messages,needed+1000);
+        warning_messages_max = needed+1000;
+      }
     }
   }
   strcat(warning_messages,message);
