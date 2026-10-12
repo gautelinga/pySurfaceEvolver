@@ -236,8 +236,8 @@ class _Export(_Engine):
 
     def _vertex_constraints(self) -> Dict[int, np.ndarray]:
         """{constraint: mask of vertex rows on it}"""
-        count = int(self.eval("high_constraint"))
-        return {k: self.values("vertex", f"on_constraint {k}") > 0 for k in range(1, count + 1)}
+        nums, _, dist, _ = self._constraint_gaps()
+        return {int(k): np.isnan(dist[:, c]) for c, k in enumerate(nums)}
 
     @staticmethod
     def _loop_constraint(index, on: Dict[int, np.ndarray], loop_points) -> Optional[int]:

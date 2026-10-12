@@ -9,7 +9,7 @@ import sys
 import tempfile
 import threading
 import warnings
-from typing import Callable, Dict, Iterable, Iterator, Generator, List, Optional, Union
+from typing import Callable, Dict, Iterator, Generator, List, Optional, Union
 
 import numpy as np
 
@@ -46,7 +46,6 @@ _ELEMENT_TYPES = {
 _QUANTITY_KINDS = {0: "energy", 1: "fixed", 2: "info", 3: "conserved"}
 _ELEMENT_NAMES = {_core.VERTEX: "vertex", _core.EDGE: "edge",
                   _core.FACET: "facet", _core.BODY: "body"}
-_STATEMENTS_PER_COMMAND = 2000
 
 
 def _element_type(element: str) -> int:
@@ -311,11 +310,6 @@ class _Engine:
         _core.set_datafile(snapshot.datafile)
         vars(relax_memory).update(kept)
 
-    def _ids(self, element_type: int) -> np.ndarray:
-        if _core.count(element_type) == 0:
-            return np.zeros(0, dtype=np.int64)
-        return self.values(_ELEMENT_NAMES[element_type], "id").astype(np.int64)
-
     @staticmethod
     def _mask(element_type: int, where, n: int) -> np.ndarray:
         """A boolean mask over n elements from where (a mask or rows)."""
@@ -329,40 +323,22 @@ class _Engine:
                              f"({n}), got {mask.shape[0]}")
         return mask
 
-    def _selected(self, element: str, where) -> "tuple[str, np.ndarray, np.ndarray]":
-        element_type = _element_type(element)
-        ids = self._ids(element_type)
-        mask = (np.ones(len(ids), dtype=bool) if where is None
-                else self._mask(element_type, where, len(ids)))
-        return _ELEMENT_NAMES[element_type], ids, mask
+    def _mark(self, element_type: int, where) -> str:
+        """Mark the elements ``where`` selects (a mask or rows) in the scratch
+        attribute ``pyse_mark``, for one ``set ... where`` command instead of
+        a statement per element. Returns the where clause ("" for all)."""
+        if where is None:
+            return ""
+        n = _core.count(element_type)
+        mask = self._mask(element_type, where, n)
+        self._scratch(element_type, "pyse_mark", mask.astype(float), "integer")
+        return " where pyse_mark == 1"
 
-    def _run_statements(self, statements: Iterable[str]) -> None:
-        """Run many statements in batches, recalculating once at the end.
-
-        With autorecalc on, Evolver would recalculate after every batch;
-        that dominated the time of bulk writes (8x on 49k vertices).
-        """
-        batches: List[str] = []
-        batch: List[str] = []
-        for statement in statements:
-            batch.append(statement)
-            if len(batch) == _STATEMENTS_PER_COMMAND:
-                batches.append("; ".join(batch))
-                batch = []
-        if batch:
-            batches.append("; ".join(batch))
-        if not batches:
-            return
-        autorecalc = self.eval("autorecalc") != 0
-        if autorecalc:
-            self.command("autorecalc off")
-        try:
-            for text in batches:
-                self.command(text)
-        finally:
-            if autorecalc:
-                self.command("autorecalc on")
-                self.command("recalc")
+    def _scratch(self, element_type: int, name: str, values: np.ndarray, dtype: str) -> None:
+        """Write a scratch attribute (defined on first use), one value per element."""
+        if not _core.fast_attribute(element_type, name):
+            self.command(f"define {_ELEMENT_NAMES[element_type]} attribute {name} {dtype}")
+        self._call(_core.set_values, element_type, name, np.ascontiguousarray(values), None)
 
     def set_values(self, element: str, attribute: str, values, *, where=None) -> None:
         """Set a numeric attribute on every element of a type.
@@ -375,7 +351,9 @@ class _Engine:
         attributes from :meth:`define_attribute`, ...
 
         Coordinates and scalar extra attributes are written directly in C;
-        other attributes go through Evolver's ``set`` command, in batches.
+        other attributes through one Evolver ``set`` command (the values
+        and selection go in scratch attributes, ``pyse_value`` and
+        ``pyse_mark``).
         """
         element_type = _element_type(element)
         if _core.fast_attribute(element_type, attribute):
@@ -386,10 +364,13 @@ class _Engine:
             self._call(_core.set_values, element_type, attribute, vals,
                        None if mask is None else mask.astype(np.uint8))
             return
-        name, ids, mask = self._selected(element, where)
-        vals = np.broadcast_to(np.asarray(values, dtype=float), ids.shape)
-        self._run_statements(f"set {name}[{i}] {attribute} {float(v)!r}"
-                             for i, v in zip(ids[mask], vals[mask]))
+        n = _core.count(element_type)
+        if n == 0:
+            return
+        clause = self._mark(element_type, where)
+        self._scratch(element_type, "pyse_value",
+                      np.broadcast_to(np.asarray(values, dtype=float), (n,)).astype(float), "real")
+        self.command(f"set {_ELEMENT_NAMES[element_type]} {attribute} pyse_value{clause}")
 
     def set_flag(self, element: str, flag: str, where=None, on: bool = True) -> None:
         """Set (or with ``on=False`` clear) a yes/no attribute such as ``fixed``
@@ -403,9 +384,11 @@ class _Engine:
         """
         if not re.fullmatch(r"[A-Za-z_]\w*", flag):
             raise ValueError(f"not an attribute name: {flag!r}")
-        name, ids, mask = self._selected(element, where)
-        verb = "set" if on else "unset"
-        self._run_statements(f"{verb} {name}[{i}] {flag}" for i in ids[mask])
+        element_type = _element_type(element)
+        if _core.count(element_type) == 0:
+            return
+        clause = self._mark(element_type, where)
+        self.command(f"{'set' if on else 'unset'} {_ELEMENT_NAMES[element_type]} {flag}{clause}")
 
     def fix(self, element: str, where=None) -> None:
         """Fix vertices, edges or facets (all, or those selected by ``where``)."""
@@ -425,12 +408,23 @@ class _Engine:
             return np.zeros(0, dtype=bool)
         return self.values(name, f"on_constraint {constraint}") != 0
 
+    def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
+        """Constraint numbers, attribute bits, per vertex the signed distance
+        to each (NaN where on it), and their names ("" if unnamed)."""
+        _, gaps = self._call(_core.constraint_gaps)
+        return gaps.data
+
     def set_constraint(self, element: str, constraint: Union[int, str], where=None,
                        on: bool = True) -> None:
         """Put elements on a constraint (or take them off with ``on=False``)."""
-        name, ids, mask = self._selected(element, where)
-        verb = "set" if on else "unset"
-        self._run_statements(f"{verb} {name}[{i}] constraint {constraint}" for i in ids[mask])
+        if isinstance(constraint, str) and not re.fullmatch(r"[A-Za-z_]\w*", constraint):
+            raise ValueError(f"not a constraint name: {constraint!r}")
+        element_type = _element_type(element)
+        if _core.count(element_type) == 0:
+            return
+        clause = self._mark(element_type, where)
+        self.command(f"{'set' if on else 'unset'} {_ELEMENT_NAMES[element_type]} "
+                     f"constraint {constraint}{clause}")
 
     def define_attribute(self, element: str, name: str, dtype: str = "real") -> None:
         """Define an extra per-element attribute (``real`` or ``integer``).

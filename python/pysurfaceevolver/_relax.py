@@ -344,11 +344,9 @@ class _Relaxing(_Analysis):
     def _split_marked(self, mark: np.ndarray) -> int:
         """Split the marked edges (aligned with mesh() rows; not no_refine ones),
         equiangulate. Returns the edges split."""
-        if "pyse_mark" not in self._edge_attributes():
-            self.command("define edge attribute pyse_mark integer")
-        self.set_values("edge", "pyse_mark", mark.astype(float))
+        clause = self._mark(_core.EDGE, mark)
         before = self.counts["vertices"]
-        self.command("refine edge ee where ee.pyse_mark == 1 and not ee.no_refine")
+        self.command(f"refine edge{clause} and not no_refine")
         if self._tidy_kinds()[0]:
             self.command("u")
         return self.counts["vertices"] - before
@@ -356,13 +354,6 @@ class _Relaxing(_Analysis):
     def _conj_grad(self, on: bool) -> "contextlib.AbstractContextManager[None]":
         """Conjugate gradients on (or off) for a block; the setting restored after."""
         return self._toggle("conj_grad", on)
-
-    def _edge_attributes(self) -> List[str]:
-        try:
-            self.eval("max(edge, pyse_mark)")
-            return ["pyse_mark"]
-        except EvolverError:
-            return []
 
     def newton(self, steps: int = 1, *, seek: Optional[bool] = None, tol: Optional[float] = None,
                undo_if: Optional[Callable[["Evolver"], bool]] = None,
@@ -541,18 +532,19 @@ class _Relaxing(_Analysis):
         elif min_edge is not None:
             counts["deleted"] = number(self.command(f"t {_num(min_edge, 'min_edge')}"))
         if max_edge is not None:
-            newly: np.ndarray = np.zeros(0, dtype=np.int64)
+            clause = ""
             if protect is not None:
-                ids = self._ids(_core.EDGE)
-                mask = self._mask(_core.EDGE, protect, len(ids))
-                already = self.values("edge", "no_refine") != 0
-                newly = ids[mask & ~already]
-                self._run_statements(f"set edge[{i}] no_refine" for i in newly)
+                mask = self._mask(_core.EDGE, protect, _core.count(_core.EDGE))
+                newly = mask & (self.values("edge", "no_refine") == 0)
+                if newly.any():
+                    clause = self._mark(_core.EDGE, newly)
+                    self.command(f"set edge no_refine{clause}")
             try:
                 counts["split"] = number(self.command(
                     f"refine edge where length > {_num(max_edge, 'max_edge')} and not no_refine"))
             finally:
-                self._run_statements(f"unset edge[{i}] no_refine" for i in newly)
+                if clause:
+                    self.command(f"unset edge no_refine{clause}")
         if equiangulate:
             counts["switched"] = number(self.command("u"))
         if average:
@@ -602,21 +594,19 @@ class _Relaxing(_Analysis):
         can't check), then split edges turning more than ``split_turn`` or
         longer than ``split_above`` (not ``no_refine`` ones), equiangulate.
         Returns the edges merged plus split."""
-        if "pyse_mark" not in self._edge_attributes():
-            self.command("define edge attribute pyse_mark integer")
         m = self.mesh()
         merged = 0
-        if merge_below is not None and not (self.eval("torus") or self.eval("symmetry_group")):
+        if merge_below is not None and not _core.symmetry():
             valence = _edge_valence(m)
             turn, judged = _edge_turn(m, valence)
             mark = judged & (valence == 2) & (turn < flat) & (_edge_lengths(m) < merge_below)
             if mark.any():
-                self.set_values("edge", "pyse_mark", mark.astype(float))
+                clause = self._mark(_core.EDGE, mark)
                 before = self.counts["vertices"]
                 self.command(f"collapse_max_tilt := {_num(tilt, 'tilt')}; "
                              f"collapse_max_edge := {_num(longest, 'length')}")
                 try:
-                    self.command("delete edge ee where ee.pyse_mark == 1")
+                    self.command(f"delete edge{clause}")
                 finally:
                     self.command("collapse_max_tilt := 0; collapse_max_edge := 0")
                 merged = before - self.counts["vertices"]

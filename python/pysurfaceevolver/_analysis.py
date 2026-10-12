@@ -225,12 +225,6 @@ class _Analysis(_Engine):
             count = np.bincount(m.edges[triple].ravel(), minlength=len(free))
             return bad + int(((count > 4) & free).sum())
 
-    def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
-        """Constraint numbers, attribute bits, per vertex the signed distance
-        to each (NaN where on it), and their names ("" if unnamed)."""
-        _, gaps = self._call(_core.constraint_gaps)
-        return gaps.data
-
     def stability(self, nearest: int = 6) -> Stability:
         """Whether the surface sits at a stable equilibrium (a minimum, as far as
         second order tells; call it once converged, see :meth:`residual`).
