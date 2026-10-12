@@ -20,8 +20,6 @@ class Cell:
         self.ell, self.radius, self.half = ell, radius, ell/2
         self.theta_bead, self.theta_wall = theta_bead, theta_wall
         self.r_meniscus = 0.5/np.cos(np.radians(theta_wall))
-        # the bead's wetting energy is counted from the dry bead
-        self.energy_constant = -np.cos(np.radians(theta_bead))*np.pi/2*radius**2
         self.delta = 0.006        # "near" the mirror y = 0
         self.snap_gap = 0.0005    # the band snaps when it is this close to y = 0
         self.band_step = 0.01     # relative volume step on the band
@@ -31,8 +29,8 @@ class Cell:
     def constraints(self):
         # walls and the bead wet with the contact angles in the datafile's
         # parameters; the eighth bead's integrals leave out its wet north pole
-        # (pyse.constraints gives the volume constant; the energy constant is
-        # self.energy_constant)
+        # (the volume they leave out is the body's volconst, see load(); ev.energy
+        # adds the wetting energy they leave out: counted from the dry bead)
         return {1: C.mirror("z"),
                 2: C.plane((0, 0, -1), point=(0, 0, 0.5), contact_angle="theta_wall"),
                 3: C.sphere((0, 0, 0), self.radius, contact_angle="theta_bead",
@@ -40,16 +38,17 @@ class Cell:
                 4: C.mirror("x"), 5: C.mirror("x", self.half), 6: C.mirror("y")}
 
     def load(self, vertices, faces, on, volume):
+        """A surface from a starting shape: ``on`` holds each vertex's constraints."""
         cons = self.constraints()
+        # the bead's volconst given explicitly: make_datafile adds those of the
+        # walls the surface touches, and the immersed meniscus doesn't touch the bead
+        body = pyse.Body(volume=volume, volconst=cons[3].volconst)
         ev = pyse.Evolver()
-        ev.load_string(pyse.make_datafile(
-            np.asarray(vertices, float), faces,
-            bodies=[pyse.Body(faces=range(len(faces)), volume=volume,
-                              volconst=cons[3].volconst)],
-            parameters={"radius": self.radius, "ell": self.ell,
-                        "theta_bead": self.theta_bead, "theta_wall": self.theta_wall},
-            constraints=cons,
-            vertex_constraints={k: [i for i, c in enumerate(on) if k in c] for k in range(1, 7)}))
+        ev.load_arrays(np.asarray(vertices, float), faces, constraints=cons,
+                       vertex_constraints=on, bodies=[body],
+                       parameters={"radius": self.radius, "ell": self.ell,
+                                   "theta_bead": self.theta_bead,
+                                   "theta_wall": self.theta_wall})
         return ev
 
     # ---- starting shapes ------------------------------------------------------
@@ -152,22 +151,13 @@ class Cell:
         ev.relax(stability=False)
 
 
-def _solve(f, target, lo, hi):
-    """Bisection for an increasing f."""
-    for _ in range(60):
-        mid = (lo + hi)/2
-        lo, hi = (mid, hi) if f(mid) < target else (lo, mid)
-    return mid
-
-
 def drain(cell, v_start, v_end, levels=2, log=None):
     """Drain from immersed beads at liquid volume v_start (per eighth cell) until
     v_end or the first break, whichever comes first.
 
     Returns the states (dicts with stage 0 immersed / 1 band, volume, pressure,
     energy, vertices, facets) and the events (bead emergence; the snap)."""
-    y0 = _solve(lambda y: cell.meniscus_exact(y)[0], v_start, cell.radius, 2.0)
-    ev = cell.load(*cell.meniscus(y0), v_start)
+    ev = cell.load(*cell.meniscus(0.55), v_start)     # relaxing moves it to v_start
     cell.relax(ev)
     for _ in range(levels):
         ev.refine()
@@ -177,7 +167,7 @@ def drain(cell, v_start, v_end, levels=2, log=None):
     def record():
         m = ev.mesh()
         states.append(dict(stage=stage, volume=ev.bodies().volume[0],
-                           pressure=ev.bodies().pressure[0], energy=ev.total_energy,
+                           pressure=ev.bodies().pressure[0], energy=ev.energy,
                            vertices=m.vertices.copy(), facets=m.facets.copy()))
         if log:
             log(f"stage {stage} V {states[-1]['volume']:.5f} "
