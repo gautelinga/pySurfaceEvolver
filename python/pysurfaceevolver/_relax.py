@@ -14,7 +14,7 @@ from . import _core
 from ._analysis import _TARGET_LOST, _Analysis
 from ._engine import _threads_for_call, relax_memory
 from ._errors import EvolverError, EvolverWarning, UnstableEquilibriumWarning, _num
-from ._geometry import _edge_lengths, _edge_turn, _edge_valence, _long_spokes
+from ._geometry import _edge_turn, _long_spokes
 from ._results import Health, IterationResult, _Coords, _Trace
 
 if TYPE_CHECKING:
@@ -579,7 +579,7 @@ class _Relaxing(_Analysis):
         m = self.mesh()
         if m.facets is None or len(m.facets) == 0:
             return 0
-        lengths = _edge_lengths(m)
+        lengths = m.edge_lengths()
         bulk = float(np.percentile(lengths, 75))
         return self._remesh_pass(merge_below=0.75*bulk if coarsen else None,
                                  flat=max_turn/3, tilt=max_turn/2, longest=4/3*bulk,
@@ -597,9 +597,9 @@ class _Relaxing(_Analysis):
         m = self.mesh()
         merged = 0
         if merge_below is not None and not _core.symmetry():
-            valence = _edge_valence(m)
-            turn, judged = _edge_turn(m, valence)
-            mark = judged & (valence == 2) & (turn < flat) & (_edge_lengths(m) < merge_below)
+            valence = m.edge_valence()
+            turn, judged = _edge_turn(m)
+            mark = judged & (valence == 2) & (turn < flat) & (m.edge_lengths() < merge_below)
             if mark.any():
                 clause = self._mark(_core.EDGE, mark)
                 before = self.counts["vertices"]
@@ -611,7 +611,7 @@ class _Relaxing(_Analysis):
                     self.command("collapse_max_tilt := 0; collapse_max_edge := 0")
                 merged = before - self.counts["vertices"]
                 m = self.mesh()
-        mark = _edge_turn(m, _edge_valence(m))[0] > split_turn
+        mark = _edge_turn(m)[0] > split_turn
         split = self._split_marked(mark) if mark.any() else 0
         if merged and not split and self._tidy_kinds()[0]:
             self.command("u")

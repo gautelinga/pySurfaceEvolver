@@ -100,13 +100,13 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
         return float(d[k]/h)
     return float("inf")
 
-def _edge_turn(m: Mesh, valence: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
+
+def _edge_turn(m: Mesh) -> "tuple[np.ndarray, np.ndarray]":
     """Per edge, the angle (degrees, 0-90) between the vertex normals at its
     ends, and whether it was judged: not for edges touching a vertex where
     three or more facets meet on an edge (their angle is 0). Vertex normals:
     area-weighted facet normals, each sign-aligned with one facet at the
-    vertex (facet orientations needn't agree across a sheet). ``valence``:
-    _edge_valence(m)."""
+    vertex (facet orientations needn't agree across a sheet)."""
     f, x = m.facets, m.vertices
     assert f is not None
     n = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
@@ -123,7 +123,7 @@ def _edge_turn(m: Mesh, valence: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
     turn = np.degrees(np.arccos(np.clip(np.abs(np.einsum("ij,ij->i", vn[e[:, 0]], vn[e[:, 1]])),
                                         0.0, 1.0)))
     junction = np.zeros(len(x), dtype=bool)
-    hub = e[valence > 2]
+    hub = e[m.edge_valence() > 2]
     junction[hub.ravel()] = True
     unjudged = junction[e[:, 0]] | junction[e[:, 1]] | (norm[e[:, 0]] == 0) | (norm[e[:, 1]] == 0)
     turn[unjudged] = 0.0
@@ -137,7 +137,7 @@ def _long_spokes(m: Mesh, ratio: float) -> np.ndarray:
     if m.facets is None or len(m.facets) == 0:
         return np.zeros(len(m.edges), dtype=bool)
     e, n = m.edges, len(m.vertices)
-    lengths, valence = _edge_lengths(m), _edge_valence(m)
+    lengths, valence = m.edge_lengths(), m.edge_valence()
     rim = valence == 1
     total, count = np.zeros(n), np.zeros(n)
     for k in (0, 1):
@@ -148,22 +148,3 @@ def _long_spokes(m: Mesh, ratio: float) -> np.ndarray:
     spoke = (valence >= 2) & (on[e[:, 0]] != on[e[:, 1]])
     ref = np.where(on[e[:, 0]], mean[e[:, 0]], mean[e[:, 1]])
     return spoke & (lengths > ratio*ref)
-
-
-def _edge_lengths(m: Mesh) -> np.ndarray:
-    return np.linalg.norm(m.vertices[m.edges[:, 0]] - m.vertices[m.edges[:, 1]], axis=1)
-
-
-def _edge_valence(m: Mesh) -> np.ndarray:
-    """The number of facets on each edge (aligned with m.edges)."""
-    if m.facets is None or len(m.facets) == 0:
-        return np.zeros(len(m.edges), dtype=int)
-    f = m.facets
-    pairs = np.sort(np.vstack([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]), axis=1)
-    keys = pairs[:, 0]*(len(m.vertices) + 1) + pairs[:, 1]
-    uniq, counts = np.unique(keys, return_counts=True)
-    e = np.sort(m.edges, axis=1)
-    ekeys = e[:, 0]*(len(m.vertices) + 1) + e[:, 1]
-    idx = np.searchsorted(uniq, ekeys)
-    idx = np.clip(idx, 0, len(uniq) - 1)
-    return np.where(uniq[idx] == ekeys, counts[idx], 0)

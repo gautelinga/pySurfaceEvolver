@@ -10,7 +10,7 @@ import numpy as np
 from . import _core
 from ._engine import _Engine
 from ._errors import EvolverError, _num
-from ._geometry import _crossed, _edge_valence, _grow, _self_gap
+from ._geometry import _crossed, _grow, _self_gap
 from ._mesh import Mesh, MeshQuality
 from ._results import EigenCounts, Health, Stability
 
@@ -208,7 +208,7 @@ class _Analysis(_Engine):
         if len(m.edges) == 0:
             return 0
         # (in a torus two edges can join the same two vertices: Evolver counts)
-        valence = self.values("edge", "valence") if _core.symmetry() else _edge_valence(m)
+        valence = self.values("edge", "valence") if _core.symmetry() else m.edge_valence()
         if not (valence >= 3).any():  # a film without junctions: every vertex is a disc
             return 0
         bad = 0

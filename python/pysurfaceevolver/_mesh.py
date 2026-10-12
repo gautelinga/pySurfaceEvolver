@@ -476,6 +476,51 @@ class Mesh:
     edge_node_index: Optional[np.ndarray] = None   # (order+1, 2) barycentric
     facet_nodes: Optional[np.ndarray] = None       # (k, nodes) vertex rows
     facet_node_index: Optional[np.ndarray] = None  # (nodes, 3) barycentric
+    # arrays computed from the mesh, kept with it (see _cached)
+    _cache: Dict[str, np.ndarray] = field(default_factory=dict, init=False, repr=False,
+                                          compare=False)
+
+    def _cached(self, name: str, compute) -> np.ndarray:
+        if name not in self._cache:
+            value = np.asarray(compute())
+            value.flags.writeable = False
+            self._cache[name] = value
+        return self._cache[name]
+
+    def edge_lengths(self) -> np.ndarray:
+        """The length of each edge (straight, between its end vertices),
+        aligned with :attr:`edges`. Read-only (kept with the mesh)."""
+        return self._cached("edge_lengths", lambda: np.linalg.norm(
+            self.vertices[self.edges[:, 0]] - self.vertices[self.edges[:, 1]], axis=1))
+
+    def edge_valence(self) -> np.ndarray:
+        """The number of facets on each edge (all 0 without facets), aligned
+        with :attr:`edges`: 1 on a boundary or contact line, 3 or more at a
+        junction of films. Read-only."""
+        def compute() -> np.ndarray:
+            if self.facets is None or len(self.facets) == 0:
+                return np.zeros(len(self.edges), dtype=int)
+            f, nv = self.facets, len(self.vertices) + 1
+            pairs = np.sort(np.vstack([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]), axis=1)
+            uniq, counts = np.unique(pairs[:, 0]*nv + pairs[:, 1], return_counts=True)
+            e = np.sort(self.edges, axis=1)
+            keys = e[:, 0]*nv + e[:, 1]
+            idx = np.clip(np.searchsorted(uniq, keys), 0, len(uniq) - 1)
+            return np.where(uniq[idx] == keys, counts[idx], 0)
+        return self._cached("edge_valence", compute)
+
+    def facet_areas(self) -> np.ndarray:
+        """The area of each facet, flat between its corner vertices (see
+        :meth:`tessellate` for curved ones), aligned with :attr:`facets`.
+        Read-only."""
+        if self.facets is None:
+            raise ValueError("facet_areas() needs facets (the soapfilm model)")
+        def compute() -> np.ndarray:
+            assert self.facets is not None
+            p = _as_3d(self.vertices)
+            a, b, c = (p[self.facets[:, i]] for i in range(3))
+            return 0.5*np.linalg.norm(np.cross(b - a, c - a), axis=1)
+        return self._cached("facet_areas", compute)
 
     def _repr_html_(self) -> str:
         order = "linear" if self.order == 1 else f"order {self.order}"
@@ -538,8 +583,7 @@ class Mesh:
         nan = float("nan")
         if len(self.edges) == 0:          # the simplex representation lists none
             return MeshQuality(nan, nan, nan, nan, nan, 0, 0, skinny_angle)
-        lengths = np.linalg.norm(self.vertices[self.edges[:, 0]]
-                                 - self.vertices[self.edges[:, 1]], axis=1)
+        lengths = self.edge_lengths()
         if self.facets is None or len(self.facets) == 0:
             return MeshQuality(float(lengths.min()), float(np.median(lengths)),
                                float(lengths.max()), nan, nan, 0, 0, skinny_angle)
