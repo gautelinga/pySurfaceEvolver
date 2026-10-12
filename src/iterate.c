@@ -322,14 +322,25 @@ void calc_all_grads(
   int mode /* bits for CALC_FORCE and CALC_VOLGRADS */
 )
 { find_fixed();
- 
 
-  if ( mode & CALC_VOLGRADS ) 
+  /* With named quantities only, the energy gradients come from the same
+     pass over the elements as the constraint gradients (one pass instead
+     of two); calc_force() then skips them. */
+#ifndef MPI_EVOLVER
+  grads_merge_energy = (mode & CALC_VOLGRADS) && (mode & CALC_FORCE)
+      && quantities_only_flag && !min_square_grad_flag && (optparamcount == 0)
+      && (compound_quant_list_head < 0);
+#endif
+  grads_merged_energy = 0;
+
+  if ( mode & CALC_VOLGRADS )
     calc_volgrads(DO_OPTS);
+  grads_merge_energy = 0;
   if ( mode & CALC_FORCE )
   { calc_force();
     pressure_forces();
   }
+  grads_merged_energy = 0;
 
   partner_shift_grads(mode);  /* in case doing partners */
 
@@ -536,7 +547,11 @@ void move_vertices(
 
   partner_move(); /* in case doing partners */
 
+  /* the energy below evaluated in project_all()'s last content pass
+     where it can be (see calc_content_and_energy()) */
+  content_fuse_energy = 1;
   project_all(1, mode);
+  content_fuse_energy = 0;
  
 
   if ( fixed_constraint_flag || web.pressure_flag || web.pressflag ) 
@@ -666,6 +681,7 @@ void project_all(
   fl_sel sel;
   int one_sided_mode = (mode2==TEST_MOVE) ? KEEP_ONESIDEDNESS : RESET_ONESIDEDNESS;
   /* project to constraints and boundaries */
+  content_energy_ready = 0;
 
   if ( itdebug )
     outstring("project_all(): to level set and extensive constraints\n");
@@ -704,8 +720,9 @@ void project_all(
     calc_count = 1;
     psaved.coord = NULL;
     save_coords(&psaved,SAVE_SEPARATE);
-    do 
-    { if ( diff == 0.0 ) break; 
+    do
+    { content_energy_ready = 0;  /* moving again */
+      if ( diff == 0.0 ) break; 
       if ( itdebug ) printf("Diff: %g    Old_diff: %g\n",
            (double)diff,(double)old_diff);
       if ( diff > 1.01*old_diff )
@@ -739,7 +756,7 @@ void project_all(
         break;
       }
       old_diff = diff;
-      diff = calc_content(Q_FIXED);
+      diff = calc_content_and_energy(); /* with the energy for move_vertices() */
       if ( itdebug ) printf("Next diff: %g\n",(double)diff);
     } while ( mode && (diff > 1) ); 
 

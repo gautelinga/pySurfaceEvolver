@@ -632,6 +632,10 @@ extern int gap_quantity_num;  /* number of quantity for default gap energy */
 extern int default_area_quant_num; /* number of quantity for default area */
 extern int rotorder_var; /* for flip_rot order */
 extern int calc_quant_flag; /* set when quantity calculation underway */
+extern int grads_merge_energy; /* calc_all_grads(): energy gradients in the constraint gradient pass */
+extern int grads_merged_energy; /* set when that pass did them */
+extern int content_fuse_energy; /* move_vertices(): energy values in project_all()'s last content pass */
+extern int content_energy_ready; /* set when that pass did them, at the final coordinates */
 extern char volume_method_name[100];  /* for replacing default */
 extern char area_method_name[100];  /* for replacing default */
 extern char length_method_name[100];  /* for replacing default */

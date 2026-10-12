@@ -291,6 +291,10 @@ int cur_quant;  /* when reading compound quantity */
 int compound_hess_flag; /* mode while doing compound hessian */
 int quantities_only_flag; /* for using named quantities only */
 int calc_quant_flag; /* set when quantity calculation underway */
+int grads_merge_energy; /* calc_all_grads(): energy gradients in the constraint gradient pass */
+int grads_merged_energy; /* set when that pass did them */
+int content_fuse_energy; /* move_vertices(): energy values in project_all()'s last content pass */
+int content_energy_ready; /* set when that pass did them, at the final coordinates */
 int gravity_quantity_num;  /* number of quantity for default gravity */
 int gap_quantity_num;  /* number of quantity for default gap energy */
 int default_area_quant_num; /* number of quantity for default area */

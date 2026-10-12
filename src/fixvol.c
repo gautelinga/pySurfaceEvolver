@@ -129,7 +129,14 @@ void local_calc_volgrads(
         (*film_grad)();
     }
   }
-  calc_quant_grads(Q_FIXED|Q_CONSERVED);
+  if ( grads_merge_energy )
+  { /* and calc_force()'s quantity gradients (see calc_all_grads()) */
+    zero_vertex_forces();
+    calc_quant_grads(Q_FIXED|Q_CONSERVED|Q_ENERGY);
+    grads_merged_energy = 1;
+  }
+  else
+    calc_quant_grads(Q_FIXED|Q_CONSERVED);
 
   // calc_one_sided_grads();  /* no, doing one-sided lagranges after others */
 
