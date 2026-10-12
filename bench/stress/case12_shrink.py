@@ -4,22 +4,21 @@ error must not grow as the drop shrinks (the mesh shrinks with it)."""
 
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
+from pysurfaceevolver import constraints as C, recipes, shapes
 
-from common import Result, Tracker, cap, cap_reference, contact_radius, rel
+from common import Result, Tracker, cap_reference, contact_radius, rel
 
 NAME = "12 cap shrinking to 1e-4 volume"
 
 
 def run(quick=False):
     theta = 60.0
-    v, f, rim = cap(1.0, 1 - np.cos(np.radians(theta)))
-    v0 = cap_reference(1.0, theta)
+    drop = shapes.cap(1.0, 1 - np.cos(np.radians(theta)))
     volume = np.pi*(1 - np.cos(np.radians(theta)))**2*(3 - (1 - np.cos(np.radians(theta))))/3
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=theta)},
-        vertex_constraints={1: rim}, bodies=[pyse.Body(faces=range(len(f)), volume=volume)]))
+    ev.load_arrays(
+        drop.vertices, drop.faces, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=theta)},
+        vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=volume)])
     track = Tracker()
     track.relax(ev)
     res = Result(NAME, False, "")

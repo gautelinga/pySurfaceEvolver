@@ -6,12 +6,12 @@ hundredfold, wires, instabilities, gravity. They are the stress suite in
 `bench/stress/` condensed into examples (`python bench/stress/run.py` runs the full
 versions and checks them). The code below is not run when the documentation is built;
 the outputs are from running it in October 2026 (the development version after pySE
-0.7.0, 2 threads), and they vary in
+0.7.2, 2 threads), and they vary in
 the last digits with the thread count.
 
-The examples import starting shapes and reference solutions from
+The starting shapes come from `pysurfaceevolver.shapes`, the reference solutions from
 [`docs/stress_helpers.py`](https://github.com/gautelinga/pySurfaceEvolver/blob/main/docs/stress_helpers.py)
-(the references need SciPy); run them from the `docs` directory, or put it on
+(they need SciPy); run the examples from the `docs` directory, or put it on
 `sys.path`. `recipes.continuation` steps a parameter or a volume and relaxes after
 each step; `step.result` is that relaxation's result.
 
@@ -37,16 +37,15 @@ stability check tells.
 ```python
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
-from stress_helpers import tube
+from pysurfaceevolver import constraints as C, recipes, shapes
 
 # a liquid column of radius 0.5 between the plates z = 0 and z = 1, contact angle 90
-v, f, bottom, top = tube(0.5, 0.0, 1.0, nz=12, nt=24)
+column = shapes.tube(0.5, 0.0, 1.0, nz=12, nt=24)
 ev = pyse.Evolver()
-ev.load_string(pyse.make_datafile(
-    v, f, constraints={1: C.plane((0, 0, 1), 0.0), 2: C.plane((0, 0, -1), point=(0, 0, 1))},
-    vertex_constraints={1: bottom, 2: top},
-    bodies=[pyse.Body(faces=range(len(f)), volume=np.pi*0.5**2)]))
+ev.load_arrays(column.vertices, column.faces,
+               constraints={1: C.plane((0, 0, 1), 0.0), 2: C.plane((0, 0, -1), point=(0, 0, 1))},
+               vertex_constraints={1: column.rims["bottom"], 2: column.rims["top"]},
+               bodies=[pyse.Body(volume=np.pi*0.5**2)])
 ev.relax()
 
 # thin it at constant height: past r = 1/pi the column is a saddle (Rayleigh-Plateau)
@@ -86,8 +85,7 @@ along them, which Newton must not mistake for a freedom.
 ```python
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import recipes
-from stress_helpers import tube
+from pysurfaceevolver import recipes, shapes
 
 def catenoid_area(H):
     """The stable catenoid between rings of radius 1 at z = +-H (None past the fold)."""
@@ -100,11 +98,12 @@ def catenoid_area(H):
     return np.pi*a*(2*H + a*np.sinh(2*H/a))
 
 # a soap film between two wire rings, the rings pulled apart (parameter hh)
-v, f, bottom, top = tube(1.0, -0.3, 0.3, nz=8, nt=32)
+film = shapes.tube(1.0, -0.3, 0.3, nz=8, nt=32)
+bottom, top = film.rims["bottom"], film.rims["top"]
 ev = pyse.Evolver()
-ev.load_string(pyse.make_datafile(
-    v, f, constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
-    vertex_constraints={1: bottom + top, 2: top, 3: bottom}, parameters={"hh": 0.3}))
+ev.load_arrays(film.vertices, film.faces,
+               constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
+               vertex_constraints={1: bottom + top, 2: top, 3: bottom}, parameters={"hh": 0.3})
 ev.relax(levels=1)
 for step in recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025)):
     ref = catenoid_area(step.value)
@@ -167,16 +166,16 @@ relaxes again (the facet count grows near the rim).
 ```python
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
-from stress_helpers import cap, cap_reference, contact_radius
+from pysurfaceevolver import constraints as C, recipes, shapes
+from stress_helpers import cap_reference, contact_radius
 
 # a hemispherical drop on the plane z = 0, its contact angle the parameter theta
-v, f, rim = cap(1.0, 1.0)
+drop = shapes.cap(1.0, 1.0)
 ev = pyse.Evolver()
-ev.load_string(pyse.make_datafile(
-    v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle="theta")},
-    vertex_constraints={1: rim}, parameters={"theta": 90.0},
-    bodies=[pyse.Body(faces=range(len(f)), volume=2*np.pi/3)]))
+ev.load_arrays(drop.vertices, drop.faces,
+               constraints={1: C.plane((0, 0, 1), 0.0, contact_angle="theta")},
+               vertex_constraints={1: drop.rims["rim"]}, parameters={"theta": 90.0},
+               bodies=[pyse.Body(volume=2*np.pi/3)])
 ev.relax()
 for step in recipes.continuation(ev, "theta", np.arange(100.0, 175, 10)):
     ref = cap_reference(2*np.pi/3, step.value)
@@ -217,47 +216,44 @@ The drop at 10, 50, 130 and 170 degrees, same volume.
 ## A liquid bridge as the gap closes
 
 A bridge of liquid (volume 0.05, contact angle 40) between two unit spheres, the gap
-closed from 0.2 to 1e-3. Each gap starts from a coarse cylinder (16 around) and is
-relaxed with `levels=2`. Reference: the axisymmetric Young-Laplace solution. On that
+closed from 0.2 to 1e-3. Each gap starts from a coarse cylinder (16 around, radius
+0.35: relaxing meets the volume) and is relaxed with `levels=2`. Reference: the axisymmetric Young-Laplace solution. On that
 coarse start the contact lines can collapse within a few steps; `relax()` notices and
 undoes it.
 
 ```python
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C
-from stress_helpers import tube, bridge_spheres
+from pysurfaceevolver import constraints as C, shapes
+from stress_helpers import bridge_spheres
 
-def bridge(gap, theta=40.0, volume=0.05):
-    """A liquid bridge between unit spheres, from a cylinder holding the volume."""
+def bridge(gap, theta=40.0, volume=0.05, a=0.35):
+    """A liquid bridge between unit spheres, from a cylinder of radius a."""
     c = 1 + gap/2
-    lo, hi = 0.0, 0.999              # the cylinder radius that holds the volume
-    for _ in range(60):
-        a = (lo + hi)/2
-        lo, hi = (a, hi) if 2*np.pi*(c*a*a - 2/3*(1 - (1 - a*a)**1.5)) < volume else (lo, a)
-    zb = c - np.sqrt(1 - a*a)
-    v, f, bottom, top = tube(a, -zb, zb, nz=4, nt=16)
-    s1 = C.sphere((0, 0, -c), 1.0, contact_angle=theta, wet_poles=("north",))
-    s2 = C.sphere((0, 0, c), 1.0, contact_angle=theta, wet_poles=("south",))
+    zb = c - np.sqrt(1 - a*a)                  # the cylinder's ends on the spheres
+    tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: s1, 2: s2}, vertex_constraints={1: bottom, 2: top},
-        bodies=[pyse.Body(faces=range(len(f)), volume=volume, volconst=s1.volconst + s2.volconst)]))
+    ev.load_arrays(tube.vertices, tube.faces,
+                   constraints={1: C.sphere((0, 0, -c), 1.0, contact_angle=theta, wet_poles=("north",)),
+                                2: C.sphere((0, 0, c), 1.0, contact_angle=theta, wet_poles=("south",))},
+                   vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=volume)])    # volconst: the spheres' caps
     ev.relax(levels=2)
-    return ev, s1.energy_constant + s2.energy_constant
+    return ev
 
 for gap in (0.2, 0.05, 0.01, 0.001):
-    ev, const = bridge(gap)
+    ev = bridge(gap)
     ref = bridge_spheres(0.05, gap, 40.0)
-    print(f"gap {gap:5.3f}: energy {ev.total_energy + const:.5f} (reference {ref['energy']:.5f}), "
+    # ev.energy: with the wetted caps' energy, which Evolver's total_energy leaves out
+    print(f"gap {gap:5.3f}: energy {ev.energy:.5f} (reference {ref['energy']:.5f}), "
           f"pressure {ev.body(1).pressure:.4f} (reference {ref['pressure']:.4f})")
 ```
 
 ```text
-gap 0.200: energy 0.08377 (reference 0.08390), pressure -0.1753 (reference -0.1734)
-gap 0.050: energy -0.24965 (reference -0.24967), pressure -1.9179 (reference -1.9090)
-gap 0.010: energy -0.37990 (reference -0.37985), pressure -1.8928 (reference -1.8867)
-gap 0.001: energy -0.41157 (reference -0.41151), pressure -1.8437 (reference -1.8377)
+gap 0.200: energy 0.08377 (reference 0.08390), pressure -0.1755 (reference -0.1734)
+gap 0.050: energy -0.24965 (reference -0.24967), pressure -1.9178 (reference -1.9090)
+gap 0.010: energy -0.37992 (reference -0.37985), pressure -1.8925 (reference -1.8867)
+gap 0.001: energy -0.41160 (reference -0.41151), pressure -1.8433 (reference -1.8377)
 ```
 
 Energies within 0.2% and pressures within 0.01 (0.5% where they are large) at every
@@ -288,17 +284,17 @@ which must not count as an instability.
 ```python
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
-from stress_helpers import revolve, barrel
+from pysurfaceevolver import constraints as C, recipes, shapes
+from stress_helpers import barrel
 
 # a barrel drop (volume 2) on a fibre of radius 0.2 (the z axis)
 z = np.linspace(-1.2, 1.2, 13)
-v, f, bottom, top = revolve(np.sqrt(0.04 + (0.75**2 - 0.04)*(1 - (z/1.2)**2)), z, nt=24)
+drop = shapes.revolve(np.sqrt(0.04 + (0.75**2 - 0.04)*(1 - (z/1.2)**2)), z, nt=24)
 ev = pyse.Evolver()
-ev.load_string(pyse.make_datafile(
-    v, f, constraints={1: C.cylinder((0, 0, 0), (0, 0, 1), 0.2, contact_angle="theta")},
-    vertex_constraints={1: bottom + top}, parameters={"theta": 20.0},
-    bodies=[pyse.Body(faces=range(len(f)), volume=2.0)]))
+ev.load_arrays(drop.vertices, drop.faces,
+               constraints={1: C.cylinder((0, 0, 0), (0, 0, 1), 0.2, contact_angle="theta")},
+               vertex_constraints={1: drop.rims["bottom"] + drop.rims["top"]},
+               parameters={"theta": 20.0}, bodies=[pyse.Body(volume=2.0)])
 ev.relax(levels=1)
 guess = (0.78, 2.4)
 for step in recipes.continuation(ev, "theta", np.arange(20.0, 81, 10)):
@@ -384,18 +380,18 @@ axisymmetric sessile drop with gravity; a large puddle's height tends to
 
 ```python
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C
-from stress_helpers import cap, cap_reference, sessile
+from pysurfaceevolver import constraints as C, shapes
+from stress_helpers import cap_reference, sessile
 
 # a drop of volume 50 with gravity (capillary length 1), contact angle 60,
 # started as the cap it would be without gravity
 c0 = cap_reference(50.0, 60.0)
-v, f, rim = cap(c0["R"], c0["height"], nr=10, nt=48)
+drop = shapes.cap(c0["R"], c0["height"], nr=10, nt=48)
 ev = pyse.Evolver()
-ev.load_string(pyse.make_datafile(
-    v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
-    vertex_constraints={1: rim}, gravity=1,
-    bodies=[pyse.Body(faces=range(len(f)), volume=50.0, density=1.0)]))
+ev.load_arrays(drop.vertices, drop.faces,
+               constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
+               vertex_constraints={1: drop.rims["rim"]}, gravity=1,
+               bodies=[pyse.Body(volume=50.0, density=1.0)])
 ev.relax(levels=1)
 ref = sessile(50.0, 60.0, rho_g=1.0)
 print(f"height {ev.mesh().vertices[:, 2].max():.4f} (reference {ref['height']:.4f}), "
@@ -430,17 +426,17 @@ Reference: the exact cap. The error must not grow as the drop shrinks.
 ```python
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
-from stress_helpers import cap, cap_reference, contact_radius
+from pysurfaceevolver import constraints as C, recipes, shapes
+from stress_helpers import cap_reference, contact_radius
 
 # a 60-degree cap evaporating to 1e-4 of its volume
 h = 1 - np.cos(np.radians(60.0))
-v, f, rim = cap(1.0, h)
+drop = shapes.cap(1.0, h)
 volume = np.pi*h*h*(3 - h)/3
 ev = pyse.Evolver()
-ev.load_string(pyse.make_datafile(
-    v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
-    vertex_constraints={1: rim}, bodies=[pyse.Body(faces=range(len(f)), volume=volume)]))
+ev.load_arrays(drop.vertices, drop.faces,
+               constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
+               vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=volume)])
 ev.relax()
 # 25 steps, each about 70% of the last (jumps of 10x are too large to follow)
 for step in recipes.continuation(ev, ev.body(1), volume*np.geomspace(1, 1e-4, 25)):

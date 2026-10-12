@@ -8,9 +8,9 @@ a 1-degree error moves it by 12%.)"""
 
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
+from pysurfaceevolver import constraints as C, recipes, shapes
 
-from common import Result, Tracker, cap, cap_reference, contact_radius, rel
+from common import Result, Tracker, cap_reference, contact_radius, rel
 
 
 def implied_angle(volume, radius):
@@ -25,12 +25,12 @@ NAME = "3 sessile drop, 10-170 degrees"
 
 
 def load(volume):
-    v, f, rim = cap(1.0, 1.0)                    # a hemisphere: 90 degrees
+    drop = shapes.cap(1.0, 1.0)                  # a hemisphere: 90 degrees
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle="theta")},
-        vertex_constraints={1: rim}, parameters={"theta": 90.0},
-        bodies=[pyse.Body(faces=range(len(f)), volume=volume)]))
+    ev.load_arrays(
+        drop.vertices, drop.faces, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle="theta")},
+        vertex_constraints={1: drop.rims["rim"]}, parameters={"theta": 90.0},
+        bodies=[pyse.Body(volume=volume)])
     return ev
 
 

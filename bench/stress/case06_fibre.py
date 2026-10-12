@@ -8,9 +8,9 @@ where eigenvalues turn negative. Translation along the fibre is a zero mode."""
 
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
+from pysurfaceevolver import constraints as C, recipes, shapes
 
-from common import Result, Tracker, revolve, rel
+from common import Result, Tracker, rel
 import axisym
 
 NAME = "6 barrel on a fibre, 20-80 degrees"
@@ -22,12 +22,13 @@ def run(quick=False):
     L, rm = 2.4, 0.75
     z = np.linspace(-L/2, L/2, 13)
     r = np.sqrt(B*B + (rm*rm - B*B)*(1 - (2*z/L)**2))
-    v, f, bottom, top = revolve(r, z, nt=24)
+    drop = shapes.revolve(r, z, nt=24)
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: C.cylinder((0, 0, 0), (0, 0, 1), B, contact_angle="theta")},
-        vertex_constraints={1: bottom + top}, parameters={"theta": 20.0},
-        bodies=[pyse.Body(faces=range(len(f)), volume=VOLUME)]))
+    ev.load_arrays(
+        drop.vertices, drop.faces,
+        constraints={1: C.cylinder((0, 0, 0), (0, 0, 1), B, contact_angle="theta")},
+        vertex_constraints={1: drop.rims["bottom"] + drop.rims["top"]}, parameters={"theta": 20.0},
+        bodies=[pyse.Body(volume=VOLUME)])
     track = Tracker()
     track.relax(ev)
     ev.refine()

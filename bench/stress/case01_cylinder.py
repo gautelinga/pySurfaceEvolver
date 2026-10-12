@@ -5,21 +5,22 @@ pi r (r < 1/pi): a robust solver must say so, not converge to it silently."""
 
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, recipes
+from pysurfaceevolver import constraints as C, recipes, shapes
 
-from common import Result, Tracker, tube, rel
+from common import Result, Tracker, rel
 
 NAME = "1 cylinder past Rayleigh-Plateau"
 
 
 def run(quick=False):
     r0 = 0.5
-    v, f, bottom, top = tube(r0, 0.0, 1.0, nz=12, nt=24)
+    column = shapes.tube(r0, 0.0, 1.0, nz=12, nt=24)
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: C.plane((0, 0, 1), 0.0), 2: C.plane((0, 0, -1), point=(0, 0, 1.0))},
-        vertex_constraints={1: bottom, 2: top},
-        bodies=[pyse.Body(faces=range(len(f)), volume=np.pi*r0*r0)]))
+    ev.load_arrays(
+        column.vertices, column.faces,
+        constraints={1: C.plane((0, 0, 1), 0.0), 2: C.plane((0, 0, -1), point=(0, 0, 1.0))},
+        vertex_constraints={1: column.rims["bottom"], 2: column.rims["top"]},
+        bodies=[pyse.Body(volume=np.pi*r0*r0)])
     track = Tracker()
     track.relax(ev)
     res = Result(NAME, False, "")

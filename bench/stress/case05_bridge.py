@@ -2,56 +2,41 @@
 volume 0.05, the gap closed from 0.2 to 1e-3. Reference: the axisymmetric
 Young-Laplace solution (axisym.bridge_spheres). The gap is in the spheres'
 centres, which the constraint builders take as numbers, so each gap is a new
-surface, started from a cylinder between the spheres and relaxed (default
-relax, two refinements)."""
+surface, started from a cylinder of radius 0.35 between the spheres (relaxing
+meets the volume) and relaxed (default relax, two refinements)."""
 
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C
+from pysurfaceevolver import constraints as C, shapes
 
-from common import Result, Tracker, tube, rel
+from common import Result, Tracker, rel
 import axisym
 
 NAME = "5 bridge, gap down to 1e-3"
 THETA, VOLUME = 40.0, 0.05
 
 
-def start_radius(gap, volume, R=1.0):
-    # a cylinder between the spheres holding the volume (as in the liquid-bridge example)
-    c = R + gap/2
-    lo, hi = 0.0, 0.999*R
-    for _ in range(60):
-        a = (lo + hi)/2
-        v = 2*np.pi*(c*a*a - 2/3*(R**3 - (R*R - a*a)**1.5))
-        lo, hi = (a, hi) if v < volume else (lo, a)
-    return a
-
-
 def neck_radius(ev):
-    m = ev.mesh()
-    p, q = m.vertices[m.edges[:, 0]], m.vertices[m.edges[:, 1]]
-    cross = (p[:, 2] < 0) != (q[:, 2] < 0)
-    t = p[cross, 2]/(p[cross, 2] - q[cross, 2])
-    x = p[cross] + t[:, None]*(q[cross] - p[cross])
-    return float(np.hypot(x[:, 0], x[:, 1]).mean())
+    ring = ev.mesh().slice((0, 0, 1))[0][:-1]        # the mid-plane z = 0, a closed curve
+    return float(np.hypot(ring[:, 0], ring[:, 1]).mean())
 
 
-def bridge(gap, track):
+def bridge(gap, track, a=0.35):
     c = 1 + gap/2
-    a = start_radius(gap, VOLUME)
     zb = c - np.sqrt(1 - a*a)
-    v, f, bottom, top = tube(a, -zb, zb, nz=4, nt=16)
+    tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
     s1 = C.sphere((0, 0, -c), 1.0, contact_angle=THETA, wet_poles=("north",))
     s2 = C.sphere((0, 0, c), 1.0, contact_angle=THETA, wet_poles=("south",))
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: s1, 2: s2}, vertex_constraints={1: bottom, 2: top},
-        bodies=[pyse.Body(faces=range(len(f)), volume=VOLUME, volconst=s1.volconst + s2.volconst)]))
+    ev.load_arrays(
+        tube.vertices, tube.faces, constraints={1: s1, 2: s2},
+        vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+        bodies=[pyse.Body(volume=VOLUME)])          # volconst from the spheres
     track.relax(ev)
     for _ in range(2):
         ev.refine()
         track.relax(ev)
-    return ev, s1.energy_constant + s2.energy_constant
+    return ev
 
 
 def run(quick=False):
@@ -64,13 +49,13 @@ def run(quick=False):
         ref = axisym.bridge_spheres(VOLUME, gap, THETA, guess=guess)
         guess = (ref["neck"], ref["pressure"])
         try:
-            ev, const = bridge(gap, track)
+            ev = bridge(gap, track)
         except Exception as e:
             res.rows.append(dict(gap=gap, failed=f"{type(e).__name__}: {str(e)[:120]}"))
             res.notes.append(f"gap {gap}: {type(e).__name__}: {str(e)[:120]}")
             errs.append(np.inf)
             continue
-        e = ev.total_energy + const
+        e = ev.energy                  # with the wetted caps' constant energy
         p = ev.body(1).pressure
         err = max(rel(e, ref["energy"]), abs(p - ref["pressure"])/max(1.0, abs(ref["pressure"])),
                   rel(neck_radius(ev), ref["neck"]))

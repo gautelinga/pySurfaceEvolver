@@ -5,9 +5,9 @@ large-puddle height 2 sin(theta/2) l_c."""
 
 import numpy as np
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C
+from pysurfaceevolver import constraints as C, shapes
 
-from common import Result, Tracker, cap, cap_reference, contact_radius, rel
+from common import Result, Tracker, cap_reference, contact_radius, rel
 import axisym
 
 NAME = "11 gravity puddle, 60 degrees"
@@ -16,12 +16,12 @@ THETA, VOLUME = 60.0, 50.0
 
 def run(quick=False):
     c0 = cap_reference(VOLUME, THETA)
-    v, f, rim = cap(c0["R"], c0["height"], nr=10, nt=48)
+    drop = shapes.cap(c0["R"], c0["height"], nr=10, nt=48)
     ev = pyse.Evolver()
-    ev.load_string(pyse.make_datafile(
-        v, f, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=THETA)},
-        vertex_constraints={1: rim}, gravity=1,
-        bodies=[pyse.Body(faces=range(len(f)), volume=VOLUME, density=1.0)]))
+    ev.load_arrays(
+        drop.vertices, drop.faces, constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=THETA)},
+        vertex_constraints={1: drop.rims["rim"]}, gravity=1,
+        bodies=[pyse.Body(volume=VOLUME, density=1.0)])
     track = Tracker()
     track.relax(ev)
     ev.refine()
