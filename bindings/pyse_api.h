@@ -110,6 +110,10 @@ long pyse_quantity_count(void);
 /* the Evolver method names of the energy quantities' method instances (at
    most max rows; count: all of them) */
 int pyse_energy_methods(char (*names)[PYSE_NAME_SIZE], int max, int *count);
+/* the energy quantities' method instances: names, method names and what
+   each adds to the energy (at most max rows; count: all of them) */
+int pyse_energy_terms(char (*names)[PYSE_NAME_SIZE], char (*methods)[PYSE_NAME_SIZE],
+                      double *energy, int max, int *count);
 int pyse_get_quantities(char (*names)[PYSE_NAME_SIZE], double *value,
                         double *target, double *modulus, double *pressure,
                         int *kind /* 0 energy, 1 fixed, 2 info, 3 conserved */,

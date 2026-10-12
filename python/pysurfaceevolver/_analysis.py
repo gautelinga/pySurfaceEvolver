@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 
@@ -305,6 +305,23 @@ class _Analysis(_Engine):
         return MeshQuality(*edges, float(smallest.min()), float(np.median(smallest)),
                            int((smallest < skinny_angle).sum()),
                            int((area < 1e-12*np.median(area)).sum()), skinny_angle)
+
+    def energies(self) -> Dict[str, float]:
+        """What the energy is made of, term by term: ``{name: energy}`` for
+        every energy method instance once Evolver has converted everything to
+        named quantities (``default_area`` for the facets' tension,
+        ``constraint_1_energy`` for a wall's line integral, gravity, ...).
+        Brakke's way of checking a datafile (``convert_to_quantities;
+        show_all_quantities; Q``): a term with the wrong sign or size points
+        at the mistake. The terms add up to :attr:`total_energy`. Works on
+        a copy: the surface is left as it was."""
+        snapshot = self.save()
+        try:
+            self.command("convert_to_quantities")
+            _, result = self._call(_core.energy_terms)
+        finally:
+            self.restore(snapshot)
+        return {name: energy for name, _, energy in result.data}
 
     def contact_lines(self, constraint: Union[int, str]) -> List[np.ndarray]:
         """Where the surface meets a constraint (number or name): the edges on

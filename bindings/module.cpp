@@ -507,6 +507,34 @@ NB_MODULE(_core, m) {
     }
     return r;
   }, CALLBACK_NAMES, "data: the energy quantities' method names");
+  m.def("energy_terms", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    int count = 0, max = 64;
+    std::vector<char> names, methods;
+    std::vector<double> energy;
+    CallResult r;
+    for (;;) {      // until every term fits
+      names.assign(size_t(max) * PYSE_NAME_SIZE, 0);
+      methods.assign(size_t(max) * PYSE_NAME_SIZE, 0);
+      energy.assign(size_t(max), 0.0);
+      r = run_guarded([&] {
+        return pyse_energy_terms(reinterpret_cast<char(*)[PYSE_NAME_SIZE]>(names.data()),
+                                 reinterpret_cast<char(*)[PYSE_NAME_SIZE]>(methods.data()),
+                                 energy.data(), max, &count);
+      });
+      if (r.status != PYSE_OK || count <= max) break;
+      max = count;
+    }
+    if (r.status == PYSE_OK) {
+      nb::list out;
+      for (int i = 0; i < count; i++)
+        out.append(nb::make_tuple(std::string(&names[size_t(i) * PYSE_NAME_SIZE]),
+                                  std::string(&methods[size_t(i) * PYSE_NAME_SIZE]),
+                                  energy[i]));
+      r.data = out;
+    }
+    return r;
+  }, CALLBACK_NAMES, "data: [(instance name, method name, energy)] of the energy quantities");
   m.def("quantities", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_quantity_count();

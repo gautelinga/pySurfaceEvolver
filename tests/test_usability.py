@@ -193,3 +193,14 @@ def test_stability_can_report_eigenvalues_when_stable(cube):
     cube.relax()
     s = cube.stability(eigenvalues=True)
     assert s.stable and len(s.lowest) and s.lowest.min() > 0
+
+
+def test_energies_add_up_and_leave_the_surface_alone(load):
+    ev = load("tankex.fe")
+    ev.relax(stability=False)
+    before = ev.vertices
+    terms = ev.energies()
+    assert sum(terms.values()) == pytest.approx(ev.total_energy, rel=1e-12)
+    assert terms["default_area_inst"] > 0 and "gap_energy" in terms
+    assert np.array_equal(ev.vertices, before)
+    assert ev.quantities().keys() == {"arb_grav"}     # not converted for good

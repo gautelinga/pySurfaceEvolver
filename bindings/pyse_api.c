@@ -1524,6 +1524,45 @@ int pyse_energy_methods(char (*names)[PYSE_NAME_SIZE], int max, int *count)
   return status;
 }
 
+struct energy_terms_args
+{ char (*names)[PYSE_NAME_SIZE]; char (*methods)[PYSE_NAME_SIZE]; double *energy;
+  int max; int count; };
+
+/* each energy quantity's method instances with what they add to the energy
+   (quantity modulus * instance modulus * instance value) */
+static void energy_terms_body(void *arg)
+{ struct energy_terms_args *a = (struct energy_terms_args *)arg;
+  int i,j;
+  a->count = 0;
+  calc_content(Q_ENERGY|Q_FIXED|Q_INFO|Q_CONSERVED);
+  for ( i = 0 ; i < gen_quant_count ; i++ )
+  { struct gen_quant *q = GEN_QUANT(i);
+    if ( (q->flags & Q_DELETED) || !(q->flags & Q_ENERGY) ) continue;
+    for ( j = 0 ; j < q->method_count ; j++ )
+    { struct method_instance *mi = METH_INSTANCE(q->meth_inst[j]);
+      if ( a->count < a->max )
+      { snprintf(a->names[a->count],PYSE_NAME_SIZE,"%s",mi->name);
+        snprintf(a->methods[a->count],PYSE_NAME_SIZE,"%s",
+                 basic_gen_methods[mi->gen_method].name);
+        a->energy[a->count] = (double)(q->modulus*mi->modulus*mi->value);
+      }
+      a->count++;
+    }
+  }
+}
+
+int pyse_energy_terms(char (*names)[PYSE_NAME_SIZE], char (*methods)[PYSE_NAME_SIZE],
+                      double *energy, int max, int *count)
+{ struct energy_terms_args a;
+  int status;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  a.names = names; a.methods = methods; a.energy = energy; a.max = max; a.count = 0;
+  status = surface_call(energy_terms_body,&a);
+  if ( count ) *count = a.count;
+  return status;
+}
+
 int pyse_get_quantities(char (*names)[PYSE_NAME_SIZE], double *value,
                         double *target, double *modulus, double *pressure,
                         int *kind, long n)
