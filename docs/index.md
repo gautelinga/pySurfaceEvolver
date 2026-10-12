@@ -20,7 +20,7 @@ written out for finite-element meshing.
   long quasi-static run ({doc}`slit_drainage`).
 * Brakke's sample datafiles run as they come, each with his own recipe and with
   `relax()` side by side: a gallery of what Evolver can model.
-* The reference has the API, nine stress cases with exact references, and performance
+* The reference has the API, fourteen stress cases with exact references, and performance
   numbers.
 
 ```{toctree}

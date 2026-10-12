@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Stress cases
+
+- Four new cases (`bench/stress/`, and sections in the stress cases page), each on
+  `relax()`'s defaults against an exact or converged reference:
+  - 14, a drop on a sphere, its contact angle swept from 20 to 150 degrees as a
+    parameter (exact spherical caps): energies within 0.3%, but most steps end
+    unconverged. The contact line creeps over the curved wall, the gradient rounds
+    use up `max_iter`, and Newton stops after a first step that lowers the energy
+    while barely cutting the residual (a second `relax()` or a few `newton()` steps
+    then converge). Two fixes were tried and dropped: counting the energy drop as
+    progress broke the catenoid past its fold (case 2), and a budget of its own for
+    the conjugate-gradient fallback broke `max_iter`.
+  - 15, a double bubble from two boxes, the second volume shrunk to 0.2 (the standard
+    double bubble): area and pressures within 0.2%.
+  - 16, a solder joint's force on its pad (Brakke's bga-3) against his axisymmetric
+    model (bga-30): both converge at second order, the extrapolations agree to 5e-5.
+  - 17, a catenoid between round wires pulled past its fold with
+    `continuation(stop_on="unconverged")`: areas within 0.04%, stopped at the first
+    step past the fold.
+- `docs/stress_helpers.py` has the exact references (`drop_on_sphere`,
+  `double_bubble`).
+
+### Documentation
+
+- The site reads as one path: grouped navigation (getting started, guides,
+  examples, Brakke's samples, reference), every page saying what it adds and
+  pointing to the next, conventions in one place (Getting started), the examples
+  on the current API, and README's threading notes moved to the performance page.
+
 ## 0.7.3 (2026-10-12)
 
 Replaces 0.7.2, whose x86 wheels and source distribution did not build. Faster

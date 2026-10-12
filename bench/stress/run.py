@@ -9,7 +9,8 @@ from common import Result
 
 CASES = ["case01_cylinder", "case02_catenoid", "case03_sessile", "case05_bridge",
          "case06_fibre", "case08_band", "case09_inflate", "case11_puddle", "case12_shrink",
-         "case13_periodic"]
+         "case13_periodic", "case14_sphere_drop", "case15_double_bubble", "case16_pad_force",
+         "case17_wire_catenoid"]
 
 
 def main(argv):

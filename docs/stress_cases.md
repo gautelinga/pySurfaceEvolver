@@ -1,12 +1,12 @@
 # Stress cases
 
-Nine hard problems with exact or axisymmetric references, each run with `relax()`'s
+Thirteen hard problems with exact or axisymmetric references, each run with `relax()`'s
 defaults: contact lines that travel far, surfaces that grow or shrink a
 hundredfold, wires, instabilities, gravity. They are the stress suite in
 `bench/stress/` condensed into examples (`python bench/stress/run.py` runs the full
 versions and checks them). The code below is not run when the documentation is built;
-the outputs are from running it in October 2026 (the development version after pySE
-0.7.2, 2 threads), and they vary in
+the outputs are from running it in October 2026 (pySE 0.7.3 and the development
+version after it, 2 threads), and they vary in
 the last digits with the thread count.
 
 The starting shapes come from `pysurfaceevolver.shapes`, the reference solutions from
@@ -21,7 +21,7 @@ reference, the error per step with the case's pass limit, and what `relax()` did
 step (gradient and Newton steps, seconds, and marks where it didn't converge or reported
 an unstable equilibrium); and the surface at a few steps.
 
-A ninth case, the drainage band of [slit_drainage](slit_drainage.ipynb), needs the mesh
+A fourteenth case, the drainage band of [slit_drainage](slit_drainage.ipynb), needs the mesh
 remeshed explicitly at each step (`ev.remesh(target=h)`, as in that notebook); with
 `relax()` alone its band pressures are off by up to several percent. See
 [Relaxing a surface](relaxing.md) for why that is not automatic.
@@ -123,12 +123,12 @@ H = 0.400: area 4.882871, catenoid 4.883793, error 0.02%
 H = 0.425: area 5.166914, catenoid 5.167861, error 0.02%
 H = 0.450: area 5.446549, catenoid 5.447546, error 0.02%
 H = 0.475: area 5.721403, catenoid 5.722374, error 0.02%
-H = 0.500: area 5.990531, catenoid 5.991797, error 0.02%
-H = 0.525: area 6.253761, catenoid 6.255163, error 0.02%
+H = 0.500: area 5.990525, catenoid 5.991797, error 0.02%
+H = 0.525: area 6.253760, catenoid 6.255163, error 0.02%
 H = 0.550: area 6.510162, catenoid 6.511674, error 0.02%
 H = 0.575: area 6.758706, catenoid 6.760303, error 0.02%
-H = 0.600: area 6.997991, catenoid 6.999643, error 0.02%
-H = 0.625: area 7.225879, catenoid 7.227532, error 0.02%
+H = 0.600: area 6.997992, catenoid 6.999643, error 0.02%
+H = 0.625: area 7.225880, catenoid 7.227532, error 0.02%
 H = 0.650: area 7.438262, catenoid 7.439781, error 0.02%
 H = 0.675: past the fold, area 6.273097 (two discs 6.283185), converged True
 H = 0.700: past the fold, area 6.273097 (two discs 6.283185), converged True
@@ -399,7 +399,7 @@ print(f"height {ev.mesh().vertices[:, 2].max():.4f} (reference {ref['height']:.4
 ```
 
 ```text
-height 1.0739 (reference 1.0714), energy 62.6164 (reference 62.5967)
+height 1.0738 (reference 1.0714), energy 62.6159 (reference 62.5967)
 ```
 
 Height and energy within 0.25%.
@@ -505,3 +505,201 @@ D: 3.838111 after 5 refinements, extrapolated 3.837785, reference 3.8377
 
 The error falls fourfold per refinement (second order in the edge length), and the
 extrapolated areas agree with the standard values to their last digit.
+
+## A drop on a sphere
+
+A drop of volume 0.5 resting on a solid sphere of radius 1, its contact angle swept as
+a parameter. Without gravity the exact shape is a spherical cap meeting the sphere at
+the contact angle (`drop_on_sphere` in the helpers). The wetted region holds the
+sphere's north pole, where the line integrals of the wall can't reach: the
+constraint's `volconst` closes the volume and `ev.energy` adds the wetting energy the
+integrals leave out, both automatically, also with the angle as a parameter.
+
+```python
+import numpy as np
+import pysurfaceevolver as pyse
+from pysurfaceevolver import constraints as C, recipes, shapes
+from stress_helpers import drop_on_sphere
+
+V = 0.5
+exact = drop_on_sphere(V, 90.0)                 # start from the exact 90 degree drop
+rho, a = exact["rho"], exact["radius"]
+d = np.sqrt(1 + rho**2)
+t = np.linspace(np.arctan2(a, np.sqrt(1 - a**2) - d), 0, 9)
+drop = shapes.revolve(rho*np.sin(t), d + rho*np.cos(t), nt=24)
+ev = pyse.Evolver()
+ev.load_arrays(drop.vertices, drop.faces,
+               constraints={1: C.sphere((0, 0, 0), 1.0, contact_angle="theta",
+                                        wet_poles=("north",))},
+               vertex_constraints={1: drop.rims["bottom"]}, parameters={"theta": 90.0},
+               bodies=[pyse.Body(volume=V)])
+ev.relax(levels=2)
+
+for step in recipes.continuation(ev, "theta", [75, 60, 45, 30]):
+    ref = drop_on_sphere(V, step.value)
+    print(f"theta {step.value:2d}: energy {ev.energy:.5f} (exact {ref['energy']:.5f}), "
+          f"pressure {ev.body(1).pressure:.4f} (exact {ref['pressure']:.4f}), "
+          f"angle on the mesh {ev.contact_angles(1).mean():.1f}, "
+          f"{'converged' if step.result.converged else 'NOT converged'}")
+```
+
+```text
+theta 75: energy 2.46377 (exact 2.46113), pressure 3.4789 (exact 3.4772), angle on the mesh 72.6, NOT converged
+theta 60: energy 2.17858 (exact 2.17580), pressure 3.1790 (exact 3.1767), angle on the mesh 57.3, NOT converged
+theta 45: energy 1.85078 (exact 1.84797), pressure 2.8287 (exact 2.8250), angle on the mesh 41.9, NOT converged
+theta 30: energy 1.50555 (exact 1.50271), pressure 2.4575 (exact 2.4508), angle on the mesh 26.2, NOT converged
+```
+
+The energies and pressures stay within 0.3% of the exact cap's at 1,700 facets; the
+contact angle measured on the mesh lags the set one by a degree or more (it is first
+order in the edge length). But this case shows a limit of the defaults: as the contact
+line creeps over the sphere the gradient rounds never settle, use up `max_iter`, and
+Newton stops after a first step that lowers the energy without cutting the residual
+much, so most steps end unconverged (`step.result.converged` is False). A few more
+`ev.newton()` steps converge from there, quadratically.
+
+## A double bubble
+
+Two unit boxes sharing a face relax to the standard double bubble: three spherical
+caps meeting at 120 degrees along a circle, the shape proved to enclose two volumes
+with the least area (Hutchings, Morgan, Ritoré and Ros). The second bubble then
+shrinks; the reference is exact (`double_bubble` in the helpers). Two bodies share
+the wall, so each body lists its faces.
+
+```python
+import numpy as np
+import pysurfaceevolver as pyse
+from pysurfaceevolver import shapes
+from stress_helpers import double_bubble
+
+# two unit boxes side by side, sharing the face x = 1
+box = shapes.box((1, 1, 1), n=2)
+right = box.vertices + [1, 0, 0]
+row = {tuple(np.round(p, 9)): i for i, p in enumerate(box.vertices)}
+shared = np.array([row.get(tuple(np.round(p, 9)), -1) for p in right])
+new = len(box.vertices) + np.cumsum(shared < 0) - 1
+vertices = np.vstack([box.vertices, right[shared < 0]])
+right_faces = np.where(shared >= 0, shared, new)[box.faces]
+wall = np.flatnonzero(np.isclose(box.vertices[box.faces].mean(axis=1)[:, 0], 1))
+right_faces = right_faces[~np.isclose(vertices[right_faces].mean(axis=1)[:, 0], 1)]
+faces = np.vstack([box.faces, right_faces])
+n = len(box.faces)
+ev = pyse.Evolver()
+ev.load_arrays(vertices, faces, bodies=[
+    pyse.Body(1.0, faces=range(n)), pyse.Body(1.0, faces=list(wall) + list(range(n, len(faces))))])
+ev.relax(levels=2)
+
+for v2 in [1.0, 0.6, 0.2]:
+    ev.body(2).target = v2
+    ev.relax()
+    ref = double_bubble(1.0, v2)
+    p = ev.bodies().pressure
+    print(f"volumes 1 and {v2}: area {ev.total_area:.5f} (exact {ref['area']:.5f}), "
+          f"pressures {p[0]:.4f}, {p[1]:.4f} (exact {ref['p1']:.4f}, {ref['p2']:.4f})")
+```
+
+```text
+volumes 1 and 1.0: area 9.15253 (exact 9.13942), pressures 3.0507, 3.0507 (exact 3.0465, 3.0465)
+volumes 1 and 0.6: area 7.84328 (exact 7.83166), pressures 3.0985, 3.5491 (exact 3.0938, 3.5456)
+volumes 1 and 0.2: area 6.21830 (exact 6.20805), pressures 3.1698, 4.8730 (exact 3.1640, 4.8735)
+```
+
+## The force of a solder joint
+
+The force a liquid solder joint exerts on its pad (Brakke's `bga-3.fe`: pads of
+radius 0.1 cm 0.12 cm apart, surface tension 480 erg/cm², gravity), from
+`ev.derivative` with the joint stretched along with the pad. The reference is the same
+joint in Brakke's axisymmetric string model, `bga-30.fe` (its solder density set to
+`bga-3`'s 9 g/cm³; it ships with 8.9, which alone moves the force by 1.3%), refined
+until it converges. See [Solder joints](solder_joints.ipynb) for the whole series.
+
+```python
+import numpy as np
+import pysurfaceevolver as pyse
+
+def force(ev, axis):                     # minus dE/dheight, the joint stretched along
+    h = ev.parameters["height"]
+    move = lambda x: np.where(np.arange(x.shape[1]) == axis, x/h, 0.0)
+    return -ev.derivative("height", method="fixed", move=move)
+
+axi = pyse.Evolver("bga-30.fe")
+axi.parameters["s_density"] = 9.0
+axi.relax(levels=2)
+F = []
+for level in range(8):
+    if level:
+        axi.relax(levels=1)
+    F.append(force(axi, 1))
+reference = (4*F[-1] - F[-2])/3                  # second order: error / 4 per level
+print(f"axisymmetric: {F[-1]:.5f} dyn at {axi.counts['edges']} edges, extrapolated {reference:.5f}")
+
+ev = pyse.Evolver("bga-3.fe")
+ev.relax(levels=2)
+forces = []
+for level in range(4):
+    if level:
+        ev.relax(levels=1)
+    forces.append(force(ev, 2))
+    print(f"3D, {ev.counts['facets']:5d} facets: {forces[-1]:.5f} dyn "
+          f"({forces[-1]/reference - 1:+.2%})")
+print(f"3D extrapolated: {(4*forces[-1] - forces[-2])/3:.5f}")
+```
+
+```text
+axisymmetric: 16.70464 dyn at 515 edges, extrapolated 16.70370
+3D,   432 facets: 29.97050 dyn (+79.42%)
+3D,  1632 facets: 19.87428 dyn (+18.98%)
+3D,  6336 facets: 17.48835 dyn (+4.70%)
+3D, 24960 facets: 16.89928 dyn (+1.17%)
+3D extrapolated: 16.70292
+```
+
+Brakke's starting meshes give a force nearly twice the converged one; both models
+then converge at second order, to the same force.
+
+## A catenoid between round wires, to its fold
+
+A soap film between two round wires of radius 1, pulled apart. The wires are Evolver
+boundaries (`constraints.circle` and `constraints.curve`), so refining keeps them
+round, and their vertices are fixed. Past a separation of 1.3255 no catenoid spans
+the wires; `continuation(stop_on="unconverged")` stops there and puts the last
+catenoid back.
+
+```python
+import warnings
+import numpy as np
+import pysurfaceevolver as pyse
+from pysurfaceevolver import constraints as C, recipes, shapes
+
+tube = shapes.tube(1.0, 0.0, 0.6, nz=4, nt=16)
+top = C.curve("cos(p1)", "sin(p1)", "ht", lambda x: np.arctan2(x[:, 1], x[:, 0]))
+ev = pyse.Evolver()
+ev.load_arrays(tube.vertices, tube.faces, boundaries={1: C.circle(), 2: top},
+               vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+               parameters={"ht": 0.6})
+ev.relax(levels=2)
+
+def catenoid(H):                       # the exact area, wires at -H and H
+    lo, hi = 1/np.cosh(1.19967864), 1.0  # the stable root of a cosh(H/a) = 1
+    for _ in range(100):
+        a = (lo + hi)/2
+        lo, hi = (lo, a) if a*np.cosh(H/a) > 1 else (a, hi)
+    return np.pi*a*(2*H + a*np.sinh(2*H/a))
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    for step in recipes.continuation(ev, "ht", np.arange(0.8, 1.6, 0.1), stop_on="unconverged"):
+        print(f"wires {step.value:.1f} apart: area {ev.total_area:.5f} "
+              f"(exact {catenoid(step.value/2):.5f})")
+print([str(w.message).split(";")[0] for w in caught if "stopped" in str(w.message)])
+```
+
+```text
+wires 0.8 apart: area 4.88239 (exact 4.88379)
+wires 0.9 apart: area 5.44628 (exact 5.44755)
+wires 1.0 apart: area 5.99072 (exact 5.99180)
+wires 1.1 apart: area 6.51062 (exact 6.51167)
+wires 1.2 apart: area 6.99884 (exact 6.99964)
+wires 1.3 apart: area 7.43941 (exact 7.43978)
+['continuation() stopped before 1.4: relax() came out unconverged there']
+```

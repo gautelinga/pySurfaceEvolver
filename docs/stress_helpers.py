@@ -231,4 +231,70 @@ def barrel(volume, b, theta, guess=None):
                 energy=2*(area - np.cos(t)*wet), volume=2*v)
 
 
+# ---- exact references from spheres ------------------------------------------------
+
+def _cap(r: float, h: float) -> "tuple[float, float]":
+    """Area and volume of a spherical cap of sphere radius r and height h."""
+    return 2*np.pi*r*h, np.pi*h*h*(3*r - h)/3
+
+
+def drop_on_sphere(volume: float, theta_deg: float, R: float = 1.0) -> Dict[str, float]:
+    """A drop (no gravity) on a solid sphere of radius R at the origin, its
+    contact angle theta through the liquid: a spherical cap of radius rho centred
+    at height d on the axis, cos(theta) = (R^2 + rho^2 - d^2)/(2 R rho) at the
+    contact circle. Energy (free area - cos(theta) wetted area), free and wetted
+    areas, pressure 2/rho, contact radius, and the drop's height above the sphere."""
+    c = np.cos(np.radians(theta_deg))
+
+    def parts(rho):
+        d = np.sqrt(R*R + rho*rho - 2*R*rho*c)
+        z0 = (d*d + R*R - rho*rho)/(2*d)              # the contact circle's plane
+        a_in, v_in = _cap(rho, z0 - (d - rho))         # the liquid ball inside the solid
+        a_wet, v_wet = _cap(R, R - z0)                 # the solid inside the liquid ball
+        return d, z0, 4*np.pi*rho**2 - a_in, a_wet, 4/3*np.pi*rho**3 - v_in - v_wet
+
+    rho = brentq(lambda r: parts(r)[4] - volume, 1e-6*R, 1e3*R)
+    d, z0, free, wet, _ = parts(rho)
+    return dict(energy=free - c*wet, free=free, wetted=wet, pressure=2/rho, rho=rho,
+                radius=float(np.sqrt(R*R - z0*z0)), height=d + rho - R)
+
+
+def double_bubble(v1: float, v2: float) -> Dict[str, float]:
+    """The standard double bubble enclosing v1 >= v2 (Hutchings, Morgan, Ritore
+    and Ros): three spherical caps meeting at 120 degrees along a circle, radii
+    r1, r2 and r3 with 1/r3 = 1/r2 - 1/r1, centres a distance D apart with
+    D^2 = r1^2 + r2^2 - r1 r2. Total area, pressures 2/r1 and 2/r2."""
+    from scipy.optimize import fsolve
+
+    def geometry(r1, r2):
+        D = np.sqrt(r1*r1 + r2*r2 - r1*r2)
+        x0 = (D*D + r1*r1 - r2*r2)/(2*D)               # the triple circle's plane
+        a = np.sqrt(max(r1*r1 - x0*x0, 0.0))
+        a1, c1 = _cap(r1, r1 - x0)                     # sphere 1 beyond the plane: cut off
+        a2, c2 = _cap(r2, r2 - (D - x0))
+        if abs(r1 - r2) < 1e-14*r1:
+            a3, v3 = np.pi*a*a, 0.0                    # a flat wall
+        else:
+            r3 = r1*r2/(r1 - r2)
+            h3 = r3 - np.sqrt(r3*r3 - a*a)
+            a3, v3 = _cap(r3, h3)                      # bulging into the larger bubble
+        V1 = 4/3*np.pi*r1**3 - c1 - v3
+        V2 = 4/3*np.pi*r2**3 - c2 + v3
+        return V1, V2, 4*np.pi*r1**2 - a1 + 4*np.pi*r2**2 - a2 + a3
+
+    if v2 > v1:
+        raise ValueError("give the larger volume first")
+    if v1 == v2:                    # a flat wall: each bubble 27 pi r^3/24
+        r = (24*v1/(27*np.pi))**(1/3)
+        return dict(area=6.75*np.pi*r*r, r1=r, r2=r, p1=2/r, p2=2/r)
+    # (started off r1 = r2, where the wall turns flat and fsolve stalls)
+    g = 1.001*(3*v1/(4*np.pi))**(1/3), (3*v2/(4*np.pi))**(1/3)
+    (r1, r2), info, ier, msg = fsolve(lambda x: np.array(geometry(*x)[:2]) - [v1, v2], g,
+                                      xtol=1e-14, full_output=True)
+    V1, V2, area = geometry(r1, r2)
+    if abs(V1 - v1) > 1e-10*v1 or abs(V2 - v2) > 1e-10*v1:
+        raise RuntimeError(f"double_bubble({v1}, {v2}) did not converge: {msg}")
+    return dict(area=area, r1=r1, r2=r2, p1=2/r1, p2=2/r2)
+
+
 # ---- validation ----------------------------------------------------------------
