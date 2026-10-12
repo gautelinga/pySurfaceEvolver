@@ -1912,7 +1912,11 @@ void hessian_init(
             i--;
           }
         }
-        if ( (hessian_normal_flag && (v->freedom == 1)) || hessian_double_normal_flag)
+        /* pySE: without a level-set constraint the freedom is the vertex
+           normal itself, so the slant below is 1 (as initialised); skip
+           the serial normal recomputation then. */
+        if ( ((hessian_normal_flag && (v->freedom == 1)) || hessian_double_normal_flag)
+             && (oncount > 0) )
         { /* get cosine of normal and degree of freedom */
           /* pySE: against the raw surface normal(s). The stored vertex normal
              has been projected onto the constraints by now, so on a wire it
