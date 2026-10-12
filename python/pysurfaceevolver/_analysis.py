@@ -81,7 +81,10 @@ class _Analysis(_Engine):
         times N/sqrt(area) measures that imbalance relative to the surface's
         size: comparable across meshes and scales. With an elastic energy
         (Evolver's elastic methods: in-plane forces are physical there) all
-        directions count, not only the normal. (For a string: the root
+        directions count, not only the normal. Optimizing parameters count
+        too: the force on each (minus the derivative of the energy, with
+        the volume and quantity multipliers applied), as if spread over the
+        vertices. (For a string: the root
         mean square times N, the imbalance times the length; in general the
         imbalance times the surface measure to the power 1/dimension.)
         """
@@ -94,7 +97,8 @@ class _Analysis(_Engine):
             return float(np.sqrt((r**2).sum()))
         rep = _core.representation()
         dim = 1 if rep == 1 else 2 if rep == 2 else int(self.eval("surface_dimension"))
-        return float(np.sqrt((r**2).sum()*len(r))/area**((dim - 1)/dim))
+        n = max(_core.count(_core.VERTEX), 1)      # (r: the vertices, then the parameters)
+        return float(np.sqrt((r**2).sum()*n)/area**((dim - 1)/dim))
 
     def health(self, tol: float = 1e-8, stability: bool = False) -> Health:
         """A check-up of the surface: is it in equilibrium (:meth:`residual`
@@ -151,7 +155,11 @@ class _Analysis(_Engine):
         # of every constraint
         free = moving & ~np.isnan(dist).any(axis=1) if dist.size else moving
         label = {int(c): f"constraint {nm or c}" for c, nm in zip(nums, names)}
-        for c in range(len(nums)):
+        # an equality constraint only fixed vertices are on just places them
+        # (a pad's rim, a solid drawn for display): not a wall to the surface
+        active = np.array([bool(attrs[c] & 3) or bool((np.isnan(dist[:, c]) & moving).any())
+                           for c in range(len(nums))], dtype=bool)
+        for c in np.flatnonzero(active):
             d = dist[:, c]
             on = np.isnan(d) & used
             off = ~np.isnan(d) & free
@@ -162,7 +170,8 @@ class _Analysis(_Engine):
                 g = float(np.abs(d[far]).min())/h
                 if g < wall_gap:
                     wall_gap, wall = g, int(nums[c])
-        crossed = _crossed(nums, attrs, dist, used, _CROSS_TOL*h)
+        crossed = _crossed(nums[active], attrs[active], dist[:, active], moving,
+                           _CROSS_TOL*h)             # (fixed vertices never moved)
         self_gap = _self_gap(m.vertices, e, moving, h)
         issues = []
         if not residual < tol and not _core.crystalline():

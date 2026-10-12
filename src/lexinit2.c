@@ -1366,7 +1366,10 @@ int read_named_quantity()
   }
 
 named_exit:
-  if ( !lagmulflag ) pressure_set_flag = 0;
+  /* pySE: only a quantity with a multiplier (fixed, conserved) leaves the
+     pressures unknown; an energy or info quantity has none */
+  if ( !lagmulflag && (GEN_QUANT(gnum)->flags & (Q_FIXED|Q_CONSERVED)) )
+    pressure_set_flag = 0;
   GEN_QUANT(gnum)->flags &= ~Q_FORWARD_DEF;
   return gnum;
 } // end read_named_quantity()

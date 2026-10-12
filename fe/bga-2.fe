@@ -1,0 +1,79 @@
+// bga-2.fe
+
+// Simple ball grid array joint.
+// bga-1.fe with no_refine on top and bottom facets.
+
+// Circular, parallel, coaxial wetted pads in fixed positions.  
+// Energy is just the total surface area, since the default surface
+// tension 1 is used. No gravity.
+// The liquid is entirely bounded by facets.
+
+// Shape parameters
+parameter height = 0.12    // height of upper pad, cm
+parameter radius = 0.10    // radius of pads, cm
+
+// rim of pads (need something to keep pads circular when refined)
+constraint 1
+formula: x^2 + y^2 = radius^2
+
+vertices
+// lower pad
+1  radius*cos(0*pi/3) radius*sin(0*pi/3) 0   constraints 1 fixed
+2  radius*cos(1*pi/3) radius*sin(1*pi/3) 0   constraints 1 fixed
+3  radius*cos(2*pi/3) radius*sin(2*pi/3) 0   constraints 1 fixed
+4  radius*cos(3*pi/3) radius*sin(3*pi/3) 0   constraints 1 fixed
+5  radius*cos(4*pi/3) radius*sin(4*pi/3) 0   constraints 1 fixed
+6  radius*cos(5*pi/3) radius*sin(5*pi/3) 0   constraints 1 fixed
+// upper pad
+7  radius*cos(0*pi/3) radius*sin(0*pi/3) height   constraints 1 fixed
+8  radius*cos(1*pi/3) radius*sin(1*pi/3) height   constraints 1 fixed
+9  radius*cos(2*pi/3) radius*sin(2*pi/3) height   constraints 1 fixed
+10 radius*cos(3*pi/3) radius*sin(3*pi/3) height   constraints 1 fixed
+11 radius*cos(4*pi/3) radius*sin(4*pi/3) height   constraints 1 fixed
+12 radius*cos(5*pi/3) radius*sin(5*pi/3) height   constraints 1 fixed
+
+edges  // defined by endpoints
+// lower pad edges
+1    1  2  constraints 1   fixed
+2    2  3  constraints 1   fixed
+3    3  4  constraints 1   fixed
+4    4  5  constraints 1   fixed
+5    5  6  constraints 1   fixed
+6    6  1  constraints 1   fixed
+// upper pad edges
+7    7  8  constraints 1   fixed
+8    8  9  constraints 1   fixed
+9    9  10 constraints 1   fixed
+10   10 11 constraints 1   fixed
+11   11 12 constraints 1   fixed
+12   12 7  constraints 1   fixed
+// vertical edges
+13   1  7
+14   2  8
+15   3  9
+16   4  10
+17   5  11
+18   6  12
+
+faces // defined by oriented edge loops to have outward normal
+// lateral faces
+1   1 14  -7 -13 
+2   2 15  -8 -14 
+3   3 16  -9 -15 
+4   4 17 -10 -16 
+5   5 18 -11 -17 
+6   6 13 -12 -18 
+// lower pad
+7   -6 -5 -4 -3 -2 -1 fixed color red  no_refine
+// upper pad
+8    7  8  9 10 11 12 fixed color green  no_refine
+
+bodies // defined by oriented face list
+1   1 2 3 4 5 6 7 8   volume 1.3*pi*radius^2*height
+
+read // commands to be automatically executed after loading the surface
+hessian_normal // to make "hessian" work better
+
+// Typical evolution
+gogo := { u; g 5; r; g 5; r; g 5; hessian; hessian }
+

@@ -186,8 +186,18 @@ class Parameters(MutableMapping):
 
     @property
     def optimizing(self) -> frozenset:
-        """Names of the optimizing parameters."""
+        """Names of the optimizing parameters: ones the energy minimization
+        moves too, like vertex coordinates (Evolver's
+        ``optimizing_parameter``; see :meth:`optimize`)."""
         return frozenset(name for name, _, opt in self._snapshot() if opt)
+
+    def optimize(self, name: str, on: bool = True) -> None:
+        """Make a parameter optimizing (Evolver's ``unfix``): :meth:`Evolver.relax`
+        then finds its value too, say the height a loaded joint settles at.
+        ``on=False`` fixes it again at its current value."""
+        if name not in self:
+            raise KeyError(_unknown(name, list(self)))
+        self._evolver.command(f"{'unfix' if on else 'fix'} {name}")
 
     def __repr__(self) -> str:
         return repr({name: value for name, value, _ in self._snapshot()})

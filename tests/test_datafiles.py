@@ -7,6 +7,8 @@ from conftest import FE_DIR
 
 # Sample datafiles expected to fail, with the reason (none at the moment).
 KNOWN_BAD: dict = {}
+# Sample datafiles whose start has nothing free to move (their recipes refine first)
+REFINE_FIRST = {"bga-30.fe"}
 
 DATAFILES = [
     pytest.param(
@@ -26,6 +28,8 @@ def test_datafile_loads_and_iterates(load, datafile):
     if ev.representation != "simplex":  # the simplex model has no edges
         assert ev.counts["edges"] > 0
 
+    if datafile in REFINE_FIRST:
+        ev.refine()
     ev.command("g 3")
     assert np.isfinite(ev.total_energy)
     counts = ev.counts  # some datafiles change topology while iterating

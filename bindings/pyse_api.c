@@ -689,6 +689,7 @@ int pyse_set_values(int type, const char *attribute, const double *values,
  * multipliers), without moving anything. Zero at an equilibrium.
  */
 
+/* out: one entry per vertex, then one per optimizing parameter */
 struct residual_args { double *out; long n; int full; };
 
 /* A vertex's shape directions: its surface normal(s), projected into its
@@ -729,7 +730,7 @@ static void residual_body(void *arg)
   vertex_id v_id;
   long row = 0, k;
   int Q = 0, i, j, q, r, nd;
-  double *A = NULL, *bvec = NULL, *lam = NULL, *proj = NULL;
+  double *A = NULL, *bvec = NULL, *lam = NULL, *proj = NULL, *popt = NULL;
   int *ndir = NULL;
   int mode = CALC_FORCE|CALC_VOLGRADS;
   REAL ***pre_normal = NULL;       /* shape directions found in parallel */
@@ -786,6 +787,27 @@ static void residual_body(void *arg)
     row++;
   }
   expect_rows(row,a->n);
+  /* each optimizing parameter: its force and the fixed quantities' gradients,
+     scaled by 1/sqrt(n): a force on a parameter counts as that force spread
+     over the vertices would */
+  if ( optparamcount > 0 )
+  { double scale = 1.0/sqrt((double)(a->n > 0 ? a->n : 1));
+    popt = (double*)temp_calloc((size_t)optparamcount*(Q + 1) + 1,sizeof(double));
+    for ( i = 0 ; i < optparamcount ; i++ )
+    { double *e = popt + (size_t)i*(Q + 1);
+      e[0] = -(double)optparam[i].grad*scale;
+      if ( optparam_congrads )
+        for ( q = 0 ; q < gen_quant_count ; q++ )
+        { struct gen_quant *gq = GEN_QUANT(q);
+          if ( (gq->flags & Q_DELETED) || gq->fixnum < 0 || gq->fixnum >= Q ) continue;
+          e[1 + gq->fixnum] = (double)optparam_congrads[i][gq->vol_number]*scale;
+        }
+      for ( q = 0 ; q < Q ; q++ )
+      { bvec[q] += e[0]*e[1 + q];
+        for ( r = 0 ; r < Q ; r++ ) A[q*Q + r] += e[1 + q]*e[1 + r];
+      }
+    }
+  }
   for ( k = 0 ; k < a->n ; k++ )        /* normal equations for the multipliers */
   { double *pv = proj + (size_t)k*MAXCOORD*(Q + 1);
     for ( i = 0 ; i < ndir[k] ; i++ )
@@ -829,20 +851,27 @@ static void residual_body(void *arg)
     }
     a->out[k] = sqrt(sum);
   }
+  for ( i = 0 ; i < optparamcount ; i++ )
+  { double *e = popt + (size_t)i*(Q + 1);
+    double c = e[0];
+    for ( q = 0 ; q < Q ; q++ ) c -= lam[q]*e[1 + q];
+    a->out[a->n + i] = fabs(c);
+  }
   if ( pre_dims ) free(pre_dims);
   if ( pre_normal ) free_temp_matrix3(pre_normal);
   vgrad_end();
 }
 
-/* The shape part of each vertex's velocity (one per vertex, in vertex order). */
+/* The shape part of each vertex's velocity (one per vertex, in vertex order),
+   then each optimizing parameter's force (see residual_body); n counts both. */
 int pyse_residual(double *out, long n, int full)
 { struct residual_args a;
   if ( in_protected ) return PYSE_BUSY;
   if ( !initialized || !surface_valid ) return invalid_surface();
-  if ( n != web.skel[VERTEX].count )
+  if ( n != web.skel[VERTEX].count + optparamcount )
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
                       "Output array does not match the vertex count.");
-  a.out = out; a.n = n; a.full = full;
+  a.out = out; a.n = n - optparamcount; a.full = full;
   { /* plain forces: area normalization would divide each by its vertex's
        area (and in a string model can delete dangling edges) */
     int area_norm = web.area_norm_flag, status;
@@ -1452,6 +1481,9 @@ static int is_named_quantity(int i)
 { struct gen_quant *q = GEN_QUANT(i);
   return !(q->flags & (Q_DELETED|DEFAULT_QUANTITY));
 }
+
+int pyse_optparam_count(void)
+{ return ( initialized && surface_valid ) ? optparamcount : 0; }
 
 long pyse_quantity_count(void)
 { long count = 0;

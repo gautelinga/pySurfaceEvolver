@@ -257,7 +257,7 @@ NB_MODULE(_core, m) {
 
   m.def("residual", [](bool full, CALLBACK_ARGS) {
     CALL_SCOPE;
-    long n = pyse_count(PYSE_VERTEX);
+    long n = pyse_count(PYSE_VERTEX) + pyse_optparam_count();
     std::vector<double> v(n > 0 ? size_t(n) : 0);
     CallResult r = run_guarded([&] { return pyse_residual(v.data(), n, full ? 1 : 0); });
     if (r.status == PYSE_OK) {

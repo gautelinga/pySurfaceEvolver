@@ -15,6 +15,7 @@ pip install ".[all]"     # + PyVista (also in Jupyter) and meshio
 getting_started
 tutorial
 liquid_bridge
+solder_joints
 slit_droplet
 slit_drainage
 relaxing

@@ -40,7 +40,9 @@ code. Programmer: Ken Brakke, brakke@susqu.edu".
 The sample datafiles in fe/ come with Surface Evolver 2.70a, except these,
 from Brakke's online examples (https://kenbrakke.com/evolver/examples/,
 https://kenbrakke.com/evolver/bga/bga.htm), unchanged: cbga1.fe, cbga2.fe,
-pcell.fe, dcell.fe, IWP.fe, bga-1.fe, TwoSpheres.fe, TwoSpheres-explicit.fe.
+pcell.fe, dcell.fe, IWP.fe, TwoSpheres.fe, TwoSpheres-explicit.fe, and his ball grid
+array series from bga-files.zip (https://kenbrakke.com/evolver/downloads/): bga-1.fe to
+bga-10.fe, bga-30.fe and zforce.cmd, xzforce.cmd, xyztorque.cmd, runforce.cmd.
 
 ==============================================================================
 MUMPS (LICENSE)

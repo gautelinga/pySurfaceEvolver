@@ -9,7 +9,7 @@ from pysurfaceevolver import Evolver, examples, make_datafile
 
 def test_samples_are_installed():
     names = examples.names()
-    assert "cube.fe" in names and "cbga1.fe" in names and len(names) == 33
+    assert "cube.fe" in names and "cbga1.fe" in names and len(names) == 43
     assert "obj.cmd" in examples.names("*.cmd")
     assert os.path.isfile(examples.path("cube.fe"))
     with pytest.raises(FileNotFoundError):

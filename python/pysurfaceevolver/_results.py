@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import numpy as np
 
@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 class _Coords(NamedTuple):
     coords: np.ndarray
     stamp: int                    # Evolver's topology stamp when taken
+    # the optimizing parameters' values (steps move them with the vertices)
+    parameters: Tuple[Tuple[str, float], ...] = ()
 
 
 class EigenCounts(NamedTuple):

@@ -160,7 +160,8 @@ double pyse_total_energy(void);
    normal(s), projected into its constraints; one per vertex in vertex order */
 /* full: all directions instead (for energies with in-plane forces, such
    as elastic membranes) */
-int pyse_residual(double *out, long n, int full);
+int pyse_residual(double *out, long n, int full);   /* n: vertices + optimizing parameters */
+int pyse_optparam_count(void);
 /* per vertex, 1 if fixed, on a constraint or on a boundary */
 int pyse_vertex_attached(unsigned char *out, long n);
 /* how many free vertices (not fixed, on no constraint or boundary) have a

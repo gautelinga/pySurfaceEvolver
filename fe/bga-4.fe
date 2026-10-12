@@ -1,0 +1,146 @@
+// bga-4.fe
+
+// Simple ball grid array joint.
+
+// Circular, parallel, coaxial wetted pads.  
+// Energy is surface tension of free surface, with.
+
+// Both pads represented with constraints.
+// Liquid entirely bounded by facets.
+
+// Same as bga-3.fe, but with variational integrals for z force.
+
+evolver_version "2.11d"  // needed for command files
+
+// physical constants, in cgs units
+parameter S_TENSION = 480    // liquid solder surface tension, erg/cm^2
+parameter SOLDER_DENSITY = 9 // grams/cm^3
+gravity_constant 980     // cm/sec^2
+
+// configuration parameters
+parameter height = 0.12    // height of upper pad, cm
+parameter radius = 0.10    // radius of pads, cm
+
+// lower pad
+constraint 1
+formula: z = 0
+
+// upper pad
+constraint 2
+formula: z = height
+
+// rim of pads
+constraint 3
+formula: x^2 + y^2 = radius^2
+
+// variational integrals for z force
+// first, area change
+method_instance area_change method facet_general_integral
+scalar_integrand: S_TENSION*(x4^2+x5^2)/sqrt(x4^2+x5^2+x6^2)/height
+
+// second, gravitational energy change
+method_instance grav_change method facet_vector_integral
+vector_integrand:
+q1: 0
+q2: 0
+q3: G*SOLDER_DENSITY*z^2/height
+
+// third, correction for volume change
+method_instance vol_fix method facet_vector_integral
+vector_integrand:
+q1: 0
+q2: 0
+q3: -body[1].pressure*z/height
+
+// put them together, modulus -1 since force is negative of gradient
+quantity zforce7 info_only modulus -1 
+ global_method area_change 
+ global_method grav_change
+ global_method vol_fix
+
+vertices
+// lower pad
+1  radius*cos(0*pi/3) radius*sin(0*pi/3) 0   constraints 1,3 fixed
+2  radius*cos(1*pi/3) radius*sin(1*pi/3) 0   constraints 1,3 fixed
+3  radius*cos(2*pi/3) radius*sin(2*pi/3) 0   constraints 1,3 fixed
+4  radius*cos(3*pi/3) radius*sin(3*pi/3) 0   constraints 1,3 fixed
+5  radius*cos(4*pi/3) radius*sin(4*pi/3) 0   constraints 1,3 fixed
+6  radius*cos(5*pi/3) radius*sin(5*pi/3) 0   constraints 1,3 fixed
+// upper pad
+7  radius*cos(0*pi/3) radius*sin(0*pi/3) height   constraints 2,3 fixed
+8  radius*cos(1*pi/3) radius*sin(1*pi/3) height   constraints 2,3 fixed
+9  radius*cos(2*pi/3) radius*sin(2*pi/3) height   constraints 2,3 fixed
+10 radius*cos(3*pi/3) radius*sin(3*pi/3) height   constraints 2,3 fixed
+11 radius*cos(4*pi/3) radius*sin(4*pi/3) height   constraints 2,3 fixed
+12 radius*cos(5*pi/3) radius*sin(5*pi/3) height   constraints 2,3 fixed
+
+edges  // defined by endpoints
+// lower pad edges
+1    1  2  constraints 1,3   fixed
+2    2  3  constraints 1,3   fixed
+3    3  4  constraints 1,3   fixed
+4    4  5  constraints 1,3   fixed
+5    5  6  constraints 1,3   fixed
+6    6  1  constraints 1,3   fixed
+// upper pad edges
+7    7  8  constraints 2,3   fixed
+8    8  9  constraints 2,3   fixed
+9    9  10 constraints 2,3   fixed
+10   10 11 constraints 2,3   fixed
+11   11 12 constraints 2,3   fixed
+12   12 7  constraints 2,3   fixed
+// vertical edges
+13   1  7
+14   2  8
+15   3  9
+16   4  10
+17   5  11
+18   6  12
+
+faces // defined by oriented edge loops to have outward normal
+// lateral faces
+1   1 14  -7 -13 tension S_TENSION
+2   2 15  -8 -14 tension S_TENSION
+3   3 16  -9 -15 tension S_TENSION
+4   4 17 -10 -16 tension S_TENSION
+5   5 18 -11 -17 tension S_TENSION
+6   6 13 -12 -18 tension S_TENSION
+// lower pad
+7   -6 -5 -4 -3 -2 -1 fixed no_refine color red tension 0
+// upper pad
+8   7 8 9 10 11 12 fixed no_refine color green tension 0 constraint 2
+
+bodies // defined by oriented face list
+1   1 2 3 4 5 6 7 8   volume 1.3*pi*radius^2*height density SOLDER_DENSITY
+
+
+read
+
+hessian_normal
+
+read "zforce.cmd"  // contains a bunch of force calculations
+
+// To set volume to spherical segment, for zforce = 0 test (requires no grav)
+setvol := { body[1].target := pi*(radius^2+height^2/6)*height }
+
+// Typical evolution
+gogo := { u; g 3; r; g 5; r; g 5; hessian; hessian }
+
+// command to calculate and print all the ways to do zforce
+forces := { zforce1; zforce2; zforce3; zforce4; zforce5; zforce6;
+	    printf "zforce: %18.15f  (variational integrands)\n",
+	      zforce7.value;
+          }
+
+// A script for automatically generating force data for a range
+// of volumes and heights.
+read "runforce.cmd"
+
+// Command used to create data in chart example.
+// To be run right after loading.
+chartdata := { u; height := .10; recalc; V; V; V;
+               body[1].target := .002;
+               gogo; r; g 5; hessian; hessian;
+               runforce;
+             }
+              

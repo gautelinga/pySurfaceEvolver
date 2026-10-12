@@ -33,6 +33,9 @@ _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative
 _NEWTON_RESIDUAL_RISE = 1.1    # ... and one raising both the energy and the residual by this factor
 _NEWTON_PROGRESS = 0.9         # Newton goes on while each step cuts the residual below this factor
 _TARGET_HALFWAY = 0.5          # ... or brings an unmet target this much closer
+_NO_FREEDOM = (3004, 3005)      # Evolver: fewer degrees of freedom than constraints
+_NEWTON_STEPS = 20             # derivative(): Newton steps to reconverge, at most
+_DERIVATIVE_TOL = 1e-10        # ... down to this residual
 _STABILITY_NEAR = 100          # relax() checks stability below this many times tol
 # relax() takes stability from the last Newton step's factorization if that
 # step began this close to equilibrium (residual) and counted no negative
@@ -179,6 +182,20 @@ class _Relaxing(_Analysis):
         ``settled``, ``stable``, ``negative_modes``, ``health``, ``popped``
         and ``collapsed``.
         """
+        caught: list = []
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                return self._relax(tol, max_iter, levels, newton, stability, adapt, tidy, seek,
+                                   undo_if, callback, every, threads)
+        finally:
+            _reemit(caught)         # (after the block: outside it they'd be recorded again)
+
+    def _relax(self, tol: float, max_iter: int, levels: int, newton: Optional[int],
+               stability: Optional[bool], adapt: Union[bool, float], tidy: int,
+               seek: Optional[bool], undo_if: Optional[Callable[["Evolver"], bool]],
+               callback: Optional[Callable[["Evolver", int], Any]], every: int,
+               threads: Optional[int]) -> IterationResult:
         elastic = self._elastic()
         # a membrane: no mesh tidying (it would change the physics), and Newton
         # by line search, which keeps the surface from running off; a
@@ -224,7 +241,13 @@ class _Relaxing(_Analysis):
                 for lev in range(levels + 1):
                     if lev:
                         self.refine()
-                    run.settle(lev)
+                    try:
+                        run.settle(lev)
+                    except EvolverError as e:
+                        # a start with nothing free to move (Brakke's bga-30:
+                        # every vertex on a pad); refining gives it some
+                        if e.errnum not in _NO_FREEDOM or lev == levels:
+                            raise
                 steps, residual = run.finish(levels)
             if self.model == "linear" and residual < tol and not keep_mesh:
                 more, residual = run.contact_pass(levels + 1, residual)
@@ -285,43 +308,108 @@ class _Relaxing(_Analysis):
                                health, popped, collapsed, settled)
 
     def derivative(self, name: str, step: Optional[float] = None, *,
-                   relax: Union[bool, Dict[str, Any]] = True) -> float:
+                   move: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+                   method: str = "newton") -> float:
         """The derivative of the equilibrium energy (:attr:`energy`) with
-        respect to a parameter, by central differences: the parameter set
-        to its value plus and minus ``step`` (default 1e-4 times its size,
-        at least 1e-4), the surface relaxed each time, then put back as it
-        was. With a parameter that moves a wall or plate, minus this is the
-        force on it (Brakke's "reconverge" method, the most reliable of his
-        seven on bga-4: volume constraints and contact angles are accounted
-        for by relaxing). ``relax``: options for :meth:`relax` (a dict), or
-        False to keep the vertices where they are (only the explicit
-        dependence on the parameter; vertices on a moved constraint don't
-        follow it).
+        respect to a parameter, by central differences: the parameter set to
+        its value plus and minus ``step`` (default 1e-5 times its size, at
+        least 1e-5), the energy found each time, the surface put back as it
+        was. With a parameter that moves a wall or a pad, minus this is the
+        force on it (Brakke's bga-4 tutorial compares seven ways).
+
+        ``method``:
+
+        * ``"newton"`` (default): safeguarded Newton steps reconverge the
+          surface each time, as Brakke's ``zforce5``. Newton moves vertices
+          along the normal only, so the mesh doesn't drift between the two
+          and the difference is clean even for tiny steps.
+        * ``"fixed"``: no reconverging, the energy corrected for the volume
+          and quantity changes by their multipliers (minus pressure times
+          change), as Brakke's preferred ``zforce4``: as accurate, and far
+          cheaper on a large surface, but it needs ``move``.
+        * ``"relax"``: :meth:`relax` each time; it tidies the mesh too, which
+          changes the energy by more than a small step does: give a larger
+          ``step`` (1e-3 of the size, say).
+
+        ``move(xyz)``: how the vertices follow a unit change of the
+        parameter, an ``(n, sdim)`` array (a pad at height ``h``:
+        ``lambda x: np.c_[0*x[:, :2], x[:, 2]/h]``, everything stretched with
+        it); the surface is moved that way before the energy is taken, which
+        also gives Newton a close start. An optimizing parameter is held
+        fixed meanwhile: at its optimum the derivative is zero (with a load
+        in the energy, the joint's force balances it).
         """
+        if method not in ("newton", "fixed", "relax"):
+            raise ValueError("method must be 'newton', 'fixed' or 'relax'")
+        if method == "fixed" and move is None:
+            raise ValueError("method='fixed' needs move: how the vertices follow the parameter")
         if name not in self.parameters:
             raise KeyError(f"{name!r} is not a parameter of this datafile")
         value = self.parameters[name]
-        h = 1e-4*max(abs(value), 1.0) if step is None else float(step)
+        h = 1e-5*max(abs(value), 1.0) if step is None else float(step)
         if not h > 0:
             raise ValueError("step must be positive")
-        options = {"stability": False, **relax} if isinstance(relax, dict) else {"stability": False}
         snapshot = self.save()
+        start = self._coords()
         energies = []
+        optimizing = name in self.parameters.optimizing
         try:
+            if optimizing:              # held where it is set, not optimized
+                self.parameters.optimize(name, False)
             for sign in (1, -1):
+                if move is not None:
+                    x = start.coords
+                    shift = np.asarray(move(x), dtype=float)
+                    if shift.shape != x.shape:
+                        raise ValueError(f"move() must give an {x.shape} array")
+                    self.vertices = x + sign*h*shift
                 self.parameters[name] = value + sign*h
-                if relax is not False:
-                    result = self.relax(**options)
-                    if not result.converged:
-                        warnings.warn(f"derivative(): relax() didn't converge at {name} = "
-                                      f"{value + sign*h:.6g}", EvolverWarning, stacklevel=2)
+                if method == "relax":
+                    result = self.relax(stability=False)
+                    ok = bool(result.converged)
+                elif method == "newton":
+                    # two steps at least: the residual doesn't see vertices
+                    # left off a moved constraint, which a step projects back
+                    self.newton(2)
+                    self.newton(_NEWTON_STEPS, tol=_DERIVATIVE_TOL)
+                    ok = self.residual() < _DERIVATIVE_TOL*100
                 else:
                     self.recalc()
-                energies.append(self.energy)
-                self.restore(snapshot)
+                    ok = True
+                if not ok:
+                    warnings.warn(f"derivative(): the surface didn't reconverge at {name} = "
+                                  f"{value + sign*h:.6g}", EvolverWarning, stacklevel=2)
+                energies.append(self.energy - (self._constraint_change() if method == "fixed"
+                                               else 0.0))
+                self.parameters[name] = value
+                # (Newton and relax() change the multipliers too: all back)
+                if method != "fixed" or not self._put_back(start):
+                    self.restore(snapshot)
+                    if optimizing:
+                        self.parameters.optimize(name, False)
+                else:
+                    self.recalc()
         finally:
-            self.restore(snapshot)
+            if method != "fixed" or not self._put_back(start):
+                self.restore(snapshot)
+            else:
+                self.parameters[name] = value
+                self.recalc()
+            if optimizing:
+                self.parameters.optimize(name)
         return (energies[0] - energies[1])/(2*h)
+
+    def _constraint_change(self) -> float:
+        """Pressure times the change of each fixed volume and quantity from
+        its target: what holding them would add to the energy, to first order
+        (taken off a moved surface's energy, as in Brakke's zforce)."""
+        b = self.bodies()
+        total = float((b.pressure[b.fixed]*(b.volume[b.fixed] - b.target[b.fixed])).sum()) \
+            if len(b.ids) else 0.0
+        for q in self.quantities().values():
+            if q.kind == "fixed":
+                total += q.pressure*(q.value - q.target)
+        return total
 
     def pop(self) -> int:
         """Pop the junctions a minimal surface can't have (Evolver's ``o``:
@@ -508,8 +596,11 @@ class _Relaxing(_Analysis):
         return negative
 
     def _coords(self) -> "_Coords":
-        """The vertex coordinates, to undo steps that only move vertices."""
-        return _Coords(self.vertices, _core.topology_stamp())
+        """The vertex coordinates (and optimizing parameters), to undo steps
+        that only move vertices."""
+        _, result = self._call(_core.parameters)
+        return _Coords(self.vertices, _core.topology_stamp(),
+                       tuple((name, value) for name, value, opt in result.data if opt))
 
     def _put_back(self, snapshot: "_Coords") -> bool:
         """Restore coordinates from :meth:`_coords`; False (and nothing done)
@@ -518,6 +609,8 @@ class _Relaxing(_Analysis):
         if snapshot.stamp != _core.topology_stamp() \
                 or len(snapshot.coords) != _core.count(_core.VERTEX):
             return False
+        if snapshot.parameters:
+            self.command("; ".join(f"{name} := {value!r}" for name, value in snapshot.parameters))
         self.vertices = snapshot.coords
         return True
 
@@ -662,6 +755,23 @@ class _Relaxing(_Analysis):
         if merged and not split and self._tidy_kinds()[0]:
             self.command("u")
         return merged + split
+
+
+def _reemit(caught) -> None:
+    """Warnings recorded during relax(), passed on to its caller: Evolver's own
+    once per kind (WARNING n), with how often it came up (it repeats one per
+    vertex and step), others as they were."""
+    seen: Dict[str, list] = {}
+    for w in caught:
+        if issubclass(w.category, EvolverWarning):
+            code = re.match(r"\s*(WARNING \d+)", str(w.message))
+            key = code.group(1) if code else str(w.message)
+            seen.setdefault(key, [w, 0])[1] += 1
+        else:
+            warnings.warn(w.message, w.category, stacklevel=3)
+    for w, count in seen.values():
+        more = f" (and {count - 1} more like it during relax())" if count > 1 else ""
+        warnings.warn(f"{w.message}{more}", w.category, stacklevel=3)
 
 
 class _Run:
