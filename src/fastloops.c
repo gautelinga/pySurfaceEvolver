@@ -1159,16 +1159,37 @@ static int fl_calc_leftside_impl(REAL **rleftside, struct linsys *S, int fixcoun
    order and with their orientation, are kept per topology (vn_*), and each
    facet's normal is computed once per call instead of once per corner.
    Results agree with new_calc_vertex_normal() to round-off (an inverted
-   facet's normal is the negated one). */
+   facet's normal is the negated one).
+
+   The Lagrange model likewise: lagrange_facet_normal() gives a facet's unit
+   normal at one of its nodes, from all the facet's nodes, so each facet's
+   normals at all its nodes are computed at once (vn_lnorm, by facet ordinal
+   and node) instead of one get_facet_verts() per node and facet. A vertex
+   then combines them as new_calc_vertex_normal() does: a corner as above
+   (VN_ORIENTED); a node inside an edge of one or two facets, their plain
+   sum, and a node inside a facet, its facet's normal (VN_SUM). Any other
+   vertex (triple or bare edges, degenerate facets) is left to
+   new_calc_vertex_normal(). */
+#define VN_OTHER 0
+#define VN_ORIENTED 1
+#define VN_SUM 2
 static long *vn_start = NULL, vn_start_size = 0;   /* [n+1] into vn_fac */
 static long *vn_fac = NULL, vn_fac_size = 0;       /* +-(facet ordinal + 1) */
+static int *vn_node = NULL;                        /* Lagrange: node in facet */
+static long vn_node_size = 0;
+static unsigned char *vn_kind = NULL;              /* per vertex: VN_* */
+static long vn_kind_size = 0;
 static long vn_stamp = -1, vn_count = -1, vn_maxord = -1;
+static int vn_model = -1, vn_order = -1;
 static vertex_id *vn_list = NULL;
 static double (*vn_fnorm)[3] = NULL;
 static long vn_fnorm_size = 0;
+static double (*vn_lnorm)[3] = NULL;   /* Lagrange: [facet ordinal*ctrl + node] */
+static long vn_lnorm_size = 0;
 
 static int vn_applicable(void)
-{ return web.representation == SOAPFILM && web.modeltype == LINEAR
+{ return web.representation == SOAPFILM
+      && (web.modeltype == LINEAR || (web.modeltype == LAGRANGE && web.dimension == 2))
       && !web.symmetry_flag && SDIM == 3 && !hessian_special_normal_flag
       && !hessian_normal_one_flag;
 }
@@ -1186,37 +1207,104 @@ static int vn_usual(vertex_id v_id)
   return valid_id(get_vertex_fe(v_id));
 }
 
+/* append facet f_id (as oriented) to the list; Lagrange: with v_id's node */
+static int vn_push(long *m, long n, facet_id f_id, vertex_id v_id, int lag)
+{ long o = (long)ordinal(f_id) + 1;
+  if ( *m >= vn_fac_size || (lag && *m >= vn_node_size) )
+  { long want = vn_fac_size ? 2*vn_fac_size : 8*n + 64;
+    long *grown = (long*)realloc(vn_fac,(size_t)want*sizeof(long));
+    if ( !grown ) return 0;
+    vn_fac = grown; vn_fac_size = want;
+    if ( lag )
+    { int *ngrown = (int*)realloc(vn_node,(size_t)want*sizeof(int));
+      if ( !ngrown ) return 0;
+      vn_node = ngrown; vn_node_size = want;
+    }
+  }
+  if ( lag )
+  { vertex_id *v = get_facet_vertices(f_id);
+    int ctrl = web.skel[FACET].ctrlpts, i;
+    for ( i = 0 ; i < ctrl ; i++ ) if ( v[i] == v_id ) break;
+    if ( i >= ctrl ) return 0;
+    vn_node[*m] = i;
+  }
+  vn_fac[(*m)++] = inverted(f_id) ? -o : o;
+  return 1;
+}
+
+/* new_calc_vertex_normal()'s case for a Lagrange vertex, with its facets
+   listed; -1: out of memory */
+static int vn_lagrange_vertex(vertex_id v_id, long *m, long n)
+{ ATTR attr = get_vattr(v_id);
+  if ( attr & Q_MIDFACET )
+    return vn_push(m,n,get_vertex_facet(v_id),v_id,1) ? VN_SUM : -1;
+  if ( attr & Q_MIDEDGE )
+  { edge_id e_id = get_vertex_edge(v_id);
+    facetedge_id sidea, sideb;
+    int valence;
+    if ( !valid_id(e_id) ) return VN_OTHER;
+    valence = get_edge_valence(e_id);   /* the only edge it counts */
+    if ( valence < 1 || valence > 2 ) return VN_OTHER;
+    sidea = get_vertex_fe(v_id);
+    if ( !valid_id(sidea) ) return VN_OTHER;
+    if ( inverted(get_fe_facet(sidea)) ) sidea = inverse_id(sidea);
+    if ( !equal_id(get_next_facet(sidea),get_prev_facet(sidea)) ) return VN_OTHER;
+    if ( !vn_push(m,n,get_fe_facet(sidea),v_id,1) ) return -1;
+    sideb = get_next_facet(sidea);
+    if ( !equal_id(sidea,sideb) )
+      if ( !vn_push(m,n,get_fe_facet(inverse_id(sideb)),v_id,1) ) return -1;
+    return VN_SUM;
+  }
+  if ( vn_usual(v_id) )
+  { facetedge_id fe, start_fe;
+    fe = start_fe = get_vertex_first_facet(v_id);
+    do
+    { if ( !vn_push(m,n,get_fe_facet(fe),v_id,1) ) return -1;
+      fe = get_next_vertex_facet(v_id,fe);
+    } while ( !equal_element(fe,start_fe) );
+    return VN_ORIENTED;
+  }
+  return VN_OTHER;
+}
+
 static int vn_build(vertex_id *list, long n)
 { long k, m = 0;
+  int lag = web.modeltype == LAGRANGE;
   if ( vn_list == list && vn_stamp == top_timestamp && vn_count == n
-       && vn_maxord == (long)web.skel[VERTEX].max_ord )
+       && vn_maxord == (long)web.skel[VERTEX].max_ord && vn_model == web.modeltype
+       && vn_order == web.lagrange_order )
     return 1;
-  if ( !ensure_size((void**)&vn_start,&vn_start_size,n + 1,sizeof(long)) ) return 0;
+  if ( !ensure_size((void**)&vn_start,&vn_start_size,n + 1,sizeof(long))
+       || !ensure_size((void**)&vn_kind,&vn_kind_size,n,1) )
+    return 0;
   vn_stamp = -1;
   vn_start[0] = 0;
   for ( k = 0 ; k < n ; k++ )
   { vertex_id v_id = list[k];
-    if ( vn_usual(v_id) )
+    int kind = VN_OTHER;
+    long m0 = m;
+    if ( lag )
+    { kind = vn_lagrange_vertex(v_id,&m,n);
+      if ( kind < 0 ) return 0;
+    }
+    else if ( vn_usual(v_id) )
     { facetedge_id fe, start_fe;
+      kind = VN_ORIENTED;
       fe = start_fe = get_vertex_first_facet(v_id);
       do
-      { facet_id f_id = get_fe_facet(fe);
-        long o = (long)ordinal(f_id) + 1;
-        if ( m >= vn_fac_size )
-        { long want = vn_fac_size ? 2*vn_fac_size : 8*n + 64;
-          long *grown = (long*)realloc(vn_fac,(size_t)want*sizeof(long));
-          if ( !grown ) return 0;
-          vn_fac = grown; vn_fac_size = want;
-        }
-        vn_fac[m++] = inverted(f_id) ? -o : o;
+      { if ( !vn_push(&m,n,get_fe_facet(fe),v_id,0) ) return 0;
         fe = get_next_vertex_facet(v_id,fe);
       } while ( !equal_element(fe,start_fe) );
     }
+    if ( kind == VN_OTHER ) m = m0;
+    vn_kind[k] = (unsigned char)kind;
     vn_start[k+1] = m;
   }
   vn_list = list;
   vn_count = n;
   vn_maxord = (long)web.skel[VERTEX].max_ord;
+  vn_model = web.modeltype;
+  vn_order = web.lagrange_order;
   vn_stamp = top_timestamp;
   return 1;
 }
@@ -1246,19 +1334,61 @@ static int vn_facet_normals(void)
   return 1;
 }
 
+/* Lagrange: each facet's unit normal at each of its nodes, as
+   lagrange_facet_normal() computes it for the facet's positive orientation
+   (same sums, same kernel_basis_rows()); NAN where that is not one vector */
+static int vn_lagrange_normals(void)
+{ facet_id *facets;
+  long nf, j;
+  int ctrl = web.skel[FACET].ctrlpts;
+  struct gauss_lag *gl = &gauss_lagrange[web.dimension][web.gauss2D_order];
+  if ( !(facets = fl_facet_list(&nf)) || ctrl > MAXVCOUNT || !gl->lpolypart ) return 0;
+  if ( !ensure_size((void**)&vn_lnorm,&vn_lnorm_size,
+                    ((long)web.skel[FACET].max_ord + 1)*ctrl,sizeof(double[3])) )
+    return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
+#endif
+  for ( j = 0 ; j < nf ; j++ )
+  { facet_id f_id = positive_id(facets[j]);
+    long o = (long)ordinal(f_id);
+    MAT2D(sides,MAXCOORD,MAXCOORD);
+    MAT2D(vx,MAXVCOUNT,MAXCOORD);
+    MAT2D(nrm,MAXCOORD,MAXCOORD);
+    int i, jj, k, kk;
+    get_facet_verts(f_id,vx,NULL);
+    for ( k = 0 ; k < ctrl ; k++ )
+    { double *out = vn_lnorm[o*ctrl + k];
+      for ( i = 1 ; i <= 2 ; i++ )
+        for ( jj = 0 ; jj < SDIM ; jj++ )
+          for ( kk = 0, sides[i][jj] = 0.0 ; kk < ctrl ; kk++ )
+            sides[i][jj] += gl->lpolypart[k][i-1][kk]*vx[kk][jj];
+      if ( kernel_basis_rows(sides+1,nrm,2,SDIM) == 1 )
+        for ( i = 0 ; i < 3 ; i++ ) out[i] = nrm[0][i];
+      else
+        out[0] = out[1] = out[2] = NAN;
+    }
+  }
+  return 1;
+}
+
 /* new_calc_vertex_normal() for the k-th vertex of the list vn_build() saw */
 static int vn_vertex_normal(long k, vertex_id v_id, REAL **norm)
 { long j;
   int i, d;
-  if ( vn_start[k] == vn_start[k+1] ) return new_calc_vertex_normal(v_id,norm);
+  int lag = vn_model == LAGRANGE;
+  int ctrl = web.skel[FACET].ctrlpts;
+  if ( vn_kind[k] == VN_OTHER ) return new_calc_vertex_normal(v_id,norm);
   for ( d = 0 ; d < SDIM ; d++ )
     for ( i = 0 ; i < SDIM ; i++ ) norm[d][i] = 0.0;
   for ( j = vn_start[k] ; j < vn_start[k+1] ; j++ )
   { long o = vn_fac[j];
-    double *f = vn_fnorm[(o < 0 ? -o : o) - 1];
+    double *f = lag ? vn_lnorm[((o < 0 ? -o : o) - 1)*ctrl + vn_node[j]]
+                    : vn_fnorm[(o < 0 ? -o : o) - 1];
     REAL fn[3];
+    if ( isnan(f[0]) ) return new_calc_vertex_normal(v_id,norm);
     for ( i = 0 ; i < 3 ; i++ ) fn[i] = o < 0 ? -f[i] : f[i];
-    if ( j > vn_start[k] && SDIM_dot(norm[0],fn) < 0 )
+    if ( vn_kind[k] == VN_ORIENTED && j > vn_start[k] && SDIM_dot(norm[0],fn) < 0 )
       for ( i = 0 ; i < 3 ; i++ ) norm[0][i] -= fn[i];
     else
       for ( i = 0 ; i < 3 ; i++ ) norm[0][i] += fn[i];
@@ -1278,7 +1408,8 @@ static int vn_vertex_normal(long k, vertex_id v_id, REAL **norm)
 
 /* set up the cached normals for the vertices of list; 0: not applicable */
 static int vn_prepare(vertex_id *list, long n)
-{ return vn_applicable() && vn_build(list,n) && vn_facet_normals();
+{ if ( !vn_applicable() || !vn_build(list,n) ) return 0;
+  return web.modeltype == LAGRANGE ? vn_lagrange_normals() : vn_facet_normals();
 }
 
 /* hessian_init()'s vertex normals, see fastloops.h. The normals only read
