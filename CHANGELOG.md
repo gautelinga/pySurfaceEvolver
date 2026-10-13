@@ -21,6 +21,15 @@
   residual below `tol`, or 1e-8 without one, with the volume and quantity targets met).
   Breaking: code using the number reads `ev.newton(...).newton_steps`.
 
+- `ev.modes(n=1)`: the `n` lowest Hessian eigenvalues with the constraints held
+  (`linear_metric`, as `stability()` reports them) and their modes as displacements
+  per vertex, `Modes(values, vectors)` with `vectors` shaped (n, vertices, 3), each
+  scaled to a root mean square of 1 and signed so its largest component is positive:
+  a simple eigenvalue's mode comes out the same on any thread count. Evolver's `ritz`
+  below the lowest eigenvalue, each vector turned into vertex motion through Evolver's
+  own move (boundaries, constraint projection), undone. Unlike `saddle()`, the surface
+  is left as it is and the mode carries no line search's even part.
+
 ### Continuation
 
 - `recipes.arclength(ev, what, ds, steps, bounds=)`: pseudo-arclength continuation,
@@ -53,7 +62,10 @@
   the bridge above (8192 facets) stopped at its fold in about half the runs; now each
   point takes 3-5 iterations at the full `ds` and 8 of 8 runs pass the fold, in 7 s
   instead of about 30. Undoing a step (in `relax()` too) puts the multipliers back with
-  the vertices; the stress cases come out as before.
+  the vertices: the stress cases and 40 of the 42 sample datafiles that finish
+  `relax(levels=2)` come out the same (cat.fe varies run to run either way); bga-6, an
+  overloaded pad with no equilibrium, undoes 20 steps instead of 12 before giving up
+  (5 s instead of 1).
 
 - `continuation()` predicts each step: from the third step on, relax starts from every
   vertex extrapolated from the last two steps (a secant predictor), which saves a fifth
@@ -90,7 +102,7 @@
   (`bridge_spheres_fold`, `bridge_spheres_branch`, `bridge_spheres_offset`), a figure
   drawn by `tools/bridge_rupture_figure.py` along with pictures of the bridge along
   the run, its unstable mode and the off-centre bridge in 3D, and the page's code
-  checked by `tools/check_doc_snippets.py`.
+  checked by `tools/check_doc_snippets.py`. The unstable mode comes from `ev.modes()`.
 
 - A shorter README (92 lines, was 261): what pySE is, a picture of four relaxed
   surfaces, install, one example with its output, and where to read on, with badges.

@@ -203,6 +203,19 @@ def test_stability_can_report_eigenvalues_when_stable(cube):
     assert s.stable and len(s.lowest) and s.lowest.min() > 0
 
 
+def test_modes_are_the_lowest_eigenpairs_and_leave_the_surface_alone(cube):
+    cube.refine()
+    cube.relax()
+    before = cube.vertices
+    m = cube.modes(4)
+    assert np.array_equal(cube.vertices, before)
+    assert m.values == pytest.approx(cube.stability(eigenvalues=True).lowest[:4], rel=1e-6)
+    assert m.vectors.shape == (4, len(before), 3)
+    assert np.sqrt((m.vectors**2).sum(axis=2).mean(axis=1)) == pytest.approx(1.0)
+    with pytest.raises(ValueError):
+        cube.modes(0)
+
+
 def test_energies_add_up_and_leave_the_surface_alone(load):
     ev = load("tankex.fe")
     ev.relax(stability=False)

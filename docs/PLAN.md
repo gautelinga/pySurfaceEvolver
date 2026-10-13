@@ -63,14 +63,13 @@ Open, for the user to pick (proposed 2026-10-13):
   The slivers build up within each step; tangential motion in Newton steps would be
   remeshing by another name.
 * **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
-* **Loose ends from the multiplier fix (2026-10-13):** whether `relax()`/`newton()`
-  converge differently now that undoing a rejected step restores the pressures (only
-  checked: the stress cases come out the same); `relax()`'s inertia cache is keyed by
-  the vertices, though the count also depends on the pressures; the bridge page's
-  level-4 numbers (onset 0.0808-0.0785, least volume 0.07306) are from the old
-  corrector; no API for a negative mode's eigenvector (`saddle()` line-searches in an
-  arbitrary direction, so the page prints only the step's odd part); the
-  `_core.multipliers()` stub is typed `object`.
+* **After the multiplier fix (2026-10-13):** restoring the pressures on undo leaves the
+  stress cases and 40/42 sample datafiles as they were; bga-6 (no equilibrium) takes
+  20 undone steps instead of 12 to give up. `relax()`'s inertia cache keyed by the
+  vertices is fine (reset per call, only a count of 0 reused, and vertices back now
+  means pressures back). `ev.modes(n)` added (ritz + Evolver's own move, unit RMS,
+  sign fixed; repeated eigenvalues' modes are any combination). Left: the
+  `_core.multipliers()`/`modes` stubs are typed `object`.
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
 

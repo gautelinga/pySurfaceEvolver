@@ -9,11 +9,11 @@ from ._errors import (EvolverBusyError, EvolverError, EvolverExit, EvolverFatalE
                       UnstableEquilibriumWarning)
 from ._export import _Export
 from ._relax import _Relaxing
-from ._results import EigenCounts, Health, IterationResult, Snapshot, Stability
+from ._results import EigenCounts, Health, IterationResult, Modes, Snapshot, Stability
 from ._views import BodyView, Parameters, QuantityView
 
 __all__ = [
-    "BodyView", "EigenCounts", "Health", "QuantityView", "Stability",
+    "BodyView", "EigenCounts", "Health", "Modes", "QuantityView", "Stability",
     "SharedEngineWarning", "UnstableEquilibriumWarning",
     "Evolver",
     "IterationResult",

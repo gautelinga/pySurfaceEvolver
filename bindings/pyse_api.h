@@ -155,6 +155,10 @@ int pyse_crystalline(void);   /* a Wulff (crystalline) integrand is in use */
 int pyse_symmetry(void);      /* a torus or quotient space: coordinates are wrapped */
 /* goes up with every topology change (Evolver's top_timestamp) */
 long pyse_topology_stamp(void);
+/* the n lowest Hessian eigenvalues with the constraints held and their
+   eigenvectors as vertex displacements (vectors: n * nv * sdim); found: how
+   many there are (at most n) */
+int pyse_modes(int n, double *values, double *vectors, long nv, int *found);
 /* the Lagrange multipliers: bodies' pressures, then quantities' (n must be
    pyse_multiplier_count()) */
 long pyse_multiplier_count(void);

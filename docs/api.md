@@ -23,6 +23,7 @@ handle to it.
 .. autoclass:: EigenCounts
    :no-members:
 .. autoclass:: Stability
+.. autoclass:: Modes
 .. autoclass:: Snapshot
 .. autoclass:: Parameters
    :members: optimizing

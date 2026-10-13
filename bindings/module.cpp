@@ -255,6 +255,26 @@ NB_MODULE(_core, m) {
     return r;
   }, "expr"_a, CALLBACK_NAMES);
 
+  m.def("modes", [](int n, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long nv = pyse_count(PYSE_VERTEX);
+    int sdim = pyse_sdim();
+    std::vector<double> values(n > 0 ? size_t(n) : 0);
+    std::vector<double> vectors(n > 0 ? size_t(n)*size_t(nv)*size_t(sdim) : 0);
+    int found = 0;
+    CallResult r = run_guarded([&] {
+      return pyse_modes(n, values.data(), vectors.data(), nv, &found);
+    });
+    if (r.status == PYSE_OK) {
+      values.resize(size_t(found));
+      vectors.resize(size_t(found)*size_t(nv)*size_t(sdim));
+      r.data = nb::make_tuple(to_numpy(std::move(values), {size_t(found)}),
+                              to_numpy(std::move(vectors),
+                                       {size_t(found), size_t(nv), size_t(sdim)}));
+    }
+    return r;
+  }, "n"_a, CALLBACK_NAMES, "data: (eigenvalues (found,), displacements (found, vertices, sdim))");
+
   m.def("residual", [](bool full, CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(PYSE_VERTEX) + pyse_optparam_count();

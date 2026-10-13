@@ -12,7 +12,7 @@ from ._engine import _Engine
 from ._errors import EvolverError, _num
 from ._geometry import _chains, _crossed, _grow, _self_gap
 from ._mesh import Mesh, MeshQuality
-from ._results import EigenCounts, Health, Stability
+from ._results import EigenCounts, Health, Modes, Stability
 
 
 # a vertex counts as crossed when beyond a constraint by this many median edge lengths:
@@ -275,6 +275,43 @@ class _Analysis(_Engine):
             threshold = -0.01*scale
             negative = self.eigen_counts(threshold).negative
         return Stability(negative == 0, negative, values, threshold)
+
+    def modes(self, n: int = 1) -> Modes:
+        """The ``n`` lowest Hessian eigenvalues and their modes: the motions
+        of the vertices, with the constraints (volumes, quantities, walls)
+        held.
+
+        ``values`` are ascending, with Evolver's ``linear_metric`` as in
+        :meth:`stability` (the continuous surface's eigenvalues: a negative
+        one is a motion that lowers the energy). ``vectors[k]`` is mode
+        ``k`` as a displacement per vertex (0 for fixed vertices), scaled to
+        a root mean square of 1 over the vertices and signed so that its
+        largest component is positive (among components within 1% of the
+        largest, the first in vertex order), so a simple eigenvalue's mode
+        comes out the same each time; a repeated eigenvalue's (a symmetry's
+        rotations or translations) is any combination of its eigenspace.
+        ``ev.vertices + 0.01*m.vectors[0]`` steps along the first. Unlike
+        :meth:`saddle`, the surface is left as it is. Fewer than ``n`` come
+        back when the surface has fewer degrees of freedom. A mode that
+        moves optimizing parameters moves them too; ``vectors`` has only
+        the vertices. Uses Evolver's ``ritz``, slow on large surfaces.
+        """
+        if int(n) < 1:
+            raise ValueError("modes() needs n >= 1")
+        with self._toggle("linear_metric", True):
+            _, result = self._call(_core.modes, int(n))
+        values, vectors = (np.asarray(a, dtype=float) for a in result.data)
+        order = np.argsort(values, kind="stable")
+        values, vectors = values[order], vectors[order]
+        for v in vectors:
+            rms = np.sqrt((v*v).sum(axis=1).mean())
+            if rms > 0:
+                v /= rms
+            flat = v.ravel()
+            big = np.flatnonzero(np.abs(flat) >= 0.99*np.abs(flat).max())
+            if len(big) and flat[big[0]] < 0:
+                v *= -1
+        return Modes(values, vectors)
 
     def eigen_counts(self, shift: float = 0.0) -> "EigenCounts":
         """How many Hessian eigenvalues lie below, at and above ``shift``

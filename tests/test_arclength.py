@@ -61,6 +61,28 @@ def test_around_the_fold_and_down_the_unstable_branch():
     assert ev.parameters["ht"] == pytest.approx(values[-1])
 
 
+def test_the_unstable_catenoids_mode_lowers_the_area():
+    ev = _wire_catenoid(1)
+    ev.parameters["ht"] = 1.0
+    for s in recipes.arclength(ev, "ht", 0.05, 40):
+        if s.result.negative_modes == 1:
+            break
+    m = ev.modes(2)
+    assert m.values[0] < 0 < m.values[1]
+    # a simple eigenvalue: the same mode again, sign included
+    assert np.allclose(ev.modes(1).vectors[0], m.vectors[0], atol=1e-6)
+    x, area = ev.vertices, ev.total_area
+    for eps in (1e-3, -1e-3):
+        ev.vertices = x + eps*m.vectors[0]
+        assert ev.total_area < area
+    # the neck widens or narrows: the same motion at both ends of the axis
+    d = m.vectors[0]
+    r = np.hypot(x[:, 0], x[:, 1])
+    out = (d[:, 0]*x[:, 0] + d[:, 1]*x[:, 1])/np.maximum(r, 1e-12)
+    mid = abs(x[:, 2] - ev.parameters["ht"]/2) < 0.1
+    assert abs(out[mid].mean()) > 0.5
+
+
 def test_bounds_end_the_run_at_the_last_point_inside():
     ev = _wire_catenoid(1)
     ev.parameters["ht"] = 0.8

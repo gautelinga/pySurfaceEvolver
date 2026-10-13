@@ -41,6 +41,14 @@ class Stability:
     threshold: float          # eigenvalues below this counted as negative
 
 
+@dataclass(frozen=True)
+class Modes:
+    """See :meth:`Evolver.modes`."""
+
+    values: np.ndarray        # the lowest eigenvalues, ascending
+    vectors: np.ndarray       # (len(values), vertices, dimension): each mode's displacements
+
+
 @dataclass(frozen=True, repr=False)
 class Health:
     """See :meth:`Evolver.health`. Gaps are in units of the median edge length."""

@@ -66,25 +66,24 @@ print(f"stable down to volume {V[k-1]:.4f} (neck {necks[k-1]:.4f}), "
       f"one negative mode from {V[k]:.4f} (neck {necks[k]:.4f})")
 print(f"least volume {V[f]:.4f}")
 
-# the unstable mode: step along it from the first unstable bridge
+# the unstable mode of the first unstable bridge
 ev.restore(first_unstable)
-x = ev.mesh().vertices
-ev.saddle()
-dx = ev.mesh().vertices - x
+mode = ev.modes(1)
+x, d = ev.vertices, mode.vectors[0]
 phi = np.arctan2(x[:, 1], x[:, 0])
-outward = dx[:, 0]*np.cos(phi) + dx[:, 1]*np.sin(phi)       # the radial displacement
-heights = (0.05, 0.15, 0.25)
-up = [outward[abs(x[:, 2] - z) < 0.05].mean() for z in heights]
-down = [outward[abs(x[:, 2] + z) < 0.05].mean() for z in heights]
-odd = [(u - d)/2 for u, d in zip(up, down)]     # the part that flips sign across the mid-plane
-print("odd part of the radial displacement at z = 0.05 0.15 0.25:",
-      " ".join(f"{o/odd[-1]:.1f}" for o in odd))
+outward = d[:, 0]*np.cos(phi) + d[:, 1]*np.sin(phi)       # the radial displacement
+heights = (-0.25, -0.15, -0.05, 0.05, 0.15, 0.25)
+moved = [outward[abs(x[:, 2] - z) < 0.05].mean() for z in heights]
+print(f"its eigenvalue {mode.values[0]:.2f}; radial displacement at z =",
+      " ".join(f"{z:+.2f}" for z in heights))
+print(" " * 36, " ".join(f"{m:+.2f}" for m in moved))
 ```
 
 ```text
 stable down to volume 0.0792 (neck 0.1315), one negative mode from 0.0775 (neck 0.1266)
 least volume 0.0730
-odd part of the radial displacement at z = 0.05 0.15 0.25: 0.4 0.9 1.0
+its eigenvalue -0.74; radial displacement at z = -0.25 -0.15 -0.05 +0.05 +0.15 +0.25
+                                     +0.91 +0.81 +0.38 -0.39 -0.81 -0.91
 ```
 
 The bridge turns unstable between volumes 0.0792 and 0.0775, while it still has a
@@ -100,11 +99,11 @@ at the fold (the least volume), and past it on the thinner-necked branch, where 
 fold's own mode has made a second one.
 ```
 
-{meth}`~pysurfaceevolver.Evolver.saddle` steps along the first unstable mode. The
-mode is odd about the mid-plane: the bridge narrows on one side of it and widens on
-the other, so liquid moves toward one sphere. Which sphere is chance (the mode's
-sign is arbitrary). The code prints the step's odd part: holding the volume during
-a finite step adds a small even part, a few percent of it.
+{meth}`~pysurfaceevolver.Evolver.modes` gives the lowest eigenvalues and their modes,
+the motions of the vertices with the volume held. The unstable mode is odd about the
+mid-plane: the bridge widens on one side of it and narrows on the other, so liquid
+moves toward one sphere. Which sphere is chance: the mode's sign is arbitrary
+(`modes()` fixes one, so the output above is reproducible).
 
 ```{figure} _static/bridge_rupture_mode.png
 :alt: The first unstable bridge coloured by its unstable mode, and the bridge pushed along the mode
@@ -112,8 +111,8 @@ a finite step adds a small even part, a few percent of it.
 
 Left, the first unstable bridge coloured by how its surface moves along the mode
 (scaled to 1 at the most): in at one end, out at the other, nothing at the
-mid-plane. Right, the bridge pushed along the mode, exaggerated six times, over the
-bridge before (grey).
+mid-plane. Right, the bridge pushed along the mode (a root mean square displacement
+of 0.03), over the bridge before (grey).
 ```
 
 ## The reference
@@ -161,7 +160,7 @@ neck 0.10 above the mid-plane: volume 0.0978, energy 0.60638, 4.81e-03 above the
 The off-centre bridges branch off at volume 0.07895, between the last stable point of
 the run above (0.0792) and the first unstable one (0.0775). The fold is at 0.07307,
 where the run's least volume is 0.0730. On a mesh refined once more (32768 facets),
-the onset lies between 0.0808 and 0.0785 and the least volume is 0.07306.
+the onset lies between 0.0790 and 0.0773 and the least volume is 0.07308.
 
 ```{figure} _static/bridge_rupture.png
 :alt: The symmetric bridge's branch with Evolver's points, the pitchfork, the energy barrier and two bridge shapes
@@ -197,9 +196,9 @@ symmetric bridge and breaking.
 * **A slowly shrinking bridge breaks at the branch point** (volume 0.0790 here), not
   at the fold (0.0731), and it breaks lopsided. No equilibrium is nearby to settle
   into, so the bridge doesn't drift to an off-centre shape first. Evolver can't follow
-  the break itself (the surface would change topology). `relax()` from the stepped-off
-  bridge above makes slow progress, because the mode's eigenvalue is barely below zero
-  that close to the onset.
+  the break itself (the surface would change topology). `relax()` from the bridge pushed
+  along its mode makes slow progress, because the mode's eigenvalue is barely below
+  zero that close to the onset.
 * **Real bridges are likely to break earlier still.** With a subcritical pitchfork,
   a small asymmetry (unequal spheres or contact angles, gravity along the axis)
   typically makes the bridge break before the symmetric branch point. A supercritical

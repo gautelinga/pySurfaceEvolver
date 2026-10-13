@@ -38,7 +38,7 @@ LIQUID = dict(color="#a6cee3", show_edges=True, edge_color="#7aa9d0", line_width
 def evolver_branch():
     """The page's run: (volume, neck, negative modes) at each point, the mesh
     (vertices, facets) at each point, and the first unstable bridge's mesh with
-    the displacement of a saddle() step from it."""
+    its unstable mode (ev.modes())."""
     a = 0.35
     zb = CENTRE - np.sqrt(1 - a*a)
     tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
@@ -64,8 +64,7 @@ def evolver_branch():
             break
     ev.restore(first_unstable)
     m = ev.mesh()
-    ev.saddle()
-    mode = (m.vertices.copy(), m.facets.copy(), ev.mesh().vertices - m.vertices)
+    mode = (m.vertices.copy(), m.facets.copy(), ev.modes(1).vectors[0])
     return np.array(rows), meshes, mode
 
 
@@ -140,7 +139,7 @@ def render_shapes(rows, meshes, picks, labels):
     p.close()
 
 
-def render_mode(mode, exaggerate=6.0):
+def render_mode(mode, amplitude=0.03):
     import pyvista as pv
     x, facets, dx = mode
     phi = np.arctan2(x[:, 1], x[:, 0])
@@ -164,8 +163,8 @@ def render_mode(mode, exaggerate=6.0):
     p.subplot(0, 1)
     spheres(p)
     p.add_mesh(polydata(x, facets), color="#bbbbbb", opacity=0.3, smooth_shading=True)
-    p.add_mesh(polydata(x + exaggerate*dx, facets), **LIQUID)
-    p.add_text(f"pushed along it (exaggerated {exaggerate:g}x;\ngrey: before)",
+    p.add_mesh(polydata(x + amplitude*dx, facets), **LIQUID)
+    p.add_text(f"pushed along it (root mean square {amplitude:g};\ngrey: before)",
                position="upper_left", font_size=9, color="black")
     side_view(p)
     p.screenshot(os.path.join(STATIC, "bridge_rupture_mode.png"))

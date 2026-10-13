@@ -1675,6 +1675,105 @@ int pyse_torus(void) { return web.torus_flag; }
 int pyse_crystalline(void) { return web.wulff_flag; }
 int pyse_symmetry(void) { return web.torus_flag || web.symmetry_flag; }
 long pyse_topology_stamp(void) { return top_timestamp; }
+/* The n lowest eigenpairs of the Hessian with the constraints held (as
+   saddle and eigenprobe set it up, with linear_metric or area normalization
+   if on): Evolver's ritz shifted below every eigenvalue, so the nearest are
+   the lowest. Each eigenvector as a displacement per vertex: a central
+   difference of Evolver's own move along it (through the boundaries'
+   parameters and the projection onto constraints), undone. values (n),
+   vectors (n * vertices * SDIM); found: how many ritz gave (at most n). */
+extern REAL *evalues;              /* do_ritz()'s eigenvalues (hessian2.c) */
+
+struct modes_args { int n; double *values; double *vectors; long nv; int found; };
+
+static void modes_body(void *arg)
+{ struct modes_args *a = (struct modes_args *)arg;
+  struct linsys S;
+  REAL *rhs = NULL, **vecs = NULL, t;
+  struct oldcoord saver;
+  vertex_id v_id;
+  int k, i, quiet = quiet_flag;
+  long row;
+
+  memset(&S,0,sizeof(S));
+  memset(&saver,0,sizeof(saver));
+  hmode = hessian_normal_flag;
+  hessian_init(&S,&rhs);
+  hess_flag = 1; rhs_flag = 1;
+  hessian_fill(&S,&rhs);
+  (*sp_AIJ_setup_func)(S.A_rows,&S);
+  (*sp_constraint_setup_func)(web.skel[BODY].max_ord+1 + gen_quant_count,&S);
+  if ( sp_ordering_func ) (*sp_ordering_func)(&S);
+  if ( hessian_linear_metric_flag ) linear_metric_setup(&S,&Met);
+  else if ( web.area_norm_flag ) star_metric_setup(&S,&Met);
+
+  /* a shift below every eigenvalue (as lowest_eigenpair() finds one) */
+  S.lambda = -0.01;
+  sp_factor(&S,MKL_INDEF);
+  (*sp_hess_project_setup_func)(&S);
+  while ( S.neg > 0 )
+  { S.lambda *= 10;
+    sp_factor(&S,MKL_INDEF);
+    (*sp_hess_project_setup_func)(&S);
+  }
+  vecs = dmatrix(0,a->n-1,0,S.N+S.concount);
+  quiet_flag = 1;
+  do_ritz(&S,S.lambda,a->n,vecs);
+  quiet_flag = quiet;
+  a->found = a->n;
+  if ( a->found > S.N - (augmented_hessian_mode ? 2 : 1)*S.CN )
+    a->found = S.N - (augmented_hessian_mode ? 2 : 1)*S.CN;
+  if ( a->found < 0 ) a->found = 0;
+
+  /* ritz scales each vector to a largest component of a tenth of the
+     surface's size: step a millionth of that */
+  t = 1e-6;
+  for ( k = 0 ; k < a->found ; k++ )
+  { double *d = a->vectors + (size_t)k*a->nv*SDIM;
+    a->values[k] = (double)evalues[k];
+    save_coords(&saver,SAVE_SEPARATE);
+    hessian_move(t,ACTUAL_MOVE,vecs[k]);
+    row = 0;
+    FOR_ALL_VERTICES(v_id)
+    { REAL *x = get_coord(v_id);
+      if ( row >= a->nv ) inconsistent("vertex count changed");
+      for ( i = 0 ; i < SDIM ; i++ ) d[row*SDIM + i] = (double)x[i];
+      row++;
+    }
+    restore_coords(&saver,SAVE_SEPARATE);
+    hessian_move(-t,ACTUAL_MOVE,vecs[k]);
+    row = 0;
+    FOR_ALL_VERTICES(v_id)
+    { REAL *x = get_coord(v_id);
+      for ( i = 0 ; i < SDIM ; i++ )
+        d[row*SDIM + i] = (d[row*SDIM + i] - (double)x[i])/(2*t);
+      row++;
+    }
+    restore_coords(&saver,SAVE_SEPARATE);
+    unsave_coords(&saver,SAVE_SEPARATE);
+  }
+  free_matrix(vecs);
+  hessian_exit(NULL);
+  free_system(&S);
+  if ( hessian_linear_metric_flag || web.area_norm_flag ) free_system(&Met);
+  temp_free((char*)rhs);
+  recalc();
+}
+
+int pyse_modes(int n, double *values, double *vectors, long nv, int *found)
+{ struct modes_args a;
+  int status;
+  if ( n < 1 )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,"modes: n must be at least 1.");
+  if ( nv != web.skel[VERTEX].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "modes: output array does not match the vertex count.");
+  a.n = n; a.values = values; a.vectors = vectors; a.nv = nv; a.found = 0;
+  status = surface_call(modes_body,&a);
+  *found = a.found;
+  return status;
+}
+
 /* The Lagrange multipliers: each body's pressure (in body order), then each
    quantity's (in quantity order). A Newton step (hessian) uses them in the
    Hessian and adds its increments to them, so undoing a step undoes them too. */
