@@ -299,6 +299,24 @@ def _newton_target(ev, put: Callable[[Any], None], value: float) -> "tuple[np.nd
     return x, negative
 
 
+def _normal_part(ev, dx: np.ndarray) -> np.ndarray:
+    """The part of a displacement along the surface's normals (area-weighted
+    facet normals at each vertex): the shape's change, without the vertices'
+    sliding along the surface (the mesh tidying between points)."""
+    m = ev.mesh()
+    if m.facets is None or m.vertices.shape[1] != 3 or m.order != 1:
+        return dx
+    x, f = m.vertices, m.facets
+    cross = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
+    normals = np.zeros_like(x)
+    for k in range(3):
+        np.add.at(normals, f[:, k], cross)
+    length = np.linalg.norm(normals, axis=1)
+    unit = np.divide(normals, length[:, None], out=np.zeros_like(normals),
+                     where=length[:, None] > 0)
+    return unit*(dx*unit).sum(axis=1)[:, None]
+
+
 def _arc_norm2(dx: np.ndarray, dvalue: float) -> float:
     """arclength()'s measure of a step: the value's change and the vertices'
     root mean square displacement."""
@@ -333,23 +351,32 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
     return False, max_iter
 
 
-def _arc_settle(ev, tol: float, tidy: bool) -> "tuple[bool, int, float]":
+def _arc_settle(ev, put, value: float, tol: float, tidy: bool,
+                tangent: "Optional[tuple[np.ndarray, float]]" = None) -> "tuple[bool, int, float]":
     """After a converged step: the vertices spread along the surface (Newton
     moves them along its normal only) and edges flipped, keeping the same
-    vertices; then plain Newton steps back to the equilibrium. Whether it is
-    there, the negative eigenvalues, the residual."""
+    vertices; then back to the branch, by the corrector along ``tangent``
+    (near a fold the equilibrium at a fixed value is ill-conditioned) or by
+    plain Newton steps without one. Whether it is there, the negative
+    eigenvalues (with the constraints held), the residual."""
     if tidy:
         for _ in range(2):
             ev.vertex_average()
             ev.equiangulate()
-    negative, residual = 0, ev.residual()
-    for _ in range(8):
-        _hessian(ev)
-        negative = int(ev.eval("eigen_neg"))
+    if tangent is not None:
+        ok, _ = _arc_correct(ev, put, ev.vertices, value, tangent[0], tangent[1], tol, 12)
         residual = ev.residual()
-        if residual < tol:
-            return True, negative, residual
-    return False, negative, residual
+    else:
+        ok, residual = False, ev.residual()
+        for _ in range(8):
+            _hessian(ev)
+            residual = ev.residual()
+            if residual < tol:
+                ok = True
+                break
+    # counted with the constraints held (a Newton step's own count,
+    # eigen_neg, isn't: it counts as if the volume were free)
+    return ok, (ev.eigen_counts(0.0).negative if ok else 0), residual
 
 
 def arclength(ev, what: Any, ds: float, steps: int, *,
@@ -367,8 +394,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     catenoid past its widest span, a drop or bridge past its largest
     volume). Yields a :class:`Step` per point, starting with the first two;
     ``result.negative_modes`` counts the Hessian's negative eigenvalues there
-    (0 on a stable branch, 1 past a simple fold; symmetries can add
-    near-zero ones, see :meth:`Evolver.stability`).
+    with the constraints (volumes, ...) held, from
+    :meth:`Evolver.eigen_counts` (0 on a stable branch, 1 past a simple
+    fold; a symmetry's zero modes can come out slightly negative, which
+    :meth:`Evolver.stability` sorts out, at the cost of Evolver's ``ritz``).
 
     It starts by relaxing the surface at the current value, then takes Newton
     steps to the value plus ``ds`` (the sign sets the direction). From there
@@ -417,14 +446,14 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         warnings.warn("arclength(): the surface didn't relax at the start", UserWarning,
                       stacklevel=2)
         return
-    ok, negative, residual = _arc_settle(ev, tol, False)
+    ok, negative, residual = _arc_settle(ev, put, float(value), tol, False)
     points = [(float(value), ev.vertices)]
     yield step(0, float(value), 0, negative, residual)
     if steps < 2:
         return
     put(value + ds)
     kept = ev.newton(20, tol=tol)
-    ok, negative, residual = _arc_settle(ev, tol, tidy)
+    ok, negative, residual = _arc_settle(ev, put, float(value + ds), tol, tidy)
     if not (kept.converged and ok):
         warnings.warn(f"arclength(): no equilibrium found at {value + ds:.6g} by Newton "
                       "steps (try a smaller ds)", UserWarning, stacklevel=2)
@@ -437,8 +466,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         if len(x0) != len(x1) or len(x1) != len(ev.vertices):
             raise RuntimeError("arclength(): the vertices changed between points (it "
                                "needs the same mesh throughout)")
-        norm = np.sqrt(_arc_norm2(x1 - x0, v1 - v0))
-        tx, tv = (x1 - x0)/norm, (v1 - v0)/norm
+        dx = _normal_part(ev, x1 - x0)       # (the tidying's sliding isn't a step)
+        norm = np.sqrt(_arc_norm2(dx, v1 - v0))
+        tx, tv = dx/norm, (v1 - v0)/norm
         last = ev._coords()
         for k in range(halvings + 1):
             ok, iterations = _arc_correct(ev, put, x1 + h*tx, v1 + h*tv, tx, tv, tol, 12)
@@ -457,7 +487,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             ev._put_back(last)
             put(v1)
             return
-        ok, negative, residual = _arc_settle(ev, tol, tidy)
+        ok, negative, residual = _arc_settle(ev, put, v, tol, tidy, (tx, tv))
+        v = float(_current(ev, what))       # (settling back can move it a little)
         if not ok:
             warnings.warn(f"arclength(): the surface didn't settle again at {v:.6g} after "
                           "tidying its mesh (too coarse there? refine); stopping",

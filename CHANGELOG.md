@@ -32,10 +32,18 @@
   its own factorization; no gradient steps, which would leave an unstable branch).
   Between points the vertices are averaged along the surface and edges flipped (Newton
   steps move vertices only along the normal; without this the error grew to 0.5% and
-  the run broke down before the fold); the vertices themselves stay the same. Steps
-  yield `result.negative_modes`. On the catenoid between round wires (stress case 17)
+  the run broke down before the fold); the vertices themselves stay the same, and the
+  step is measured along the surface's normals (the tidying's sliding isn't a step;
+  counting it, a run turned back at the bridge's fold). Steps yield
+  `result.negative_modes`, counted with the constraints held (`eigen_counts`). On the catenoid between round wires (stress case 17)
   it turns at the fold and follows the unstable catenoid within 0.03% of the exact
-  areas. Stops with a warning when a step fails after halving or the mesh degenerates.
+  areas. On a liquid bridge between two spheres (gap 0.6, 40 degrees) shrunk at fixed
+  volume it passes the rupture fold (V 0.07306 against the axisymmetric 0.07307,
+  refined four times) onto the thinner-necked branch within 5e-4 of the reference
+  energies, and finds one negative mode from a neck of about 0.13 (V 0.08), before the
+  fold, steady under refinement: an axisymmetric mode (a single eigenvalue); following
+  it with `saddle()` lowers the energy. Stops with a warning when a step fails after
+  halving or the mesh degenerates.
 
 - `continuation()` predicts each step: from the third step on, relax starts from every
   vertex extrapolated from the last two steps (a secant predictor), which saves a fifth
