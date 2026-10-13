@@ -845,3 +845,57 @@ Left, the area against the exact catenoid, with the fold. Middle, the error. Rig
 
 The film between the wires at three separations.
 ```
+
+### Past the fold
+
+`recipes.arclength` follows the branch itself rather than the separation: each point
+lies a fixed distance along the branch from the last, so the run turns at the fold
+and comes back along the unstable catenoid, the one with the thinner neck. Its points
+are found by Newton steps alone (gradient steps would leave an unstable branch), and
+`result.negative_modes` counts the directions that lower the energy: none before the
+fold, one after.
+
+```python
+import numpy as np
+import pysurfaceevolver as pyse
+from pysurfaceevolver import constraints as C, recipes, shapes
+
+tube = shapes.tube(1.0, 0.0, 0.6, nz=4, nt=16)
+top = C.curve("cos(p1)", "sin(p1)", "ht", lambda x: np.arctan2(x[:, 1], x[:, 0]))
+ev = pyse.Evolver()
+ev.load_arrays(tube.vertices, tube.faces, boundaries={1: C.circle(), 2: top},
+               vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+               parameters={"ht": 0.6})
+ev.relax(levels=2)
+
+def catenoid(H, stable):               # the exact area, wires at -H and H
+    a_fold = H/1.19967864               # a*cosh(H/a) = 1 has two roots up to the fold
+    lo, hi = (a_fold, 1.0) if stable else (1e-3, a_fold)
+    for _ in range(100):
+        a = (lo + hi)/2
+        lo, hi = (lo, a) if (a*np.cosh(H/a) > 1) == stable else (a, hi)
+    return np.pi*a*(2*H + a*np.sinh(2*H/a))
+
+for step in recipes.arclength(ev, "ht", 0.05, 40):
+    if step.index % 5 == 0:
+        modes = step.result.negative_modes
+        exact = catenoid(step.value/2, modes == 0) if step.value < 1.3255 else float("nan")
+        print(f"wires {step.value:.4f} apart: area {step.energy:.5f} (exact {exact:.5f}), "
+              f"negative modes {modes}")
+```
+
+```text
+wires 0.6000 apart: area 3.70989 (exact 3.71143), negative modes 0
+wires 0.8358 apart: area 5.08644 (exact 5.08770), negative modes 0
+wires 1.0473 apart: area 6.24028 (exact 6.24090), negative modes 0
+wires 1.2351 apart: area 7.16066 (exact 7.16084), negative modes 0
+wires 1.2969 apart: area 7.45092 (exact 7.45009), negative modes 1
+wires 1.0883 apart: area 6.98754 (exact 6.98802), negative modes 1
+wires 0.8793 apart: area 6.68487 (exact 6.68675), negative modes 1
+wires 0.6731 apart: area 6.49278 (exact 6.49106), negative modes 1
+```
+
+Both branches match the exact areas within 0.03%. Between points the vertices are
+spread along the surface and edges flipped (Newton steps move vertices only along the
+normal); the mesh is otherwise fixed, so as the neck thins its facets shrink, and the
+run stops with a warning once the mesh can't keep up: refine first for a long run.

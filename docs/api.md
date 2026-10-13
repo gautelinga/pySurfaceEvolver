@@ -76,7 +76,7 @@ handle to it.
 
 ```{eval-rst}
 .. automodule:: pysurfaceevolver.recipes
-   :members: continuation, Step, load_steps
+   :members: continuation, arclength, Step, load_steps
 .. currentmodule:: pysurfaceevolver
 ```
 

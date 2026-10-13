@@ -71,6 +71,9 @@ datafile = pyse.make_datafile(vertices, faces, constraints={
 run resumes from; `stop_on="unconverged"` ends it at a fold, back at the last good
 step. From the third step on each relax starts from the vertices extrapolated from the
 last two steps, which saves a fifth to a half of the gradient steps.
+`pyse.recipes.arclength(ev, "ht", ds, steps)` follows a branch of equilibria through a
+fold instead (pseudo-arclength continuation, Newton steps only) and on along the
+unstable branch past it, counting the negative modes at each point.
 `ev.plot(walls=True)` draws the constraints' solids with the surface.
 
 There is one Evolver engine per process: every `Evolver` object is a handle to

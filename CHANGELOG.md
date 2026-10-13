@@ -23,6 +23,20 @@
 
 ### Continuation
 
+- `recipes.arclength(ev, what, ds, steps, bounds=)`: pseudo-arclength continuation,
+  following a branch of equilibria through a fold (where `continuation()` stops) and on
+  along the unstable branch. Each point is `ds` along the branch from the last (the
+  value's change and the vertices' RMS displacement together), predicted along the
+  secant and corrected by Newton's method on the equilibrium plus the arclength
+  condition, built from two of Evolver's Newton steps per iteration (bordering with
+  its own factorization; no gradient steps, which would leave an unstable branch).
+  Between points the vertices are averaged along the surface and edges flipped (Newton
+  steps move vertices only along the normal; without this the error grew to 0.5% and
+  the run broke down before the fold); the vertices themselves stay the same. Steps
+  yield `result.negative_modes`. On the catenoid between round wires (stress case 17)
+  it turns at the fold and follows the unstable catenoid within 0.03% of the exact
+  areas. Stops with a warning when a step fails after halving or the mesh degenerates.
+
 - `continuation()` predicts each step: from the third step on, relax starts from every
   vertex extrapolated from the last two steps (a secant predictor), which saves a fifth
   to a half of the gradient steps. Over the stress cases that step a value, the gradient

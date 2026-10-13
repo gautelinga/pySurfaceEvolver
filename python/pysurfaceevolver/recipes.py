@@ -14,6 +14,9 @@ yields a record per step::
 
 A run stopped for any reason resumes from its last finished step with
 ``resume="runs/drain"``.
+
+:func:`arclength` follows a branch of equilibria through a fold (where
+:func:`continuation` stops) and on along the unstable branch past it.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from typing import Any, Callable, Iterable, Iterator, List, Optional, Union
 
 import numpy as np
 
-__all__ = ["Step", "continuation", "load_steps"]
+__all__ = ["Step", "arclength", "continuation", "load_steps"]
 
 
 @dataclass
@@ -271,3 +274,199 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
         yield step
         if checkpoint is not None:
             _save(checkpoint, ev, done)
+
+
+# ---- through folds: pseudo-arclength continuation --------------------------------
+
+def _hessian(ev) -> None:
+    """A plain Newton step (Evolver's ``hessian``), without the warning that
+    the Hessian isn't positive definite: on an unstable branch it isn't."""
+    from ._errors import EvolverWarning
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
+        ev.command("hessian")
+
+
+def _newton_target(ev, put: Callable[[Any], None], value: float) -> "tuple[np.ndarray, int]":
+    """Where one plain Newton step at ``value`` takes the vertices (undone),
+    and the negative eigenvalues it counted."""
+    put(value)
+    start = ev._coords()
+    _hessian(ev)
+    x = ev.vertices
+    negative = int(ev.eval("eigen_neg"))
+    ev._put_back(start)
+    return x, negative
+
+
+def _arc_norm2(dx: np.ndarray, dvalue: float) -> float:
+    """arclength()'s measure of a step: the value's change and the vertices'
+    root mean square displacement."""
+    return dvalue*dvalue + float((dx*dx).sum(axis=1).mean())
+
+
+def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv: float,
+                 tol: float, max_iter: int) -> "tuple[bool, int]":
+    """Newton's method on the equilibrium and the plane through the
+    prediction normal to the tangent: from one Newton step at the value and
+    one at a nearby value, the step that is both (Keller's bordering, with
+    Evolver's factorization). Whether it converged, and the iterations."""
+    ev.vertices = x_pred
+    value = v_pred
+    n = len(x_pred)
+    for it in range(1, max_iter + 1):
+        x = ev.vertices
+        delta = 1e-6*max(1.0, abs(value))
+        n0, _ = _newton_target(ev, put, value)
+        n1, _ = _newton_target(ev, put, value + delta)
+        dn = (n1 - n0)/delta
+        # the new point n0 + dv*dn on the plane: tx.(x - x_pred)/n + tv*(v - v_pred) = 0
+        gap = float((tx*(n0 - x_pred)).sum())/n + tv*(value - v_pred)
+        slope = float((tx*dn).sum())/n + tv
+        dv = -gap/slope
+        x_new = n0 + dv*dn
+        value += dv
+        put(value)
+        ev.vertices = x_new
+        if _arc_norm2(x_new - x, dv) < tol*tol and ev.residual() < tol:
+            return True, it
+    return False, max_iter
+
+
+def _arc_settle(ev, tol: float, tidy: bool) -> "tuple[bool, int, float]":
+    """After a converged step: the vertices spread along the surface (Newton
+    moves them along its normal only) and edges flipped, keeping the same
+    vertices; then plain Newton steps back to the equilibrium. Whether it is
+    there, the negative eigenvalues, the residual."""
+    if tidy:
+        for _ in range(2):
+            ev.vertex_average()
+            ev.equiangulate()
+    negative, residual = 0, ev.residual()
+    for _ in range(8):
+        _hessian(ev)
+        negative = int(ev.eval("eigen_neg"))
+        residual = ev.residual()
+        if residual < tol:
+            return True, negative, residual
+    return False, negative, residual
+
+
+def arclength(ev, what: Any, ds: float, steps: int, *,
+              bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
+              tidy: bool = True, halvings: int = 3) -> Iterator[Step]:
+    """Follow a branch of equilibria through folds: pseudo-arclength
+    continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
+    target volume or ``ev.quantity(name)``'s target).
+
+    Where :func:`continuation` steps the value and stops at a fold (no
+    equilibrium past it), this steps along the branch itself: each point is
+    a distance ``ds`` from the last, measured as the change of the value and
+    the root mean square displacement of the vertices together. So it turns
+    at a fold and goes on along the other branch, typically unstable (a
+    catenoid past its widest span, a drop or bridge past its largest
+    volume). Yields a :class:`Step` per point, starting with the first two;
+    ``result.negative_modes`` counts the Hessian's negative eigenvalues there
+    (0 on a stable branch, 1 past a simple fold; symmetries can add
+    near-zero ones, see :meth:`Evolver.stability`).
+
+    It starts by relaxing the surface at the current value, then takes Newton
+    steps to the value plus ``ds`` (the sign sets the direction). From there
+    each point is a prediction along the secant of the last two, corrected by
+    Newton's method on the equilibrium together with the condition of being
+    ``ds`` along the branch (each iteration: two Newton steps of Evolver's).
+    No gradient steps: those would leave an unstable branch. The vertices
+    stay the same: no refinement or remeshing (refine before), but between
+    points (``tidy=True``) they are spread along the surface and edges
+    flipped, which Newton steps alone don't do.
+
+    Stops after ``steps`` points, at the first point outside ``bounds``
+    (``(low, high)`` on the value; the surface is put back at the last one
+    inside), or, with a warning, when a step doesn't converge even at
+    ``ds/2**halvings`` (put back at the last point) or the facets degenerate
+    (below 1 degree: refine and start again from there). ``tol`` bounds the
+    residual of each point, as in :meth:`Evolver.relax`.
+    """
+    if ds == 0 or steps < 0 or halvings < 0:
+        raise ValueError("arclength() needs ds != 0, steps >= 0 and halvings >= 0")
+    set_value = _setter(what)
+    value = _current(ev, what)
+    if not _numeric(value):
+        raise TypeError("arclength() follows a value it can read: a parameter or variable "
+                        "name, ev.body(i) or ev.quantity(name)")
+
+    def put(v: float) -> None:
+        set_value(ev, v)
+        ev.command("recalc")        # boundaries follow a parameter (assigning one doesn't)
+
+    def step(index: int, v: float, iterations: int, negative: int, residual: float) -> Step:
+        bodies = ev.bodies()
+        none = np.empty(0)
+        result = IterationResult(none, none, none, "", converged=True, newton_steps=iterations,
+                                 residual=residual, negative_modes=negative,
+                                 stable=negative == 0)
+        return Step(index, v, ev.energy, np.array(bodies.volume), np.array(bodies.pressure),
+                    result)
+
+    def outside(v: float) -> bool:
+        return bounds is not None and not (min(bounds) <= v <= max(bounds))
+
+    from ._results import IterationResult
+    r = ev.relax(stability=False, tol=tol)
+    if not r.converged:
+        warnings.warn("arclength(): the surface didn't relax at the start", UserWarning,
+                      stacklevel=2)
+        return
+    ok, negative, residual = _arc_settle(ev, tol, False)
+    points = [(float(value), ev.vertices)]
+    yield step(0, float(value), 0, negative, residual)
+    if steps < 2:
+        return
+    put(value + ds)
+    kept = ev.newton(20, tol=tol)
+    ok, negative, residual = _arc_settle(ev, tol, tidy)
+    if not (kept.converged and ok):
+        warnings.warn(f"arclength(): no equilibrium found at {value + ds:.6g} by Newton "
+                      "steps (try a smaller ds)", UserWarning, stacklevel=2)
+        return
+    points.append((float(value + ds), ev.vertices))
+    yield step(1, float(value + ds), kept.newton_steps, negative, residual)
+    h = abs(ds)
+    for index in range(2, steps):
+        (v0, x0), (v1, x1) = points[-2], points[-1]
+        if len(x0) != len(x1) or len(x1) != len(ev.vertices):
+            raise RuntimeError("arclength(): the vertices changed between points (it "
+                               "needs the same mesh throughout)")
+        norm = np.sqrt(_arc_norm2(x1 - x0, v1 - v0))
+        tx, tv = (x1 - x0)/norm, (v1 - v0)/norm
+        last = ev._coords()
+        for k in range(halvings + 1):
+            ok, iterations = _arc_correct(ev, put, x1 + h*tx, v1 + h*tv, tx, tv, tol, 12)
+            if ok:
+                break
+            ev._put_back(last)
+            put(v1)
+            h /= 2
+        if not ok:
+            warnings.warn(f"arclength(): no equilibrium found past {v1:.6g} (even with "
+                          f"steps of {h*2:.3g}); the surface is back at the last point",
+                          UserWarning, stacklevel=2)
+            return
+        v = float(_current(ev, what))
+        if outside(v):
+            ev._put_back(last)
+            put(v1)
+            return
+        ok, negative, residual = _arc_settle(ev, tol, tidy)
+        if not ok:
+            warnings.warn(f"arclength(): the surface didn't settle again at {v:.6g} after "
+                          "tidying its mesh (too coarse there? refine); stopping",
+                          UserWarning, stacklevel=2)
+            return
+        points = [points[-1], (v, ev.vertices)]
+        yield step(index, v, iterations, negative, residual)
+        if ev.mesh_quality().angle_min < 1.0:
+            warnings.warn(f"arclength(): facets below 1 degree at {v:.6g}: refine and start "
+                          "again from here", UserWarning, stacklevel=2)
+            return
+        h = min(abs(ds), 2*h)       # back up to ds after halving
