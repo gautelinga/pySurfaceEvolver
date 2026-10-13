@@ -22,10 +22,12 @@ IterationResult; with optimizing parameters, constraint projection polishes vert
 within the tolerance (bga-5 refined four times converges; the "parameter Hessian
 limit" was the projection; for all surfaces it broke case 8 at 2 threads);
 `Evolver(process=True)` (a surface per worker process, same API, `_remote.py`,
-`_worker.py`).
+`_worker.py`; docs page several_surfaces.md); `recipes.arclength` (pseudo-arclength
+through folds; Newton-only, bordered via two Evolver Newton steps; V + u between
+points; catenoid's unstable branch within 0.03%).
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 450 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 455 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
