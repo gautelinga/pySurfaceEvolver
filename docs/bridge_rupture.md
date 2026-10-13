@@ -64,7 +64,7 @@ V, necks, modes = np.array(rows).T
 k, f = np.flatnonzero(modes == 1)[0], np.argmin(V)
 print(f"stable down to volume {V[k-1]:.4f} (neck {necks[k-1]:.4f}), "
       f"one negative mode from {V[k]:.4f} (neck {necks[k]:.4f})")
-print(f"least volume {V[f]:.4f} (neck {necks[f]:.3f}), then two negative modes")
+print(f"least volume {V[f]:.4f}")
 
 # the unstable mode: step along it from the first unstable bridge
 ev.restore(first_unstable)
@@ -81,18 +81,44 @@ print("  (scaled to 1 at the top): ", " ".join(f"{m/moved[-1]:+.2f}" for m in mo
 
 ```text
 stable down to volume 0.0795 (neck 0.1325), one negative mode from 0.0773 (neck 0.1261)
-least volume 0.0730 (neck 0.101), then two negative modes
+least volume 0.0730
 radial displacement at z = -0.25 -0.15 -0.05 +0.05 +0.15 +0.25
   (scaled to 1 at the top):  -1.06 -0.99 -0.52 +0.45 +0.93 +1.00
 ```
 
 The bridge turns unstable between volumes 0.0795 and 0.0773, while it still has a
 volume to lose before the fold at 0.0730. Past the fold a second negative mode
-appears, the fold's own. {meth}`~pysurfaceevolver.Evolver.saddle` steps along the
-first unstable mode, and that mode is odd about the mid-plane: the bridge narrows on
-one side of it and widens on the other, so liquid moves toward one sphere. Which
-sphere is chance (the mode's sign is arbitrary). The run takes about half a minute on
-two threads.
+appears, the fold's own. The run takes about half a minute on two threads.
+
+```{figure} _static/bridge_rupture_shapes.png
+:alt: The bridge at four points of the run: at the start, at the first unstable point, at the fold, and past the fold
+:width: 100%
+
+The bridge along the run: at the start (volume 0.15), at its first unstable point,
+at the fold (the least volume), and past it on the thinner-necked branch, where the
+fold's own mode has made a second one.
+```
+
+At this refinement (8192 facets) `arclength` stops at the fold, with a warning, in
+about half the runs: its corrector converges slowly there, and which runs stop
+depends on how the threads share out the work. The code above reports what the run
+reached, which is the same either way. The pictures come from a run that got past
+the fold.
+
+{meth}`~pysurfaceevolver.Evolver.saddle` steps along the first unstable mode. The
+mode is odd about the mid-plane: the bridge narrows on one side of it and widens on
+the other, so liquid moves toward one sphere. Which sphere is chance (the mode's
+sign is arbitrary).
+
+```{figure} _static/bridge_rupture_mode.png
+:alt: The first unstable bridge coloured by its unstable mode, and the bridge pushed along the mode
+:width: 80%
+
+Left, the first unstable bridge coloured by how its surface moves along the mode
+(scaled to 1 at the most): in at one end, out at the other, nothing at the
+mid-plane. Right, the bridge pushed along the mode, exaggerated six times, over the
+bridge before (grey).
+```
 
 ## The reference
 
@@ -151,7 +177,17 @@ its number of negative modes. Top right, the height of the neck: the off-centre 
 branch off at the branch point and exist only at larger volumes. Bottom left, how much
 more energy an off-centre bridge has than the symmetric one of the same volume. Bottom
 right, a section through two bridges of volume 0.098: the stable symmetric one and the
-off-centre one. Drawn by `tools/bridge_rupture_figure.py`.
+off-centre one. Drawn by `tools/bridge_rupture_figure.py`, as are the other
+pictures on this page.
+```
+
+```{figure} _static/bridge_rupture_saddle.png
+:alt: The stable symmetric bridge and the off-centre saddle of the same volume, in 3D
+:width: 80%
+
+The two bridges of the bottom-right section, as surfaces: the stable symmetric one,
+and the off-centre one with its neck 0.1 above the mid-plane, a saddle between the
+symmetric bridge and breaking.
 ```
 
 ## What it means

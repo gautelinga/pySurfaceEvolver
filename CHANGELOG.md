@@ -43,7 +43,9 @@
   energies, and finds one negative mode from a neck of about 0.13 (V 0.08), before the
   fold, steady under refinement: an axisymmetric mode odd about the mid-plane (Vogel's
   small volume instability; see "Where a shrinking bridge breaks" below); following it
-  with `saddle()` lowers the energy. Stops with a warning when a step fails after
+  with `saddle()` lowers the energy. Refined three times (8192 facets) it stops at that
+  fold, with a warning, in about half the runs (4 of 8): its corrector converges
+  slowly near the fold, and which runs stop depends on the thread scheduling. Stops with a warning when a step fails after
   halving or the mesh degenerates.
 
 - `continuation()` predicts each step: from the third step on, relax starts from every
@@ -79,8 +81,10 @@
   energy than the symmetric one (a subcritical pitchfork; T. I. Vogel's small volume
   instability, 2013). New helpers in `docs/stress_helpers.py`
   (`bridge_spheres_fold`, `bridge_spheres_branch`, `bridge_spheres_offset`), a figure
-  drawn by `tools/bridge_rupture_figure.py`, and the page's code checked by
-  `tools/check_doc_snippets.py`.
+  drawn by `tools/bridge_rupture_figure.py` along with pictures of the bridge along
+  the run, its unstable mode and the off-centre bridge in 3D, and the page's code
+  checked by `tools/check_doc_snippets.py` (its output is the same whether or not the
+  run gets past the fold).
 
 - A shorter README (92 lines, was 261): what pySE is, a picture of four relaxed
   surfaces, install, one example with its output, and where to read on, with badges.
