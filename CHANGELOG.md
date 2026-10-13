@@ -70,6 +70,20 @@
 
 ### Fixes
 
+- `relax()` with a body volume or fixed quantity far from its target (more than 25%):
+  if the first gradient step leaves degenerate facets (below 1 degree) the surface
+  didn't have, it is undone and the target approached in stages of at most 10%, each
+  with 20 tidied gradient steps. Evolver's projection onto a far target moves each
+  vertex along its volume gradient, several edge lengths and unequally where the mesh
+  is irregular, and folded facets: drops at 30-120 degrees taken from volume 1 to
+  0.25-4 in one relax() failed 15 of 72 times (3 perturbed starts each), now 9 (the
+  rest mostly a contact line receding far, as stress case 8: a continuation or
+  remeshing). The trial step is undone otherwise (coordinates and step size), so
+  other surfaces relax exactly as before (same stress results and gradient steps).
+  Staging every far target instead lost coarse starts (stress case 5's bridge, 2.6
+  times its volume: its contact lines drift during the stages); not with optimizing
+  parameters (bga-5's loaded pad has no equilibrium at the smaller volumes on the way).
+
 - With optimizing parameters, constraint projection takes one more step for a vertex
   that ends within `constraint_tolerance` of its constraints but not well inside it
   (above 1e-3 times the tolerance): projection converges quadratically, so the vertex

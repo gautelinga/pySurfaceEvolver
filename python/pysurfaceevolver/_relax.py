@@ -55,6 +55,9 @@ _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
 _CONTACT_SPLITS = 3            # relax(): splits of long contact-line spokes, at most
 _CONTACT_PASSES = 2           # relax(): relaxes after splitting long contact-line spokes, at most
 _ROUND_BLOWUP = 2             # a gradient round more than doubling the residual or a target gap is undone
+_STAGE_GAP = 0.25             # relax() stages a target further off than this (relative) if a round folds facets,
+_STAGE = 0.1                  # ... each moving the targets by at most this (relative),
+_STAGE_STEPS = 20             # ... with this many gradient steps (tidied as usual)
 _TURN = 15.0                  # adapt(): default turning angle (degrees) across an edge
 _ADAPT_SHORT = 0.75           # adapt() merges edges shorter than this times the bulk length,
 _ADAPT_FLAT = 1/3              # ... turning by less than this times max_turn,
@@ -124,6 +127,12 @@ class _Relaxing(_Analysis):
           10%; if that converges, that is all. If not, the
           surface goes back and the steps below follow; right after such a
           miss, the next call skips the attempt.
+        * A body volume or fixed quantity whose target is more than 25% from
+          its value: if the first gradient step toward it leaves degenerate
+          facets (below 1 degree) the surface didn't have, it is undone and
+          the target is approached in stages of at most 10%, each followed by
+          20 gradient steps (tidied as below): in one go, Evolver's projection
+          onto a far target can fold facets.
         * Gradient steps (Evolver's ``g``) come in rounds of ``tidy`` steps,
           each followed by equiangulation and vertex averaging (``u; V``;
           only ``V`` for strings and the Lagrange model, only ``u`` in the
@@ -261,8 +270,10 @@ class _Relaxing(_Analysis):
                        undo_if=undo_if, energy_tol=energy_tol, callback=callback, every=every)
             trace = run.trace
             facets0 = self.counts["facets"]
-            first = run.newton_first() if newton and levels == 0 and self.model != "linear" \
-                else None
+            first = None
+            if newton and levels == 0 and self.model != "linear":
+                run.approach()
+                first = run.newton_first()
             if first is not None:
                 steps, residual = first
             else:
@@ -270,6 +281,7 @@ class _Relaxing(_Analysis):
                     if lev:
                         self.refine()
                     try:
+                        run.approach()
                         run.settle(lev)
                     except EvolverError as e:
                         # a start with nothing free to move (Brakke's bga-30:
@@ -838,6 +850,65 @@ class _Run:
         self.trace = _Trace()
         self.slowed = False         # the last rounds ended slowing down (see settle)
         self.early_newton = 0       # Newton steps a trial in settle() kept
+
+    def approach(self) -> None:
+        """A target far from the surface (a body volume or fixed quantity
+        more than 25% off): first one gradient step toward it as usual; if
+        that leaves degenerate facets (below 1 degree) the surface didn't
+        have, it is undone and the targets are approached in stages of at
+        most 10%, each with a few tidied gradient steps. Evolver's projection
+        onto a target moves each vertex along its volume gradient, several
+        edge lengths for a large change and unequally where the mesh is
+        irregular: in one go it can fold facets (drops shrunk to half their
+        volume at 90 and 120 degrees). Staging every far target instead
+        lost coarse starts that the direct way converges (a bridge 2.6 times
+        its volume: its contact lines drift during the stages)."""
+        ev = self.ev
+        # (not with optimizing parameters: what they balance may have no
+        # equilibrium on the way, as bga-5's loaded pad at a smaller volume,
+        # whose height then runs off)
+        if ev._target_gap()[0] <= _STAGE_GAP or ev.parameters.optimizing or ev._degenerate():
+            return
+        targets: List[Tuple[Any, float, float]] = []
+        b = ev.bodies()
+        for i, fixed, now, target in zip(b.ids, b.fixed, b.volume, b.target):
+            if fixed:
+                targets.append((ev.body(int(i)), float(now), float(target)))
+        for name, q in ev.quantities().items():
+            if q.kind == "fixed":
+                targets.append((ev.quantity(name), float(q.value), float(q.target)))
+        # a trial step (the projection onto the targets, and one step),
+        # undone either way: a surface it doesn't fold goes on as without it.
+        # Its coordinates undo it (a restored dump isn't the same path: a
+        # constraint with a parameter then relaxes differently)
+        coords, start, mark = ev._coords(), ev.save(), self.trace.mark()
+        scale = ev.eval("scale")            # (the step size the next step starts from)
+        self.rounds(0, 1, 0)
+        folded = ev._degenerate()
+        if not ev._put_back(coords):        # (autopop or autochop changed the topology)
+            ev.restore(start)
+        ev.command(f"scale := {scale!r}")
+        self.trace.rewind(mark)
+        if not folded:
+            return
+
+        def stages(now: float, target: float) -> int:
+            if now*target > 0:
+                return int(np.ceil(abs(np.log(target/now))/np.log1p(_STAGE)))
+            return int(np.ceil(abs(target - now)/(_STAGE*max(abs(now), abs(target), 1e-300))))
+
+        def between(now: float, target: float, f: float) -> float:
+            return now*(target/now)**f if now*target > 0 else now + f*(target - now)
+
+        n = max(stages(now, target) for _, now, target in targets)
+        try:
+            for k in range(1, n):
+                for view, now, target in targets:
+                    view.target = between(now, target, k/n)
+                self.rounds(0, _STAGE_STEPS, self.tidy)
+        finally:
+            for view, _, target in targets:
+                view.target = target
 
     def next_level(self, levels: int) -> int:
         """The level after the last one with gradient steps (adaptive passes,
