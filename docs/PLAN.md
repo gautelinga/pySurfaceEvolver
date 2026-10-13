@@ -18,8 +18,9 @@ v0.7.4 tag; main is green); a short README with a picture (`tools/readme_figure.
 its API tour moved to `docs/tour.md` and the development notes to `docs/development.md`;
 `continuation()` predicts each step from the last two (secant predictor, on by default,
 13-49% fewer gradient steps over the continuation stress cases); `newton()` returns an
-IterationResult; constraint projection polishes vertices within the tolerance (bga-5
-refined four times converges; the "parameter Hessian limit" was the projection);
+IterationResult; with optimizing parameters, constraint projection polishes vertices
+within the tolerance (bga-5 refined four times converges; the "parameter Hessian
+limit" was the projection; for all surfaces it broke case 8 at 2 threads);
 `Evolver(process=True)` (a surface per worker process, same API, `_remote.py`,
 `_worker.py`).
 

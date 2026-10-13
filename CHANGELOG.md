@@ -48,15 +48,16 @@
 
 ### Fixes
 
-- Constraint projection takes one more step for a vertex that ends within
-  `constraint_tolerance` of its constraints but not well inside it (above 1e-3 times
-  the tolerance): projection converges quadratically, so the vertex lands on them to
-  rounding. Left up to the tolerance off, the vertices stalled Newton's residual on fine
-  meshes with an optimizing parameter: `bga-5.fe` refined four times ended "not
-  converged" at a residual of 2.6e-7 after 11 s; it now converges (6.5e-10) in 1 s.
-  The limit was blamed on Evolver's finite-difference parameter Hessian; varying its
-  step (`pdelta`) didn't move it. Same stress results; iteration times within 2% at 2M
-  facets with a contact line on a sphere. The solder notebook drops its `tol=1e-6`.
+- With optimizing parameters, constraint projection takes one more step for a vertex
+  that ends within `constraint_tolerance` of its constraints but not well inside it
+  (above 1e-3 times the tolerance): projection converges quadratically, so the vertex
+  lands on them to rounding. Left up to the tolerance off, the vertices stalled
+  Newton's residual on fine meshes: `bga-5.fe` refined four times ended "not converged"
+  at a residual of 2.6e-7 after 11 s; it now converges (6.5e-10) in under 1 s. The
+  limit was blamed on Evolver's finite-difference parameter Hessian; varying its step
+  (`pdelta`) didn't move it. Surfaces without optimizing parameters project as before:
+  applied to all, the extra step left stress case 8 (the remeshed drainage band)
+  unconverged at two threads. The solder notebook drops its `tol=1e-6`.
 
 - `continuation()`'s warning when it stops names the step as a plain number; with
   NumPy 2 and NumPy steps it said `np.float64(1.4)`.

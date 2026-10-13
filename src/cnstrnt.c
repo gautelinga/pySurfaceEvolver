@@ -382,12 +382,15 @@ int project_v_constr(
       walls++;
     }
     if ( totaldiff < web.tolerance )
-    { /* one more step from within the tolerance unless well inside it:
-         projection converges quadratically, so it puts the vertex on its
-         constraints to rounding. Left up to the tolerance off them, the
-         vertices stalled Newton's residual around 1e-7 on fine meshes
-         with an optimizing parameter (bga-5.fe refined four times) */
-      if ( polished || totaldiff < 1e-3*web.tolerance ) break;
+    { /* with optimizing parameters, one more step from within the
+         tolerance unless well inside it: projection converges
+         quadratically, so it puts the vertex on its constraints to
+         rounding. Left up to the tolerance off them, the vertices
+         stalled Newton's residual around 1e-7 on fine meshes (bga-5.fe
+         refined four times). Not for every surface: the drainage band
+         (pySE's stress case 8) then went unconverged at two threads */
+      if ( polished || optparamcount == 0 || totaldiff < 1e-3*web.tolerance )
+        break;
       polished = 1;
     }
 
