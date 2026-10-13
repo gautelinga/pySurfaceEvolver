@@ -159,10 +159,13 @@ def test_newton_steps(cube):
     cube.refine()
     cube.relax(tol=1e-6, max_iter=300)
     before = cube.total_energy
-    kept = cube.newton(5, tol=1e-12, seek=True)
-    assert 1 <= kept <= 5 and cube.total_energy <= before + 1e-12
+    r = cube.newton(5, tol=1e-12, seek=True)
+    assert 1 <= r.newton_steps <= 5 and cube.total_energy <= before + 1e-12
+    assert r.converged == (r.residual < 1e-12) and r.residual == pytest.approx(cube.residual())
+    assert len(r.energy) == 0 and "Newton step" in repr(r)
     calls = []           # undo_if is asked after every attempt (plain, then line search)
-    assert cube.newton(2, undo_if=lambda ev: calls.append(1) or len(calls) >= 2) <= 1
+    r = cube.newton(2, undo_if=lambda ev: calls.append(1) or len(calls) >= 2)
+    assert r.newton_steps <= 1
     with pytest.raises(ValueError):
         cube.relax(tidy=-1)
 

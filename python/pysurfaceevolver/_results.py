@@ -71,11 +71,13 @@ class Health:
 
 @dataclass
 class IterationResult:
-    """What :meth:`Evolver.iterate` or :meth:`Evolver.relax` did.
+    """What :meth:`Evolver.iterate`, :meth:`Evolver.relax` or
+    :meth:`Evolver.newton` did.
 
     ``energy``, ``area``, ``scale`` and ``level`` (the refinement level, from
-    0) have one entry per gradient iteration. ``converged`` and
-    ``newton_steps`` are set by :meth:`Evolver.relax`.
+    0) have one entry per gradient iteration (none for newton()).
+    ``converged``, ``newton_steps`` and ``residual`` are set by
+    :meth:`Evolver.relax` and :meth:`Evolver.newton`.
     """
 
     energy: np.ndarray
@@ -85,7 +87,7 @@ class IterationResult:
     converged: Optional[bool] = None
     newton_steps: int = 0
     level: Optional[np.ndarray] = None
-    residual: float = float("nan")    # Evolver.residual() at the end (relax)
+    residual: float = float("nan")    # Evolver.residual() at the end (relax, newton)
     stable: Optional[bool] = None      # relax(): checked once converged (None: not checked)
     negative_modes: Optional[int] = None   # relax(): directions that lower the energy
     health: Optional["Health"] = None  # relax(): Evolver.health() at the end
@@ -103,8 +105,10 @@ class IterationResult:
             energy = f", energy {self.energy[0]:.10g} -> {self.energy[-1]:.10g}" if n else ""
             return f"IterationResult({steps}{energy})"
         settled = " (energy settled)" if self.settled else ""
+        k = self.newton_steps
+        done = f"{steps} and {k} Newton" if n else f"{k} Newton step{'' if k == 1 else 's'}"
         parts = [("converged" if self.converged else "not converged") + settled
-                 + f" after {steps} and {self.newton_steps} Newton",
+                 + f" after {done}",
                  f"residual {self.residual:.2g}"]
         if self.popped or self.collapsed:
             parts.append(f"{self.popped} popped, {self.collapsed} collapsed edges deleted")

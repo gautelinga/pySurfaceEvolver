@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### API
+
+- `ev.newton()` returns an `IterationResult`, as `relax()` does, instead of the number
+  of steps kept: `newton_steps` (the steps kept), `residual`, and `converged` (the
+  residual below `tol`, or 1e-8 without one, with the volume and quantity targets met).
+  Breaking: code using the number reads `ev.newton(...).newton_steps`.
+
 ### Continuation
 
 - `continuation()` predicts each step: from the third step on, relax starts from every

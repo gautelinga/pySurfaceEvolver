@@ -526,7 +526,7 @@ class _Relaxing(_Analysis):
 
     def newton(self, steps: int = 1, *, seek: Optional[bool] = None, tol: Optional[float] = None,
                undo_if: Optional[Callable[["Evolver"], bool]] = None,
-               threads: Optional[int] = None) -> int:
+               threads: Optional[int] = None) -> IterationResult:
         """Up to ``steps`` safeguarded Newton steps.
 
         Each step is a plain Newton step (``hessian``), or, if that one is
@@ -546,13 +546,23 @@ class _Relaxing(_Analysis):
         larger in one go) it can end at an unstable one. Check with
         :meth:`stability`, or let :meth:`relax` (gradient steps first) or a
         continuation in smaller steps take such jumps.
-        Returns the number of steps kept. (:meth:`hessian` takes one step with
-        no checks.)
+        Returns an :class:`IterationResult`: ``newton_steps`` (the steps
+        kept), ``residual``, and ``converged``: the residual below ``tol``
+        (without one, :meth:`relax`'s default 1e-8) and the targets met.
+        Stability isn't checked (:meth:`stability`). (:meth:`hessian` takes
+        one step with no checks.)
         """
         if steps < 0:
             raise ValueError("steps must be non-negative")
+        output: List[str] = []
         with _threads_for_call(threads):
-            return self._newton(steps, seek, tol, undo_if, [])[0]
+            kept, residual = self._newton(steps, seek, tol, undo_if, output)
+        gap, _ = self._target_gap()
+        none = np.empty(0)
+        return IterationResult(none, none, none, "".join(output),
+                               converged=bool(residual < (1e-8 if tol is None else tol)
+                                              and gap <= _TARGET_LOST),
+                               newton_steps=kept, residual=residual)
 
     def _newton(self, steps: int, seek: Optional[bool], tol: Optional[float],
                 undo_if: Optional[Callable[["Evolver"], bool]],

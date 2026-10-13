@@ -55,7 +55,8 @@ def test_newton_meets_a_new_volume_target(cube):
     cube.relax(levels=1, stability=False)
     for target in (2.0, 0.5):
         cube.body(1).target = target
-        assert cube.newton(10) > 0
+        r = cube.newton(10)
+        assert r.newton_steps > 0 and r.converged
         assert cube.body(1).volume == pytest.approx(target, rel=1e-9)
         assert cube.residual() < 1e-8
 
