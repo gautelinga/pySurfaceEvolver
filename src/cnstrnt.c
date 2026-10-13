@@ -331,6 +331,7 @@ int project_v_constr(
   int oncount = 0;
   REAL f[MAXCONHIT],delta[MAXCOORD];
   int j,itercount = 0;
+  int polished = 0; /* one step taken from inside the tolerance */
   REAL diff,totaldiff;
   int walls = 0;  /* total number of constraints vertex is on */
   REAL maxdiff;
@@ -380,7 +381,15 @@ int project_v_constr(
           set_v_constraint_status(v_id,conmap[j]);
       walls++;
     }
-    if ( totaldiff < web.tolerance ) break;
+    if ( totaldiff < web.tolerance )
+    { /* one more step from within the tolerance unless well inside it:
+         projection converges quadratically, so it puts the vertex on its
+         constraints to rounding. Left up to the tolerance off them, the
+         vertices stalled Newton's residual around 1e-7 on fine meshes
+         with an optimizing parameter (bga-5.fe refined four times) */
+      if ( polished || totaldiff < 1e-3*web.tolerance ) break;
+      polished = 1;
+    }
 
     constr_proj(PLAINPROJ,oncount,con,x,f,delta,NULL,NO_DETECT,v_id);
     for ( j = 0 ; j < SDIM ; j++ )
