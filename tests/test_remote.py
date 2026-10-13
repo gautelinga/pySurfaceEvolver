@@ -70,6 +70,8 @@ def test_a_continuation_steps_a_remote_body(remote):
 
 
 def test_callbacks_run_in_the_worker_and_print_here(remote, capsys):
+    pytest.importorskip("cloudpickle")      # (to send a function defined in a function)
+
     def callback(ev, i):
         print("step", i, ev.counts["facets"])
         warnings.warn(f"at {i}", UserWarning)
@@ -80,6 +82,31 @@ def test_callbacks_run_in_the_worker_and_print_here(remote, capsys):
 
 
 def test_closing_and_a_dead_worker(fe_dir):
+    # (as if a library had reset SIGPIPE: writing to the dead worker must
+    # raise, not kill this process)
+    previous = signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    try:
+        _closing_and_a_dead_worker()
+    finally:
+        signal.signal(signal.SIGPIPE, previous)
+
+
+def test_a_function_that_cant_be_sent(remote, monkeypatch):
+    import builtins
+    real = builtins.__import__
+
+    def no_cloudpickle(name, *args, **kwargs):
+        if name == "cloudpickle":
+            raise ImportError(name)
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_cloudpickle)
+    with pytest.raises(TypeError, match="cloudpickle"):
+        remote.iterate(1, callback=lambda ev, i: None)
+    assert remote.counts["facets"] == 24    # and the worker is fine
+
+
+def _closing_and_a_dead_worker():
     ev = pyse.Evolver("cube.fe", process=True, threads=1)
     os.kill(ev.pid, signal.SIGKILL)
     time.sleep(0.2)

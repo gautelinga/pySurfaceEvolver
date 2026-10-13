@@ -8,21 +8,21 @@ from __future__ import annotations
 
 import os
 import pickle
+import socket
 import sys
 import traceback
 import warnings
-from multiprocessing.connection import Connection
 
 
 class _Forward:
     """Text written here goes to the parent, printed there."""
 
-    def __init__(self, conn: Connection, stream: int):
+    def __init__(self, conn, stream: int):
         self.conn, self.stream = conn, stream
 
     def write(self, text: str) -> int:
         if text:
-            self.conn.send_bytes(pickle.dumps(("out", self.stream, text)))
+            self.conn.send(pickle.dumps(("out", self.stream, text)))
         return len(text)
 
     def flush(self) -> None:
@@ -48,18 +48,18 @@ def _sendable(reply: tuple) -> bytes:
 
 
 def main() -> None:
-    conn = Connection(int(sys.argv[1]))
+    from pysurfaceevolver._remote import Channel, answer
+    conn = Channel(socket.socket(fileno=int(sys.argv[1])))
     # Ctrl-C at a terminal reaches the parent only, which passes it on once
     os.setpgid(0, 0)
     sys.stdout = _Forward(conn, 0)      # prints (echo=True, callbacks) to the parent
     sys.stderr = _Forward(conn, 1)
     import pysurfaceevolver as pyse
-    from pysurfaceevolver._remote import answer
     ev = pyse.Evolver()
-    conn.send_bytes(pickle.dumps(("ready", os.getpid())))
+    conn.send(pickle.dumps(("ready", os.getpid())))
     while True:
         try:
-            data = conn.recv_bytes()
+            data = conn.recv()
         except (EOFError, OSError):
             return
         if not data:
@@ -80,7 +80,7 @@ def main() -> None:
                 except Exception:  # noqa: BLE001
                     reply = ("error", f"{type(e).__name__}: {e}", trace)
         found = [(w.category, str(w.message)) for w in caught]
-        conn.send_bytes(_sendable(reply + (found,)))
+        conn.send(_sendable(reply + (found,)))
 
 
 if __name__ == "__main__":

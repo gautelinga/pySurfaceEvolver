@@ -14,14 +14,15 @@ from __future__ import annotations
 import inspect
 import os
 import pickle
+import select
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
 import warnings
 import weakref
-from multiprocessing.connection import Connection
 from typing import Any, Optional, Tuple
 
 from ._errors import EvolverBusyError
@@ -39,9 +40,54 @@ def _dumps(obj: Any) -> bytes:
     script or notebook can then be sent too)."""
     try:
         import cloudpickle
-        return cloudpickle.dumps(obj)
     except ImportError:
-        return pickle.dumps(obj)
+        try:
+            return pickle.dumps(obj)
+        except (pickle.PicklingError, AttributeError, TypeError) as e:
+            raise TypeError(f"can't send this to the worker process: {e} (functions defined "
+                            "inside functions, as lambdas or in a notebook need cloudpickle: "
+                            "pip install cloudpickle)") from None
+    try:
+        return cloudpickle.dumps(obj)
+    except (pickle.PicklingError, AttributeError, TypeError) as e:
+        raise TypeError(f"can't send this to the worker process: {e}") from None
+
+
+class Channel:
+    """Messages over a stream socket, each with its length in front. Sending
+    to a closed peer raises OSError, never SIGPIPE, whatever that signal's
+    disposition (libraries such as VTK can reset it to the default, which
+    kills the process)."""
+
+    def __init__(self, sock: socket.socket):
+        self.sock = sock
+        nosigpipe = getattr(socket, "SO_NOSIGPIPE", 0x1022 if sys.platform == "darwin" else None)
+        if nosigpipe is not None:
+            sock.setsockopt(socket.SOL_SOCKET, nosigpipe, 1)
+        self.flags = getattr(socket, "MSG_NOSIGNAL", 0)
+
+    def send(self, data: bytes) -> None:
+        self.sock.sendall(struct.pack("!Q", len(data)) + data, self.flags)
+
+    def wait(self) -> None:
+        """Until a message is there (a Ctrl-C meanwhile leaves the stream intact)."""
+        select.select([self.sock], [], [])
+
+    def recv(self) -> bytes:
+        return self._exactly(struct.unpack("!Q", self._exactly(8))[0])
+
+    def _exactly(self, n: int) -> bytes:
+        buf = bytearray(n)
+        view, got = memoryview(buf), 0
+        while got < n:
+            k = self.sock.recv_into(view[got:], n - got)
+            if k == 0:
+                raise EOFError("the other process closed the connection")
+            got += k
+        return bytes(buf)
+
+    def close(self) -> None:
+        self.sock.close()
 
 
 def _view_class(name: str) -> type:
@@ -76,13 +122,12 @@ class _Worker:
             [sys.executable, "-m", "pysurfaceevolver._worker", str(theirs.fileno())],
             pass_fds=(theirs.fileno(),), env=env, close_fds=True)
         theirs.close()
-        self.conn = Connection(os.dup(mine.fileno()))
-        mine.close()
+        self.conn = Channel(mine)
         self.lock = threading.Lock()
         self.dead: Optional[str] = None
         self.owner: Any = None              # the RemoteEvolver (a weak reference)
         try:
-            ready = self.conn.recv_bytes()
+            ready = self.conn.recv()
         except (EOFError, OSError):
             self.process.wait()
             raise WorkerStartError(self.process.returncode) from None
@@ -103,8 +148,9 @@ class _Worker:
             raise EvolverBusyError("Surface Evolver is busy (another thread is using this "
                                    "worker)")
         try:
+            data = _dumps((os.getcwd(),) + message)
             try:
-                self.conn.send_bytes(_dumps((os.getcwd(),) + message))
+                self.conn.send(data)
             except (OSError, ValueError):
                 self._crashed()
             return self._reply()
@@ -114,9 +160,9 @@ class _Worker:
     def _reply(self) -> Any:
         while True:
             try:
-                # poll first: an interrupt then never cuts a message in half
-                self.conn.poll(None)
-                data = self.conn.recv_bytes()
+                # wait first: an interrupt then never cuts a message in half
+                self.conn.wait()
+                data = self.conn.recv()
             except KeyboardInterrupt:
                 # Ctrl-C reaches this process only (the worker has a process
                 # group of its own): pass it on; the worker answers with the
@@ -161,7 +207,7 @@ class _Worker:
             return
         self.dead = "closed"
         try:
-            self.conn.send_bytes(b"")
+            self.conn.send(b"")
         except (OSError, ValueError):
             pass
         try:
