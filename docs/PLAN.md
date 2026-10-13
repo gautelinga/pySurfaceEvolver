@@ -28,10 +28,15 @@ points; catenoid's unstable branch within 0.03%); `relax()` approaches a far tar
 in stages when its first step folds facets; docs page bridge_rupture.md (a bridge
 between spheres turns unstable 8% above its fold, a subcritical pitchfork to off-centre
 bridges, Vogel's small volume instability; reference helpers in stress_helpers.py,
-figure by `tools/bridge_rupture_figure.py`).
+figure by `tools/bridge_rupture_figure.py`); `arclength`'s corrector holds the Lagrange
+multipliers fixed for its two Newton steps and carries them with the vertices (Evolver's
+`hessian` uses the stored pressures in its Hessian and updates them, so they are Newton
+state; the second step had started from the first one's pressures and the corrector
+crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a step
+(`_put_back`, in `relax()` too) restores them; `_core.multipliers()`/`set_multipliers()`.
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 455 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 457 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
@@ -58,6 +63,14 @@ Open, for the user to pick (proposed 2026-10-13):
   The slivers build up within each step; tangential motion in Newton steps would be
   remeshing by another name.
 * **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
+* **Loose ends from the multiplier fix (2026-10-13):** whether `relax()`/`newton()`
+  converge differently now that undoing a rejected step restores the pressures (only
+  checked: the stress cases come out the same); `relax()`'s inertia cache is keyed by
+  the vertices, though the count also depends on the pressures; the bridge page's
+  level-4 numbers (onset 0.0808-0.0785, least volume 0.07306) are from the old
+  corrector; no API for a negative mode's eigenvector (`saddle()` line-searches in an
+  arbitrary direction, so the page prints only the step's odd part); the
+  `_core.multipliers()` stub is typed `object`.
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
 
