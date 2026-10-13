@@ -29,6 +29,8 @@ from typing import Any, Callable, Iterable, Iterator, List, Optional, Union
 
 import numpy as np
 
+from . import _core
+
 __all__ = ["Step", "arclength", "continuation", "load_steps"]
 
 
@@ -287,16 +289,17 @@ def _hessian(ev) -> None:
         ev.command("hessian")
 
 
-def _newton_target(ev, put: Callable[[Any], None], value: float) -> "tuple[np.ndarray, int]":
-    """Where one plain Newton step at ``value`` takes the vertices (undone),
-    and the negative eigenvalues it counted."""
+def _newton_target(ev, put: Callable[[Any], None],
+                   value: float) -> "tuple[np.ndarray, np.ndarray]":
+    """Where one plain Newton step at ``value`` takes the vertices and the
+    Lagrange multipliers (undone, both: the step's Hessian uses the
+    multipliers, so two steps from the same point need the same ones)."""
     put(value)
     start = ev._coords()
     _hessian(ev)
-    x = ev.vertices
-    negative = int(ev.eval("eigen_neg"))
+    x, multipliers = ev.vertices, np.asarray(_core.multipliers(), dtype=float)
     ev._put_back(start)
-    return x, negative
+    return x, multipliers
 
 
 def _normal_part(ev, dx: np.ndarray) -> np.ndarray:
@@ -328,15 +331,16 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
     """Newton's method on the equilibrium and the plane through the
     prediction normal to the tangent: from one Newton step at the value and
     one at a nearby value, the step that is both (Keller's bordering, with
-    Evolver's factorization). Whether it converged, and the iterations."""
+    Evolver's factorization), for the vertices and the Lagrange multipliers
+    together. Whether it converged, and the iterations."""
     ev.vertices = x_pred
     value = v_pred
     n = len(x_pred)
     for it in range(1, max_iter + 1):
         x = ev.vertices
         delta = 1e-6*max(1.0, abs(value))
-        n0, _ = _newton_target(ev, put, value)
-        n1, _ = _newton_target(ev, put, value + delta)
+        n0, m0 = _newton_target(ev, put, value)
+        n1, m1 = _newton_target(ev, put, value + delta)
         dn = (n1 - n0)/delta
         # the new point n0 + dv*dn on the plane: tx.(x - x_pred)/n + tv*(v - v_pred) = 0
         gap = float((tx*(n0 - x_pred)).sum())/n + tv*(value - v_pred)
@@ -346,6 +350,7 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
         value += dv
         put(value)
         ev.vertices = x_new
+        _core.set_multipliers(m0 + dv*(m1 - m0)/delta)
         if _arc_norm2(x_new - x, dv) < tol*tol and ev.residual() < tol:
             return True, it
     return False, max_iter

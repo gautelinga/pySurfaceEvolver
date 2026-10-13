@@ -1675,6 +1675,32 @@ int pyse_torus(void) { return web.torus_flag; }
 int pyse_crystalline(void) { return web.wulff_flag; }
 int pyse_symmetry(void) { return web.torus_flag || web.symmetry_flag; }
 long pyse_topology_stamp(void) { return top_timestamp; }
+/* The Lagrange multipliers: each body's pressure (in body order), then each
+   quantity's (in quantity order). A Newton step (hessian) uses them in the
+   Hessian and adds its increments to them, so undoing a step undoes them too. */
+long pyse_multiplier_count(void)
+{ return pyse_count(PYSE_BODY) + gen_quant_count; }
+
+void pyse_get_multipliers(double *out, long n)
+{ body_id b_id;
+  long row = 0;
+  int i;
+  FOR_ALL_BODIES(b_id)
+    if ( row < n ) out[row++] = (double)get_body_pressure(b_id);
+  for ( i = 0 ; i < gen_quant_count && row < n ; i++ )
+    out[row++] = (double)GEN_QUANT(i)->pressure;
+}
+
+void pyse_set_multipliers(const double *in, long n)
+{ body_id b_id;
+  long row = 0;
+  int i;
+  FOR_ALL_BODIES(b_id)
+    if ( row < n ) set_body_pressure(b_id,(REAL)in[row++]);
+  for ( i = 0 ; i < gen_quant_count && row < n ; i++ )
+    GEN_QUANT(i)->pressure = (REAL)in[row++];
+}
+
 double pyse_total_energy(void) { return (double)web.total_energy; }
 double pyse_total_area(void) { return (double)web.total_area; }
 const char *pyse_datafilename(void) { return datafilename; }

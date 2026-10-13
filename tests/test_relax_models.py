@@ -109,6 +109,19 @@ def test_put_back_refuses_a_changed_topology(cube):
     assert not cube._put_back(snap)
 
 
+def test_put_back_restores_the_pressures(cube):
+    # a Newton step uses the pressures in its Hessian and updates them:
+    # undoing it puts them back with the vertices
+    cube.relax(levels=1)
+    cube.body(1).target = 1.3
+    snap = cube._coords()
+    p0 = cube.bodies().pressure.copy()
+    cube.command("hessian")
+    assert not np.allclose(cube.bodies().pressure, p0)
+    assert cube._put_back(snap)
+    assert np.array_equal(cube.bodies().pressure, p0)
+
+
 def test_relax_with_autopop_keeps_the_surface(load):
     # autopop and autochop change the topology during gradient steps; undoing
     # by coordinates onto the new topology wrecked the foam (energy 15.8 -> 901)

@@ -53,7 +53,7 @@ def neck(ev):
 
 # shrink the bridge along its branch, through the fold, counting unstable modes
 rows, first_unstable = [], None
-for step in recipes.arclength(ev, ev.body(1), -0.0075, 40):
+for step in recipes.arclength(ev, ev.body(1), -0.003, 60):
     modes = step.result.negative_modes
     rows.append((step.value, neck(ev), modes))
     if modes == 1 and first_unstable is None:
@@ -73,22 +73,23 @@ ev.saddle()
 dx = ev.mesh().vertices - x
 phi = np.arctan2(x[:, 1], x[:, 0])
 outward = dx[:, 0]*np.cos(phi) + dx[:, 1]*np.sin(phi)       # the radial displacement
-heights = (-0.25, -0.15, -0.05, 0.05, 0.15, 0.25)
-moved = [outward[abs(x[:, 2] - z) < 0.05].mean() for z in heights]
-print("radial displacement at z =", " ".join(f"{z:+.2f}" for z in heights))
-print("  (scaled to 1 at the top): ", " ".join(f"{m/moved[-1]:+.2f}" for m in moved))
+heights = (0.05, 0.15, 0.25)
+up = [outward[abs(x[:, 2] - z) < 0.05].mean() for z in heights]
+down = [outward[abs(x[:, 2] + z) < 0.05].mean() for z in heights]
+odd = [(u - d)/2 for u, d in zip(up, down)]     # the part that flips sign across the mid-plane
+print("odd part of the radial displacement at z = 0.05 0.15 0.25:",
+      " ".join(f"{o/odd[-1]:.1f}" for o in odd))
 ```
 
 ```text
-stable down to volume 0.0795 (neck 0.1325), one negative mode from 0.0773 (neck 0.1261)
+stable down to volume 0.0792 (neck 0.1315), one negative mode from 0.0775 (neck 0.1266)
 least volume 0.0730
-radial displacement at z = -0.25 -0.15 -0.05 +0.05 +0.15 +0.25
-  (scaled to 1 at the top):  -1.06 -0.99 -0.52 +0.45 +0.93 +1.00
+odd part of the radial displacement at z = 0.05 0.15 0.25: 0.4 0.9 1.0
 ```
 
-The bridge turns unstable between volumes 0.0795 and 0.0773, while it still has a
+The bridge turns unstable between volumes 0.0792 and 0.0775, while it still has a
 volume to lose before the fold at 0.0730. Past the fold a second negative mode
-appears, the fold's own. The run takes about half a minute on two threads.
+appears, the fold's own. The run takes about 20 seconds on two threads.
 
 ```{figure} _static/bridge_rupture_shapes.png
 :alt: The bridge at four points of the run: at the start, at the first unstable point, at the fold, and past the fold
@@ -99,16 +100,11 @@ at the fold (the least volume), and past it on the thinner-necked branch, where 
 fold's own mode has made a second one.
 ```
 
-At this refinement (8192 facets) `arclength` stops at the fold, with a warning, in
-about half the runs: its corrector converges slowly there, and which runs stop
-depends on how the threads share out the work. The code above reports what the run
-reached, which is the same either way. The pictures come from a run that got past
-the fold.
-
 {meth}`~pysurfaceevolver.Evolver.saddle` steps along the first unstable mode. The
 mode is odd about the mid-plane: the bridge narrows on one side of it and widens on
 the other, so liquid moves toward one sphere. Which sphere is chance (the mode's
-sign is arbitrary).
+sign is arbitrary). The code prints the step's odd part: holding the volume during
+a finite step adds a small even part, a few percent of it.
 
 ```{figure} _static/bridge_rupture_mode.png
 :alt: The first unstable bridge coloured by its unstable mode, and the bridge pushed along the mode
@@ -163,7 +159,7 @@ neck 0.10 above the mid-plane: volume 0.0978, energy 0.60638, 4.81e-03 above the
 ```
 
 The off-centre bridges branch off at volume 0.07895, between the last stable point of
-the run above (0.0795) and the first unstable one (0.0773). The fold is at 0.07307,
+the run above (0.0792) and the first unstable one (0.0775). The fold is at 0.07307,
 where the run's least volume is 0.0730. On a mesh refined once more (32768 facets),
 the onset lies between 0.0808 and 0.0785 and the least volume is 0.07306.
 

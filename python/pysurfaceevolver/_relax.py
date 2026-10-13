@@ -660,7 +660,8 @@ class _Relaxing(_Analysis):
         that only move vertices."""
         _, result = self._call(_core.parameters)
         return _Coords(self.vertices, _core.topology_stamp(),
-                       tuple((name, value) for name, value, opt in result.data if opt))
+                       tuple((name, value) for name, value, opt in result.data if opt),
+                       np.asarray(_core.multipliers(), dtype=float))
 
     def _put_back(self, snapshot: "_Coords") -> bool:
         """Restore coordinates from :meth:`_coords`; False (and nothing done)
@@ -672,6 +673,9 @@ class _Relaxing(_Analysis):
         if snapshot.parameters:
             self.command("; ".join(f"{name} := {value!r}" for name, value in snapshot.parameters))
         self.vertices = snapshot.coords
+        if snapshot.multipliers is not None \
+                and len(snapshot.multipliers) == _core.multiplier_count():
+            _core.set_multipliers(snapshot.multipliers)
         return True
 
     def remesh(self, target: Optional[float] = None, *, max_edge: Optional[float] = None,

@@ -82,6 +82,20 @@ def test_a_body_volume_as_the_value(cube):
     assert np.allclose(e/v**(2/3), e[0], rtol=2e-2)
 
 
+def test_newton_target_does_not_depend_on_the_last_one(cube):
+    # the corrector differences two Newton steps from one point; the second
+    # had started from the pressures the first left
+    cube.refine()
+    cube.relax()
+    put = lambda v: setattr(cube.body(1), "target", v)
+    cube.vertices = cube.vertices*1.05
+    first, p_first = recipes._newton_target(cube, put, 1.0)
+    again, p_again = recipes._newton_target(cube, put, 1.0)
+    # (2e-8 and 2e-5 apart before)
+    assert np.allclose(first, again, rtol=0, atol=1e-12)
+    assert np.allclose(p_first, p_again, rtol=0, atol=1e-12)
+
+
 def test_arclength_arguments(cube):
     with pytest.raises(ValueError):
         next(recipes.arclength(cube, cube.body(1), 0.0, 5))

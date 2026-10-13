@@ -43,10 +43,17 @@
   energies, and finds one negative mode from a neck of about 0.13 (V 0.08), before the
   fold, steady under refinement: an axisymmetric mode odd about the mid-plane (Vogel's
   small volume instability; see "Where a shrinking bridge breaks" below); following it
-  with `saddle()` lowers the energy. Refined three times (8192 facets) it stops at that
-  fold, with a warning, in about half the runs (4 of 8): its corrector converges
-  slowly near the fold, and which runs stop depends on the thread scheduling. Stops with a warning when a step fails after
+  with `saddle()` lowers the energy. Stops with a warning when a step fails after
   halving or the mesh degenerates.
+  The two Newton steps of each iteration start from the same Lagrange multipliers
+  (pressures), and the corrector carries them along with the vertices: Evolver's Newton
+  step uses them in its Hessian and updates them, so the second step had started from
+  the first one's, and away from an equilibrium the change with the value came out
+  several times too large. The corrector had then converged slowly or not at all, and
+  the bridge above (8192 facets) stopped at its fold in about half the runs; now each
+  point takes 3-5 iterations at the full `ds` and 8 of 8 runs pass the fold, in 7 s
+  instead of about 30. Undoing a step (in `relax()` too) puts the multipliers back with
+  the vertices; the stress cases come out as before.
 
 - `continuation()` predicts each step: from the third step on, relax starts from every
   vertex extrapolated from the last two steps (a secant predictor), which saves a fifth
@@ -83,8 +90,7 @@
   (`bridge_spheres_fold`, `bridge_spheres_branch`, `bridge_spheres_offset`), a figure
   drawn by `tools/bridge_rupture_figure.py` along with pictures of the bridge along
   the run, its unstable mode and the off-centre bridge in 3D, and the page's code
-  checked by `tools/check_doc_snippets.py` (its output is the same whether or not the
-  run gets past the fold).
+  checked by `tools/check_doc_snippets.py`.
 
 - A shorter README (92 lines, was 261): what pySE is, a picture of four relaxed
   surfaces, install, one example with its output, and where to read on, with badges.

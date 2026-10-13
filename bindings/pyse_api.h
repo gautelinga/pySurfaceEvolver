@@ -155,6 +155,11 @@ int pyse_crystalline(void);   /* a Wulff (crystalline) integrand is in use */
 int pyse_symmetry(void);      /* a torus or quotient space: coordinates are wrapped */
 /* goes up with every topology change (Evolver's top_timestamp) */
 long pyse_topology_stamp(void);
+/* the Lagrange multipliers: bodies' pressures, then quantities' (n must be
+   pyse_multiplier_count()) */
+long pyse_multiplier_count(void);
+void pyse_get_multipliers(double *out, long n);
+void pyse_set_multipliers(const double *in, long n);
 double pyse_total_energy(void);
 /* per vertex, the shape part of its velocity (projected force): along its
    normal(s), projected into its constraints; one per vertex in vertex order */

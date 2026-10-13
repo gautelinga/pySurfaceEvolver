@@ -19,6 +19,9 @@ class _Coords(NamedTuple):
     stamp: int                    # Evolver's topology stamp when taken
     # the optimizing parameters' values (steps move them with the vertices)
     parameters: Tuple[Tuple[str, float], ...] = ()
+    # the Lagrange multipliers (pressures): a Newton step uses them in its
+    # Hessian and moves them with the vertices
+    multipliers: Optional[np.ndarray] = None
 
 
 class EigenCounts(NamedTuple):

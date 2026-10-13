@@ -579,6 +579,20 @@ NB_MODULE(_core, m) {
   m.def("crystalline", []() { Lock lock; return bool(pyse_crystalline()); });
   m.def("symmetry", []() { Lock lock; return bool(pyse_symmetry()); });
   m.def("topology_stamp", []() { Lock lock; return pyse_topology_stamp(); });
+  m.def("multiplier_count", []() { Lock lock; return pyse_multiplier_count(); });
+  m.def("multipliers", []() {
+    Lock lock;
+    long n = pyse_multiplier_count();
+    std::vector<double> out(n);
+    pyse_get_multipliers(out.data(), n);
+    return to_numpy(std::move(out), {size_t(n)});
+  }, "the Lagrange multipliers: bodies' pressures, then quantities'");
+  m.def("set_multipliers", [](nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu> values) {
+    Lock lock;
+    if (long(values.shape(0)) != pyse_multiplier_count())
+      throw std::invalid_argument("set_multipliers: wrong number of multipliers");
+    pyse_set_multipliers(values.data(), long(values.shape(0)));
+  }, "values"_a);
   m.def("total_energy", []() { Lock lock; return pyse_total_energy(); });
   m.def("total_area", []() { Lock lock; return pyse_total_area(); });
   m.def("datafile", []() { Lock lock; return std::string(pyse_datafilename()); });

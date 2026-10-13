@@ -52,7 +52,7 @@ def evolver_branch():
                    bodies=[pyse.Body(volume=0.15)])
     ev.relax(levels=3)
     rows, meshes, first_unstable = [], [], None
-    for step in recipes.arclength(ev, ev.body(1), -0.0075, 60):
+    for step in recipes.arclength(ev, ev.body(1), -0.003, 100):
         m = ev.mesh()
         ring = m.slice((0, 0, 1))[0][:-1]
         rows.append((step.value, np.hypot(ring[:, 0], ring[:, 1]).mean(),
@@ -67,17 +67,6 @@ def evolver_branch():
     ev.saddle()
     mode = (m.vertices.copy(), m.facets.copy(), ev.mesh().vertices - m.vertices)
     return np.array(rows), meshes, mode
-
-
-def past_the_fold(tries=4):
-    """evolver_branch() until a run gets past the fold: at this refinement
-    arclength stops at the fold in about half the runs (its corrector converges
-    slowly there; which runs depends on the thread scheduling)."""
-    for _ in range(tries):
-        run = evolver_branch()
-        if run[0][-1, 2] == 2:
-            return run
-    return run
 
 
 def symmetric_family():
@@ -217,7 +206,7 @@ def main():
     branch = H.bridge_spheres_branch(GAP, THETA)
     sym = symmetric_family()
     off = offset_family(branch)
-    ev, meshes, mode = past_the_fold()
+    ev, meshes, mode = evolver_branch()
 
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(10, 7.6))
     # neck against volume: the symmetric branch and Evolver's points
