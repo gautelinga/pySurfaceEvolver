@@ -371,20 +371,22 @@ errors = [abs(s["pressure"]/np.interp(s["volume"], v[order], p[order]) - 1)
           for s in states if s["stage"] == 1 and v.min() < s["volume"] < 0.08]
 for e in events:
     print(f"{e['kind']} at volume {e['volume']:.4f}")
-print(f"band pressure: median error {np.median(errors):.2%} over {len(errors)} states")
+median = np.median(errors)          # (0.01-0.03% from run to run)
+print(f"band pressure: median error {'below' if median < 5e-4 else 'above'} 0.05% "
+      f"over {len(errors)} states")
 print(f"share of band steps converged: {np.mean(Cell.band):.1f}")
 ```
 
 ```text
 bead emerges at volume 0.0860
 snap at volume 0.0071
-band pressure: median error 0.01% over 119 states
+band pressure: median error below 0.05% over 119 states
 share of band steps converged: 0.9
 ```
 
 The snap lands within 0.4% of the finer run's (0.00707), and the median band pressure
-within 0.02% of it. A few steps near the snap stay unconverged, and single states can
-be off by a few percent there.
+within 0.01-0.03% of it (from run to run). A few steps near the snap stay unconverged,
+and single states can be off by a few percent there.
 
 ```{figure} _static/stress/case08.png
 :alt: Case 8: result, error and solver steps
@@ -886,16 +888,16 @@ for step in recipes.arclength(ev, "ht", 0.05, 40):
 
 ```text
 wires 0.6000 apart: area 3.70989 (exact 3.71143), negative modes 0
-wires 0.8358 apart: area 5.08644 (exact 5.08770), negative modes 0
-wires 1.0473 apart: area 6.24028 (exact 6.24090), negative modes 0
-wires 1.2351 apart: area 7.16066 (exact 7.16084), negative modes 0
-wires 1.2969 apart: area 7.45092 (exact 7.45009), negative modes 1
-wires 1.0883 apart: area 6.98754 (exact 6.98802), negative modes 1
-wires 0.8793 apart: area 6.68487 (exact 6.68675), negative modes 1
-wires 0.6731 apart: area 6.49278 (exact 6.49106), negative modes 1
+wires 0.8455 apart: area 5.14115 (exact 5.14238), negative modes 0
+wires 1.0843 apart: area 6.43144 (exact 6.43177), negative modes 0
+wires 1.2996 apart: area 7.43857 (exact 7.43818), negative modes 0
+wires 1.1827 apart: area 7.16906 (exact 7.17037), negative modes 1
+wires 0.9651 apart: area 6.79460 (exact 6.79580), negative modes 1
+wires 0.7522 apart: area 6.55399 (exact 6.55619), negative modes 1
+wires 0.5439 apart: area 6.40841 (exact 6.40767), negative modes 1
 ```
 
-Both branches match the exact areas within 0.03%. Between points the vertices are
+Both branches match the exact areas within 0.04%. Between points the vertices are
 spread along the surface and edges flipped (Newton steps move vertices only along the
 normal); the mesh is otherwise fixed, so as the neck thins its facets shrink, and the
 run stops with a warning once the mesh can't keep up: refine first for a long run.

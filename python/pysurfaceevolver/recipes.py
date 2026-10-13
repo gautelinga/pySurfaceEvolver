@@ -466,12 +466,17 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         if len(x0) != len(x1) or len(x1) != len(ev.vertices):
             raise RuntimeError("arclength(): the vertices changed between points (it "
                                "needs the same mesh throughout)")
-        dx = _normal_part(ev, x1 - x0)       # (the tidying's sliding isn't a step)
+        # the step's length and the plane it ends on from the shape's change
+        # (along the normals: the tidying's sliding isn't a step; counting it
+        # turned a bridge back at its fold); the prediction along the whole
+        # secant (the vertices keep spreading as the surface stretches)
+        dx = _normal_part(ev, x1 - x0)
         norm = np.sqrt(_arc_norm2(dx, v1 - v0))
         tx, tv = dx/norm, (v1 - v0)/norm
+        sx = (x1 - x0)/norm
         last = ev._coords()
         for k in range(halvings + 1):
-            ok, iterations = _arc_correct(ev, put, x1 + h*tx, v1 + h*tv, tx, tv, tol, 12)
+            ok, iterations = _arc_correct(ev, put, x1 + h*sx, v1 + h*tv, tx, tv, tol, 12)
             if ok:
                 break
             ev._put_back(last)
