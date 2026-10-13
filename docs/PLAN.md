@@ -17,10 +17,14 @@ plain numbers (NumPy 2 printed `np.float64(1.4)` and failed the snippet check on
 v0.7.4 tag; main is green); a short README with a picture (`tools/readme_figure.py`),
 its API tour moved to `docs/tour.md` and the development notes to `docs/development.md`;
 `continuation()` predicts each step from the last two (secant predictor, on by default,
-13-49% fewer gradient steps over the continuation stress cases).
+13-49% fewer gradient steps over the continuation stress cases); `newton()` returns an
+IterationResult; constraint projection polishes vertices within the tolerance (bga-5
+refined four times converges; the "parameter Hessian limit" was the projection);
+`Evolver(process=True)` (a surface per worker process, same API, `_remote.py`,
+`_worker.py`).
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 441 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 450 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
@@ -29,9 +33,10 @@ Open, for the user to pick (proposed 2026-10-13):
   on PyPI); cp314 wheels and CI; whether to drop Python 3.9 is the user's call. The name
   `pysurfaceevolver` was free on 2026-10-12.
 * **macOS wheels** (OpenMP, MUMPS with gfortran, Intel and ARM); Windows later.
-* **Candidates:** `newton()` returning a result object; Evolver's finite-difference
-  parameter Hessian limits relax to ~1e-7 with optimizing parameters (bga-5);
-  `volconst="auto"`.
+* **Candidates:** `volconst="auto"` as calibration from a given starting volume was
+  tried and dropped 2026-10-13 (the starting mesh's enclosed volume is as unknown as
+  volconst; a constant can't follow a contact line on a wall without content
+  integrals); a geometric closure of a body's open loops would be the next idea.
 * **Known limits:** on defaults alone case 8's mesh breaks down where the bead's
   receding contact line meets the mid-plane (slivers; docs/relaxing.md); mylarcube ends
   0.1% above its recipe; topology tests are path-sensitive at several threads (run

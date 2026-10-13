@@ -4,6 +4,18 @@
 
 ### API
 
+- `pyse.Evolver(process=True)`: a surface in a worker process of its own, so several
+  surfaces at once. The handle works like any `Evolver`: attribute reads, assignments
+  and method calls go to the worker (a round trip is about 0.04 ms plus copying),
+  views such as `ev.body(1)` and `ev.parameters` are handles too (`recipes.continuation`
+  works on them), and results come back as copies. Prints, warnings and errors from the
+  worker show in the caller, Ctrl-C interrupts the worker's call, callables given to
+  methods run in the worker, and `plot()` draws in the caller. `threads=` sets the
+  worker's threads; `close()`, `with`, or the last handle going away ends it, and a
+  dead worker raises `WorkerCrashed`. The worker is a new interpreter
+  (`python -m pysurfaceevolver._worker`), so scripts need no `__main__` guard.
+  POSIX only. Errors keep `errnum` and `output` when pickled.
+
 - `ev.newton()` returns an `IterationResult`, as `relax()` does, instead of the number
   of steps kept: `newton_steps` (the steps kept), `residual`, and `converged` (the
   residual below `tol`, or 1e-8 without one, with the volume and quantity targets met).

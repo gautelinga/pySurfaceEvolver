@@ -70,12 +70,16 @@ datafile = pyse.make_datafile(vertices, faces, constraints={
 `ev.quantity(name)`) steps through a family of equilibria, with checkpoints a stopped
 run resumes from; `stop_on="unconverged"` ends it at a fold, back at the last good
 step. From the third step on each relax starts from the vertices extrapolated from the
-last two steps, which saves a fifth to a half of the gradient steps. `ev.plot(walls=True)` draws the constraints' solids with the surface.
+last two steps, which saves a fifth to a half of the gradient steps.
+`ev.plot(walls=True)` draws the constraints' solids with the surface.
 
 There is one Evolver engine per process: every `Evolver` object is a handle to
 it, so all handles see the same surface (a handle used after another one loaded a
-different surface warns). Use `save()`/`restore()` to keep surfaces around, and
-separate processes to work on several at once. `ev.mesh()` is cached
+different surface warns). Use `save()`/`restore()` to keep surfaces around.
+`pyse.Evolver(process=True)` gives a surface in a worker process of its own, with the
+same API (calls go to the worker, results come back as copies), for several surfaces
+at once; `pyse.map` runs a function over many parameters in parallel workers.
+`ev.mesh()` is cached
 until the surface changes, so its arrays are read-only. The sample datafiles and
 command scripts are in `pysurfaceevolver.examples`.
 

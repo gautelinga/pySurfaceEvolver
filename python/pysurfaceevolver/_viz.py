@@ -45,6 +45,10 @@ def surface_dataset(ev: "Evolver", scalars: Scalars = None, element: Optional[st
     array with one value per vertex row or per facet (edge, in the string
     model). Vertex values are interpolated over curved elements.
     """
+    from ._remote import is_remote
+    if is_remote(ev):           # drawn here from the worker's data
+        return ev._run("pysurfaceevolver._viz.surface_dataset",  # type: ignore[attr-defined]
+                       scalars, element, n)
     mesh = ev.mesh()
     point_values, cell_values, name = _scalar_values(ev, mesh, scalars, element)
     if _unwrap(ev, mesh):
@@ -56,8 +60,7 @@ def _unwrap(ev: "Evolver", mesh: "Mesh") -> bool:
     """Whether to show the facets one by one, unwrapped: in a torus model
     (linear facets), where wrapped coordinates would stretch the facets
     across the cell."""
-    from . import _core
-    return _core.torus() and mesh.facets is not None and mesh.order == 1
+    return ev.torus and mesh.facets is not None and mesh.order == 1
 
 
 def _unwrapped(ev: "Evolver", mesh: "Mesh", point_values: dict,

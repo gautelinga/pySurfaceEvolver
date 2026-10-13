@@ -114,7 +114,12 @@ class _Engine:
         *,
         echo: bool = False,
         input: Optional[Callable[[str], Optional[str]]] = None,
+        process: bool = False,
+        threads: Optional[int] = None,
     ):
+        if threads is not None:
+            raise ValueError("threads= is for Evolver(process=True); for the engine of "
+                             "this process use pyse.set_threads")
         self.echo = echo
         self.input = input
         self._call(_core.initialize)

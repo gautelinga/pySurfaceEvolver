@@ -10,6 +10,13 @@ import numpy as np
 from . import _core
 
 
+def _rebuilt(cls: Any, args: tuple, state: dict) -> BaseException:
+    error = cls.__new__(cls)
+    error.args = args
+    error.__dict__.update(state)
+    return error
+
+
 class EvolverError(RuntimeError):
     """An error reported by Surface Evolver. The surface is still usable.
 
@@ -21,6 +28,10 @@ class EvolverError(RuntimeError):
         self.errnum = errnum
         self.output = output
         self.command: Optional[str] = None
+
+    def __reduce__(self):
+        # with errnum, output, ... (from a worker process, Evolver(process=True))
+        return (_rebuilt, (type(self), self.args, self.__dict__))
 
 
 # Mistakes that show up as Evolver syntax errors, with what to do instead
