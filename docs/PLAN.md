@@ -15,10 +15,12 @@ experiments) in git: `git log -p docs/PLAN.md`, and the 0.7.0 condensation at
 **On main since 0.7.4** (CHANGELOG "Unreleased"): `continuation()`'s stop warning prints
 plain numbers (NumPy 2 printed `np.float64(1.4)` and failed the snippet check on the
 v0.7.4 tag; main is green); a short README with a picture (`tools/readme_figure.py`),
-its API tour moved to `docs/tour.md` and the development notes to `docs/development.md`.
+its API tour moved to `docs/tour.md` and the development notes to `docs/development.md`;
+`continuation()` predicts each step from the last two (secant predictor, on by default,
+13-49% fewer gradient steps over the continuation stress cases).
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 439 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 441 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
@@ -35,7 +37,14 @@ Open, for the user to pick (proposed 2026-10-13):
   0.1% above its recipe; topology tests are path-sensitive at several threads (run
   with threads=1).
 * **Do not re-propose:** remeshing inside `relax()` for case 8 (researched 2026-10-10,
-  and sliver merging/moving again 2026-10-12: worse over repeated runs).
+  and sliver merging/moving again 2026-10-12: worse over repeated runs). Curvature-sized
+  remeshing (PMP-style h from the principal curvatures, 2026-10-13): equilibrium
+  curvature varies too little where meshes must be fine (case 8's slivers, a catenoid
+  near its fold, a thin bridge), so it sizes like uniform remeshing. The secant
+  predictor for case 8 on defaults (2026-10-13): extrapolating pushes the squeezed
+  vertices further, the worst errors went from 4-9% to 170-1550% over 3 paired runs.
+  The slivers build up within each step; tangential motion in Newton steps would be
+  remeshing by another name.
 * **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).

@@ -335,6 +335,62 @@ def test_continuation_parameter_and_relax_callable(cube):
         next(recipes.continuation(cube, "x", [1], relax=5))
 
 
+def test_continuation_predicts_from_the_last_two_steps(cube):
+    from pysurfaceevolver import recipes
+    cube.refine()
+    values = [0.95, 0.9, 0.85, 0.8, 0.6]
+    start = cube.save()
+
+    def run(predictor):
+        cube.restore(start)
+        starts, ends = [], []
+
+        def relax(ev):
+            starts.append(ev.vertices)
+            r = ev.relax(tol=1e-9, max_iter=2000)
+            ends.append(ev.vertices)
+            return r
+
+        steps = list(recipes.continuation(cube, cube.body(1), values, relax=relax,
+                                          predictor=predictor))
+        return steps, starts, ends
+
+    plain, plain_starts, _ = run(False)
+    steps, starts, ends = run(True)
+    # two equilibria first, then every step predicted but the jump (4 times the last)
+    assert [s.predicted for s in steps] == [False, False, True, True, False]
+    assert not any(s.predicted for s in plain)
+    # (a coarse mesh: its tidying may end on another triangulation)
+    assert [s.energy for s in steps] == pytest.approx([s.energy for s in plain], rel=1e-5)
+    # a predicted step starts far nearer its equilibrium than the last one is
+    assert np.abs(starts[3] - ends[3]).max() < 0.2*np.abs(plain_starts[3] - ends[3]).max()
+
+
+def test_continuation_predictor_falls_back_and_skips_a_changed_mesh(cube):
+    from pysurfaceevolver import recipes
+    cube.refine()
+    starts = []
+
+    def relax(ev):
+        starts.append(ev.vertices)
+        r = ev.relax(tol=1e-9, max_iter=2000)
+        if len(starts) == 3:            # the first predicted step: say it failed
+            r.converged = False
+        return r
+
+    steps, ends = [], []
+    for step in recipes.continuation(cube, cube.body(1), [0.95, 0.9, 0.85, 0.8, 0.75, 0.7],
+                                     relax=relax):
+        steps.append(step)
+        ends.append(cube.vertices)
+        if step.index == 2:
+            cube.refine()               # new vertices: no prediction until two more steps
+    # step 2 predicted, said unconverged, relaxed again from step 1's positions
+    assert len(starts) == 7
+    assert np.array_equal(starts[3], ends[1])
+    assert [s.predicted for s in steps] == [False, False, False, False, False, True]
+
+
 # ---- G2.3: stability ----------------------------------------------------------
 
 def _column(radius, nz=12, nt=24):

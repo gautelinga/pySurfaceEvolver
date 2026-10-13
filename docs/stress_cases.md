@@ -186,11 +186,11 @@ for step in recipes.continuation(ev, "theta", np.arange(100.0, 175, 10)):
 theta 100.0: energy error 0.19%, contact radius 0.9179 (exact 0.9123), 480 facets
 theta 110.0: energy error 0.21%, contact radius 0.8286 (exact 0.8222), 480 facets
 theta 120.0: energy error 0.24%, contact radius 0.7352 (exact 0.7274), 480 facets
-theta 130.0: energy error 0.25%, contact radius 0.6351 (exact 0.6261), 608 facets
+theta 130.0: energy error 0.25%, contact radius 0.6349 (exact 0.6261), 608 facets
 theta 140.0: energy error 0.22%, contact radius 0.5258 (exact 0.5168), 736 facets
-theta 150.0: energy error 0.20%, contact radius 0.4088 (exact 0.3986), 864 facets
-theta 160.0: energy error 0.18%, contact radius 0.2834 (exact 0.2717), 992 facets
-theta 170.0: energy error 0.17%, contact radius 0.1550 (exact 0.1378), 1376 facets
+theta 150.0: energy error 0.20%, contact radius 0.4086 (exact 0.3986), 864 facets
+theta 160.0: energy error 0.18%, contact radius 0.2837 (exact 0.2717), 992 facets
+theta 170.0: energy error 0.17%, contact radius 0.1551 (exact 0.1378), 1376 facets
 ```
 
 Energies within 0.25%. At 170 degrees the contact disk (radius 0.14) is small next to
@@ -521,10 +521,10 @@ for step in recipes.continuation(ev, ev.body(1), volume*np.geomspace(1, 1e-4, 25
 
 ```text
 volume 6.54e-01: energy error 0.15%, radius error 0.42%
-volume 6.54e-02: energy error 0.15%, radius error 0.46%
-volume 6.54e-03: energy error 0.15%, radius error 0.48%
-volume 6.54e-04: energy error 0.17%, radius error 0.51%
-volume 6.54e-05: energy error 0.21%, radius error 0.58%
+volume 6.54e-02: energy error 0.15%, radius error 0.47%
+volume 6.54e-03: energy error 0.14%, radius error 0.46%
+volume 6.54e-04: energy error 0.15%, radius error 0.48%
+volume 6.54e-05: energy error 0.15%, radius error 0.47%
 ```
 
 The error stays near the starting mesh's (the contact radius of the coarse rim is
@@ -825,11 +825,11 @@ print([str(w.message).split(";")[0] for w in caught if "stopped" in str(w.messag
 ```text
 wires 0.8 apart: area 4.88239 (exact 4.88379)
 wires 0.9 apart: area 5.44628 (exact 5.44755)
-wires 1.0 apart: area 5.99072 (exact 5.99180)
-wires 1.1 apart: area 6.51062 (exact 6.51167)
-wires 1.2 apart: area 6.99884 (exact 6.99964)
-wires 1.3 apart: area 7.43941 (exact 7.43978)
-['continuation() stopped before 1.4: relax() came out unconverged there']
+wires 1.0 apart: area 5.99083 (exact 5.99180)
+wires 1.1 apart: area 6.51129 (exact 6.51167)
+wires 1.2 apart: area 6.99968 (exact 6.99964)
+wires 1.3 apart: area 7.43958 (exact 7.43978)
+['continuation() stopped before 1.4: relax() came out pinched off there']
 ```
 
 ```{figure} _static/stress/case17.png

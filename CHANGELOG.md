@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Continuation
+
+- `continuation()` predicts each step: from the third step on, relax starts from every
+  vertex extrapolated from the last two steps (a secant predictor), which saves a fifth
+  to a half of the gradient steps. Over the stress cases that step a value, the gradient
+  steps went from 4820 to 2970 (case 2), 3010 to 1690 (case 6), 3116 to 1606 (case 12),
+  3410 to 2520 (case 17) and 5870 to 5110 (case 14), with the same results. It applies
+  only while the vertices stay the same (not after a refinement, remeshing or pop, in
+  relax or in the loop), and not to a step more than twice the last (a jump such as
+  1, 10, 100, where a straight line would overshoot). A predicted step that comes out unconverged is relaxed again
+  from the last step's positions before `stop_on` or halving sees it. `Step.predicted`
+  says whether a step kept the prediction; `predictor=False` turns it off.
+- Tried and not adopted for stress case 8 (the drainage band on defaults, without
+  remeshing): extrapolating the band pushes the vertices squeezed by the receding
+  contact line further, and over 3 paired runs the worst errors went from 4-9% to
+  170-1550%, with the snap 15-100% off (from 3-4%).
+
 ### Documentation
 
 - A shorter README (92 lines, was 261): what pySE is, a picture of four relaxed

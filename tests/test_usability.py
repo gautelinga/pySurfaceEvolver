@@ -172,9 +172,10 @@ def test_continuation_stops_at_the_first_failed_step_and_halves(cube):
         last["pp"] = ev["pp"]
         return types.SimpleNamespace(converged=ok, stable=True)
 
+    # (no predictor: its retry of a failed step would look like a step of 0 here)
     with pytest.warns(UserWarning, match="stopped before"):
         steps = list(recipes.continuation(cube, "pp", [0.2, 0.4, 1.0, 1.2], relax=relax,
-                                          stop_on="unconverged"))
+                                          stop_on="unconverged", predictor=False))
     assert [s.value for s in steps] == [0.2, 0.4] and cube["pp"] == 0.4
     last["pp"] = 0.0
     cube["pp"] = 0.0
@@ -182,11 +183,11 @@ def test_continuation_stops_at_the_first_failed_step_and_halves(cube):
     # would say np.float64(1.0))
     with pytest.warns(UserWarning, match=r"stopped before 1\.0:"):
         list(recipes.continuation(cube, "pp", np.array([0.2, 0.4, 1.0]), relax=relax,
-                                  stop_on="unconverged"))
+                                  stop_on="unconverged", predictor=False))
     last["pp"] = 0.0
     cube["pp"] = 0.0
     steps = list(recipes.continuation(cube, "pp", [0.2, 0.4, 1.0], relax=relax,
-                                      stop_on="unconverged", halvings=2))
+                                      stop_on="unconverged", halvings=2, predictor=False))
     assert [s.substeps for s in steps] == [1, 1, 4] and cube["pp"] == 1.0
 
 
