@@ -163,12 +163,11 @@ Evolver's own finite difference being different discretizations).
 
 Evolver differentiates the energy with respect to an optimizing parameter by finite
 differences (with `bga-5.fe`'s step `pdelta = 1e-5`), also for the Newton steps'
-second derivatives, where rounding errors then stall the residual around 1e-7: hence
-`tol=1e-6` here (the default 1e-8 would end "not converged" at the same height)."""),
+second derivatives; `relax()` converges with its default tolerance all the same."""),
     code("""
 ev = pyse.Evolver("bga-5.fe")
 print("optimizing:", sorted(ev.parameters.optimizing))
-result = ev.relax(levels=3, tol=1e-6)
+result = ev.relax(levels=3)
 print(result)
 print(f"height {ev.parameters['height']:.4f} cm (from the curve: {load_height:.4f}), "
       f"dE/dheight {ev.derivative('height', method='fixed', move=linear(ev)):.3g} dyn")"""),
