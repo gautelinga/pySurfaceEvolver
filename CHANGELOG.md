@@ -41,8 +41,9 @@
   volume it passes the rupture fold (V 0.07306 against the axisymmetric 0.07307,
   refined four times) onto the thinner-necked branch within 5e-4 of the reference
   energies, and finds one negative mode from a neck of about 0.13 (V 0.08), before the
-  fold, steady under refinement: an axisymmetric mode (a single eigenvalue); following
-  it with `saddle()` lowers the energy. Stops with a warning when a step fails after
+  fold, steady under refinement: an axisymmetric mode odd about the mid-plane (Vogel's
+  small volume instability; see "Where a shrinking bridge breaks" below); following it
+  with `saddle()` lowers the energy. Stops with a warning when a step fails after
   halving or the mesh degenerates.
 
 - `continuation()` predicts each step: from the third step on, relax starts from every
@@ -69,6 +70,17 @@
   `tools/check_doc_snippets.py` with the stress page's.
 - The stress page's catenoid between round wires goes past the fold with
   `recipes.arclength` (a runnable section).
+- "Where a shrinking bridge breaks" (`docs/bridge_rupture.md`): a liquid bridge between
+  two spheres (gap 0.6, 40 degrees) shrunk with `recipes.arclength` turns unstable at
+  volume 0.079, 8% above the fold at 0.0731 where an axisymmetric calculation puts its
+  end, and the unstable mode moves the liquid toward one sphere. An axisymmetric
+  reference without the mirror symmetry checks it: bridges with the neck off the
+  mid-plane branch off at volume 0.07895, exist only at larger volumes and have more
+  energy than the symmetric one (a subcritical pitchfork; T. I. Vogel's small volume
+  instability, 2013). New helpers in `docs/stress_helpers.py`
+  (`bridge_spheres_fold`, `bridge_spheres_branch`, `bridge_spheres_offset`), a figure
+  drawn by `tools/bridge_rupture_figure.py`, and the page's code checked by
+  `tools/check_doc_snippets.py`.
 
 - A shorter README (92 lines, was 261): what pySE is, a picture of four relaxed
   surfaces, install, one example with its output, and where to read on, with badges.

@@ -1,4 +1,5 @@
-"""Helpers for the stress-case examples (docs/stress_cases.md): exact
+"""Helpers for the stress-case examples (docs/stress_cases.md) and the
+shrinking bridge (docs/bridge_rupture.md): exact
 spherical caps and axisymmetric Young-Laplace references (the starting shapes
 come from ``pysurfaceevolver.shapes``).
 
@@ -10,9 +11,14 @@ tension 1; p the pressure jump at z = 0). They need SciPy.
 * ``sessile(volume, theta, rho_g=0)``: a drop on the plane z = 0.
 * ``bridge_spheres(volume, gap, theta, R=1)``: a bridge between two spheres of
   radius R centred at z = +-(R + gap/2).
+* ``bridge_spheres_fold(gap, theta)``, ``bridge_spheres_branch(gap, theta)`` and
+  ``bridge_spheres_offset(neck_height, gap, theta)``: where the mirror-symmetric
+  bridges end, where bridges with the neck off the mid-plane branch off them,
+  and those bridges.
 * ``barrel(volume, b, theta)``: a barrel drop on a fibre of radius b (the z axis).
 
-The same code drives the stress suite in bench/stress/.
+The same code drives the stress suite in bench/stress/ (all but the
+off-centre bridges).
 """
 
 from __future__ import annotations
@@ -122,7 +128,8 @@ def sessile(volume, theta, rho_g=0.0):
 
 # ---- bridge between spheres ---------------------------------------------------
 
-def _bridge_half(rn, p, c, R, theta):
+def _bridge_half(rn, p, c, R, theta, z0=0.0):
+    """From the neck, radius rn at height z0, up to the sphere centred at z = c."""
     def hit(s, y):
         return y[0]**2 + (y[1] - c)**2 - R*R
     hit.terminal, hit.direction = True, -1
@@ -130,7 +137,7 @@ def _bridge_half(rn, p, c, R, theta):
     def lost(s, y):
         return y[0] - 1e-6
     lost.terminal = True
-    sol = profile(rn, 0.0, np.pi/2, p, events=(hit, lost), s_max=4*(c + R))
+    sol = profile(rn, z0, np.pi/2, p, events=(hit, lost), s_max=4*(c + R))
     if sol.status != 1 or len(sol.t_events[0]) == 0:
         raise ValueError("missed the sphere")
     r, z, psi, area, vol, _ = sol.y[:, -1]
@@ -141,7 +148,9 @@ def _bridge_half(rn, p, c, R, theta):
 
 
 def bridge_spheres(volume, gap, theta, R=1.0, guess=None):
-    """``guess``: (neck radius, pressure), e.g. a previous solution's."""
+    """``guess``: (neck radius, pressure), e.g. a previous solution's. Without
+    one, of two bridges holding the volume (a stable one and, with a thinner
+    neck, an unstable one) this finds the unstable one."""
     c = R + gap/2
     t = np.radians(theta)
     if guess is not None:
@@ -173,6 +182,131 @@ def bridge_spheres(volume, gap, theta, R=1.0, guess=None):
     p, r, z, area, v, wet = half(rn)
     return dict(neck=rn, pressure=p, contact_z=z, contact_r=r, area=2*area, wetted=2*wet,
                 energy=2*(area - np.cos(t)*wet), volume=2*v)
+
+
+def _symmetric_pressure(rn, c, R, theta, guess=None):
+    """The pressure of the mirror-symmetric bridge with neck radius rn."""
+    def f(p):
+        return _bridge_half(rn, p, c, R, theta)[0]
+    if guess is not None:
+        from scipy.optimize import newton
+        try:
+            p = newton(f, guess, tol=1e-13, maxiter=50)
+            if abs(f(p)) < 1e-9:
+                return p
+        except (RuntimeError, ValueError):
+            pass
+    return _root_in_scan(f, np.linspace(-3/rn - 3, 3/rn + 3, 61))
+
+
+def _offset_bridge(rn, p, zn, c, R, theta):
+    """The bridge with neck radius rn at height zn: the contact-angle errors at
+    the upper and lower spheres, the energy and the volume. The part below the
+    neck is the mirror image of a profile from height -zn up to the upper sphere."""
+    t = np.radians(theta)
+    angles, energy, volume = [], 0.0, 0.0
+    for z0 in (zn, -zn):
+        ang, r, z, area, vol = _bridge_half(rn, p, c, R, theta, z0)
+        hc = z - (c - R)
+        angles.append(ang)
+        energy += area - np.cos(t)*2*np.pi*R*hc
+        volume += vol - np.pi*hc*hc*(3*R - hc)/3
+    return angles, energy, volume
+
+
+def _symmetric_family(gap, theta, R, necks):
+    """The mirror-symmetric bridges at these neck radii (largest first):
+    (neck, pressure) rows; necks where none is found are skipped."""
+    c = R + gap/2
+    rows, p = [], None
+    for rn in sorted(necks, reverse=True):
+        try:
+            p = _symmetric_pressure(rn, c, R, theta, p)
+        except ValueError:
+            p = None
+            continue
+        rows.append((rn, p))
+    return rows
+
+
+def _symmetric(rn, p, gap, theta, R):
+    c = R + gap/2
+    _, energy, volume = _offset_bridge(rn, p, 0.0, c, R, theta)
+    return dict(neck=rn, pressure=p, volume=volume, energy=energy)
+
+
+def bridge_spheres_fold(gap, theta, R=1.0, necks=(0.02, 0.6)):
+    """The least volume a mirror-symmetric bridge holds, for neck radii in the
+    range ``necks`` (times R): where its stable branch (wider neck) meets the
+    unstable one. Below it no such bridge exists. A dict: volume, neck,
+    pressure, energy."""
+    from scipy.optimize import minimize_scalar
+    c = R + gap/2
+    rows = _symmetric_family(gap, theta, R, np.geomspace(necks[0]*R, necks[1]*R, 60))
+    vols = [_symmetric(rn, p, gap, theta, R)["volume"] for rn, p in rows]
+    k = int(np.argmin(vols))
+    if k in (0, len(rows) - 1):
+        raise ValueError("no least volume inside the range of necks")
+    pressure = {"p": rows[k][1]}
+
+    def volume(rn):
+        pressure["p"] = _symmetric_pressure(rn, c, R, theta, pressure["p"])
+        return _symmetric(rn, pressure["p"], gap, theta, R)["volume"]
+    best = minimize_scalar(volume, bounds=(rows[k + 1][0], rows[k - 1][0]), method="bounded",
+                           options={"xatol": 1e-10})
+    return _symmetric(best.x, _symmetric_pressure(best.x, c, R, theta, pressure["p"]),
+                      gap, theta, R)
+
+
+def bridge_spheres_branch(gap, theta, R=1.0, necks=(0.02, 0.6), eps=1e-5):
+    """Where bridges whose neck sits off the mid-plane branch off the
+    mirror-symmetric ones: the symmetric bridge at which sliding the neck
+    along the axis keeps both contact angles to first order. Of several in the
+    range ``necks`` (times R), the widest-necked: the first met as a bridge
+    shrinks. A dict: volume, neck, pressure, energy."""
+    c = R + gap/2
+
+    def slope(rn, p):            # d(contact angle at the upper sphere)/d(neck height)
+        return (_bridge_half(rn, p, c, R, theta, eps)[0]
+                - _bridge_half(rn, p, c, R, theta, -eps)[0])/(2*eps)
+    rows = _symmetric_family(gap, theta, R, np.geomspace(necks[0]*R, necks[1]*R, 60))
+    s = [slope(rn, p) for rn, p in rows]
+    for k in range(len(rows) - 1):           # widest first
+        if s[k]*s[k + 1] < 0:
+            pressure = {"p": rows[k][1]}
+
+            def f(rn):
+                pressure["p"] = _symmetric_pressure(rn, c, R, theta, pressure["p"])
+                return slope(rn, pressure["p"])
+            rn = brentq(f, rows[k + 1][0], rows[k][0], xtol=1e-12)
+            return _symmetric(rn, _symmetric_pressure(rn, c, R, theta, pressure["p"]),
+                              gap, theta, R)
+    raise ValueError("no branch point in the range of necks")
+
+
+def bridge_spheres_offset(neck_height, gap, theta, R=1.0, guess=None):
+    """The axisymmetric bridge with its neck at ``neck_height`` above the
+    mid-plane (not mirror-symmetric), on the family through
+    :func:`bridge_spheres_branch`; its mirror image has the neck below.
+    ``guess``: (neck radius, pressure), by default the branch point's (fine for
+    small heights; step out from there for larger ones). A dict: volume, neck,
+    neck_height, pressure, energy."""
+    c = R + gap/2
+    if guess is None:
+        b = bridge_spheres_branch(gap, theta, R)
+        guess = (b["neck"], b["pressure"])
+
+    def f(x):
+        try:
+            return _offset_bridge(x[0], x[1], neck_height, c, R, theta)[0]
+        except ValueError:
+            return [1e3, 1e3]
+    x = _solve2(f, guess)
+    if x is None:
+        raise ValueError(f"no bridge with the neck at {neck_height} near {guess}")
+    _, energy, volume = _offset_bridge(x[0], x[1], neck_height, c, R, theta)
+    return dict(volume=volume, neck=x[0], neck_height=neck_height, pressure=x[1],
+                energy=energy)
 
 
 # ---- barrel on a fibre ---------------------------------------------------------

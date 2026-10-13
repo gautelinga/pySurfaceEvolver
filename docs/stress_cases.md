@@ -901,3 +901,5 @@ Both branches match the exact areas within 0.04%. Between points the vertices ar
 spread along the surface and edges flipped (Newton steps move vertices only along the
 normal); the mesh is otherwise fixed, so as the neck thins its facets shrink, and the
 run stops with a warning once the mesh can't keep up: refine first for a long run.
+{doc}`bridge_rupture` follows a liquid bridge between spheres the same way, and finds
+it turning unstable before its fold.

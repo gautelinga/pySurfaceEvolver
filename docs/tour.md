@@ -73,7 +73,8 @@ step. From the third step on each relax starts from the vertices extrapolated fr
 last two steps, which saves a fifth to a half of the gradient steps.
 `pyse.recipes.arclength(ev, "ht", ds, steps)` follows a branch of equilibria through a
 fold instead (pseudo-arclength continuation, Newton steps only) and on along the
-unstable branch past it, counting the negative modes at each point.
+unstable branch past it, counting the negative modes at each point ({doc}`bridge_rupture`
+finds where a liquid bridge breaks this way).
 `ev.plot(walls=True)` draws the constraints' solids with the surface.
 
 There is one Evolver engine per process: every `Evolver` object is a handle to

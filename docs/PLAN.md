@@ -24,7 +24,11 @@ limit" was the projection; for all surfaces it broke case 8 at 2 threads);
 `Evolver(process=True)` (a surface per worker process, same API, `_remote.py`,
 `_worker.py`; docs page several_surfaces.md); `recipes.arclength` (pseudo-arclength
 through folds; Newton-only, bordered via two Evolver Newton steps; V + u between
-points; catenoid's unstable branch within 0.03%).
+points; catenoid's unstable branch within 0.03%); `relax()` approaches a far target
+in stages when its first step folds facets; docs page bridge_rupture.md (a bridge
+between spheres turns unstable 8% above its fold, a subcritical pitchfork to off-centre
+bridges, Vogel's small volume instability; reference helpers in stress_helpers.py,
+figure by `tools/bridge_rupture_figure.py`).
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
 band) with `ev.remesh(target=h)` each step, as its notebook runs it. 455 tests.
