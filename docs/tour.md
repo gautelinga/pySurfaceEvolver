@@ -81,7 +81,8 @@ it, so all handles see the same surface (a handle used after another one loaded 
 different surface warns). Use `save()`/`restore()` to keep surfaces around.
 `pyse.Evolver(process=True)` gives a surface in a worker process of its own, with the
 same API (calls go to the worker, results come back as copies), for several surfaces
-at once; `pyse.map` runs a function over many parameters in parallel workers.
+at once; `pyse.map` runs a function over many parameters in parallel workers (see
+[Several surfaces at once](several_surfaces.md)).
 `ev.mesh()` is cached
 until the surface changes, so its arrays are read-only. The sample datafiles and
 command scripts are in `pysurfaceevolver.examples`.

@@ -38,6 +38,7 @@ tour
 :maxdepth: 2
 
 relaxing
+several_surfaces
 ```
 
 ```{toctree}

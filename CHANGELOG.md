@@ -54,6 +54,14 @@
 
 ### Documentation
 
+- "Several surfaces at once" (`docs/several_surfaces.md`): `save()`/`restore()`,
+  `pyse.map` and `Evolver(process=True)` compared, with an example of four drops relaxed
+  and shrunk side by side from threads (twice as fast as one after another), what
+  crosses between the processes, and the limits. Its example is checked by
+  `tools/check_doc_snippets.py` with the stress page's.
+- The stress page's catenoid between round wires goes past the fold with
+  `recipes.arclength` (a runnable section).
+
 - A shorter README (92 lines, was 261): what pySE is, a picture of four relaxed
   surfaces, install, one example with its output, and where to read on, with badges.
   Its API tour moved to the docs as "A tour of the API" (`docs/tour.md`), and building,
