@@ -84,6 +84,17 @@
 
 ### Documentation
 
+- Liquid bridge example: "How far a bridge stretches". Bridges at 20 and 60 degrees
+  followed by `arclength` in volume at gaps 0.4 and 0.7 to their first unstable mode,
+  against the exact axisymmetric bridges: at 20 degrees they end at the fold (the neck
+  pinches), at 60 degrees at the branch point well before it (the liquid goes to one
+  bead); Evolver within 1.4%, Lian et al.'s rupture distance within 5%.
+  `bridge_spheres_branch` in `docs/stress_helpers.py` returns the branch point where
+  shrinking bridges lose stability: at 60 degrees there is a second, at large volumes,
+  where Evolver finds none, and the helper had taken that one. References to Surface
+  Evolver work on liquid in bead packs on the bridge, slit drainage and bridge rupture
+  pages.
+
 - "Several surfaces at once" (`docs/several_surfaces.md`): `save()`/`restore()`,
   `pyse.map` and `Evolver(process=True)` compared, with an example of four drops relaxed
   and shrunk side by side from threads (twice as fast as one after another), what
