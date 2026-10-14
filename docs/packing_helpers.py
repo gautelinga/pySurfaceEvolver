@@ -17,7 +17,6 @@ vertex to vertex; each sphere's contact line is where the patches meet it.
 """
 
 import numpy as np
-from matplotlib.path import Path
 from scipy.optimize import brentq
 from scipy.spatial import Delaunay
 
@@ -53,6 +52,17 @@ def _closed(*curves):
     return np.vstack([c[:-1] for c in curves])
 
 
+def _inside(polygon, points):
+    """Whether each point (m, 2) lies inside the polygon (n, 2): crossings of
+    a ray along +x with its edges."""
+    x, y = points[:, :1], points[:, 1:]
+    a, b = polygon, np.roll(polygon, -1, axis=0)
+    spans = (a[:, 1] > y) != (b[:, 1] > y)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cross = a[:, 0] + (y - a[:, 1])*(b[:, 0] - a[:, 0])/(b[:, 1] - a[:, 1])
+    return np.count_nonzero(spans & (x < cross), axis=1) % 2 == 1
+
+
 def _patch(loop, normal, h):
     """Triangulate the flat region inside a closed loop of points: the loop's
     points as given, inside them a triangular lattice of spacing h. Returns
@@ -65,16 +75,15 @@ def _patch(loop, normal, h):
     e1 /= np.linalg.norm(e1)
     e2 = np.cross(n, e1)
     xy = np.c_[(loop - o) @ e1, (loop - o) @ e2]
-    path = Path(np.vstack([xy, xy[:1]]))
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     xs = np.arange(lo[0], hi[0] + h, h)
     ys = np.arange(lo[1], hi[1] + h, h*np.sqrt(3)/2)
     grid = np.array([(x + (j % 2)*h/2, y) for j, y in enumerate(ys) for x in xs])
     near = np.min(np.linalg.norm(grid[:, None, :] - xy[None, :, :], axis=2), axis=1)
-    grid = grid[path.contains_points(grid) & (near > 0.6*h)]
+    grid = grid[_inside(xy, grid) & (near > 0.6*h)]
     pts = np.vstack([xy, grid])
     tri = Delaunay(pts).simplices
-    tri = tri[path.contains_points(pts[tri].mean(axis=1))]
+    tri = tri[_inside(xy, pts[tri].mean(axis=1))]
     a, b, c = pts[tri[:, 0]], pts[tri[:, 1]], pts[tri[:, 2]]
     cross = (b[:, 0] - a[:, 0])*(c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1])*(c[:, 0] - a[:, 0])
     keep = np.abs(cross) > 1e-9*h*h            # (three points along a straight side)
@@ -240,7 +249,7 @@ def throat_thickness(ev, centres):
     x = ev.vertices
     free = np.all(np.abs(np.linalg.norm(x[:, None, :] - centres[None], axis=2) - 1) > 1e-6,
                   axis=1)
-    inside = Path(centres[:, :2]).contains_points(x[:, :2])
+    inside = _inside(centres[:, :2], x[:, :2])
     return 2*np.abs(x[free & inside, 2]).min()
 
 
