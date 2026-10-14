@@ -225,3 +225,14 @@ an asymmetric mode.
 * B. Y. Rubinstein and L. G. Fel, Stability of unduloidal and nodoidal menisci between
   two solid spheres, *J. Geom. Symmetry Phys.* 39 (2015) 77-98. Stability regions
   under axisymmetric perturbations.
+* C. Semprebon, M. Scheel, S. Herminghaus, R. Seemann and M. Brinkmann, Liquid
+  morphologies and capillary forces between three spherical beads, *Phys. Rev. E* 94
+  (2016) 012907, [doi:10.1103/PhysRevE.94.012907](https://doi.org/10.1103/PhysRevE.94.012907).
+  Liquid between three beads, computed with Surface Evolver, including the limits
+  where its shapes lose stability.
+* J. Wang, E. Gallo, B. François, F. Gabrieli and P. Lambert, Capillary force and
+  rupture of funicular liquid bridges between three spherical bodies, *Powder
+  Technology* 305 (2017) 89-98,
+  [doi:10.1016/j.powtec.2016.09.060](https://doi.org/10.1016/j.powtec.2016.09.060).
+  Where liquid between three spheres breaks as they are pulled apart, computed with
+  Surface Evolver.
