@@ -686,7 +686,7 @@ class _Relaxing(_Analysis):
         _, result = self._call(_core.parameters)
         return _Coords(self.vertices, _core.topology_stamp(),
                        tuple((name, value) for name, value, opt in result.data if opt),
-                       np.asarray(_core.multipliers(), dtype=float))
+                       _core.multipliers())
 
     def _put_back(self, snapshot: "_Coords") -> bool:
         """Restore coordinates from :meth:`_coords`; False (and nothing done)

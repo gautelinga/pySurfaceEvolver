@@ -600,12 +600,15 @@ NB_MODULE(_core, m) {
   m.def("symmetry", []() { Lock lock; return bool(pyse_symmetry()); });
   m.def("topology_stamp", []() { Lock lock; return pyse_topology_stamp(); });
   m.def("multiplier_count", []() { Lock lock; return pyse_multiplier_count(); });
-  m.def("multipliers", []() {
+  m.def("multipliers", []() -> nb::ndarray<nb::numpy, double, nb::ndim<1>> {
     Lock lock;
     long n = pyse_multiplier_count();
-    std::vector<double> out(n);
-    pyse_get_multipliers(out.data(), n);
-    return to_numpy(std::move(out), {size_t(n)});
+    auto *heap = new std::vector<double>(n);
+    pyse_get_multipliers(heap->data(), n);
+    nb::capsule owner(heap, [](void *p) noexcept {
+      delete static_cast<std::vector<double> *>(p);
+    });
+    return nb::ndarray<nb::numpy, double, nb::ndim<1>>(heap->data(), {size_t(n)}, owner);
   }, "the Lagrange multipliers: bodies' pressures, then quantities'");
   m.def("set_multipliers", [](nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu> values) {
     Lock lock;

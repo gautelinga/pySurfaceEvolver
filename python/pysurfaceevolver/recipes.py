@@ -297,7 +297,7 @@ def _newton_target(ev, put: Callable[[Any], None],
     put(value)
     start = ev._coords()
     _hessian(ev)
-    x, multipliers = ev.vertices, np.asarray(_core.multipliers(), dtype=float)
+    x, multipliers = ev.vertices, _core.multipliers()
     ev._put_back(start)
     return x, multipliers
 
@@ -384,6 +384,22 @@ def _arc_settle(ev, put, value: float, tol: float, tidy: bool,
     return ok, (ev.eigen_counts(0.0).negative if ok else 0), residual
 
 
+def _back_to(ev, put, snapshot, value: float, tol: float) -> bool:
+    """Back at an earlier point after tidying has flipped edges, which
+    _put_back refuses: that point's vertices and multipliers on the mesh as it
+    is now (flips keep the vertices), then Newton steps at its value. Whether
+    that converged."""
+    if not ev._put_back(snapshot):
+        if len(snapshot.coords) != len(ev.vertices):
+            return False
+        ev.vertices = snapshot.coords
+        if snapshot.multipliers is not None \
+                and len(snapshot.multipliers) == _core.multiplier_count():
+            _core.set_multipliers(snapshot.multipliers)
+    put(value)
+    return _arc_settle(ev, put, value, tol, False)[0]
+
+
 def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
               tidy: bool = True, halvings: int = 3) -> Iterator[Step]:
@@ -417,7 +433,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     Stops after ``steps`` points, at the first point outside ``bounds``
     (``(low, high)`` on the value; the surface is put back at the last one
     inside), or, with a warning, when a step (the first one too) doesn't
-    converge even at ``ds/2**halvings`` (put back at the last point) or the facets degenerate
+    converge even at ``ds/2**halvings`` or doesn't settle again after tidying
+    (put back at the last point either way) or the facets degenerate
     (below 1 degree: refine and start again from there). ``tol`` bounds the
     residual of each point, as in :meth:`Evolver.relax`.
     """
@@ -514,8 +531,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         ok, negative, residual = _arc_settle(ev, put, v, tol, tidy, (tx, tv))
         v = float(_current(ev, what))       # (settling back can move it a little)
         if not ok:
+            where = ("the surface is back at the last point" if _back_to(ev, put, last, v1, tol)
+                     else "the surface is left there, out of equilibrium")
             warnings.warn(f"arclength(): the surface didn't settle again at {v:.6g} after "
-                          "tidying its mesh (too coarse there? refine); stopping",
+                          f"tidying its mesh (too coarse there? refine); stopping, and {where}",
                           UserWarning, stacklevel=2)
             return
         points = [points[-1], (v, ev.vertices)]

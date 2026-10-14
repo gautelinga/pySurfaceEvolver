@@ -130,6 +130,19 @@ def test_a_first_step_too_long_is_halved():
     assert ev.parameters["ht"] == pytest.approx(1.1)
 
 
+def test_a_point_that_doesnt_settle_leaves_the_surface_at_the_last_one():
+    # steps of 0.3 on this coarse mesh overshoot the fold; the corrector's
+    # point doesn't settle after tidying, and the surface went on from there
+    # (wires 1.45 apart, past the fold): now back at 1.1, in equilibrium
+    ev = _wire_catenoid(1)
+    ev.parameters["ht"] = 0.8
+    with pytest.warns(UserWarning, match="back at the last point"):
+        steps = list(recipes.arclength(ev, "ht", 0.3, 6))
+    assert ev.parameters["ht"] == pytest.approx(steps[-1].value)
+    # (on the mesh as tidied: the same surface, edges flipped)
+    assert ev.residual() < 1e-8 and ev.total_area == pytest.approx(steps[-1].energy, rel=5e-3)
+
+
 def test_arclength_arguments(cube):
     with pytest.raises(ValueError):
         next(recipes.arclength(cube, cube.body(1), 0.0, 5))

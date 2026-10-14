@@ -105,16 +105,17 @@
   the spheres (in Notes and limits). The `docs` extra now includes SciPy (the notebooks' reference
   helpers use it).
 
-- Liquid bridge example: "How far a bridge stretches". Bridges at 20 and 60 degrees
-  followed by `arclength` in volume at gaps 0.4 and 0.7 to their first unstable mode,
-  against the exact axisymmetric bridges: at 20 degrees they end at the fold (the neck
-  pinches), at 60 degrees at the branch point well before it (the liquid goes to one
-  bead); Evolver within 1.4%, Lian et al.'s rupture distance within 5%.
-  `bridge_spheres_branch` in `docs/stress_helpers.py` returns the branch point where
-  shrinking bridges lose stability: at 60 degrees there is a second, at large volumes,
-  where Evolver finds none, and the helper had taken that one. References to Surface
-  Evolver work on liquid in bead packs on the bridge, slit drainage and bridge rupture
-  pages.
+- Liquid bridge example: "How far a bridge stretches". Bridges of the volumes that break
+  at gaps 0.4 and 0.7 (20 and 60 degrees, from the exact axisymmetric bridges) pulled
+  apart with `arclength` in the gap, the beads following the parameter: at 20 degrees
+  they end at the fold (the neck pinches), at 60 degrees at the branch point well before
+  it (the liquid goes to one bead); Evolver's widest stable bridge within 0.01 of the
+  exact gap, Lian et al.'s rupture distance within 5%. The notebook's beads follow
+  `gap` throughout. `bridge_spheres_branch` in `docs/stress_helpers.py` returns the branch
+  point where shrinking bridges lose stability: at 60 degrees there is a second, at
+  large volumes, where Evolver finds none, and the helper had taken that one. References
+  to Surface Evolver work on liquid in bead packs on the bridge, slit drainage and
+  bridge rupture pages.
 
 - "Several surfaces at once" (`docs/several_surfaces.md`): `save()`/`restore()`,
   `pyse.map` and `Evolver(process=True)` compared, with an example of four drops relaxed
@@ -143,6 +144,11 @@
   `tools/readme_figure.py` redraws the picture.
 
 ### Fixes
+
+- `arclength()` stopping at a point that doesn't settle after tidying leaves the surface
+  at the last point (its vertices on the tidied mesh, Newton there), not at the
+  unsettled one: a catenoid stepped past its fold was left with its wires 1.45 apart.
+  `_core.multipliers()` is typed (a float64 array) in the stubs.
 
 - `arclength()` halves its first step too, as it did the later ones (up to `halvings`
   times), instead of stopping with "try a smaller ds"; the attempts are undone from a
