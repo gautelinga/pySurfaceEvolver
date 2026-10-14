@@ -36,7 +36,7 @@ crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a 
 (`_put_back`, in `relax()` too) restores them; `_core.multipliers()`/`set_multipliers()`.
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 465 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 470 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
@@ -79,18 +79,20 @@ Open, for the user to pick (proposed 2026-10-13):
   Open from it: (1) **small contact angles** (5 degrees, Semprebon et al.'s): relaxing
   a crude start slides vertices through the spheres; a one-sided copy of each sphere
   on the free vertices stops that but collapses the facets; the page uses 20 degrees.
-  (2) `arclength` can't remesh mid-run, so the trimer's unstable branch (snap-in to
-  pop-out, at 5 degrees) degenerates before the dimer; a dimer start needs its own
-  slab and the 5-degree relax. (3) Past a symmetric bifurcation (the pore's triple
-  mode) `arclength` stops; following one of the broken-symmetry branches would need a
-  push along a mode first. (5) The same Python
-  gave a different `relax()` outcome for one 20-degree bridge with the dev venv's
-  core and the docs venv's (builds differ in something; CI builds fresh). (6) At 60
-  degrees `bridge_spheres_branch` finds a second zero at large volume where Evolver
-  sees no instability (unexplained; the helper takes the other). Done since: sphere
-  centres from parameters, `arclength`'s first step halved (dcf7196), its unsettled
-  stop put back, the bridge notebook pulling beads apart, multipliers typed; CI replicated
-  in fresh venvs (Python 3.12 only), which caught SciPy missing from the `docs` extra.
+  (8) The trimer's dimer and cusp at 5 degrees need (1). (9) The pore's symmetric
+  branch stops at volume 0.2465 (levels 2) with its triple mode still positive (1.3):
+  `along=` finds nothing there, so the broken-symmetry branches aren't followed.
+  Done since: sphere centres from parameters, `arclength`'s first step halved
+  (dcf7196), its unsettled stop put back, the bridge notebook pulling beads apart,
+  multipliers typed; CI replicated in fresh venvs (Python 3.12 only), which caught
+  SciPy missing from the `docs` extra. Then (2026-10-14, second batch): `arclength`
+  `remesh=` (catenoid down the unstable branch to wires 0.43 apart) and `along=` (the
+  rupture page follows the off-centre bridges, pressures within 1e-4 of exact);
+  `relax(levels=n)` starts again one level finer when the last level fails (the
+  "build-dependent" 20-degree bridge was SciPy's last digit of its volume tipping a
+  chaotic coarse relax: 6 of 13 ulp-perturbed volumes failed, now 13 of 13; samples
+  and stress cases unchanged); `bridge_spheres_branch`'s second zero at 60 degrees
+  was the cylindrical bridge (slope now weighted by the neck's curvature).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
 

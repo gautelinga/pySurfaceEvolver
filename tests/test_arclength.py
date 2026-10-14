@@ -143,6 +143,58 @@ def test_a_point_that_doesnt_settle_leaves_the_surface_at_the_last_one():
     assert ev.residual() < 1e-8 and ev.total_area == pytest.approx(steps[-1].energy, rel=5e-3)
 
 
+def test_remeshing_keeps_the_unstable_branch():
+    # the catenoid stretches to its fold and its neck then thins: without
+    # remeshing the facets degrade and the run loses the unstable branch
+    # (back to no negative mode at 0.85, areas 30% off); remeshing between
+    # points keeps it, down to wires 0.5 apart
+    ev = _wire_catenoid(1)
+    ev.parameters["ht"] = 0.8
+    h = float(np.median(ev.mesh().edge_lengths()))
+    n = len(ev.vertices)
+    steps = list(recipes.arclength(ev, "ht", 0.05, 33, remesh=h))
+    values = np.array([s.value for s in steps])
+    negative = np.array([s.result.negative_modes for s in steps])
+    turn = int(np.argmax(values))
+    assert 1.31 < values[turn] < 1.34 and values[-1] < 0.55
+    assert (negative[:turn] == 0).all() and (negative[turn + 1:] == 1).all()
+    for s in steps:
+        exact = _catenoid_areas(s.value)
+        if exact is not None:
+            expected = exact[0] if s.result.negative_modes == 0 else exact[1]
+            assert s.energy == pytest.approx(expected, rel=6e-3)
+    assert len(ev.vertices) > 1.5*n
+    length = ev.mesh().edge_lengths()
+    assert length.max() < 1.6*h and ev.mesh_quality().angle_min > 15
+
+
+def test_remeshing_by_a_function():
+    ev = _wire_catenoid(1)
+    ev.parameters["ht"] = 0.8
+    h = float(np.median(ev.mesh().edge_lengths()))
+    calls = []
+
+    def remesh(ev):
+        calls.append(ev.parameters["ht"])
+        ev.remesh(target=h)
+    steps = list(recipes.arclength(ev, "ht", 0.05, 8, remesh=remesh))
+    assert len(calls) == 6 and len(ev.vertices) > 288
+    assert all(s.result.residual < 1e-8 for s in steps)
+
+
+def test_carry_a_field_to_a_refined_mesh():
+    ev = _wire_catenoid(0)
+    ids, x = ev.mesh().vertex_ids, ev.vertices
+    ev.refine()
+    m = ev.mesh()
+    carried = recipes._carry(ids, x, m)
+    kept = np.isin(m.vertex_ids, ids)
+    assert np.array_equal(carried[kept], x[np.searchsorted(ids, m.vertex_ids[kept])])
+    # a new vertex (an edge's midpoint) takes its neighbours' mean: near it
+    gap = np.linalg.norm(carried[~kept] - m.vertices[~kept], axis=1)
+    assert (~kept).sum() > 0 and gap.max() < np.median(m.edge_lengths())
+
+
 def test_arclength_arguments(cube):
     with pytest.raises(ValueError):
         next(recipes.arclength(cube, cube.body(1), 0.0, 5))

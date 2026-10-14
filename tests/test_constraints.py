@@ -377,3 +377,57 @@ def test_texts_hold_plain_numbers():
                            gauge="axial", ref=np.array([0, 1.0, 0])),
                 C.cylinder(np.zeros(3), np.array([0, 0, 1.0]), f64(0.4), contact_angle=f64(50))):
         assert "np." not in con.text() and "float64" not in con.text()
+
+
+def test_arclength_along_a_mode_onto_the_off_centre_bridges():
+    # a shrinking bridge loses stability where bridges with the neck off the
+    # middle branch off (no fold: the volume goes on down); along its mode,
+    # either way, the run follows them (mirror images of each other)
+    from pysurfaceevolver import recipes
+    ev = _bridge(0.4, False, levels=1, volume=0.035)
+    for s in recipes.arclength(ev, ev.body(1), -0.004, 30):
+        if s.result.negative_modes:
+            break
+    assert s.result.negative_modes == 1 and 0.022 < s.value < 0.026    # (exact 0.0248)
+    mode = ev.modes(1).vectors[0]
+    start = ev.save()
+    runs = []
+    for sign in (1, -1):
+        steps = list(recipes.arclength(ev, ev.body(1), sign*0.02, 4, along=mode))
+        x = ev.vertices
+        r = [np.hypot(*x[ev.on_constraint(k)][:, :2].T).mean() for k in (1, 2)]
+        runs.append((steps, r[1] - r[0]))      # the contact lines' radii: one wider
+        ev.restore(start)
+    (up, wider_up), (down, wider_down) = runs
+    assert len(up) == 4 and np.all(np.diff([s.value for s in up]) > 0)
+    assert all(s.result.negative_modes == 1 and s.result.residual < 1e-8 for s in up)
+    assert abs(wider_up) > 0.05 and wider_down == pytest.approx(-wider_up, rel=1e-3)
+    assert [s.energy for s in down] == pytest.approx([s.energy for s in up], rel=1e-6)
+    with pytest.raises(ValueError):
+        next(recipes.arclength(ev, ev.body(1), 0.02, 4, along=mode[:-1]))
+
+
+def test_relax_levels_from_a_crude_low_angle_start():
+    # a 20-degree bridge from a tube 12 facets around: relaxed at that
+    # coarseness first, which equilibrium it found was chance (its volume
+    # moved by a few units in the last place: 6 of 13 failed, at the last
+    # level); relax(levels=2) now starts again one level finer when the last
+    # level fails, and these all converge, to about the same energy
+    v0 = 1.4*0.18484601870300293
+    energies = []
+    for k in (-6, -4, 0, 2):
+        c, a = 1.35, 0.35
+        zb = c - np.sqrt(1 - a*a)
+        tube = pyse.shapes.tube(a, -zb, zb, nz=4, nt=12)
+        ev = pyse.Evolver()
+        ev.load_arrays(tube.vertices, tube.faces,
+                       constraints={1: C.sphere((0, 0, -c), 1.0, contact_angle=20.0,
+                                                wet_poles=("north",)),
+                                    2: C.sphere((0, 0, c), 1.0, contact_angle=20.0,
+                                                wet_poles=("south",))},
+                       vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                       bodies=[pyse.Body(volume=v0 + k*np.spacing(v0))])
+        r = ev.relax(levels=2)
+        assert r.converged and ev.mesh_quality().angle_min > 10
+        energies.append(ev.energy)
+    assert max(energies) == pytest.approx(min(energies), rel=5e-3)     # (the meshes differ)

@@ -2,7 +2,9 @@
 shown there: each ```python block followed by a ```text block is run in its
 own process (from docs/, so the helpers import), and its printed lines are
 compared with the text block, numbers within a relative tolerance (the last
-digits vary with the thread count).
+digits vary with the thread count). A block whose first line starts with
+``# continuing`` runs after the page's blocks before it (their output not
+compared again).
 
     python tools/check_doc_snippets.py [--update] [--rel 1e-3] [page.md ...]
 
@@ -64,10 +66,15 @@ def main() -> int:
     status = 0
     for page in args.pages:
         text = open(page).read()
-        out, pos = [], 0
+        out, pos, before = [], 0, []
         for k, m in enumerate(BLOCK.finditer(text), 1):
+            code = m.group(1)
+            if code.startswith("# continuing"):
+                code = ("import contextlib, io\nwith contextlib.redirect_stdout(io.StringIO()):\n"
+                        + "".join(f"    exec({c!r})\n" for c in before) + code)
+            before.append(m.group(1))
             got, seconds, error = run("import warnings; warnings.simplefilter('ignore')\n"
-                                      + m.group(1))
+                                      + code)
             ok = not error and same(m.group(2), got, args.rel)
             print(f"{os.path.basename(page)} block {k}: {'ok' if ok else 'DIFFERS'} "
                   f"({seconds:.0f} s)", flush=True)

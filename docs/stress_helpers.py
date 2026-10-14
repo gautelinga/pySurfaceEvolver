@@ -261,22 +261,24 @@ def bridge_spheres_fold(gap, theta, R=1.0, necks=(0.02, 0.6)):
 def bridge_spheres_branch(gap, theta, R=1.0, necks=(0.02, 0.6), eps=1e-5):
     """Where bridges whose neck sits off the mid-plane branch off the
     mirror-symmetric ones: the symmetric bridge at which sliding the neck
-    along the axis keeps both contact angles to first order. Of several in the
-    range ``necks`` (times R), the widest-necked one where that slope turns
-    negative as the neck narrows: there a shrinking bridge loses stability (as
-    Evolver's eigenvalues show). Where it turns positive, at large volumes and
-    contact angles, Evolver finds no instability on either side. The result
+    along the axis keeps both contact angles to first order. The slope is taken
+    per unit of the neck's curvature p - 1/rn: unweighted, it also vanishes at
+    the cylindrical bridge (rn = R cos(theta), in the range ``necks`` (times R)
+    above about 53 degrees), where sliding moves nothing; that is no branch
+    point, and Evolver sees no instability there. The weighted slope changes
+    sign once, from negative to positive as the neck narrows: there a
+    shrinking bridge loses stability (as Evolver's eigenvalues show). The result
     may lie past the fold (a thinner neck than the fold's): then the fold comes
     first. A dict: volume, neck, pressure, energy."""
     c = R + gap/2
 
-    def slope(rn, p):            # d(contact angle at the upper sphere)/d(neck height)
-        return (_bridge_half(rn, p, c, R, theta, eps)[0]
-                - _bridge_half(rn, p, c, R, theta, -eps)[0])/(2*eps)
+    def slope(rn, p):            # d(contact angle at the upper sphere)/d(neck height),
+        return (_bridge_half(rn, p, c, R, theta, eps)[0]     # per unit of the neck's curvature
+                - _bridge_half(rn, p, c, R, theta, -eps)[0])/(2*eps*(p - 1/rn))
     rows = _symmetric_family(gap, theta, R, np.geomspace(necks[0]*R, necks[1]*R, 60))
     s = [slope(rn, p) for rn, p in rows]
     for k in range(len(rows) - 1):           # widest first
-        if s[k] > 0 > s[k + 1]:
+        if s[k] < 0 < s[k + 1]:
             pressure = {"p": rows[k][1]}
 
             def f(rn):

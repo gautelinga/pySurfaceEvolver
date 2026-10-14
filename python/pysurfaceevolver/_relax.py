@@ -164,6 +164,12 @@ class _Relaxing(_Analysis):
           steps the level left of ``max_iter``; kept only if that converges.
           Otherwise plain gradient steps (your own ``conj_grad`` setting is
           restored after).
+        * With ``levels=n``, if the last level still ends unconverged: the
+          levels again from the call's start refined once first, kept only if
+          that converges. A coarse start can hold equilibria the shape doesn't
+          have, and which one its gradient rounds find can turn on the last
+          digit of a volume (a bridge at 20 degrees from a tube 12 facets
+          around).
         * Once converged (linear model), edges leaving a contact line that are
           longer than 1.5 times the contact-line edges there are split and the
           surface relaxed again, kept only if that converges: a shrinking
@@ -302,6 +308,7 @@ class _Relaxing(_Analysis):
             if first is not None:
                 steps, residual = first
             else:
+                start = self.save() if levels and not keep_mesh else None
                 for lev in range(levels + 1):
                     if lev:
                         self.refine()
@@ -314,6 +321,8 @@ class _Relaxing(_Analysis):
                         if e.errnum not in _NO_FREEDOM or lev == levels:
                             raise
                 steps, residual = run.finish(levels)
+                if start is not None and not residual < tol:
+                    steps, residual = run.finer_start(start, levels) or (steps, residual)
             if self.model == "linear" and residual < tol and not keep_mesh and not already:
                 more, residual = run.contact_pass(levels + 1, residual)
                 steps += more
@@ -1080,6 +1089,35 @@ class _Run:
                 break
             total, residual = total + steps, second
         return total, residual
+
+    def finer_start(self, start: Any, levels: int) -> "tuple[int, float] | None":
+        """relax(levels=n)'s fallback when the last level ends unconverged:
+        the levels again from the call's start refined once first (n - 1
+        refinements after). A coarse start can hold equilibria the shape
+        doesn't have, and which one its gradient rounds find is chance (a
+        bridge at 20 degrees from a tube 12 facets around: 6 in 13 starts
+        failed, its volume moved by a few units in the last place; refined
+        first, all converged, to the same energy). Kept if it converges; else
+        the surface and the trace go back (None). Returns the Newton steps
+        and the residual."""
+        ev, trace = self.ev, self.trace
+        failed, mark = ev.save(), trace.mark()
+        first = self.next_level(levels)
+        residual = float("inf")
+        try:
+            ev.restore(start)
+            for k in range(levels):
+                ev.refine()
+                self.approach()
+                self.settle(first + k)
+            steps, residual = self.finish(first + levels - 1)
+        except EvolverError:
+            pass
+        if residual < self.tol:
+            return steps, residual
+        ev.restore(failed)
+        trace.rewind(mark)
+        return None
 
     def collapse(self, levels: int) -> "tuple[int, float, int, int] | None":
         """relax()'s last resort for an unconverged surface: gradient steps

@@ -75,6 +75,25 @@
   overloaded pad with no equilibrium, undoes 20 steps instead of 12 before giving up
   (5 s instead of 1).
 
+- `arclength(..., along=mode)`: the first step goes along a displacement per vertex
+  (such as `ev.modes(1).vectors[0]`) at the starting value instead of in the value,
+  onto a branch that crosses there, and the run follows that branch. From the first
+  unstable point of a shrinking bridge (a mode turning negative without a fold), it
+  follows the off-centre bridges, with pressures within 1e-4 of the exact ones and one
+  negative mode throughout; the two signs of `ds` give mirror images (the rupture page
+  has the example). Not found for the packing page's pore: its symmetric branch stops
+  before its triply degenerate mode turns negative.
+- `arclength(..., remesh=h)`: keeps the edges in range on a branch that stretches or
+  shrinks the surface, with `ev.remesh(target=h)` between points when an edge has left
+  0.5h-1.6h (or a dict of `remesh()`'s arguments, or a function of the surface called
+  between points). The last step is carried over to the new vertices (by vertex id, and
+  for a split edge's midpoint the mean of its neighbours') and the remeshed surface is
+  brought back to the branch by the corrector. A catenoid between round wires, through
+  its fold and down the unstable branch: without remeshing its facets degrade and at
+  wires 0.85 apart the run is back to no negative mode with areas 30% off; with
+  `remesh=h` it follows the unstable catenoid to wires 0.43 apart within 0.4% of the
+  exact areas.
+
 - `continuation()` predicts each step: from the third step on, relax starts from every
   vertex extrapolated from the last two steps (a secant predictor), which saves a fifth
   to a half of the gradient steps. Over the stress cases that step a value, the gradient
@@ -104,6 +123,15 @@
   page). At 5 degrees, the paper's angle, relaxing these starts slides vertices through
   the spheres (in Notes and limits). The `docs` extra now includes SciPy (the notebooks' reference
   helpers use it).
+
+- "Where a shrinking bridge breaks": a section following the off-centre bridges with
+  `arclength(along=...)` against the exact ones. `tools/check_doc_snippets.py` runs a
+  block starting with `# continuing` after the page's blocks before it.
+- `bridge_spheres_branch` (docs helpers) weighs the neck's sliding by the neck's
+  curvature: unweighted, the slope it solves for also vanishes at the cylindrical
+  bridge (neck R cos(theta), in range above about 53 degrees), where sliding the neck
+  moves nothing. That was the unexplained second zero at 60 degrees, where Evolver
+  found no instability. The branch points it returns are the same.
 
 - Liquid bridge example: "How far a bridge stretches". Bridges of the volumes that break
   at gaps 0.4 and 0.7 (20 and 60 degrees, from the exact axisymmetric bridges) pulled
@@ -155,6 +183,15 @@
   copy once tidying has flipped edges. Finer meshes and shallow angles had needed a
   smaller `ds` by hand (the packing page's pore refined once, a throat at 20 degrees).
 
+- `relax(levels=n)` starts again one level finer when its last level ends
+  unconverged: from the call's start refined once, then the levels as before (kept only
+  if that converges). A coarse start can hold equilibria the shape doesn't have, and
+  which one the gradient rounds found was chance: a 20-degree bridge from a tube 12
+  facets around, with its volume moved by a few units in the last place, failed 6 times
+  in 13 (the "different builds" of the bridge notebook: different SciPy versions
+  computed its volume 1 ulp apart); now all 13 converge. Stress cases unchanged; the
+  sample datafiles at levels 1 and 2 converge as before, to the same energies (those
+  that don't, try the finer start too: up to 1.7 s more, tankex.fe).
 - `relax()` leaves a surface that is already in equilibrium as it is (with `levels=0`:
   residual and target gaps below `tol`, no degenerate facet, also after Evolver's
   `recalc`, which puts the vertices on wires moved by a parameter): only the stability

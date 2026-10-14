@@ -30,6 +30,7 @@ from typing import Any, Callable, Iterable, Iterator, List, Optional, Union
 import numpy as np
 
 from . import _core
+from ._relax import _MERGE_UNDER, _SPLIT_ABOVE
 
 __all__ = ["Step", "arclength", "continuation", "load_steps"]
 
@@ -400,9 +401,73 @@ def _back_to(ev, put, snapshot, value: float, tol: float) -> bool:
     return _arc_settle(ev, put, value, tol, False)[0]
 
 
+def _carry(ids: np.ndarray, values: np.ndarray, mesh) -> np.ndarray:
+    """A field per vertex (``values``, rows aligned with Evolver vertex ``ids``) on a
+    remeshed surface: by id where a vertex was kept, and where it is new (an
+    edge split) the mean over its neighbours that have one, layer by layer
+    inward."""
+    new_ids = mesh.vertex_ids
+    out = np.zeros((len(new_ids),) + values.shape[1:])
+    order = np.argsort(ids)
+    at = np.minimum(np.searchsorted(ids, new_ids, sorter=order), len(ids) - 1)
+    known = ids[order[at]] == new_ids
+    out[known] = values[order[at[known]]]
+    a, b = mesh.edges[:, 0], mesh.edges[:, 1]
+    while not known.all():
+        sums, count = np.zeros_like(out), np.zeros(len(out))
+        for u, w in ((a, b), (b, a)):
+            take = known[w] & ~known[u]
+            np.add.at(sums, u[take], out[w[take]])
+            np.add.at(count, u[take], 1)
+        newly = count > 0
+        if not newly.any():
+            break                   # (a piece without a kept vertex: left at 0)
+        out[newly] = sums[newly]/count[newly].reshape((-1,) + (1,)*(out.ndim - 1))
+        known |= newly
+    return out
+
+
+def _remesher(ev, remesh: Any) -> Optional[Callable[[Callable[[], None]], bool]]:
+    """arclength()'s ``remesh``, as a call that remeshes when the edges have
+    left their range (calling ``ready()`` first) and says whether it changed
+    the mesh."""
+    if remesh is None:
+        return None
+    if callable(remesh):
+        def by_function(ready: Callable[[], None]) -> bool:
+            ready()
+            before = ev.mesh()
+            remesh(ev)
+            after = ev.mesh()
+            return not (np.array_equal(before.vertex_ids, after.vertex_ids)
+                        and np.array_equal(before.facets, after.facets)
+                        and np.array_equal(before.vertices, after.vertices))
+        return by_function
+    kwargs = dict(remesh) if isinstance(remesh, dict) else {"target": float(remesh)}
+    if ev.model != "linear":
+        raise ValueError("arclength(remesh=...) needs the linear model (see Evolver.remesh)")
+    target = kwargs.get("target")
+    longest = kwargs.get("max_edge", _SPLIT_ABOVE*target if target is not None else None)
+    shortest = kwargs.get("min_edge", _MERGE_UNDER*target if target is not None else None)
+
+    def by_length(ready: Callable[[], None]) -> bool:
+        m = ev.mesh()
+        length = m.edge_lengths()
+        due = longest is not None and bool((length > longest).any())
+        if shortest is not None:
+            inner = m.edge_valence() != 1 if kwargs.get("keep_boundary", True) else True
+            due = due or bool(((length < shortest) & inner).any())
+        if not due:
+            return False
+        ready()
+        return any(ev.remesh(**kwargs).values())
+    return by_length
+
+
 def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
-              tidy: bool = True, halvings: int = 3) -> Iterator[Step]:
+              tidy: bool = True, halvings: int = 3, along: Optional[np.ndarray] = None,
+              remesh: Union[None, float, dict, Callable[[Any], Any]] = None) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
     target volume or ``ev.quantity(name)``'s target).
@@ -425,18 +490,36 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     each point is a prediction along the secant of the last two, corrected by
     Newton's method on the equilibrium together with the condition of being
     ``ds`` along the branch (each iteration: two Newton steps of Evolver's).
-    No gradient steps: those would leave an unstable branch. The vertices
-    stay the same: no refinement or remeshing (refine before), but between
-    points (``tidy=True``) they are spread along the surface and edges
+    No gradient steps: those would leave an unstable branch. Between points
+    (``tidy=True``) the vertices are spread along the surface and edges
     flipped, which Newton steps alone don't do.
+
+    ``along`` (a displacement per vertex, such as ``ev.modes(1).vectors[0]``)
+    starts on another branch: the first step goes a distance ``ds`` along it
+    at the starting value instead of in the value, onto a branch that crosses
+    this one there, such as a less symmetric one past a symmetric
+    bifurcation (start just past it, where the mode's eigenvalue has turned
+    negative: from the point a first run stopped at). The sign of ``ds``
+    picks the direction along it; from the second step on the run follows the
+    new branch, either way in the value.
+
+    ``remesh`` keeps the edges' lengths in range on a branch that stretches
+    or shrinks the surface: ``h`` (:meth:`Evolver.remesh`'s ``target``) or a
+    dict of its arguments, called between points when an edge has left the
+    range they set (``target=h``: 0.5h to 1.6h; edges on the boundary are
+    never deleted), or a function of the surface, called between points. The
+    remeshed surface is brought back to the branch at the same point, and the
+    last step carried over to its new vertices (a split edge's midpoint takes
+    the mean of its neighbours'). Without it the vertices stay the same
+    (refine before).
 
     Stops after ``steps`` points, at the first point outside ``bounds``
     (``(low, high)`` on the value; the surface is put back at the last one
     inside), or, with a warning, when a step (the first one too) doesn't
     converge even at ``ds/2**halvings`` or doesn't settle again after tidying
-    (put back at the last point either way) or the facets degenerate
-    (below 1 degree: refine and start again from there). ``tol`` bounds the
-    residual of each point, as in :meth:`Evolver.relax`.
+    or remeshing (put back at the last point either way) or the facets
+    degenerate (below 1 degree: refine and start again from there). ``tol``
+    bounds the residual of each point, as in :meth:`Evolver.relax`.
     """
     if ds == 0 or steps < 0 or halvings < 0:
         raise ValueError("arclength() needs ds != 0, steps >= 0 and halvings >= 0")
@@ -445,6 +528,14 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     if not _numeric(value):
         raise TypeError("arclength() follows a value it can read: a parameter or variable "
                         "name, ev.body(i) or ev.quantity(name)")
+    if along is not None:
+        along = np.array(along, dtype=float)
+        rms = float(np.sqrt((along*along).sum(axis=1).mean())) if along.ndim == 2 else 0.0
+        if along.shape != ev.vertices.shape or not rms > 0:
+            raise ValueError(f"arclength(along=...) needs a nonzero displacement per vertex, "
+                             f"shape {ev.vertices.shape}")
+        along /= rms
+    remesh_now = _remesher(ev, remesh)
 
     def put(v: float) -> None:
         set_value(ev, v)
@@ -473,16 +564,24 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     yield step(0, float(value), 0, negative, residual)
     if steps < 2:
         return
-    # the first step in the value alone, halved like the others when Newton
-    # doesn't get there
+    # the first step in the value alone (or along ``along`` at the value),
+    # halved like the others when Newton doesn't get there
     # (back by the coordinates, or by a copy once tidying has flipped edges)
-    start, copy, first = ev._coords(), ev.save(), ds
+    start, copy, first, x_start = ev._coords(), ev.save(), ds, ev.vertices
     for _ in range(halvings + 1):
-        put(value + first)
-        kept = ev.newton(20, tol=tol)
-        ok = False
-        if kept.converged:
-            ok, negative, residual = _arc_settle(ev, put, float(value + first), tol, tidy)
+        if along is None:
+            put(value + first)
+            kept = ev.newton(20, tol=tol)
+            iterations, ok = kept.newton_steps, False
+            if kept.converged:
+                ok, negative, residual = _arc_settle(ev, put, float(value + first), tol, tidy)
+        else:
+            tangent = (np.sign(first)*along, 0.0)
+            ok, iterations = _arc_correct(ev, put, x_start + first*along, float(value),
+                                          *tangent, tol, 12)
+            if ok:
+                ok, negative, residual = _arc_settle(ev, put, float(_current(ev, what)), tol,
+                                                     tidy, tangent)
         if ok:
             break
         if not ev._put_back(start):
@@ -490,26 +589,38 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         put(value)
         first /= 2
     if not ok:
-        warnings.warn(f"arclength(): no equilibrium found at {value + 2*first:.6g} by Newton "
-                      f"steps (even with steps of {abs(2*first):.3g}); the surface is back at "
-                      "the start", UserWarning, stacklevel=2)
+        where = f"at {value + 2*first:.6g}" if along is None else "along the given mode"
+        warnings.warn(f"arclength(): no equilibrium found {where} by Newton steps (even with "
+                      f"steps of {abs(2*first):.3g}); the surface is back at the start",
+                      UserWarning, stacklevel=2)
         return
-    points.append((float(value + first), ev.vertices))
-    yield step(1, float(value + first), kept.newton_steps, negative, residual)
+    v = float(_current(ev, what))
+    points.append((v, ev.vertices))
+    yield step(1, v, iterations, negative, residual)
     h = abs(first)              # (and back up to ds below)
     for index in range(2, steps):
+        if remesh_now is not None:
+            points, ok = _arc_remesh(ev, put, points, remesh_now, tol, tidy,
+                                     lambda: float(_current(ev, what)))
+            if not ok:
+                warnings.warn(f"arclength(): the surface didn't settle again at "
+                              f"{points[-1][0]:.6g} after remeshing; stopping, and the "
+                              "surface is back at the last point, as it was before",
+                              UserWarning, stacklevel=2)
+                return
+        if ev.mesh_quality().angle_min < 1.0:
+            warnings.warn(f"arclength(): facets below 1 degree at {points[-1][0]:.6g}: refine "
+                          "and start again from here", UserWarning, stacklevel=2)
+            return
         (v0, x0), (v1, x1) = points[-2], points[-1]
         if len(x0) != len(x1) or len(x1) != len(ev.vertices):
             raise RuntimeError("arclength(): the vertices changed between points (it "
-                               "needs the same mesh throughout)")
+                               "needs the same mesh throughout, or remesh=...)")
         # the step's length and the plane it ends on from the shape's change
         # (along the normals: the tidying's sliding isn't a step; counting it
         # turned a bridge back at its fold); the prediction along the whole
         # secant (the vertices keep spreading as the surface stretches)
-        dx = _normal_part(ev, x1 - x0)
-        norm = np.sqrt(_arc_norm2(dx, v1 - v0))
-        tx, tv = dx/norm, (v1 - v0)/norm
-        sx = (x1 - x0)/norm
+        tx, tv, sx = _arc_secant(ev, x0, v0, x1, v1)
         last = ev._coords()
         for k in range(halvings + 1):
             ok, iterations = _arc_correct(ev, put, x1 + h*sx, v1 + h*tv, tx, tv, tol, 12)
@@ -539,8 +650,38 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             return
         points = [points[-1], (v, ev.vertices)]
         yield step(index, v, iterations, negative, residual)
-        if ev.mesh_quality().angle_min < 1.0:
-            warnings.warn(f"arclength(): facets below 1 degree at {v:.6g}: refine and start "
-                          "again from here", UserWarning, stacklevel=2)
-            return
         h = min(abs(ds), 2*h)       # back up to ds after halving
+
+
+def _arc_secant(ev, x0: np.ndarray, v0: float, x1: np.ndarray,
+                v1: float) -> "tuple[np.ndarray, float, np.ndarray]":
+    """The unit tangent (its vertices' part along the normals, and the
+    value's) and the whole secant scaled alike, from two points."""
+    dx = _normal_part(ev, x1 - x0)
+    norm = np.sqrt(_arc_norm2(dx, v1 - v0))
+    return dx/norm, (v1 - v0)/norm, (x1 - x0)/norm
+
+
+def _arc_remesh(ev, put, points: list, remesh_now: Callable[[Callable[[], None]], bool],
+                tol: float, tidy: bool, current: Callable[[], float]) -> "tuple[list, bool]":
+    """arclength()'s remeshing between points: remesh, carry the last step
+    over to the new vertices, and back to the branch at the same point by the
+    corrector along it. The points as they are then, and whether it settled
+    (if not, the surface is restored as it was)."""
+    (v0, x0), (v1, x1) = points
+    before: dict = {}
+
+    def ready() -> None:
+        before.update(ids=ev.mesh().vertex_ids, copy=ev.save())
+    if not remesh_now(ready):
+        return points, True
+    ids, copy = before["ids"], before["copy"]
+    d = _carry(ids, x1 - x0, ev.mesh())
+    tx, tv, _ = _arc_secant(ev, ev.vertices - d, v0, ev.vertices, v1)
+    ok, _, _ = _arc_settle(ev, put, v1, tol, tidy, (tx, tv))
+    if not ok:
+        ev.restore(copy)
+        put(v1)
+        return points, False
+    x = ev.vertices             # (tidying flips edges: the same vertices)
+    return [(v0, x - d), (current(), x)], True

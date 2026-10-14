@@ -185,6 +185,49 @@ and the off-centre one with its neck 0.1 above the mid-plane, a saddle between t
 symmetric bridge and breaking.
 ```
 
+## Along the off-centre bridges
+
+`arclength` can also follow the off-centre bridges, starting from the run's first
+unstable bridge. With `along=`, its first step goes along the unstable mode at the same
+volume, onto the branch that crosses the symmetric one there; from there it follows that
+branch.
+
+```python
+# continuing from the two blocks above: back to the first unstable bridge,
+# and off along its unstable mode
+ev.restore(first_unstable)
+rows = []
+for step in recipes.arclength(ev, ev.body(1), 0.01, 12, along=mode.vectors[0]):
+    rows.append((step.value, step.pressures[0], step.energy, step.result.negative_modes))
+
+# the exact off-centre bridges, by the height of the neck
+guess, exact = (branch["neck"], branch["pressure"]), []
+for height in np.linspace(0.005, 0.2, 40):
+    off = bridge_spheres_offset(height, gap, theta, guess=guess)
+    guess = (off["neck"], off["pressure"])
+    exact.append((off["volume"], off["pressure"], off["energy"]))
+exact = np.array(exact)
+for V, p, E, n in rows[1::2]:
+    print(f"volume {V:.4f}: pressure {p:.4f} (exact {np.interp(V, exact[:, 0], exact[:, 1]):.4f}), "
+          f"energy {E:.5f} ({np.interp(V, exact[:, 0], exact[:, 2]):.5f}), {n:.0f} negative mode")
+```
+
+```text
+volume 0.0796: pressure 3.3414 (exact 3.3416), energy 0.54574 (0.54597), 1 negative mode
+volume 0.0848: pressure 3.3209 (exact 3.3210), energy 0.56320 (0.56344), 1 negative mode
+volume 0.0943: pressure 3.2857 (exact 3.2856), energy 0.59452 (0.59476), 1 negative mode
+volume 0.1067: pressure 3.2430 (exact 3.2429), energy 0.63486 (0.63509), 1 negative mode
+volume 0.1209: pressure 3.1978 (exact 3.1979), energy 0.68069 (0.68092), 1 negative mode
+volume 0.1364: pressure 3.1527 (exact 3.1531), energy 0.72982 (0.73007), 1 negative mode
+```
+
+The run climbs the off-centre branch to larger volumes, as the reference says it
+should, with one negative mode throughout: saddles. Its pressures agree with the exact
+ones to 1e-4, and its energies are 0.04% low, which is the mesh's error. Taking the
+first step the other way (`ds` of -0.01) gives the mirror image, with the neck below
+the mid-plane. Start such a run just past the crossing, as here: the off-centre
+bridges are then close by.
+
 ## What it means
 
 * **The off-centre bridges are saddles.** They exist only above the branch volume,
@@ -209,7 +252,8 @@ symmetric bridge and breaking.
 
 To find instabilities like this in a surface of your own, follow the branch with
 `arclength` and watch `negative_modes` change. A symmetric reference alone can't see
-an asymmetric mode.
+an asymmetric mode. Where a mode turns negative without a fold, another branch crosses,
+and `along=` with that mode takes the run onto it.
 
 ## References
 
