@@ -34,7 +34,9 @@ def same(expected: str, got: str, rel: float) -> bool:
             return False
         for p, q in zip(nx, ny):
             u, v = float(p.rstrip("%")), float(q.rstrip("%"))
-            if abs(u - v) > rel*max(abs(u), abs(v)) and abs(u - v) > 10**-_decimals(p):
+            # (a unit in the last digit shown, allowing for its binary rounding:
+            # 0.48 - 0.47 is a little over 0.01)
+            if abs(u - v) > rel*max(abs(u), abs(v)) and abs(u - v) > 1.000001*10**-_decimals(p):
                 return False
     return True
 

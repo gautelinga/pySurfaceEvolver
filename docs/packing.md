@@ -124,7 +124,7 @@ k = int(np.argmax(curvature))
 print(f"full at volume {V[0]:.3f}; the curvature peaks at {curvature[k]:.3f} (volume {V[k]:.3f})")
 for i in (0, k):
     print(f"  four lowest eigenvalues at volume {V[i]:.3f}:",
-          " ".join(f"{e[i]:.2f}" for e in lowest))
+          " ".join(f"{e[i]:.1f}" for e in lowest))
 
 ev = throat_layer(20.0, gap=0.02)
 entry = 0.0
@@ -138,8 +138,8 @@ print(f"the same throat in a layer: entry curvature {entry:.3f} "
 
 ```text
 full at volume 0.604; the curvature peaks at 9.886 (volume 0.249)
-  four lowest eigenvalues at volume 0.604: 24.82 24.83 24.84 46.00
-  four lowest eigenvalues at volume 0.249: 2.18 2.23 2.29 48.01
+  four lowest eigenvalues at volume 0.604: 24.8 24.8 24.8 46.0
+  four lowest eigenvalues at volume 0.249: 2.2 2.2 2.3 48.0
 the same throat in a layer: entry curvature 9.871 (Mayer-Stowe-Princen 10.131)
 ```
 

@@ -102,7 +102,8 @@
   patches between the spheres in `docs/packing_helpers.py`; figures by
   `tools/packing_figure.py`; checked by `tools/check_doc_snippets.py` (now a default
   page). At 5 degrees, the paper's angle, relaxing these starts slides vertices through
-  the spheres (in Notes and limits).
+  the spheres (in Notes and limits). The `docs` extra now includes SciPy (the notebooks' reference
+  helpers use it).
 
 - Liquid bridge example: "How far a bridge stretches". Bridges at 20 and 60 degrees
   followed by `arclength` in volume at gaps 0.4 and 0.7 to their first unstable mode,

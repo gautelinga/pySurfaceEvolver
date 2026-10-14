@@ -887,14 +887,14 @@ for step in recipes.arclength(ev, "ht", 0.05, 40):
 ```
 
 ```text
-wires 0.6000 apart: area 3.70989 (exact 3.71143), negative modes 0
-wires 0.8455 apart: area 5.14115 (exact 5.14238), negative modes 0
+wires 0.6000 apart: area 3.70990 (exact 3.71143), negative modes 0
+wires 0.8455 apart: area 5.14115 (exact 5.14237), negative modes 0
 wires 1.0843 apart: area 6.43144 (exact 6.43177), negative modes 0
-wires 1.2996 apart: area 7.43857 (exact 7.43818), negative modes 0
-wires 1.1827 apart: area 7.16906 (exact 7.17037), negative modes 1
-wires 0.9651 apart: area 6.79460 (exact 6.79580), negative modes 1
-wires 0.7522 apart: area 6.55399 (exact 6.55619), negative modes 1
-wires 0.5439 apart: area 6.40841 (exact 6.40767), negative modes 1
+wires 1.2996 apart: area 7.43873 (exact 7.43826), negative modes 0
+wires 1.1825 apart: area 7.16939 (exact 7.17002), negative modes 1
+wires 0.9649 apart: area 6.79371 (exact 6.79555), negative modes 1
+wires 0.7521 apart: area 6.55399 (exact 6.55609), negative modes 1
+wires 0.5432 apart: area 6.40821 (exact 6.40729), negative modes 1
 ```
 
 Both branches match the exact areas within 0.04%. Between points the vertices are
