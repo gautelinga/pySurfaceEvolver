@@ -6,9 +6,10 @@ digits vary with the thread count).
 
     python tools/check_doc_snippets.py [--update] [--rel 1e-3] [page.md ...]
 
-Default pages: docs/stress_cases.md, docs/several_surfaces.md and
-docs/bridge_rupture.md. Exit status 1 if an output differs (or a
-block fails); ``--update`` writes the new outputs into the page instead.
+Default pages: docs/stress_cases.md, docs/several_surfaces.md,
+docs/bridge_rupture.md and docs/packing.md. Exit status 1 if an output
+differs (or a block fails); ``--update`` writes the new outputs into the page
+instead.
 """
 import argparse
 import os
@@ -54,7 +55,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("pages", nargs="*", default=[os.path.join(DOCS, name) for name in
                                                  ("stress_cases.md", "several_surfaces.md",
-                                                  "bridge_rupture.md")])
+                                                  "bridge_rupture.md", "packing.md")])
     ap.add_argument("--update", action="store_true")
     ap.add_argument("--rel", type=float, default=1e-3)
     args = ap.parse_args()

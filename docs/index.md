@@ -18,8 +18,9 @@ written out for finite-element meshing.
 * The examples add one thing at a time: contact angles on curved solids
   ({doc}`liquid_bridge`), forces and optimizing parameters from Brakke's datafiles
   ({doc}`solder_joints`), several walls and mirror planes ({doc}`slit_droplet`), and a
-  long quasi-static run ({doc}`slit_drainage`), and following a bridge through its
-  instability and fold ({doc}`bridge_rupture`).
+  long quasi-static run ({doc}`slit_drainage`), following a bridge through its
+  instability and fold ({doc}`bridge_rupture`), and liquid in throats and pores of a
+  sphere packing ({doc}`packing`).
 * Brakke's sample datafiles run as they come, each with his own recipe and with
   `relax()` side by side: a gallery of what Evolver can model.
 * The reference has the API, fourteen stress cases with exact references, performance
@@ -51,6 +52,7 @@ solder_joints
 slit_droplet
 slit_drainage
 bridge_rupture
+packing
 ```
 
 ```{toctree}

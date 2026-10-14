@@ -36,7 +36,7 @@ crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a 
 (`_put_back`, in `relax()` too) restores them; `_core.multipliers()`/`set_multipliers()`.
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 457 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 461 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
@@ -70,6 +70,21 @@ Open, for the user to pick (proposed 2026-10-13):
   means pressures back). `ev.modes(n)` added (ritz + Evolver's own move, unit RMS,
   sign fixed; repeated eigenvalues' modes are any combination). Left: the
   `_core.multipliers()`/`modes` stubs are typed `object`.
+* **Packing examples (2026-10-14):** references to Surface Evolver work on liquid in
+  bead packs added; liquid bridge notebook "how far a bridge stretches" (arclength in
+  volume to the fold or branch point, against the exact bridges and Lian et al.);
+  docs/packing.md (a throat in a layer against MSP, a trimer drained to its burst, a
+  full pore whose curvature peaks at its throats' entry curvature, with a triply
+  degenerate mode), helpers in docs/packing_helpers.py, figures by
+  `tools/packing_figure.py`. `relax()` leaves a converged surface alone (8d1cd56).
+  Open from it: (1) **small contact angles** (5 degrees, Semprebon et al.'s): relaxing
+  a crude start slides vertices through the spheres; a one-sided copy of each sphere
+  on the free vertices stops that but collapses the facets; the page uses 20 degrees.
+  (2) `arclength` can't remesh mid-run, so the trimer's unstable branch (snap-in to
+  pop-out, at 5 degrees) degenerates before the dimer; a dimer start needs its own
+  slab and the 5-degree relax. (3) Past a symmetric bifurcation (the pore's triple
+  mode) `arclength` stops; following one of the broken-symmetry branches would need a
+  push along a mode first.
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
 

@@ -84,6 +84,18 @@
 
 ### Documentation
 
+- "Liquid in a sphere packing" (`docs/packing.md`): the curvature at which gas passes
+  the throat between three spheres of a layer (contact angles 20-60 degrees, against
+  the Mayer-Stowe-Princen estimate: 2% below to 6% above), a trimer between three
+  beads drained until the menisci in its throat meet (Semprebon et al.'s burst; at 20
+  degrees it comes before any fold at gaps 0.09-0.25), and a pore full of liquid
+  between four spheres, whose curvature peaks at its throats' entry curvature (9.886
+  against 9.871) as a triply degenerate mode goes soft. Starting surfaces from flat
+  patches between the spheres in `docs/packing_helpers.py`; figures by
+  `tools/packing_figure.py`; checked by `tools/check_doc_snippets.py` (now a default
+  page). At 5 degrees, the paper's angle, relaxing these starts slides vertices through
+  the spheres (in Notes and limits).
+
 - Liquid bridge example: "How far a bridge stretches". Bridges at 20 and 60 degrees
   followed by `arclength` in volume at gaps 0.4 and 0.7 to their first unstable mode,
   against the exact axisymmetric bridges: at 20 degrees they end at the fold (the neck
