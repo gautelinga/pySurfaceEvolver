@@ -328,12 +328,16 @@ def _arc_norm2(dx: np.ndarray, dvalue: float) -> float:
 
 
 def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv: float,
-                 tol: float, max_iter: int) -> "tuple[bool, int]":
+                 tol: float, max_iter: int,
+                 reach: Optional[float] = None) -> "tuple[bool, int]":
     """Newton's method on the equilibrium and the plane through the
     prediction normal to the tangent: from one Newton step at the value and
     one at a nearby value, the step that is both (Keller's bordering, with
     Evolver's factorization), for the vertices and the Lagrange multipliers
-    together. Whether it converged, and the iterations."""
+    together. Whether it converged, and the iterations. With ``reach``, it
+    fails as soon as the point is farther than that from the prediction: on
+    the plane, but somewhere else (a pore's liquid at a volume 0.7 below a
+    step of 0.01, where Newton's basin was a fifth of the step)."""
     ev.vertices = x_pred
     value = v_pred
     n = len(x_pred)
@@ -352,53 +356,78 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
         put(value)
         ev.vertices = x_new
         _core.set_multipliers(m0 + dv*(m1 - m0)/delta)
+        if reach is not None and _arc_norm2(x_new - x_pred, value - v_pred) > reach*reach:
+            return False, it
         if _arc_norm2(x_new - x, dv) < tol*tol and ev.residual() < tol:
             return True, it
     return False, max_iter
 
 
 def _arc_settle(ev, put, value: float, tol: float, tidy: bool,
-                tangent: "Optional[tuple[np.ndarray, float]]" = None) -> "tuple[bool, int, float]":
+                tangent: "Optional[tuple[np.ndarray, float]]" = None,
+                reach: Optional[float] = None) -> "tuple[bool, int, float]":
     """After a converged step: the vertices spread along the surface (Newton
     moves them along its normal only) and edges flipped, keeping the same
     vertices; then back to the branch, by the corrector along ``tangent``
-    (near a fold the equilibrium at a fixed value is ill-conditioned) or by
-    plain Newton steps without one. Whether it is there, the negative
-    eigenvalues (with the constraints held), the residual."""
+    (near a fold the equilibrium at a fixed value is ill-conditioned, and
+    ``reach`` bounds how far it may go) or by plain Newton steps without one.
+    If that fails, the spreading is undone (the point's vertices on the
+    flipped mesh) and it tries again; failing that, the point counts as not
+    there (the caller goes back and halves the step). Near a fold or where a
+    mode goes soft, Newton's basin can be smaller than what tidying moves (a
+    pore's liquid near pinching, moved 2e-4 RMS), and a coarse mesh can hold
+    an equilibrium the shape doesn't have, which tidying undoes (a catenoid
+    past its fold). Whether it is there, the negative eigenvalues (with the
+    constraints held), the residual."""
+    ok, residual = False, float("inf")
     if tidy:
+        start = ev._coords()
         for _ in range(2):
             ev.vertex_average()
             ev.equiangulate()
-    if tangent is not None:
-        ok, _ = _arc_correct(ev, put, ev.vertices, value, tangent[0], tangent[1], tol, 12)
-        residual = ev.residual()
+        ok, residual = _arc_back(ev, put, value, tol, tangent, reach)
+        if not ok:
+            _put_coords(ev, start)
+            put(value)
+            ok, residual = _arc_back(ev, put, value, tol, tangent, reach)
     else:
-        ok, residual = False, ev.residual()
-        for _ in range(8):
-            _hessian(ev)
-            residual = ev.residual()
-            if residual < tol:
-                ok = True
-                break
+        ok, residual = _arc_back(ev, put, value, tol, tangent, reach)
     # counted with the constraints held (a Newton step's own count,
     # eigen_neg, isn't: it counts as if the volume were free)
     return ok, (ev.eigen_counts(0.0).negative if ok else 0), residual
 
 
-def _back_to(ev, put, snapshot, value: float, tol: float) -> bool:
-    """Back at an earlier point after tidying has flipped edges, which
-    _put_back refuses: that point's vertices and multipliers on the mesh as it
-    is now (flips keep the vertices), then Newton steps at its value. Whether
-    that converged."""
-    if not ev._put_back(snapshot):
-        if len(snapshot.coords) != len(ev.vertices):
-            return False
-        ev.vertices = snapshot.coords
-        if snapshot.multipliers is not None \
-                and len(snapshot.multipliers) == _core.multiplier_count():
-            _core.set_multipliers(snapshot.multipliers)
-    put(value)
-    return _arc_settle(ev, put, value, tol, False)[0]
+def _arc_back(ev, put, value: float, tol: float,
+              tangent: "Optional[tuple[np.ndarray, float]]",
+              reach: Optional[float]) -> "tuple[bool, float]":
+    """Back to the branch from near it (see _arc_settle): whether it got
+    there, and the residual."""
+    if tangent is not None:
+        ok, _ = _arc_correct(ev, put, ev.vertices, value, tangent[0], tangent[1], tol, 12,
+                             reach)
+        return ok, ev.residual()
+    residual = ev.residual()
+    for _ in range(8):
+        _hessian(ev)
+        residual = ev.residual()
+        if residual < tol:
+            return True, residual
+    return False, residual
+
+
+def _put_coords(ev, snapshot) -> bool:
+    """A point's vertices and multipliers (from _coords) on the mesh as it is
+    now, which _put_back refuses after edges were flipped (flips keep the
+    vertices). Whether the vertices still match."""
+    if ev._put_back(snapshot):
+        return True
+    if len(snapshot.coords) != len(ev.vertices):
+        return False
+    ev.vertices = snapshot.coords
+    if snapshot.multipliers is not None \
+            and len(snapshot.multipliers) == _core.multiplier_count():
+        _core.set_multipliers(snapshot.multipliers)
+    return True
 
 
 def _carry(ids: np.ndarray, values: np.ndarray, mesh) -> np.ndarray:
@@ -510,15 +539,19 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     never deleted), or a function of the surface, called between points. The
     remeshed surface is brought back to the branch at the same point, and the
     last step carried over to its new vertices (a split edge's midpoint takes
-    the mean of its neighbours'). Without it the vertices stay the same
-    (refine before).
+    the mean of its neighbours'); if it doesn't get back, the surface is put
+    back as it was and the run goes on. Without it the vertices stay the same
+    (refine before). Next to a contact line that shrinks, let it merge
+    contact-line edges too (``remesh=dict(target=h, keep_boundary=False)``).
 
     Stops after ``steps`` points, at the first point outside ``bounds``
     (``(low, high)`` on the value; the surface is put back at the last one
     inside), or, with a warning, when a step (the first one too) doesn't
-    converge even at ``ds/2**halvings`` or doesn't settle again after tidying
-    or remeshing (put back at the last point either way) or the facets
-    degenerate (below 1 degree: refine and start again from there). ``tol``
+    converge, or doesn't settle again after tidying, even at ``ds/2**halvings``
+    (put back at the last point) or the facets degenerate (below 1 degree:
+    refine and start again from there). A step is also cut when its point
+    lands farther from the prediction than the step itself: on the branch's
+    plane, but on some other branch or none. ``tol``
     bounds the residual of each point, as in :meth:`Evolver.relax`.
     """
     if ds == 0 or steps < 0 or halvings < 0:
@@ -578,10 +611,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         else:
             tangent = (np.sign(first)*along, 0.0)
             ok, iterations = _arc_correct(ev, put, x_start + first*along, float(value),
-                                          *tangent, tol, 12)
+                                          *tangent, tol, 12, abs(first))
             if ok:
                 ok, negative, residual = _arc_settle(ev, put, float(_current(ev, what)), tol,
-                                                     tidy, tangent)
+                                                     tidy, tangent, abs(first))
         if ok:
             break
         if not ev._put_back(start):
@@ -600,14 +633,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     h = abs(first)              # (and back up to ds below)
     for index in range(2, steps):
         if remesh_now is not None:
-            points, ok = _arc_remesh(ev, put, points, remesh_now, tol, tidy,
-                                     lambda: float(_current(ev, what)))
-            if not ok:
-                warnings.warn(f"arclength(): the surface didn't settle again at "
-                              f"{points[-1][0]:.6g} after remeshing; stopping, and the "
-                              "surface is back at the last point, as it was before",
-                              UserWarning, stacklevel=2)
-                return
+            # (a remeshed surface that doesn't settle is put back as it was:
+            # the run goes on, and remeshing is tried again after the next point)
+            points, _ = _arc_remesh(ev, put, points, remesh_now, tol, tidy,
+                                    lambda: float(_current(ev, what)))
         if ev.mesh_quality().angle_min < 1.0:
             warnings.warn(f"arclength(): facets below 1 degree at {points[-1][0]:.6g}: refine "
                           "and start again from here", UserWarning, stacklevel=2)
@@ -622,32 +651,46 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         # secant (the vertices keep spreading as the surface stretches)
         tx, tv, sx = _arc_secant(ev, x0, v0, x1, v1)
         last = ev._coords()
+        corrected = False
         for k in range(halvings + 1):
-            ok, iterations = _arc_correct(ev, put, x1 + h*sx, v1 + h*tv, tx, tv, tol, 12)
+            ok, iterations = _arc_correct(ev, put, x1 + h*sx, v1 + h*tv, tx, tv, tol, 12, h)
             if ok:
-                break
-            ev._put_back(last)
+                corrected = True
+                v = float(_current(ev, what))
+                if outside(v):
+                    ev._put_back(last)
+                    put(v1)
+                    return
+                # then tidied and settled again, or a failed step too (put back
+                # untidied, so the last point's mesh)
+                ok, negative, residual = _arc_settle(ev, put, v, tol, tidy, (tx, tv), h)
+                if ok:
+                    break
+            # back at the last point: on the mesh as tidying left it (flips
+            # keep the vertices), then back to the branch there by the
+            # corrector along the same tangent
+            if not ev._put_back(last):
+                _put_coords(ev, last)
+                put(v1)
+                if not _arc_back(ev, put, v1, tol, (tx, tv), h)[0]:
+                    _put_coords(ev, last)
+                    put(v1)
+                    warnings.warn(f"arclength(): no equilibrium found past {v1:.6g} that "
+                                  "settles again after tidying its mesh (too coarse there? "
+                                  "refine), nor back at it: stopping, with the last point's "
+                                  "vertices on the tidied mesh (out of equilibrium)",
+                                  UserWarning, stacklevel=2)
+                    return
             put(v1)
             h /= 2
         if not ok:
-            warnings.warn(f"arclength(): no equilibrium found past {v1:.6g} (even with "
+            why = (" that settles again after tidying its mesh (too coarse there? refine)"
+                   if corrected else "")
+            warnings.warn(f"arclength(): no equilibrium found past {v1:.6g}{why} (even with "
                           f"steps of {h*2:.3g}); the surface is back at the last point",
                           UserWarning, stacklevel=2)
             return
-        v = float(_current(ev, what))
-        if outside(v):
-            ev._put_back(last)
-            put(v1)
-            return
-        ok, negative, residual = _arc_settle(ev, put, v, tol, tidy, (tx, tv))
         v = float(_current(ev, what))       # (settling back can move it a little)
-        if not ok:
-            where = ("the surface is back at the last point" if _back_to(ev, put, last, v1, tol)
-                     else "the surface is left there, out of equilibrium")
-            warnings.warn(f"arclength(): the surface didn't settle again at {v:.6g} after "
-                          f"tidying its mesh (too coarse there? refine); stopping, and {where}",
-                          UserWarning, stacklevel=2)
-            return
         points = [points[-1], (v, ev.vertices)]
         yield step(index, v, iterations, negative, residual)
         h = min(abs(ds), 2*h)       # back up to ds after halving

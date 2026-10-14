@@ -10,6 +10,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 import numpy as np
 
+from .constraints import ANGLE_FLOOR
+
 __all__ = ["Body", "make_datafile"]
 
 
@@ -306,6 +308,10 @@ def make_datafile(
             raise ValueError(f"{name!r}: single letters are Evolver commands; use a longer name")
     declared = set(parameters or {}) | set(re.findall(
         r"^\s*(?:optimizing_)?parameter\s+(\w+)", header, re.MULTILINE | re.I))
+    # the least contact angle relax() can raise small ones to (constraints.ANGLE_FLOOR)
+    floor = any(getattr(spec, "floored", False) for spec in cons.values()) \
+        and ANGLE_FLOOR not in declared
+    declared |= {ANGLE_FLOOR} if floor else set()
     for c, spec in cons.items():
         missing = [n for n in getattr(spec, "parameters", ()) if n not in declared]
         if missing:
@@ -405,6 +411,8 @@ def make_datafile(
         out.append(f"space_dimension {sdim}\n")
     for name, value in (parameters or {}).items():
         out.append(f"parameter {name} = {_num(value)}\n")
+    if floor:
+        out.append(f"parameter {ANGLE_FLOOR} = 0\n")
     if gravity is not None:
         out.append(f"gravity_constant {float(gravity)!r}\n")
     if header:

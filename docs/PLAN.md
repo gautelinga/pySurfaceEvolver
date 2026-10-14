@@ -36,7 +36,7 @@ crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a 
 (`_put_back`, in `relax()` too) restores them; `_core.multipliers()`/`set_multipliers()`.
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 470 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 471 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
@@ -76,12 +76,12 @@ Open, for the user to pick (proposed 2026-10-13):
   full pore whose curvature peaks at its throats' entry curvature, with a triply
   degenerate mode), helpers in docs/packing_helpers.py, figures by
   `tools/packing_figure.py`. `relax()` leaves a converged surface alone (8d1cd56).
-  Open from it: (1) **small contact angles** (5 degrees, Semprebon et al.'s): relaxing
-  a crude start slides vertices through the spheres; a one-sided copy of each sphere
-  on the free vertices stops that but collapses the facets; the page uses 20 degrees.
-  (8) The trimer's dimer and cusp at 5 degrees need (1). (9) The pore's symmetric
-  branch stops at volume 0.2465 (levels 2) with its triple mode still positive (1.3):
-  `along=` finds nothing there, so the broken-symmetry branches aren't followed.
+  Open from it: (9) the pore's broken-symmetry branch (into one throat): `arclength`
+  crosses the soft triple mode only with `tidy=False` (at V 0.2377, levels 1), and the
+  mesh splits the triple mode (0.17/0.77/1.08), so `along=` finds no one-throat branch;
+  needs a mesh with the tetrahedral symmetry. Trimers at 5 degrees stop near the
+  paper's kink (gap 0.13 at V 0.107, lamella 0.07 thick; gap 0.15 just past its
+  snap-in): the throat would need refining there.
   Done since: sphere centres from parameters, `arclength`'s first step halved
   (dcf7196), its unsettled stop put back, the bridge notebook pulling beads apart,
   multipliers typed; CI replicated in fresh venvs (Python 3.12 only), which caught
@@ -92,7 +92,14 @@ Open, for the user to pick (proposed 2026-10-13):
   "build-dependent" 20-degree bridge was SciPy's last digit of its volume tipping a
   chaotic coarse relax: 6 of 13 ulp-perturbed volumes failed, now 13 of 13; samples
   and stress cases unchanged); `bridge_spheres_branch`'s second zero at 60 degrees
-  was the cylindrical bridge (slope now weighted by the neck's curvature).
+  was the cylindrical bridge (slope now weighted by the neck's curvature). Then
+  (third batch): `arclength` cuts a step whose point lands farther than the step from
+  its prediction, and halves (instead of stopping) when a point doesn't settle after
+  tidying, going back by the corrector; `relax()` stages small contact angles (walls
+  below 15 degrees that a crude start sinks into: raised to 20 via the datafile
+  parameter `pyse_angle_floor`, lowered by 0.7 a stage); the packing page's 5-degree
+  section follows trimers through snap-in and pop-out onto the dimers and maps the
+  folds to a cusp at (V, s) = (0.267, 0.226), the paper's (0.26, 0.22).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
 

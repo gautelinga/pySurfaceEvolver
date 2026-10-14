@@ -9,14 +9,14 @@ estimates. This page computes three of them in full with pySE, on spheres of rad
 and finds where each stops being an equilibrium:
 
 * the curvature at which gas passes a throat,
-* the liquid between three beads, and where it bursts,
+* the liquid between three beads, where it bursts, and at a small contact angle,
+  where it snaps into another shape and back,
 * a pore full of liquid, and where it empties.
 
 All three follow the liquid with {func}`~pysurfaceevolver.recipes.arclength` in its
 volume, as on the [bridge page](bridge_rupture.md). The starting surfaces are built
 from flat patches between the spheres in `docs/packing_helpers.py`. Each example takes
-about a minute, and the contact angle is 20 degrees or more (see
-[notes](#notes-and-limits)).
+a minute or two.
 
 ## Gas passing a throat
 
@@ -91,13 +91,99 @@ gap 0.25: the menisci in the throat meet at volume 0.323, pressure -2.83, 0 unst
 ```
 
 The trimer stays stable to the end, and bursts with more liquid the wider the gap. At
-the 5 degrees of Semprebon et al. the picture differs: for gaps from about 0.125 up to
-0.22, the trimer's outer meniscus in the gap snaps in first, at a fold of the branch,
-and below 0.125 it bursts as here. Followed at 5 degrees (outside this page; see
-[notes](#notes-and-limits)), the trimer branch turns at a fold at volume 0.186 for a gap
-of 0.17 and 0.218 for 0.19, on the way to the paper's cusp, where the fold vanishes, at
-volume 0.26 and gap 0.22. At 20 degrees the burst comes first at every gap followed,
-from 0.09 to 0.25.
+20 degrees the burst comes first at every gap followed, from 0.09 to 0.25. At the 5
+degrees of Semprebon et al. the picture differs (next section).
+
+## Five degrees: snap-in, pop-out and the dimer
+
+At a contact angle of 5 degrees and gaps from about 0.125 to 0.22, Semprebon et al.
+found that the trimer ends differently. Its outer meniscus, the one spanning the gap
+between beads 1 and 2, jumps in toward bead 3 (a **snap-in**), and the liquid is left
+as a dimer. Filled again, the dimer jumps back out into a trimer (a **pop-out**), at a
+larger volume. In between, both hold the same volume. They tell the two apart by the
+**meniscus distance** d, from bead 3 along the symmetry axis to that outer meniscus
+(`meniscus_distance`): large for a trimer, small for a dimer.
+
+`trimer` builds the start at 5 degrees directly. Relaxed at that angle outright, the
+crude start would sink into the beads, so {meth}`~pysurfaceevolver.Evolver.relax`
+starts again with the angle raised to 20 degrees and lowers it in stages. `arclength`
+then follows the branch through both folds. With `remesh=` it keeps the edges in range
+as the outer meniscus sweeps across the gap, merging contact-line edges too where its
+contact lines close in.
+
+```python
+import numpy as np
+from pysurfaceevolver import recipes
+from packing_helpers import meniscus_distance, trimer
+
+ev, centres = trimer(0.17, theta=5.0, volume=0.45)
+h = float(np.median(ev.mesh().edge_lengths()))
+rows = []
+for step in recipes.arclength(ev, ev.body(1), -0.005, 400,
+                              remesh=dict(target=h, keep_boundary=False)):
+    rows.append((step.value, meniscus_distance(ev, centres), step.result.negative_modes))
+    if rows[-1][1] < 0.06:
+        break
+V, d, unstable = np.array(rows).T
+snap, pop = [k for k in range(1, len(V) - 1) if (V[k] - V[k - 1])*(V[k + 1] - V[k]) < 0]
+print(f"trimer: stable down to volume {V[snap]:.3f} (d = {d[snap]:.2f}), the snap-in")
+print(f"between: up to {unstable[snap:pop].max():.0f} negative mode, back up to volume "
+      f"{V[pop]:.3f} (d = {d[pop]:.2f}), the pop-out")
+print(f"dimer: from there down to volume {V[-1]:.3f} (d = {d[-1]:.2f}), "
+      f"{unstable[pop + 1:].max():.0f} negative modes")
+```
+
+```text
+trimer: stable down to volume 0.185 (d = 0.65), the snap-in
+between: up to 1 negative mode, back up to volume 0.224 (d = 0.27), the pop-out
+dimer: from there down to volume 0.190 (d = 0.06), 0 negative modes
+```
+
+Along the way the run passes two folds. The trimer is stable down to volume 0.185;
+there its branch turns, and the surface the run follows back up is unstable, with one
+negative mode. At volume 0.224 it turns again into stable dimers, which go on down to
+where the outer meniscus reaches bead 3 (d near 0, where the two bridges come apart).
+Between 0.185 and 0.224, a trimer and a dimer hold the same liquid. A draining trimer
+snaps in at 0.185, and a dimer being filled pops out at 0.224.
+
+The same run at other gaps (`tools/packing_figure.py cusp`, below) gives the volumes of
+the two folds:
+
+| gap | snap-in | pop-out |
+|---|---|---|
+| 0.17 | 0.185 | 0.224 |
+| 0.19 | 0.218 | 0.238 |
+| 0.20 | 0.233 | 0.245 |
+| 0.21 | 0.248 | 0.253 |
+| 0.22 | 0.261 | 0.262 |
+| 0.225 | 0.2667 | 0.2668 |
+
+The window narrows as the gap widens and closes between gaps 0.225 and 0.23, at volume
+0.267. Above that a trimer turns into a dimer smoothly, without a jump (at gap 0.25, d
+falls from 0.82 to 0.06 with no fold). Semprebon et al. put this cusp at volume 0.26 and
+gap 0.22. At gap 0.15 the run stops just past the snap-in, and at 0.13 it stops at
+volume 0.107 before any fold, as the liquid in the throat thins to 0.07 (about two edges
+across). That is near the paper's kink at gap 0.125 and volume 0.09, where the
+snap-in meets the burst.
+
+```{figure} _static/packing_cusp.png
+:alt: The meniscus distance against the liquid volume at four gaps, with the unstable parts dashed, and the snap-in and pop-out volumes against the gap meeting near Semprebon et al.'s cusp
+:width: 100%
+
+Left, the meniscus distance against the volume at 5 degrees: S-shaped below the cusp
+(dashed, the unstable part between the folds), smooth above it. Right, the volumes at
+which the trimer snaps in and the dimer pops out, by gap, with Semprebon et al.'s cusp
+and kink.
+```
+
+```{figure} _static/packing_dimer.png
+:alt: A trimer and a dimer between three beads at gap 0.17, holding about the same volume
+:width: 80%
+
+A trimer and a dimer at gap 0.17 holding about the same liquid (volume 0.204 and
+0.205), from the run above. The trimer spans the gap between the two lower beads; the
+dimer has left it.
+```
 
 ## A pore full of liquid
 
@@ -151,8 +237,14 @@ the tetrahedron's symmetry, and fall toward zero together as the pressure peaks 
 mesh refined once more, the first turns negative just past the peak, at volume 0.240);
 the fourth stays stiff. Which throat goes first is chance in a symmetric pore, so the
 three modes come out as any combination of the three (see
-{meth}`~pysurfaceevolver.Evolver.modes`). `arclength` stops just past the peak, where
-its steps no longer settle.
+{meth}`~pysurfaceevolver.Evolver.modes`). Past the peak `arclength` takes ever shorter
+steps and stops just before the first of them turns negative: so close to zero,
+Newton's steps converge only from very near, nearer than tidying the mesh moves the
+vertices. With `tidy=False` it gets past, at volume 0.2377. Following the liquid into
+one throat from there (with `along=` and that mode) would need a mesh with the
+tetrahedron's symmetry. This one splits the three modes (0.17, 0.77 and 1.08 just
+before), so the branching is blurred, and the steps along the lowest mode find no
+branch that leaves through one throat.
 
 ## Pictures
 
@@ -179,11 +271,11 @@ in the middle, with the four menisci drawn deep into the throats.
 
 ## Notes and limits
 
-* **Small contact angles.** At 5 degrees, relaxing these crude starts fails: gradient
-  steps slide the vertices next to the contact line through the sphere, which the
-  liquid meets almost tangentially. Newton steps don't, so `arclength` can follow a
-  surface once it has relaxed. The 5-degree trimers quoted above started from slabs
-  that happened to relax (gaps 0.17 and 0.19); at gaps of 0.21 and 0.25 they didn't.
+* **Small contact angles.** At 5 degrees, relaxing these crude starts outright slides
+  the vertices next to the contact line through the beads, which the liquid meets
+  almost tangentially; `relax()` then starts again with the angle raised to 20 degrees
+  and lowers it in stages. Newton steps don't slide vertices that way, so `arclength`
+  follows a surface once it has relaxed.
 * **Topology changes are where the runs stop.** A burst, a Haines jump or a pore
   emptying changes how the liquid is connected, which the mesh can't follow. The runs
   find where each happens; the state after it needs a new surface.

@@ -20,7 +20,12 @@ Conventions (the usual ones for bodies):
   mirror) means no wetting energy. It may be a datafile parameter's name or an
   expression (``"theta"``), so ``ev.parameters["theta"] = 50`` changes it;
   then :attr:`Constraint.energy_constant` is NaN and the left-out energy is
-  ``-tension*cos(theta)*area_constant``;
+  ``-tension*cos(theta)*area_constant``. An angle given as a parameter, or a
+  number below 20 degrees, enters as ``maximum(angle, pyse_angle_floor)``
+  with a datafile parameter ``pyse_angle_floor`` (0) that
+  :meth:`~pysurfaceevolver.Evolver.relax` raises for a while when a crude start
+  at a small angle fails (see there), and :attr:`Constraint.energy_constant`
+  is NaN for it too;
 * volumes are Evolver's default (``z dx dy`` over facets), not
   ``symmetric_content``.
 
@@ -68,6 +73,10 @@ def _lin(coeffs: "Sequence[float] | np.ndarray", const: float = 0.0) -> str:
     return "(" + " + ".join(terms) + ")"
 
 
+ANGLE_FLOOR = "pyse_angle_floor"   # the datafile parameter relax() raises small angles to
+ANGLE_FLOOR_TOP = 20.0             # ... from at most this many degrees
+
+
 @dataclass(frozen=True)
 class Constraint:
     """A constraint for :func:`make_datafile`: its datafile text, and the
@@ -89,6 +98,14 @@ class Constraint:
     # the wall's geometry, for drawing: ("plane", normal, offset),
     # ("sphere", center, radius) or ("cylinder", point, direction, radius)
     shape: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
+    # the contact angle as given (degrees or a datafile expression)
+    contact_angle: Any = field(default=None, compare=False, repr=False)
+
+    @property
+    def floored(self) -> bool:
+        """Whether its contact angle takes ANGLE_FLOOR as its least (see
+        :meth:`~pysurfaceevolver.Evolver.relax`)."""
+        return ANGLE_FLOOR in self.text()
 
     def text(self) -> str:
         """The constraint's body in a datafile (after ``constraint n``)."""
@@ -163,7 +180,8 @@ def _identifiers(expr: str) -> Tuple[str, ...]:
 
 class _Coefficient:
     """tension*cos(contact_angle): a number, or a datafile expression when the
-    angle is given as a parameter name or expression (e.g. ``"theta"``)."""
+    angle is given as a parameter name or expression (e.g. ``"theta"``) or is
+    below ANGLE_FLOOR_TOP; those take ANGLE_FLOOR as their least angle."""
 
     def __init__(self, contact_angle, tension: float):
         self.value: Optional[float] = None
@@ -174,7 +192,11 @@ class _Coefficient:
         if contact_angle is None:
             self.value = 0.0
         elif isinstance(contact_angle, str):
-            self.expr = f"({_n(tension)}*cos(({contact_angle})*pi/180))"
+            self.expr = (f"({_n(tension)}*cos(maximum(({contact_angle}), {ANGLE_FLOOR})"
+                         "*pi/180))")
+        elif 0 < float(contact_angle) < ANGLE_FLOOR_TOP:
+            self.expr = (f"({_n(tension)}*cos(maximum({_n(float(contact_angle))}, "
+                         f"{ANGLE_FLOOR})*pi/180))")
         else:
             self.value = float(tension)*float(np.cos(np.radians(contact_angle)))
             if abs(self.value) < 1e-12*abs(float(tension)):
@@ -237,7 +259,8 @@ def plane(normal, offset: float = 0.0, contact_angle: Optional[float] = None, *,
         p = f"({_n(n[2])}*({_n(o[2])}*{t} + {_n(u[2])}*{s}*{t} + {_n(v[2]/2)}*{t}^2))"
         content = [f"{_n(ui)}*{p}" if ui != 0 else "0" for ui in u]
     return Constraint(f"{_lin(n)[1:-1]} = {float(d)!r}", energy, content,
-                      shape=("plane", tuple(n), d), parameters=k.names)
+                      shape=("plane", tuple(n), d), parameters=k.names,
+                      contact_angle=contact_angle)
 
 
 def mirror(axis, at: float = 0.0) -> Constraint:
@@ -313,7 +336,7 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     return Constraint(formula, energy, content, volconst, k.energy(area), nonnegative, area,
                       shape=("sphere", c if moving else tuple(float(x) for x in c), R),
                       energy_constant_text=(f"-{k.expr}*{_n(area)}" if k.expr and area else None),
-                      parameters=tuple(sorted(set(names))))
+                      parameters=tuple(sorted(set(names))), contact_angle=contact_angle)
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,
@@ -378,7 +401,8 @@ def cylinder(point, direction, radius: float, contact_angle: Optional[float] = N
                    if has_content else None)
     formula = f"{a}^2 + {b}^2 = {float(R*R)!r}"
     return Constraint(formula, energy, content, 0.0, 0.0, nonnegative,
-                      shape=("cylinder", tuple(p), tuple(d), R), parameters=k.names)
+                      shape=("cylinder", tuple(p), tuple(d), R), parameters=k.names,
+                      contact_angle=contact_angle)
 
 
 @dataclass(frozen=True)

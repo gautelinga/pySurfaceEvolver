@@ -253,6 +253,28 @@ def throat_thickness(ev, centres):
     return 2*np.abs(x[free & inside, 2]).min()
 
 
+
+def meniscus_distance(ev, centres):
+    """Semprebon et al.'s d: along the symmetry axis (x = 0, z = 0) from bead
+    3's surface toward the gap, the distance to the first liquid surface (the
+    outer meniscus in the gap). Large for a trimer, which fills the throat;
+    small for a dimer, whose liquid has left it."""
+    m = ev.mesh()
+    x, f = m.vertices, m.facets
+    p0 = x[f[:, 0]]
+    a, b = x[f[:, 1]] - p0, x[f[:, 2]] - p0
+    # where each facet's plane meets the axis: p0 + u a + v b with x = z = 0
+    det = a[:, 0]*b[:, 2] - a[:, 2]*b[:, 0]
+    ok = np.abs(det) > 1e-14
+    det = np.where(ok, det, 1.0)
+    u = (b[:, 0]*p0[:, 2] - b[:, 2]*p0[:, 0])/det
+    v = (a[:, 2]*p0[:, 0] - a[:, 0]*p0[:, 2])/det
+    hit = ok & (u >= 0) & (v >= 0) & (u + v <= 1)
+    y = (p0[:, 1] + u*a[:, 1] + v*b[:, 1])[hit]
+    surface = centres[2, 1] - 1                     # bead 3's surface on the axis
+    below = y[y < surface - 1e-9]
+    return float(surface - below.max()) if len(below) else float("nan")
+
 # ---- the pore between four spheres ---------------------------------------------------
 
 def pore_centres(gap):

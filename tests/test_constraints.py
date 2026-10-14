@@ -431,3 +431,33 @@ def test_relax_levels_from_a_crude_low_angle_start():
         assert r.converged and ev.mesh_quality().angle_min > 10
         energies.append(ev.energy)
     assert max(energies) == pytest.approx(min(energies), rel=5e-3)     # (the meshes differ)
+
+
+def test_relax_lowers_a_small_contact_angle_in_stages():
+    # a bridge at 5 degrees from a fat tube (far more liquid than its volume):
+    # relaxed at 5 degrees outright, the vertices next to the contact lines
+    # sank into the spheres, the energy falling without end (-1.6 against
+    # -0.35); relax() now starts again with the angle raised to 20 degrees
+    # and lowers it in stages
+    gap, a = 0.2, 0.7
+    c = 1 + gap/2
+    zb = c - np.sqrt(1 - a*a)
+    tube = pyse.shapes.tube(a, -zb, zb, nz=4, nt=12)
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   constraints={1: C.sphere((0, 0, -c), 1.0, contact_angle=5.0, wet_poles=("north",)),
+                                2: C.sphere((0, 0, c), 1.0, contact_angle=5.0, wet_poles=("south",))},
+                   vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=0.3)])
+    r = ev.relax(levels=3)
+    assert r.converged and ev.parameters["pyse_angle_floor"] == 0
+    x = ev.vertices
+    depth = 1 - np.minimum(np.linalg.norm(x - [0, 0, -c], axis=1),
+                           np.linalg.norm(x - [0, 0, c], axis=1))
+    assert depth.max() < 1e-9
+    # the exact axisymmetric bridge (docs/stress_helpers.py): -0.352478
+    assert ev.energy == pytest.approx(-0.352478, rel=2e-3)
+    # the floor is in the datafile only for small angles and parameters
+    assert C.sphere((0, 0, 0), 1.0, contact_angle=5.0).floored
+    assert C.sphere((0, 0, 0), 1.0, contact_angle="theta").floored
+    assert not C.sphere((0, 0, 0), 1.0, contact_angle=40.0).floored

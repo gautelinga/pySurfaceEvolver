@@ -13,6 +13,7 @@ import numpy as np
 
 from . import _core
 from ._analysis import _TARGET_LOST, _Analysis
+from .constraints import ANGLE_FLOOR, ANGLE_FLOOR_TOP
 from ._engine import _threads_for_call, surface
 from ._errors import EvolverError, EvolverWarning, UnstableEquilibriumWarning, _num
 from ._geometry import _edge_turn, _long_spokes
@@ -66,6 +67,9 @@ _ADAPT_LONGEST = 4/3           # ... or an edge grows longer than this times the
 _SPLIT_ABOVE = 1.6             # remesh(target=h) splits edges longer than this times h
 _MERGE_UNDER = 0.5             # ... and deletes those shorter than this times h
 _ADAPT_GROWTH = 4        # adaptive passes stop past this many times the facets relax() began with
+_SMALL_ANGLE = 15.0           # relax() stages contact angles below this when a start sinks into a wall,
+_ANGLE_STEP = 0.7             # ... lowering them from ANGLE_FLOOR_TOP by this factor a stage
+_SINK = 1e-3                  # ... sinking: a free vertex deeper in a wall than this times the median edge
 
 class _Relaxing(_Analysis):
     """Moving the surface: gradient and Newton steps, relax(), remeshing."""
@@ -170,6 +174,16 @@ class _Relaxing(_Analysis):
           have, and which one its gradient rounds find can turn on the last
           digit of a volume (a bridge at 20 degrees from a tube 12 facets
           around).
+        * A surface that ends unconverged with vertices sunk into a wall from
+          :mod:`pysurfaceevolver.constraints` whose contact angle is below 15
+          degrees: the levels again from the call's start with the small angles
+          raised to 20 degrees, then lowered in stages (by 0.7 each), relaxed
+          at each, kept only if that converges at their own angles. At a small
+          angle the liquid meets the solid almost tangentially, gradient steps
+          from a crude start slide the vertices next to the contact line
+          through it, and the wall's integrals reward that (a trimer between
+          three beads at 5 degrees). Walls with such angles carry a datafile
+          parameter ``pyse_angle_floor`` (0) for this.
         * Once converged (linear model), edges leaving a contact line that are
           longer than 1.5 times the contact-line edges there are split and the
           surface relaxed again, kept only if that converges: a shrinking
@@ -308,7 +322,8 @@ class _Relaxing(_Analysis):
             if first is not None:
                 steps, residual = first
             else:
-                start = self.save() if levels and not keep_mesh else None
+                small = None if keep_mesh else self._small_angle()
+                start = self.save() if (levels or small is not None) and not keep_mesh else None
                 for lev in range(levels + 1):
                     if lev:
                         self.refine()
@@ -322,7 +337,13 @@ class _Relaxing(_Analysis):
                             raise
                 steps, residual = run.finish(levels)
                 if start is not None and not residual < tol:
-                    steps, residual = run.finer_start(start, levels) or (steps, residual)
+                    # sunk into a wall at a small contact angle: the angles staged
+                    # down; otherwise a finer start
+                    if small is not None and self._sunk():
+                        retry = run.lower_angles(start, levels, small)
+                    else:
+                        retry = run.finer_start(start, levels) if levels else None
+                    steps, residual = retry or (steps, residual)
             if self.model == "linear" and residual < tol and not keep_mesh and not already:
                 more, residual = run.contact_pass(levels + 1, residual)
                 steps += more
@@ -712,6 +733,53 @@ class _Relaxing(_Analysis):
             _core.set_multipliers(snapshot.multipliers)
         return True
 
+    def _small_angle(self) -> Optional[float]:
+        """The least contact angle below _SMALL_ANGLE degrees among the walls
+        given to load_arrays() that relax() can raise (their angle takes
+        constraints.ANGLE_FLOOR as its least), or None."""
+        if ANGLE_FLOOR not in self.parameters:
+            return None
+        low: Optional[float] = None
+        for wall in surface.walls.values():
+            angle = getattr(wall, "contact_angle", None)
+            if angle is None or not getattr(wall, "floored", False):
+                continue
+            try:
+                angle = float(self.eval(angle)) if isinstance(angle, str) else float(angle)
+            except (EvolverError, ValueError):
+                continue
+            if 0 <= angle < _SMALL_ANGLE:
+                low = angle if low is None else min(low, angle)
+        return low
+
+    def _sunk(self) -> bool:
+        """Whether a vertex on no constraint lies inside the solid of a wall
+        with a small contact angle, deeper than _SINK times the median edge."""
+        x = self.vertices
+        _, _, dist, _ = self._constraint_gaps()
+        free = ~np.isnan(dist).any(axis=1) if dist.size else np.ones(len(x), dtype=bool)
+        if not free.any():
+            return False
+        h = self.mesh_quality().edge_median
+        for wall in surface.walls.values():
+            angle, shape = getattr(wall, "contact_angle", None), getattr(wall, "shape", None)
+            if angle is None or shape is None or not getattr(wall, "floored", False):
+                continue
+            kind = shape[0]
+            if kind == "sphere":
+                c = np.array([float(self.eval(v)) if isinstance(v, str) else float(v)
+                              for v in shape[1]])
+                depth = shape[2] - np.linalg.norm(x[free] - c, axis=1)
+            elif kind == "cylinder":
+                p, d = np.asarray(shape[1], float), np.asarray(shape[2], float)
+                r = x[free] - p
+                depth = shape[3] - np.linalg.norm(r - np.outer(r @ d, d), axis=1)
+            else:
+                depth = shape[2] - x[free] @ np.asarray(shape[1], float)
+            if (depth > _SINK*h).any():
+                return True
+        return False
+
     def remesh(self, target: Optional[float] = None, *, max_edge: Optional[float] = None,
                min_edge: Optional[float] = None, equiangulate: bool = True,
                average: bool = False, protect=None,
@@ -1089,6 +1157,46 @@ class _Run:
                 break
             total, residual = total + steps, second
         return total, residual
+
+    def lower_angles(self, start: Any, levels: int, low: float) -> "tuple[int, float] | None":
+        """relax()'s fallback for a crude start at a small contact angle that
+        sank into a wall (gradient steps slide the vertices next to the
+        contact line through a solid the liquid meets almost tangentially,
+        and the wall's integrals reward it): the levels again from the call's
+        start with the small angles raised to ANGLE_FLOOR_TOP (the datafile
+        parameter ANGLE_FLOOR), then lowered by _ANGLE_STEP a stage, relaxed
+        at each, down to their own (``low``, the least). Kept if it
+        converges; else the surface and the trace go back (None). Returns
+        the Newton steps and the residual."""
+        ev, trace = self.ev, self.trace
+        failed, mark = ev.save(), trace.mark()
+        lev = self.next_level(levels)
+        floors = [ANGLE_FLOOR_TOP]
+        while floors[-1]*_ANGLE_STEP > max(low, 1.0):
+            floors.append(floors[-1]*_ANGLE_STEP)
+        steps, residual = 0, float("inf")
+        try:
+            ev.restore(start)
+            ev.parameters[ANGLE_FLOOR] = floors[0]
+            for k in range(levels + 1):
+                if k:
+                    ev.refine()
+                self.approach()
+                self.settle(lev + k)
+            steps, residual = self.finish(lev + levels)
+            for k, floor in enumerate(floors[1:] + [0.0], lev + levels + 1):
+                if not residual < self.tol:
+                    break
+                ev.parameters[ANGLE_FLOOR] = floor
+                more, residual = self.level(k)
+                steps += more
+        except EvolverError:
+            residual = float("inf")
+        if residual < self.tol and ev.parameters[ANGLE_FLOOR] == 0:
+            return steps, residual
+        ev.restore(failed)
+        trace.rewind(mark)
+        return None
 
     def finer_start(self, start: Any, levels: int) -> "tuple[int, float] | None":
         """relax(levels=n)'s fallback when the last level ends unconverged:

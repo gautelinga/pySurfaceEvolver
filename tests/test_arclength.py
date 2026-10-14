@@ -130,17 +130,24 @@ def test_a_first_step_too_long_is_halved():
     assert ev.parameters["ht"] == pytest.approx(1.1)
 
 
-def test_a_point_that_doesnt_settle_leaves_the_surface_at_the_last_one():
-    # steps of 0.3 on this coarse mesh overshoot the fold; the corrector's
-    # point doesn't settle after tidying, and the surface went on from there
-    # (wires 1.45 apart, past the fold): now back at 1.1, in equilibrium
+def test_a_point_that_doesnt_settle_is_tried_again_closer():
+    # steps of 0.3 on this coarse mesh overshoot the fold: the corrector's
+    # point doesn't settle after tidying (the run stopped at 1.1, then); the
+    # step is halved instead, and the run turns at the fold
     ev = _wire_catenoid(1)
     ev.parameters["ht"] = 0.8
-    with pytest.warns(UserWarning, match="back at the last point"):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
         steps = list(recipes.arclength(ev, "ht", 0.3, 6))
-    assert ev.parameters["ht"] == pytest.approx(steps[-1].value)
-    # (on the mesh as tidied: the same surface, edges flipped)
-    assert ev.residual() < 1e-8 and ev.total_area == pytest.approx(steps[-1].energy, rel=5e-3)
+    values = [s.value for s in steps]
+    turn = int(np.argmax(values))
+    assert 1.31 < values[turn] < 1.34 and turn < len(steps) - 1
+    for s in steps:
+        exact = _catenoid_areas(s.value)
+        expected = exact[0] if s.result.negative_modes == 0 else exact[1]
+        assert s.energy == pytest.approx(expected, rel=2e-3)
+        assert s.result.residual < 1e-8
+    assert steps[-1].result.negative_modes == 1
 
 
 def test_remeshing_keeps_the_unstable_branch():

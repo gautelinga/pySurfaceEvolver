@@ -6,6 +6,13 @@ liquid) and their surfaces where each stops. Needs matplotlib, PyVista
     OMP_NUM_THREADS=4 python tools/packing_figure.py
 
 writes docs/_static/packing.png (the curves) and docs/_static/packing_shapes.png.
+
+    OMP_NUM_THREADS=4 python tools/packing_figure.py cusp
+
+draws the trimers at 5 degrees instead (about ten minutes):
+docs/_static/packing_cusp.png (the meniscus distance against the volume, and
+where the snap-in and pop-out folds lie) and docs/_static/packing_dimer.png (a
+trimer and a dimer holding the same volume).
 """
 import os
 import sys
@@ -57,6 +64,84 @@ def trimer_run(gap, theta=20.0):
         if h < 0.02 or step.result.negative_modes:
             break
     return np.array(rows), snapshot(ev), centres
+
+
+def scurve_run(gap, theta=5.0, keep=0.205):
+    """(volume, meniscus distance d, negative modes) along a drain at a small
+    contact angle, through the snap-in and pop-out folds where there are, and
+    the surfaces nearest volume ``keep`` on the trimer and the dimer branch."""
+    ev, centres = H.trimer(gap, theta, 0.45)
+    h = float(np.median(ev.mesh().edge_lengths()))
+    rows, kept = [], {}
+    for step in recipes.arclength(ev, ev.body(1), -0.005, 600,
+                                  remesh=dict(target=h, keep_boundary=False)):
+        d = H.meniscus_distance(ev, centres)
+        rows.append((step.value, d, step.result.negative_modes))
+        branch = "trimer" if d > 0.5 else "dimer" if d < 0.3 else None
+        if branch and step.result.negative_modes == 0 \
+                and abs(step.value - keep) < abs(kept.get(branch, (np.inf,))[0] - keep):
+            kept[branch] = (step.value, snapshot(ev))
+        if d < 0.06:
+            break
+    return np.array(rows), kept, centres
+
+
+def folds(rows):
+    """The volumes at which a run turns: the snap-in (a least volume) and the
+    pop-out (a largest one after it)."""
+    V = rows[:, 0]
+    k = [i for i in range(1, len(V) - 1) if (V[i] - V[i - 1])*(V[i + 1] - V[i]) < 0]
+    return [V[i] for i in k[:2]]
+
+
+def cusp():
+    warnings.simplefilter("ignore")
+    gaps = (0.15, 0.17, 0.19, 0.20, 0.21, 0.215, 0.22, 0.225, 0.23, 0.25)
+    runs = {gap: scurve_run(gap) for gap in gaps}
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
+    shown = (0.17, 0.20, 0.22, 0.25)
+    for gap, colour in zip(shown, ("#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd")):
+        rows = runs[gap][0]
+        stable = np.where(rows[:, 2] == 0, rows[:, 1], np.nan)
+        ax1.plot(rows[:, 0], rows[:, 1], color=colour, ls="--", lw=1)
+        ax1.plot(rows[:, 0], stable, color=colour, label=f"gap {gap}")
+    ax1.set_xlabel("liquid volume")
+    ax1.set_ylabel("meniscus distance d")
+    ax1.set_ylim(bottom=0)
+    ax1.legend(fontsize=8, title="dashed: unstable", title_fontsize=8)
+    ax1.set_title("Trimers drained at 5 degrees", fontsize=10)
+    snap = [(gap, f[0]) for gap, (rows, _, _) in runs.items() if len(f := folds(rows)) >= 1]
+    pop = [(gap, f[1]) for gap, (rows, _, _) in runs.items() if len(f := folds(rows)) == 2]
+    ax2.plot(*np.array(snap).T, "v-", color="#1f77b4", label="snap-in (trimer ends)")
+    ax2.plot(*np.array(pop).T, "^-", color="#d62728", label="pop-out (dimer ends)")
+    ax2.plot([0.22], [0.26], "*", color="black", ms=11, label="Semprebon et al.'s cusp")
+    ax2.plot([0.125], [0.09], "D", color="black", ms=6, label="... and kink")
+    ax2.set_xlabel("gap")
+    ax2.set_ylabel("liquid volume")
+    ax2.legend(fontsize=8)
+    ax2.set_title("Where the folds lie (5 degrees)", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(os.path.join(STATIC, "packing_cusp.png"), dpi=110)
+    plt.close(fig)
+
+    import pyvista as pv
+    rows, kept, centres = runs[0.17]
+    p = pv.Plotter(shape=(1, 2), off_screen=True, window_size=(1000, 440), border=False,
+                   lighting="three lights")
+    p.set_background("white")
+    for k, branch in enumerate(("trimer", "dimer")):
+        p.subplot(0, k)
+        volume, mesh = kept[branch]
+        balls(p, centres)
+        p.add_mesh(polydata(*mesh), **LIQUID)
+        p.add_text(f"the {branch} (gap 0.17, volume {volume:.3f})", position="upper_left",
+                   font_size=9, color="black")
+        view(p, (0.0, -0.5, 1.0), centres.mean(axis=0), 1.7)
+    p.screenshot(os.path.join(STATIC, "packing_dimer.png"))
+    p.close()
+    for gap, (rows, _, _) in runs.items():
+        print(f"gap {gap}: folds at volumes", " ".join(f"{v:.4f}" for v in folds(rows)))
+    print("wrote", os.path.normpath(STATIC) + "/packing_cusp.png and packing_dimer.png")
 
 
 def pore_run(gap=0.02, theta=20.0):
@@ -174,4 +259,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    cusp() if sys.argv[1:] == ["cusp"] else main()

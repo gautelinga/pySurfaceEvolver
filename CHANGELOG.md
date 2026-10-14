@@ -83,6 +83,15 @@
   negative mode throughout; the two signs of `ds` give mirror images (the rupture page
   has the example). Not found for the packing page's pore: its symmetric branch stops
   before its triply degenerate mode turns negative.
+- `arclength()` past folds and soft modes: a corrected point farther from its
+  prediction than the step itself is a failed step (halved), not a point (a pore's
+  liquid, stepped 0.01 in volume, had landed at -0.49); a point that doesn't settle
+  again after tidying is tried with the averaging undone, and failing that it is a
+  failed step too: the run goes back to the last point by the corrector along the same
+  tangent and halves the step, where it used to stop. A catenoid on a coarse mesh in
+  steps of 0.3 now turns at its fold (it stopped at wires 1.1 apart); a trimer between
+  three beads at 5 degrees goes through its snap-in fold and on (it stopped there).
+  A remeshed surface that doesn't settle is put back and the run goes on.
 - `arclength(..., remesh=h)`: keeps the edges in range on a branch that stretches or
   shrinks the surface, with `ev.remesh(target=h)` between points when an edge has left
   0.5h-1.6h (or a dict of `remesh()`'s arguments, or a function of the surface called
@@ -124,6 +133,13 @@
   the spheres (in Notes and limits). The `docs` extra now includes SciPy (the notebooks' reference
   helpers use it).
 
+- "Liquid in a sphere packing": a section on trimers at 5 degrees, Semprebon et al.'s
+  angle: `arclength` with `remesh=` follows the trimer through its snap-in fold, along
+  the unstable branch, through the pop-out fold and down the dimer branch (gap 0.17:
+  bistable between volumes 0.185 and 0.224), and the two folds, mapped over gaps,
+  meet in a cusp at about volume 0.267 and gap 0.226 (the paper: 0.26 and 0.22).
+  `meniscus_distance` in the helpers; figures by `tools/packing_figure.py cusp`. The
+  notes no longer say 5-degree starts fail.
 - "Where a shrinking bridge breaks": a section following the off-centre bridges with
   `arclength(along=...)` against the exact ones. `tools/check_doc_snippets.py` runs a
   block starting with `# continuing` after the page's blocks before it.
@@ -183,6 +199,20 @@
   copy once tidying has flipped edges. Finer meshes and shallow angles had needed a
   smaller `ds` by hand (the packing page's pore refined once, a throat at 20 degrees).
 
+- Small contact angles: a surface that `relax()` leaves unconverged with vertices sunk
+  into a wall from `constraints` whose contact angle is below 15 degrees is relaxed
+  again from the call's start with those angles raised to 20 degrees, then lowered in
+  stages (by 0.7 each) to their own, kept only if that converges. At a small angle the
+  liquid meets the solid almost tangentially, gradient steps from a crude start slide
+  the vertices next to the contact line through it, and the wall's integrals reward
+  that (the energy fell without end). Trimers between three beads at 5 degrees (gaps
+  0.25 and 0.30) and a bridge from a fat tube, which sank, now converge, within 2e-4
+  of the same surfaces lowered by hand (the bridge within 7e-4 of the exact one).
+  Surfaces that relaxed before come out the same, with the same speed. For this, a
+  wall's contact angle given as a parameter, or as a number below 20 degrees, enters its
+  integrals as `maximum(angle, pyse_angle_floor)`, a datafile parameter declared at 0
+  (`Constraint.floored` says which); such a wall's `energy_constant` is NaN, as for a
+  parameter angle, and `Evolver.energy` adds the left-out part.
 - `relax(levels=n)` starts again one level finer when its last level ends
   unconverged: from the call's start refined once, then the levels as before (kept only
   if that converges). A coarse start can hold equilibria the shape doesn't have, and
