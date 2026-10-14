@@ -36,7 +36,7 @@ crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a 
 (`_put_back`, in `relax()` too) restores them; `_core.multipliers()`/`set_multipliers()`.
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 464 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 465 tests.
 
 Open, for the user to pick (proposed 2026-10-13):
 
@@ -68,8 +68,7 @@ Open, for the user to pick (proposed 2026-10-13):
   20 undone steps instead of 12 to give up. `relax()`'s inertia cache keyed by the
   vertices is fine (reset per call, only a count of 0 reused, and vertices back now
   means pressures back). `ev.modes(n)` added (ritz + Evolver's own move, unit RMS,
-  sign fixed; repeated eigenvalues' modes are any combination). Left: the
-  `_core.multipliers()`/`modes` stubs are typed `object`.
+  sign fixed; repeated eigenvalues' modes are any combination).
 * **Packing examples (2026-10-14):** references to Surface Evolver work on liquid in
   bead packs added; liquid bridge notebook "how far a bridge stretches" (arclength in
   volume to the fold or branch point, against the exact bridges and Lian et al.);
@@ -84,13 +83,13 @@ Open, for the user to pick (proposed 2026-10-13):
   pop-out, at 5 degrees) degenerates before the dimer; a dimer start needs its own
   slab and the 5-degree relax. (3) Past a symmetric bifurcation (the pore's triple
   mode) `arclength` stops; following one of the broken-symmetry branches would need a
-  push along a mode first. (4) When a later point "didn't settle", `arclength` stops
-  with the surface at that point, not put back at the last one. (5) The same Python
+  push along a mode first. (5) The same Python
   gave a different `relax()` outcome for one 20-degree bridge with the dev venv's
   core and the docs venv's (builds differ in something; CI builds fresh). (6) At 60
   degrees `bridge_spheres_branch` finds a second zero at large volume where Evolver
   sees no instability (unexplained; the helper takes the other). Done since: sphere
-  centres from parameters, `arclength`'s first step halved (dcf7196); CI replicated
+  centres from parameters, `arclength`'s first step halved (dcf7196), its unsettled
+  stop put back, the bridge notebook pulling beads apart, multipliers typed; CI replicated
   in fresh venvs (Python 3.12 only), which caught SciPy missing from the `docs` extra.
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
