@@ -9,7 +9,7 @@ writes docs/_static/packing.png (the curves) and docs/_static/packing_shapes.png
 
     OMP_NUM_THREADS=4 python tools/packing_figure.py cusp
 
-draws the trimers at 5 degrees instead (about ten minutes):
+draws the trimers at 5 degrees instead (about twenty-five minutes):
 docs/_static/packing_cusp.png (the meniscus distance against the volume, and
 where the snap-in and pop-out folds lie) and docs/_static/packing_dimer.png (a
 trimer and a dimer holding the same volume).
@@ -66,38 +66,66 @@ def trimer_run(gap, theta=20.0):
     return np.array(rows), snapshot(ev), centres
 
 
-def scurve_run(gap, theta=5.0, keep=0.205):
-    """(volume, meniscus distance d, negative modes) along a drain at a small
-    contact angle, through the snap-in and pop-out folds where there are, and
-    the surfaces nearest volume ``keep`` on the trimer and the dimer branch."""
-    ev, centres = H.trimer(gap, theta, 0.45)
+def scurve_run(gap, theta=5.0, keep=0.205, h=0.05):
+    """(volume, meniscus distance d, negative modes, throat thickness) along a
+    drain at a small contact angle, through the snap-in and pop-out folds where
+    there are, to where d or the throat's liquid vanishes, and the surfaces
+    nearest volume ``keep`` on the trimer and the dimer branch."""
+    ev, centres = H.trimer(gap, theta, 0.45, h=h)
     h = float(np.median(ev.mesh().edge_lengths()))
     rows, kept = [], {}
-    for step in recipes.arclength(ev, ev.body(1), -0.005, 600,
+    for step in recipes.arclength(ev, ev.body(1), -0.005, 800,
                                   remesh=dict(target=h, keep_boundary=False)):
         d = H.meniscus_distance(ev, centres)
-        rows.append((step.value, d, step.result.negative_modes))
+        thickness = H.throat_thickness(ev, centres)
+        rows.append((step.value, d, step.result.negative_modes, thickness))
         branch = "trimer" if d > 0.5 else "dimer" if d < 0.3 else None
         if branch and step.result.negative_modes == 0 \
                 and abs(step.value - keep) < abs(kept.get(branch, (np.inf,))[0] - keep):
             kept[branch] = (step.value, snapshot(ev))
-        if d < 0.06:
+        # the throat's thickness means the liquid between its two menisci only
+        # while the outer meniscus is clearly outside the triangle of the
+        # centres (as at the point before; where the menisci have met, d jumps)
+        if d < 0.06 or (thickness < 0.01 and len(rows) > 1 and trimer_like(rows[-2], centres)):
             break
     return np.array(rows), kept, centres
 
 
-def folds(rows):
-    """The volumes at which a run turns: the snap-in (a least volume) and the
-    pop-out (a largest one after it)."""
+def trimer_like(row, centres):
+    """Whether the outer meniscus in the gap (d) is clearly outside the triangle
+    of the centres, so that the throat's thickness is the liquid between its
+    two menisci."""
+    return row[1] > centres[2, 1] - 1 + 0.05
+
+
+def folds(rows, by=5e-5):
+    """The volumes at which a run turns by more than ``by``: the snap-in (the
+    first least volume it climbs back from) and the pop-out (the largest after
+    it, which it comes back down from)."""
     V = rows[:, 0]
-    k = [i for i in range(1, len(V) - 1) if (V[i] - V[i - 1])*(V[i + 1] - V[i]) < 0]
-    return [V[i] for i in k[:2]]
+    lo = 0
+    for k in range(1, len(V)):
+        if V[k] < V[lo]:
+            lo = k
+        elif V[k] > V[lo] + by:
+            break
+    else:
+        return []
+    hi = lo
+    for k in range(lo + 1, len(V)):
+        if V[k] > V[hi]:
+            hi = k
+        elif V[k] < V[hi] - by:
+            return [V[lo], V[hi]]
+    return [V[lo]]
 
 
 def cusp():
     warnings.simplefilter("ignore")
-    gaps = (0.15, 0.17, 0.19, 0.20, 0.21, 0.215, 0.22, 0.225, 0.23, 0.25)
-    runs = {gap: scurve_run(gap) for gap in gaps}
+    # (near the kink, where the liquid in the throat thins, on a finer mesh)
+    fine = (0.10, 0.11, 0.13, 0.14, 0.15)
+    gaps = fine + (0.17, 0.19, 0.20, 0.21, 0.215, 0.22, 0.225, 0.23, 0.25)
+    runs = {gap: scurve_run(gap, h=0.035 if gap in fine else 0.05) for gap in gaps}
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4.2))
     shown = (0.17, 0.20, 0.22, 0.25)
     for gap, colour in zip(shown, ("#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd")):
@@ -112,7 +140,11 @@ def cusp():
     ax1.set_title("Trimers drained at 5 degrees", fontsize=10)
     snap = [(gap, f[0]) for gap, (rows, _, _) in runs.items() if len(f := folds(rows)) >= 1]
     pop = [(gap, f[1]) for gap, (rows, _, _) in runs.items() if len(f := folds(rows)) == 2]
+    burst = [(gap, rows[-1, 0]) for gap, (rows, _, c) in runs.items()
+             if rows[-1, 3] < 0.01 and trimer_like(rows[-2], c) and not folds(rows)]
     ax2.plot(*np.array(snap).T, "v-", color="#1f77b4", label="snap-in (trimer ends)")
+    if burst:
+        ax2.plot(*np.array(burst).T, "o-", color="#2ca02c", label="burst (no fold before)")
     ax2.plot(*np.array(pop).T, "^-", color="#d62728", label="pop-out (dimer ends)")
     ax2.plot([0.22], [0.26], "*", color="black", ms=11, label="Semprebon et al.'s cusp")
     ax2.plot([0.125], [0.09], "D", color="black", ms=6, label="... and kink")
@@ -140,7 +172,8 @@ def cusp():
     p.screenshot(os.path.join(STATIC, "packing_dimer.png"))
     p.close()
     for gap, (rows, _, _) in runs.items():
-        print(f"gap {gap}: folds at volumes", " ".join(f"{v:.4f}" for v in folds(rows)))
+        print(f"gap {gap}: folds at volumes", " ".join(f"{v:.4f}" for v in folds(rows)),
+              f"; ends at volume {rows[-1, 0]:.4f}, d {rows[-1, 1]:.3f}, thickness {rows[-1, 3]:.4f}")
     print("wrote", os.path.normpath(STATIC) + "/packing_cusp.png and packing_dimer.png")
 
 

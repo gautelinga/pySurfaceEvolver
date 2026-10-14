@@ -6,14 +6,16 @@ digits vary with the thread count). A block whose first line starts with
 ``# continuing`` runs after the page's blocks before it (their output not
 compared again).
 
-    python tools/check_doc_snippets.py [--update] [--rel 1e-3] [page.md ...]
+    python tools/check_doc_snippets.py [--update] [--rel 1e-3] [--jobs n] [page.md ...]
 
 Default pages: docs/stress_cases.md, docs/several_surfaces.md,
 docs/bridge_rupture.md and docs/packing.md. Exit status 1 if an output
 differs (or a block fails); ``--update`` writes the new outputs into the page
-instead.
+instead. ``--jobs n`` runs up to n blocks at a time (each in its own process
+as always; give each fewer threads with OMP_NUM_THREADS).
 """
 import argparse
+import concurrent.futures
 import os
 import re
 import subprocess
@@ -62,19 +64,29 @@ def main() -> int:
                                                   "bridge_rupture.md", "packing.md")])
     ap.add_argument("--update", action="store_true")
     ap.add_argument("--rel", type=float, default=1e-3)
+    ap.add_argument("--jobs", type=int, default=1)
     args = ap.parse_args()
     status = 0
+    pool = concurrent.futures.ThreadPoolExecutor(max(1, args.jobs))
+    # every block of every page queued at once (each in its own process, up to
+    # --jobs at a time), then reported page by page, in order
+    queued = []
     for page in args.pages:
         text = open(page).read()
-        out, pos, before = [], 0, []
-        for k, m in enumerate(BLOCK.finditer(text), 1):
+        before, runs = [], []
+        for m in BLOCK.finditer(text):
             code = m.group(1)
             if code.startswith("# continuing"):
                 code = ("import contextlib, io\nwith contextlib.redirect_stdout(io.StringIO()):\n"
                         + "".join(f"    exec({c!r})\n" for c in before) + code)
             before.append(m.group(1))
-            got, seconds, error = run("import warnings; warnings.simplefilter('ignore')\n"
-                                      + code)
+            runs.append(pool.submit(run, "import warnings; warnings.simplefilter('ignore')\n"
+                                    + code))
+        queued.append((page, text, runs))
+    for page, text, runs in queued:
+        out, pos = [], 0
+        for k, (m, done) in enumerate(zip(BLOCK.finditer(text), runs), 1):
+            got, seconds, error = done.result()
             ok = not error and same(m.group(2), got, args.rel)
             print(f"{os.path.basename(page)} block {k}: {'ok' if ok else 'DIFFERS'} "
                   f"({seconds:.0f} s)", flush=True)

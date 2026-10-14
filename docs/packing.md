@@ -11,7 +11,7 @@ and finds where each stops being an equilibrium:
 * the curvature at which gas passes a throat,
 * the liquid between three beads, where it bursts, and at a small contact angle,
   where it snaps into another shape and back,
-* a pore full of liquid, and where it empties.
+* a pore full of liquid, where it empties, and through which throat.
 
 All three follow the liquid with {func}`~pysurfaceevolver.recipes.arclength` in its
 volume, as on the [bridge page](bridge_rupture.md). The starting surfaces are built
@@ -151,6 +151,9 @@ the two folds:
 
 | gap | snap-in | pop-out |
 |---|---|---|
+| 0.13 | 0.109 | 0.200 |
+| 0.14 | 0.130 | 0.206 |
+| 0.15 | 0.150 | 0.212 |
 | 0.17 | 0.185 | 0.224 |
 | 0.19 | 0.218 | 0.238 |
 | 0.20 | 0.233 | 0.245 |
@@ -161,10 +164,17 @@ the two folds:
 The window narrows as the gap widens and closes between gaps 0.225 and 0.23, at volume
 0.267. Above that a trimer turns into a dimer smoothly, without a jump (at gap 0.25, d
 falls from 0.82 to 0.06 with no fold). Semprebon et al. put this cusp at volume 0.26 and
-gap 0.22. At gap 0.15 the run stops just past the snap-in, and at 0.13 it stops at
-volume 0.107 before any fold, as the liquid in the throat thins to 0.07 (about two edges
-across). That is near the paper's kink at gap 0.125 and volume 0.09, where the
-snap-in meets the burst.
+gap 0.22.
+
+Toward smaller gaps the window widens, and the liquid in the throat thins on the way
+down to the snap-in; the runs at gaps 0.13 to 0.15 in the table start from a finer mesh
+(`trimer(..., h=0.035)`), with about two edges across the throat at the snap-in
+otherwise. At a gap of 0.11 the trimer bursts instead: the menisci in its throat meet
+at volume 0.093, before any fold (d still 0.84). So the burst gives way to the snap-in
+between gaps 0.11 and 0.13, near volume 0.1; Semprebon et al. put this kink at gap
+0.125 and volume 0.09. (`throat_thickness` means the liquid between the throat's two menisci
+only while the outer meniscus is outside the triangle of the bead centres; past the
+snap-in it isn't, and its own points near z = 0 would count.)
 
 ```{figure} _static/packing_cusp.png
 :alt: The meniscus distance against the liquid volume at four gaps, with the unstable parts dashed, and the snap-in and pop-out volumes against the gap meeting near Semprebon et al.'s cusp
@@ -172,8 +182,8 @@ snap-in meets the burst.
 
 Left, the meniscus distance against the volume at 5 degrees: S-shaped below the cusp
 (dashed, the unstable part between the folds), smooth above it. Right, the volumes at
-which the trimer snaps in and the dimer pops out, by gap, with Semprebon et al.'s cusp
-and kink.
+which the trimer snaps in and the dimer pops out, and below the kink bursts, by gap,
+with Semprebon et al.'s cusp and kink.
 ```
 
 ```{figure} _static/packing_dimer.png
@@ -238,13 +248,63 @@ mesh refined once more, the first turns negative just past the peak, at volume 0
 the fourth stays stiff. Which throat goes first is chance in a symmetric pore, so the
 three modes come out as any combination of the three (see
 {meth}`~pysurfaceevolver.Evolver.modes`). Past the peak `arclength` takes ever shorter
-steps and stops just before the first of them turns negative: so close to zero,
-Newton's steps converge only from very near, nearer than tidying the mesh moves the
-vertices. With `tidy=False` it gets past, at volume 0.2377. Following the liquid into
-one throat from there (with `along=` and that mode) would need a mesh with the
-tetrahedron's symmetry. This one splits the three modes (0.17, 0.77 and 1.08 just
-before), so the branching is blurred, and the steps along the lowest mode find no
-branch that leaves through one throat.
+steps and stops just before the first of them turns negative. So close to zero, Newton
+converges only from very near, nearer than tidying the mesh moves the vertices.
+
+### Which throat goes first
+
+The mesh spoils the symmetry a little, and splits the three modes (0.17, 0.77 and 1.08
+just before the run stops), so it can't show which way the pore goes. A symmetry the
+mesh keeps exactly does. Take one throat, the bottom one, against the other three: the
+pore then has a three-fold axis through it and the sphere opposite, with three mirror
+planes along it. `pore_wedge` relaxes the full pore with that axis along z and cuts it
+down to the sixth between two of the mirror planes. That holds a 60-degree piece of the
+top sphere and half of one lower sphere; the mirrors stand in for the rest. `base` sets
+the gaps between the three lower spheres, so the bottom throat can be wider or narrower
+than the others. `bottom_meniscus` gives the height at which its meniscus crosses the
+axis (the pore's centre is near 0).
+
+```python
+import numpy as np
+from pysurfaceevolver import recipes
+from packing_helpers import bottom_meniscus, pore_wedge
+
+for base in (0.03, 0.01):
+    ev, centres = pore_wedge(0.02, theta=20.0, base=base)
+    rows = []
+    for step in recipes.arclength(ev, ev.body(1), -0.002, 300):
+        rows.append((6*step.value, -step.pressures[0], bottom_meniscus(ev)))
+        if step.result.negative_modes or 6*step.value < 0.15:
+            break
+    V, curvature, z = np.array(rows).T
+    k = int(np.argmax(curvature))
+    print(f"bottom gaps {base}: the curvature peaks at {curvature[k]:.3f} (volume {V[k]:.3f}); "
+          f"the bottom meniscus at {z[k]:+.3f} there, {z[-1]:+.3f} at the end")
+    turns = np.flatnonzero(np.diff(V[k:]) > 0)       # a fold: the volume turns back up
+    print("   " + (f"the branch turns at volume {V[k + turns[0]]:.4f}" if len(turns)
+                   else "the branch doesn't turn")
+          + f"; a negative mode from volume {V[-1]:.3f}")
+```
+
+```text
+bottom gaps 0.03: the curvature peaks at 9.533 (volume 0.291); the bottom meniscus at -0.182 there, -0.090 at the end
+   the branch turns at volume 0.2877; a negative mode from volume 0.291
+bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.251); the bottom meniscus at -0.294 there, -0.379 at the end
+   the branch doesn't turn; a negative mode from volume 0.186
+```
+
+With the bottom throat the widest (gaps 0.03 against 0.02), the curvature peaks at
+9.533. That is the entry curvature of a throat with gaps of 0.03: the layer of the first
+section gives 9.520 for it. Past the peak, the bottom meniscus goes on into the pore
+while the other three pull back, and the branch turns at a fold just below the peak's
+volume. Draining further, there is no equilibrium nearby to follow: gas breaks through
+the widest throat and the pore empties, a Haines jump. With the bottom throat the
+narrowest (gaps 0.01), the other three go first, at a curvature of 10.002, and the
+bottom meniscus pulls back out. In the wedge those three can only move together;
+whether one of them would go alone is what the mirrors leave out. Either way the pore
+empties through its widest throat, at that throat's entry curvature. With all four
+throats alike, the wedge's run goes on past the peak (9.877) onto the second kind of
+branch without a fold: which way it turns is then up to the mesh.
 
 ## Pictures
 
@@ -280,7 +340,8 @@ in the middle, with the four menisci drawn deep into the throats.
   emptying changes how the liquid is connected, which the mesh can't follow. The runs
   find where each happens; the state after it needs a new surface.
 * **Mirror planes.** The throat is computed in a prism with mirror planes, so modes that
-  break the layer's symmetry don't show. The trimer and the pore are whole surfaces.
+  break the layer's symmetry don't show; likewise the pore's wedge, which keeps only
+  shapes with its three-fold symmetry. The trimer and the full pore are whole surfaces.
 * **The pore's start** pushes the tetrahedron's faces out by 0.3, so a face crosses the
   gap between two spheres along a strip about 0.1 wide. With touching spheres the
   strip vanishes and the start pinches: a gap is needed.

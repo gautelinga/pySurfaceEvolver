@@ -9,6 +9,9 @@ of radius 1 (surface tension 1, so a pressure is minus a curvature).
   ``throat_thickness`` measures the liquid in the throat.
 * ``filled_pore(gap, theta)``: liquid filling the pore between four spheres
   ``gap`` apart, from the tetrahedron of their centres with its faces pushed out.
+* ``pore_wedge(gap, theta, base)``: the same pore with a three-fold axis along z,
+  cut down to a sixth between two mirror planes; ``base`` sets the gaps between
+  the three lower spheres, and so the bottom throat's width against the others'.
 * ``msp_throat(theta, gap)``: the Mayer-Stowe-Princen estimate of the curvature
   at which gas passes the throat between three spheres.
 
@@ -245,7 +248,10 @@ def trimer(gap, theta, volume, z0=0.35, delta=0.3, h=0.05, levels=1):
 
 def throat_thickness(ev, centres):
     """The liquid's thickness across z = 0 in the throat: twice the smallest
-    |z| of the free surface's vertices over the triangle of the centres."""
+    |z| of the free surface's vertices over the triangle of the centres. (Only
+    while the outer meniscus in the gap lies outside that triangle, as for a
+    trimer: d of meniscus_distance above bead 3's distance to the line through
+    the other two centres.)"""
     x = ev.vertices
     free = np.all(np.abs(np.linalg.norm(x[:, None, :] - centres[None], axis=2) - 1) > 1e-6,
                   axis=1)
@@ -285,11 +291,9 @@ def pore_centres(gap):
     return a*np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], float)
 
 
-def filled_pore(gap, theta, delta=0.3, h=0.05, levels=1):
-    """Liquid filling the pore between four spheres (see pore_centres): the
-    tetrahedron of their centres with its faces pushed out by delta, minus the
-    spheres, relaxed at the volume it holds. Returns the Evolver and the centres."""
-    Cs = pore_centres(gap)
+def _pore_surface(Cs, delta, h):
+    """The faces of the tetrahedron of the centres Cs pushed out by delta, minus
+    the spheres: (vertices, triangles)."""
     g = Cs.mean(axis=0)
     rw = np.sqrt(1 - delta*delta)
     faces = []
@@ -318,7 +322,15 @@ def filled_pore(gap, theta, delta=0.3, h=0.05, levels=1):
         for p, q, r in ((a, b, c), (b, c, a), (c, a, b)):
             loop += [edge[p, q], _arc(Cs[q] + delta*n, rw, n, edge[p, q][-1], edge[q, r][0], h)]
         pieces.append(_patch(_closed(*loop), n, h))
-    v, f = _merge(pieces)
+    return _merge(pieces)
+
+
+def filled_pore(gap, theta, delta=0.3, h=0.05, levels=1):
+    """Liquid filling the pore between four spheres (see pore_centres): the
+    tetrahedron of their centres with its faces pushed out by delta, minus the
+    spheres, relaxed at the volume it holds. Returns the Evolver and the centres."""
+    Cs = pore_centres(gap)
+    v, f = _pore_surface(Cs, delta, h)
     ev = pyse.Evolver()
     ev.load_arrays(v, f, constraints={f"sphere{k + 1}": C.sphere(c, 1.0, contact_angle=theta)
                                       for k, c in enumerate(Cs)},
@@ -327,3 +339,119 @@ def filled_pore(gap, theta, delta=0.3, h=0.05, levels=1):
     ev.body(1).target = ev.body(1).volume
     ev.relax(levels=levels)
     return ev, Cs
+
+
+# ---- the pore in a wedge: one throat against the other three -----------------------
+
+# the wedge's mirror planes, through the z axis: y = 0 and the azimuth 60 degrees
+WEDGE = (np.array([0.0, 1.0, 0.0]), np.array([np.sin(np.pi/3), -np.cos(np.pi/3), 0.0]))
+
+
+def axis_centres(gap, base=None):
+    """The pore's spheres with a three-fold axis along z: A on it above, B, C, D
+    below at azimuths 0, 120 and 240 degrees, ``gap`` from A and ``base``
+    (default ``gap``) from each other. Their three-fold symmetry about z (with
+    mirror planes through it) holds the bottom throat, BCD, against the other three."""
+    base = gap if base is None else base
+    R = (2 + base)/np.sqrt(3)
+    H = np.sqrt((2 + gap)**2 - R*R)
+    return np.array([[0, 0, 3*H/4]] + [[R*np.cos(t), R*np.sin(t), -H/4]
+                                       for t in np.radians([0, 120, 240])])
+
+
+def _cut(v, f, n, Cs, snap, kept=()):
+    """The part of a surface with n.x >= 0. Vertices within ``snap`` of the plane
+    are moved onto it (along the planes ``kept``, for those on them; not those on
+    a sphere whose centre is off the plane, which can't touch it), and back onto
+    their sphere; triangles across it are split."""
+    v = v.copy()
+    d = v @ n
+    on_sphere = [np.abs(np.linalg.norm(v - c, axis=1) - 1) < 1e-7 for c in Cs]
+    near = np.abs(d) < snap
+    for c, on in zip(Cs, on_sphere):
+        if abs(c @ n) > 1e-9:
+            near &= ~on
+    move = np.outer(d, n)
+    for m in kept:
+        on = np.abs(v @ m) < 1e-12
+        t = n - (n @ m)*m
+        move[on] = np.outer(d[on]/(n @ t), t)
+    v[near] -= move[near]
+    for c, on in zip(Cs, on_sphere):
+        sel = near & on
+        v[sel] = c + (v[sel] - c)/np.linalg.norm(v[sel] - c, axis=1)[:, None]
+    d = np.where(near, 0.0, v @ n)
+    pts, new, tris = list(v), {}, []
+
+    def cross(i, j):
+        key = (min(i, j), max(i, j))
+        if key not in new:
+            x = v[i] + d[i]/(d[i] - d[j])*(v[j] - v[i])
+            for c, on in zip(Cs, on_sphere):     # a contact-line edge: back onto its sphere
+                if on[i] and on[j]:
+                    x = c + (x - c)/np.linalg.norm(x - c)
+            new[key] = len(pts)
+            pts.append(x)
+        return new[key]
+    for t in f:
+        s = d[t]
+        if (s >= 0).all():
+            tris.append(t)
+        elif not (s <= 0).all():
+            poly = []
+            for k in range(3):
+                i, j = t[k], t[(k + 1) % 3]
+                if d[i] >= 0:
+                    poly.append(i)
+                if d[i]*d[j] < 0:
+                    poly.append(cross(i, j))
+            tris += [[poly[0], poly[k], poly[k + 1]] for k in range(1, len(poly) - 1)]
+    pts, tris = np.array(pts), np.array(tris)
+    used = np.unique(tris)
+    index = np.full(len(pts), -1)
+    index[used] = np.arange(len(used))
+    return pts[used], index[tris]
+
+
+def pore_wedge(gap, theta, base=None, delta=0.3, h=0.05, levels=1):
+    """The full pore of axis_centres(gap, base), relaxed, cut down to the wedge
+    between the mirror planes WEDGE: a sixth of it, with a 60-degree piece of
+    sphere A (its south pole wet) and half of sphere B; C and D lie outside.
+    Returns the Evolver and the centres."""
+    Cs = axis_centres(gap, base)
+    v, f = _pore_surface(Cs, delta, h)
+    names = ("sphere_a", "sphere_b", "sphere_c", "sphere_d")
+    full = pyse.Evolver()
+    full.load_arrays(v, f, constraints={nm: C.sphere(c, 1.0, contact_angle=theta,
+                                                     wet_poles=("south",) if k == 0 else ())
+                                        for k, (nm, c) in enumerate(zip(names, Cs))},
+                     vertex_constraints={nm: _on(v, c) for nm, c in zip(names, Cs)},
+                     bodies=[pyse.Body(volume=1.0)])
+    full.body(1).target = full.body(1).volume
+    full.relax(levels=levels)
+    volume, m = full.body(1).volume/6, full.mesh()
+    snap = 0.3*float(np.median(m.edge_lengths()))
+    v, f = _cut(m.vertices, m.facets, WEDGE[0], Cs, snap)
+    v, f = _cut(v, f, WEDGE[1], Cs, snap, kept=(WEDGE[0],))
+    f = f[np.linalg.norm(np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]]), axis=1) > 1e-12]
+    walls = {"sphere_a": C.sphere(Cs[0], 1.0, contact_angle=theta, wet_poles=("south",),
+                                  span=np.pi/3),
+             "sphere_b": C.sphere(Cs[1], 1.0, contact_angle=theta),
+             "mirror_0": C.mirror((WEDGE[0], np.zeros(3))),
+             "mirror_60": C.mirror((WEDGE[1], np.zeros(3)))}
+    rows = {"sphere_a": _on(v, Cs[0]), "sphere_b": _on(v, Cs[1]),
+            "mirror_0": np.flatnonzero(np.abs(v @ WEDGE[0]) < 1e-9),
+            "mirror_60": np.flatnonzero(np.abs(v @ WEDGE[1]) < 1e-9)}
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints=walls, vertex_constraints=rows,
+                   bodies=[pyse.Body(volume=volume)])
+    ev.relax()
+    return ev, Cs
+
+
+def bottom_meniscus(ev):
+    """Where the meniscus in the bottom throat crosses the z axis (the wedge's
+    corner): its height, the pore's centre at about 0."""
+    x = ev.vertices
+    on = (np.abs(x @ WEDGE[0]) < 1e-9) & (np.abs(x @ WEDGE[1]) < 1e-9)
+    return float(x[on, 2].min())

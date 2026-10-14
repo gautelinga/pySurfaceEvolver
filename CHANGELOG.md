@@ -133,6 +133,25 @@
   the spheres (in Notes and limits). The `docs` extra now includes SciPy (the notebooks' reference
   helpers use it).
 
+- "Liquid in a sphere packing": which throat a pore empties through. `pore_wedge` relaxes
+  the full pore with a three-fold axis through one sphere and the opposite (bottom)
+  throat, and cuts it down to the sixth between two mirror planes, which holds the
+  bottom throat against the other three exactly (the full pore's mesh had split the
+  triply degenerate mode). With the bottom throat the widest (gaps 0.03 against 0.02),
+  the curvature peaks at 9.533, that throat's entry curvature (9.520 in the layer); its
+  meniscus then goes on into the pore while the others pull back, and the branch turns
+  at a fold: the pore empties through it. With it the narrowest, the other three go
+  first (at 10.002). `bottom_meniscus` and the cut in the helpers (`_pore_surface`
+  shared with `filled_pore`, unchanged).
+- The 5-degree trimers near Semprebon et al.'s kink, on a finer mesh: the snap-in at
+  gaps 0.13-0.15 with the throat's menisci meeting just past it, and at 0.11 a burst
+  with no fold before it, so the change lies between gaps 0.11 and 0.13 near volume 0.1
+  (the paper: 0.125 and 0.09); the figure shows both lines.
+- Docs CI: the notebooks run side by side (`sphinx-build -j auto`, one thread each: 3
+  minutes locally instead of 9 of notebooks), and the snippet pages in two jobs, each
+  running its blocks four at a time (`tools/check_doc_snippets.py --jobs n`, which
+  queues every page's blocks at once and reports them in order: all pages in 6 minutes
+  locally instead of about 15).
 - "Liquid in a sphere packing": a section on trimers at 5 degrees, Semprebon et al.'s
   angle: `arclength` with `remesh=` follows the trimer through its snap-in fold, along
   the unstable branch, through the pop-out fold and down the dimer branch (gap 0.17:

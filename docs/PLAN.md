@@ -76,12 +76,10 @@ Open, for the user to pick (proposed 2026-10-13):
   full pore whose curvature peaks at its throats' entry curvature, with a triply
   degenerate mode), helpers in docs/packing_helpers.py, figures by
   `tools/packing_figure.py`. `relax()` leaves a converged surface alone (8d1cd56).
-  Open from it: (9) the pore's broken-symmetry branch (into one throat): `arclength`
-  crosses the soft triple mode only with `tidy=False` (at V 0.2377, levels 1), and the
-  mesh splits the triple mode (0.17/0.77/1.08), so `along=` finds no one-throat branch;
-  needs a mesh with the tetrahedral symmetry. Trimers at 5 degrees stop near the
-  paper's kink (gap 0.13 at V 0.107, lamella 0.07 thick; gap 0.15 just past its
-  snap-in): the throat would need refining there.
+  Open from it: nothing from (9) or (8b) (see the fourth batch below). The pore's
+  one-of-three branch (one side throat alone) would need a whole surface with a
+  mesh of the tetrahedron's symmetry; the wedge shows the three side throats only
+  together.
   Done since: sphere centres from parameters, `arclength`'s first step halved
   (dcf7196), its unsettled stop put back, the bridge notebook pulling beads apart,
   multipliers typed; CI replicated in fresh venvs (Python 3.12 only), which caught
@@ -99,7 +97,14 @@ Open, for the user to pick (proposed 2026-10-13):
   below 15 degrees that a crude start sinks into: raised to 20 via the datafile
   parameter `pyse_angle_floor`, lowered by 0.7 a stage); the packing page's 5-degree
   section follows trimers through snap-in and pop-out onto the dimers and maps the
-  folds to a cusp at (V, s) = (0.267, 0.226), the paper's (0.26, 0.22).
+  folds to a cusp at (V, s) = (0.267, 0.226), the paper's (0.26, 0.22). Then
+  (fourth batch, 2026-10-15): the pore in a C3v wedge (`pore_wedge`: the full pore
+  with a three-fold axis along z, relaxed, cut to a sixth between two mirrors): the
+  widest throat goes first at its own entry curvature (bottom gaps 0.03: 9.533 against
+  the layer's 9.520, then a fold); 5-degree trimers near the kink on a finer mesh
+  (snap-in and pop-out at gaps 0.13-0.15, burst at 0.11; `throat_thickness` only
+  means the lamella while the outer meniscus is outside the triangle of centres);
+  docs CI parallel (`sphinx-build -j auto`, snippets `--jobs 4` in two jobs).
 * **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
   setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
 
@@ -205,7 +210,7 @@ paired runs and the median. Liquid-bridge notebook grid: 25 of 25 on `relax(leve
 - CI runs `python -m mypy -p pysurfaceevolver`; run it before pushing.
 - Docs: `sphinx-build -W docs <out>`; notebooks execute in the build (600 s each,
   drainage 900 s). docs/stress_cases.md is not executed in the build:
-  `OMP_NUM_THREADS=2 python tools/check_doc_snippets.py` runs and compares its snippets
+  `OMP_NUM_THREADS=1 python tools/check_doc_snippets.py --jobs 4` runs and compares its snippets
   (also a CI job; `--update` rewrites the outputs).
 - Tests: `pytest`. Benchmark: `python bench/benchmark.py --levels 6 8 --threads 1 4`.
 - Profiling build: `pip install . -C build-dir=<dir> -C cmake.define.PYSE_NOSTRIP=ON
