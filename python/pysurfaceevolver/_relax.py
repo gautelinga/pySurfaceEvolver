@@ -120,6 +120,12 @@ class _Relaxing(_Analysis):
 
         How it works:
 
+        * With ``levels=0``, a surface already in equilibrium (residual and
+          the gaps to its volume and quantity targets below ``tol``, no
+          degenerate facet) is left as it is: only the stability check below
+          (and ``adapt``, if given) runs. Gradient steps on it would be mesh
+          motion only, which next to a shallow contact line slides vertices
+          through the wall.
         * In the quadratic and Lagrange models (a final stage from a mesh
           settled in the linear model) with ``levels=0``, five gradient steps
           and then safeguarded Newton steps come first (as the manual's
@@ -271,7 +277,26 @@ class _Relaxing(_Analysis):
             trace = run.trace
             facets0 = self.counts["facets"]
             first = None
-            if newton and levels == 0 and self.model != "linear":
+            # a surface already in equilibrium is left as it is: gradient
+            # rounds on it are mesh motion only, and next to a shallow contact
+            # line they slide vertices through the wall (a bridge at 20 degrees
+            # relaxed a second time: 300 steps later 175 vertices sat inside a
+            # bead, the energy falling all the way). A surface that passes is
+            # checked again after Evolver's recalc, which puts the vertices on
+            # their boundaries and constraints as they are now: a wire moved by
+            # a parameter leaves them where they were, and the old equilibrium
+            # passes. (Only then: recalc changes the path of a surface that
+            # goes on to relax.)
+            def met() -> bool:
+                return (self.residual() < tol and self._target_gap()[0] < tol
+                        and not self._degenerate())
+            already = False
+            if levels == 0 and met():
+                self.command("recalc")
+                already = met()
+            if already:
+                first = (0, self.residual())
+            elif newton and levels == 0 and self.model != "linear":
                 run.approach()
                 first = run.newton_first()
             if first is not None:
@@ -289,7 +314,7 @@ class _Relaxing(_Analysis):
                         if e.errnum not in _NO_FREEDOM or lev == levels:
                             raise
                 steps, residual = run.finish(levels)
-            if self.model == "linear" and residual < tol and not keep_mesh:
+            if self.model == "linear" and residual < tol and not keep_mesh and not already:
                 more, residual = run.contact_pass(levels + 1, residual)
                 steps += more
             if adapt and self.model == "linear" and not elastic:

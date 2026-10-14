@@ -112,6 +112,18 @@
 
 ### Fixes
 
+- `relax()` leaves a surface that is already in equilibrium as it is (with `levels=0`:
+  residual and target gaps below `tol`, no degenerate facet, also after Evolver's
+  `recalc`, which puts the vertices on wires moved by a parameter): only the stability
+  check runs. Its gradient rounds were mesh motion only, and next to a shallow contact
+  line they slid vertices through the wall: a bridge between beads at 20 degrees,
+  relaxed a second time, ended unconverged with 14 vertices inside a bead (175 after
+  300 plain gradient steps, the energy falling throughout), and `arclength()`, which
+  relaxes first, failed from it. Tests, the 43 sample datafiles and the stress errors
+  are as before; stress case 6's continuation, whose first step re-relaxed the
+  converged barrel, now needs a retry at 60 degrees (2020 gradient steps instead of
+  1690).
+
 - `relax()` with a body volume or fixed quantity far from its target (more than 25%):
   if the first gradient step leaves degenerate facets (below 1 degree) the surface
   didn't have, it is undone and the target approached in stages of at most 10%, each

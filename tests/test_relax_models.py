@@ -207,6 +207,35 @@ def test_relax_leaves_a_sound_surface_alone(cube):
     assert r.popped == 0 and r.collapsed == 0
 
 
+def test_relax_leaves_a_converged_surface_alone(cube):
+    # gradient rounds on an equilibrium are mesh motion only (next to a
+    # shallow contact line they slid vertices through the wall)
+    cube.relax(levels=1)
+    x = cube.vertices
+    r = cube.relax()
+    assert r.converged and len(r.energy) == 0 and r.newton_steps == 0
+    assert np.array_equal(cube.vertices, x) and r.stable is True
+    cube.body(1).target = 1.2               # a new target: relaxed as usual
+    assert cube.relax().newton_steps > 0
+
+
+def test_relax_follows_a_wire_moved_by_a_parameter():
+    # setting the parameter leaves the wire's vertices where they were, and
+    # the old surface is still in equilibrium there until Evolver's recalc
+    from pysurfaceevolver import constraints as C, shapes
+    tube = shapes.tube(1.0, 0.0, 0.6, nz=4, nt=16)
+    top = C.curve("cos(p1)", "sin(p1)", "ht", lambda x: np.arctan2(x[:, 1], x[:, 0]))
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces, boundaries={1: C.circle(), 2: top},
+                   vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   parameters={"ht": 0.6})
+    ev.relax(levels=1)
+    ev.parameters["ht"] = 0.7
+    r = ev.relax()
+    assert r.converged and len(r.energy) > 0
+    assert ev.vertices[:, 2].max() == pytest.approx(0.7)
+
+
 def test_relax_pinches_a_collapsing_neck(load):
     # cat.fe: a catenoid at its fold. The neck collapses during untidied
     # gradient steps, its ring of edges is deleted and the pinched vertex
