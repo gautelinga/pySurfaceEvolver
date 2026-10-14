@@ -315,6 +315,56 @@ def test_contact_angle_as_a_parameter():
     assert np.isnan(s.energy_constant) and s.area_constant == pytest.approx(np.pi)
 
 
+def _bridge(gap, centres_from_parameter, levels=2, theta=40.0, volume=0.1, a=0.35):
+    """A liquid bridge between unit spheres gap apart, wetted around the poles
+    facing each other."""
+    c = 1 + gap/2
+    zb = c - np.sqrt(1 - a*a)
+    tube = pyse.shapes.tube(a, -zb, zb, nz=4, nt=16)
+    lo, hi = ((0, 0, "-(1 + gap/2)"), (0, 0, "1 + gap/2")) if centres_from_parameter \
+        else ((0, 0, -c), (0, 0, c))
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   constraints={1: C.sphere(lo, 1.0, contact_angle=theta, wet_poles=("north",)),
+                                2: C.sphere(hi, 1.0, contact_angle=theta, wet_poles=("south",))},
+                   vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=volume)],
+                   parameters={"gap": gap} if centres_from_parameter else None)
+    ev.relax(levels=levels)
+    return ev
+
+
+def test_sphere_centre_from_a_parameter():
+    # the volume over the wet pole moves into the line integral: the same
+    # bridge (to the integrals' quadrature along the contact line)
+    fixed = _bridge(0.4, False)
+    energy, pressure = fixed.energy, fixed.body(1).pressure    # (one engine: read first)
+    moving = _bridge(0.4, True)
+    assert moving.energy == pytest.approx(energy, rel=2e-5)
+    assert moving.body(1).pressure == pytest.approx(pressure, rel=1e-4)
+    s = C.sphere((0, 0, "1 + gap/2"), 1.0, contact_angle="theta", wet_poles=("south",))
+    assert s.parameters == ("gap", "theta") and s.volconst == 0.0
+    with pytest.raises(ValueError):
+        C.sphere((0, 0, "c"), 1.0, wet_poles=("north", "south"))
+
+
+def test_arclength_moves_a_sphere_by_its_parameter():
+    from pysurfaceevolver import recipes
+    ev = _bridge(0.4, True)
+    steps = list(recipes.arclength(ev, "gap", 0.05, 4))
+    gaps = [s.value for s in steps]
+    assert np.all(np.diff(gaps) > 0) and gaps[-1] > 0.5
+    # the contact line on the moved sphere, and the bridge there as built afresh
+    top = np.flatnonzero(ev.vertices[:, 2] > 0)
+    on = np.abs(np.linalg.norm(ev.vertices[top] - [0, 0, 1 + gaps[-1]/2], axis=1) - 1) < 1e-9
+    assert on.sum() >= 16
+    # drawn where it is now
+    wall = ev._walls(True)[1]
+    assert wall.shape[1] == pytest.approx((0, 0, 1 + gaps[-1]/2))
+    energy = ev.energy
+    assert _bridge(gaps[-1], False).energy == pytest.approx(energy, rel=5e-3)
+
+
 def test_texts_hold_plain_numbers():
     # numpy >= 2 formats numpy floats as np.float64(...): none may reach a datafile,
     # whichever numpy runs the tests

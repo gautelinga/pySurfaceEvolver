@@ -118,6 +118,18 @@ def test_newton_target_does_not_depend_on_the_last_one(cube):
     assert np.allclose(p_first, p_again, rtol=0, atol=1e-12)
 
 
+def test_a_first_step_too_long_is_halved():
+    # past the fold (1.3255) there is nothing at 1.4: the first step halves
+    # to 0.3 as later steps do, from where the attempt left the surface
+    ev = _wire_catenoid(1)
+    ev.parameters["ht"] = 0.8
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        steps = list(recipes.arclength(ev, "ht", 0.6, 2))
+    assert [s.value for s in steps] == pytest.approx([0.8, 1.1])
+    assert ev.parameters["ht"] == pytest.approx(1.1)
+
+
 def test_arclength_arguments(cube):
     with pytest.raises(ValueError):
         next(recipes.arclength(cube, cube.body(1), 0.0, 5))

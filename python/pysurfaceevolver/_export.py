@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
@@ -344,5 +345,18 @@ class _Export(_Engine):
         return LiveView(self, scalars, **kwargs)
 
     def _walls(self, walls):
-        """``walls`` for drawing: True means those given to load_arrays()."""
-        return list(_surface.walls.values()) if walls is True else walls
+        """``walls`` for drawing: True means those given to load_arrays(). A
+        sphere whose centre follows parameters is drawn where it is now."""
+        walls = list(_surface.walls.values()) if walls is True else walls
+        if not isinstance(walls, (list, tuple)):
+            return walls
+        out = []
+        for wall in walls:
+            shape = getattr(wall, "shape", None)
+            if shape is not None and shape[0] == "sphere" \
+                    and any(isinstance(x, str) for x in shape[1]):
+                centre = tuple(float(self.eval(x)) if isinstance(x, str) else float(x)
+                               for x in shape[1])
+                wall = dataclasses.replace(wall, shape=("sphere", centre, shape[2]))
+            out.append(wall)
+        return out

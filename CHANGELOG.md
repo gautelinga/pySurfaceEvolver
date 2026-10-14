@@ -4,6 +4,14 @@
 
 ### API
 
+- `constraints.sphere()`: a coordinate of the centre may be a datafile parameter's name
+  or an expression (`(0, 0, "1 + gap/2")`), so setting the parameter moves the sphere and
+  `recipes.arclength` can follow it (a bridge pulled apart at a fixed volume, say). The
+  volume over a wet pole is then in the line integral (the pole's value taken off inside)
+  instead of `volconst`, which can't follow a parameter; the same bridge comes out the
+  same to 2e-6 in energy, converging alike under refinement. Both poles wet needs a
+  centre of numbers. `plot(walls=True)` draws such a sphere where it is.
+
 - `pyse.Evolver(process=True)`: a surface in a worker process of its own, so several
   surfaces at once. The handle works like any `Evolver`: attribute reads, assignments
   and method calls go to the worker (a round trip is about 0.04 ms plus copying),
@@ -134,6 +142,11 @@
   `tools/readme_figure.py` redraws the picture.
 
 ### Fixes
+
+- `arclength()` halves its first step too, as it did the later ones (up to `halvings`
+  times), instead of stopping with "try a smaller ds"; the attempts are undone from a
+  copy once tidying has flipped edges. Finer meshes and shallow angles had needed a
+  smaller `ds` by hand (the packing page's pore refined once, a throat at 20 degrees).
 
 - `relax()` leaves a surface that is already in equilibrium as it is (with `levels=0`:
   residual and target gaps below `tol`, no degenerate facet, also after Evolver's

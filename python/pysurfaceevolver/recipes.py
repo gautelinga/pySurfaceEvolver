@@ -416,8 +416,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
 
     Stops after ``steps`` points, at the first point outside ``bounds``
     (``(low, high)`` on the value; the surface is put back at the last one
-    inside), or, with a warning, when a step doesn't converge even at
-    ``ds/2**halvings`` (put back at the last point) or the facets degenerate
+    inside), or, with a warning, when a step (the first one too) doesn't
+    converge even at ``ds/2**halvings`` (put back at the last point) or the facets degenerate
     (below 1 degree: refine and start again from there). ``tol`` bounds the
     residual of each point, as in :meth:`Evolver.relax`.
     """
@@ -456,16 +456,30 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     yield step(0, float(value), 0, negative, residual)
     if steps < 2:
         return
-    put(value + ds)
-    kept = ev.newton(20, tol=tol)
-    ok, negative, residual = _arc_settle(ev, put, float(value + ds), tol, tidy)
-    if not (kept.converged and ok):
-        warnings.warn(f"arclength(): no equilibrium found at {value + ds:.6g} by Newton "
-                      "steps (try a smaller ds)", UserWarning, stacklevel=2)
+    # the first step in the value alone, halved like the others when Newton
+    # doesn't get there
+    # (back by the coordinates, or by a copy once tidying has flipped edges)
+    start, copy, first = ev._coords(), ev.save(), ds
+    for _ in range(halvings + 1):
+        put(value + first)
+        kept = ev.newton(20, tol=tol)
+        ok = False
+        if kept.converged:
+            ok, negative, residual = _arc_settle(ev, put, float(value + first), tol, tidy)
+        if ok:
+            break
+        if not ev._put_back(start):
+            ev.restore(copy)
+        put(value)
+        first /= 2
+    if not ok:
+        warnings.warn(f"arclength(): no equilibrium found at {value + 2*first:.6g} by Newton "
+                      f"steps (even with steps of {abs(2*first):.3g}); the surface is back at "
+                      "the start", UserWarning, stacklevel=2)
         return
-    points.append((float(value + ds), ev.vertices))
-    yield step(1, float(value + ds), kept.newton_steps, negative, residual)
-    h = abs(ds)
+    points.append((float(value + first), ev.vertices))
+    yield step(1, float(value + first), kept.newton_steps, negative, residual)
+    h = abs(first)              # (and back up to ds below)
     for index in range(2, steps):
         (v0, x0), (v1, x1) = points[-2], points[-1]
         if len(x0) != len(x1) or len(x1) != len(ev.vertices):

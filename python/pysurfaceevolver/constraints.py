@@ -117,6 +117,9 @@ class Constraint:
         kind = self.shape[0]
         if kind == "sphere":
             _, c, r = self.shape
+            if any(isinstance(x, str) for x in c):
+                raise ValueError("this sphere's centre follows parameters: draw it with "
+                                 "Evolver.plot(walls=True), which puts it where it is")
             return pv.Sphere(radius=r, center=c, theta_resolution=resolution,
                              phi_resolution=resolution)
         if kind == "cylinder":
@@ -146,22 +149,28 @@ def _frame(n: np.ndarray) -> "tuple[np.ndarray, np.ndarray]":
     return u, np.cross(n, u)
 
 
+_FUNCTIONS = {"pi", "e", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt", "exp",
+              "log", "abs", "sinh", "cosh", "tanh", "pow", "floor", "ceil", "minimum", "maximum"}
+
+
+def _identifiers(expr: str) -> Tuple[str, ...]:
+    """The names a datafile expression refers to (parameters), without
+    Evolver's functions and constants."""
+    import re
+    # identifiers, not exponents (the "e3" of 1e3)
+    return tuple(sorted(set(re.findall(r"(?<![\w.])[A-Za-z_]\w*", expr)) - _FUNCTIONS))
+
+
 class _Coefficient:
     """tension*cos(contact_angle): a number, or a datafile expression when the
     angle is given as a parameter name or expression (e.g. ``"theta"``)."""
-
-    _KNOWN = {"pi", "e", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt", "exp",
-              "log", "abs", "sinh", "cosh", "tanh", "pow", "floor", "ceil", "minimum", "maximum"}
 
     def __init__(self, contact_angle, tension: float):
         self.value: Optional[float] = None
         self.expr: Optional[str] = None
         self.names: Tuple[str, ...] = ()
         if isinstance(contact_angle, str):
-            import re
-            # identifiers, not exponents (the "e3" of 1e3)
-            self.names = tuple(sorted(set(re.findall(r"(?<![\w.])[A-Za-z_]\w*", contact_angle))
-                                      - self._KNOWN))
+            self.names = _identifiers(contact_angle)
         if contact_angle is None:
             self.value = 0.0
         elif isinstance(contact_angle, str):
@@ -255,16 +264,27 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     surface, pi/2 for a quarter cut by mirrors through the axis). They set
     :attr:`Constraint.volconst` and :attr:`Constraint.energy_constant`.
     ``nonnegative`` makes it one-sided (vertices may not enter the sphere).
+
+    A coordinate of ``center`` may be a datafile parameter's name or an
+    expression (``(0, 0, "1 + gap/2")``), so ``ev.parameters["gap"] = 0.5``
+    moves the sphere (and :func:`pysurfaceevolver.recipes.arclength` can
+    follow the parameter). The volume over a wet pole is then in the line
+    integral itself rather than in ``volconst``, which can't follow the
+    parameter; with both poles wet the centre must be numbers.
     """
-    c = np.asarray(center, dtype=float)
+    c = tuple(center)
     R = float(radius)
-    if c.shape != (3,) or R <= 0:
+    if len(c) != 3 or R <= 0:
         raise ValueError("center must be a 3-vector and radius positive")
+    moving = any(isinstance(x, str) for x in c)
+    text = [f"({x})" if isinstance(x, str) else _n(float(x)) for x in c]
     poles = set(wet_poles)
     if not poles <= {"north", "south"}:
         raise ValueError("wet_poles may hold 'north' and 'south'")
+    if moving and len(poles) == 2:
+        raise ValueError("a sphere with both poles wet needs a center of numbers")
     k = _Coefficient(contact_angle, tension)
-    X, Y, Z = (f"(x - {_n(c[0])})", f"(y - {_n(c[1])})", f"(z - {_n(c[2])})")
+    X, Y, Z = (f"(x - {text[0]})", f"(y - {text[1]})", f"(z - {text[2]})")
     rho2 = f"({X}^2 + {Y}^2)"
     dphi = (f"(-{Y})/{rho2}", f"{X}/{rho2}", "0")       # d(azimuth) about z
     energy = None
@@ -272,17 +292,28 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
         # wetted area = -integral of R h dphi (+ R^2 span per wet pole, with sign)
         energy = [f"{k.times(R)}*{Z}*{d}" if d != "0" else "0" for d in dphi]
     # volume over the wetted face: integral of Q(h) dphi, Q = c_z h^2/2 + h^3/3
-    q = f"({_n(c[2]/2)}*{Z}^2 + {Z}^3/3)"
-    content = [f"{q}*{d}" if d != "0" else "0" for d in dphi]
     north, south = "north" in poles, "south" in poles
-    Q = lambda h: c[2]*h*h/2 + h**3/3
-    volconst = -span*((Q(R) if north else 0.0) - (Q(-R) if south else 0.0))
+    if moving:
+        # with the wet pole's Q taken off inside: around that pole the azimuth
+        # turns by -span (north) or span (south) along the contact line, so
+        # the integral takes in what volconst holds for a fixed centre
+        h0 = R if north else -R if south else 0.0
+        q = (f"(({text[2]})/2*({Z}^2 - {_n(h0*h0)}) + ({Z}^3 - {_n(h0**3)})/3)" if poles
+             else f"(({text[2]})/2*{Z}^2 + {Z}^3/3)")
+        volconst = 0.0
+    else:
+        cz = float(c[2])
+        q = f"({_n(cz/2)}*{Z}^2 + {Z}^3/3)"
+        Q = lambda h: cz*h*h/2 + h**3/3
+        volconst = -span*((Q(R) if north else 0.0) - (Q(-R) if south else 0.0))
+    content = [f"{q}*{d}" if d != "0" else "0" for d in dphi]
     area = R*R*span*((1.0 if north else 0.0) + (1.0 if south else 0.0))
     formula = f"{X}^2 + {Y}^2 + {Z}^2 = {float(R*R)!r}"
+    names = k.names + tuple(n for x in c if isinstance(x, str) for n in _identifiers(x))
     return Constraint(formula, energy, content, volconst, k.energy(area), nonnegative, area,
-                      shape=("sphere", tuple(c), R),
+                      shape=("sphere", c if moving else tuple(float(x) for x in c), R),
                       energy_constant_text=(f"-{k.expr}*{_n(area)}" if k.expr and area else None),
-                      parameters=k.names)
+                      parameters=tuple(sorted(set(names))))
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,
