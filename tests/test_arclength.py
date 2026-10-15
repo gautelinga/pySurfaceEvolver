@@ -164,6 +164,29 @@ def test_a_point_that_doesnt_settle_is_tried_again_closer():
     assert steps[-1].result.negative_modes == 1
 
 
+def test_a_sharp_fold_is_turned_along_the_tangent():
+    # a drop hanging from a ring of radius 1 (Bond 2), grown in its volume:
+    # at the largest volume the branch turns almost at a right angle in the
+    # step's measure, and the secant of the last two points pointed off it
+    # whatever the step (stopped at 3.03, with steps of 0.04 down to 0.005)
+    h = np.real(np.roots([1.0, 0.0, 3.0, -3.0])).max()     # the cap of volume pi/2
+    cap = shapes.cap((1 + h*h)/(2*h), h, nr=6, nt=32)
+    ev = pyse.Evolver()
+    ev.load_arrays(cap.vertices*[1, 1, -1], cap.faces[:, ::-1],
+                   boundaries={1: C.circle()}, vertex_boundaries={1: cap.rims["rim"]},
+                   gravity=2.0, bodies=[pyse.Body(volume=np.pi/2, density=1.0)])
+    ev.relax()
+    values = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        for s in recipes.arclength(ev, ev.body(1), 0.04, 80):
+            values.append(s.value)
+            if len(values) > 3 and values[-1] < values[-2] < values[-3]:
+                break
+    assert 3.0 < max(values) < 3.1 and values[-1] < max(values) - 0.02
+    assert s.result.negative_modes == 1
+
+
 def test_remeshing_keeps_the_unstable_branch():
     # the catenoid stretches to its fold and its neck then thins: without
     # remeshing the facets degrade and the run loses the unstable branch

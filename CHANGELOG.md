@@ -8,6 +8,11 @@
   vertical, a body's volume had the wetted face's part added instead of taken off
   (a band of liquid round a fibre along x came out 2x too large in the test; the
   energy was right). Found while computing drops on crossed fibres.
+- `recipes.arclength` turns sharp folds: where a step's change is mostly the value's
+  (a drop hanging from a ring of radius 1 at its largest volume), the secant of the
+  last two points points off the branch by an angle that halving the step doesn't
+  shrink, and the run stopped at the fold. Once a step fails, the shorter ones go
+  along the branch's tangent at the last point (two more Newton steps).
 
 ## 0.7.5 (2026-10-15)
 

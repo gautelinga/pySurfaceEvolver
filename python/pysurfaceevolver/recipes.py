@@ -525,7 +525,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
 
     It starts by relaxing the surface at the current value, then takes Newton
     steps to the value plus ``ds`` (the sign sets the direction). From there
-    each point is a prediction along the secant of the last two, corrected by
+    each point is a prediction along the secant of the last two (where that
+    fails, along the branch's tangent at the last one), corrected by
     Newton's method on the equilibrium together with the condition of being
     ``ds`` along the branch (each iteration: two Newton steps of Evolver's).
     No gradient steps: those would leave an unstable branch. Between points
@@ -661,7 +662,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         # secant (the vertices keep spreading as the surface stretches)
         tx, tv, sx = _arc_secant(ev, x0, v0, x1, v1)
         last = ev._coords()
-        corrected = False
+        corrected = exact = False
         for k in range(halvings + 1):
             ok, iterations = _arc_correct(ev, put, x1 + h*sx, v1 + h*tv, tx, tv, tol, 12, h)
             if ok:
@@ -692,6 +693,22 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                                   UserWarning, stacklevel=2)
                     return
             put(v1)
+            if not exact:
+                # where the branch turns sharply between points (a drop
+                # hanging from a ring at its largest volume: the value's change
+                # dwarfs the shape's), the secant points off it by an angle
+                # that halving the step doesn't shrink, and the corrector's
+                # point lands farther than the step: the shorter steps go
+                # along the branch's tangent at the last point. The vertices'
+                # sliding along the surface comes from the secant, per unit of
+                # its shape change (per unit of the step, it is mostly the
+                # value's there, the sliding came out too large and the drop
+                # still stopped; without it a catenoid's coarse mesh doesn't
+                # settle on its unstable branch)
+                ex, ev_ = _arc_tangent(ev, put, v1, tx, tv)
+                shape = _rms(tx)
+                slide = (sx - _normal_part(ev, sx))*(_rms(ex)/shape if shape > 0 else 0.0)
+                tx, tv, sx, exact = ex, ev_, ex + slide, True
             h /= 2
         if not ok:
             why = (" that settles again after tidying its mesh (too coarse there? refine)"
@@ -713,6 +730,31 @@ def _arc_secant(ev, x0: np.ndarray, v0: float, x1: np.ndarray,
     dx = _normal_part(ev, x1 - x0)
     norm = np.sqrt(_arc_norm2(dx, v1 - v0))
     return dx/norm, (v1 - v0)/norm, (x1 - x0)/norm
+
+
+def _rms(dx: np.ndarray) -> float:
+    """Root mean square length of a displacement per vertex."""
+    return float(np.sqrt((dx*dx).sum(axis=1).mean()))
+
+
+def _arc_tangent(ev, put, value: float, tx: np.ndarray,
+                 tv: float) -> "tuple[np.ndarray, float]":
+    """The branch's unit tangent at the current point (the vertices' part,
+    along the normals, and the value's), from where Newton steps at the
+    value and at a nearby one take the vertices, turned to point as the
+    secant (tx, tv) does."""
+    start = ev._coords()
+    delta = 1e-6*max(1.0, abs(value))
+    n0, _ = _newton_target(ev, put, value)
+    n1, _ = _newton_target(ev, put, value + delta)
+    ev._put_back(start)
+    put(value)
+    dn = _normal_part(ev, (n1 - n0)/delta)
+    norm = np.sqrt(_arc_norm2(dn, 1.0))
+    ex, ev_ = dn/norm, 1.0/norm
+    if float((ex*tx).sum())/len(tx) + ev_*tv < 0:
+        ex, ev_ = -ex, -ev_
+    return ex, ev_
 
 
 def _arc_remesh(ev, put, points: list, remesh_now: Callable[[Callable[[], None]], bool],
