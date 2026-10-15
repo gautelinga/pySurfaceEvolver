@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18...3.30)
 project(pysurfaceevolver LANGUAGES C CXX)
 
-find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(nanobind CONFIG REQUIRED)
 
 # Link-time optimization: Evolver's tiny element accessors (inline.h) are

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Requirements
+
+- Python 3.11 or later: 3.9 and 3.10 are past their end of life (October 2025 and
+  October 2026), and NumPy and SciPy releases have left them. No wheels for them, and
+  CI tests 3.11, 3.12 and 3.13.
+
 ### API
 
 - `constraints.sphere()`: a coordinate of the centre may be a datafile parameter's name

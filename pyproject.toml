@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Python frontend to Ken Brakke's Surface Evolver (2.70a)"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
@@ -42,7 +42,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.cibuildwheel]
-build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+build = "cp311-* cp312-* cp313-*"
 # glibc (manylinux) only for now
 skip = "*-musllinux_*"
 # PyVista (VTK) is left out to keep wheel tests light; test_viz.py skips

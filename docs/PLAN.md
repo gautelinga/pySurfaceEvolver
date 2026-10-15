@@ -42,7 +42,7 @@ Open, for the user to pick (proposed 2026-10-13):
 
 * **PyPI (as 0.7.5):** a publish job in `wheels.yml` on `v*` tags (trusted publishing,
   environment `pypi` with the user as reviewer; the user sets up the pending publisher
-  on PyPI); cp314 wheels and CI; whether to drop Python 3.9 is the user's call. The name
+  on PyPI); cp314 wheels and CI (3.9 and 3.10 dropped 2026-10-15: Python 3.11+). The name
   `pysurfaceevolver` was free on 2026-10-12.
 * **macOS wheels** (OpenMP, MUMPS with gfortran, Intel and ARM); Windows later.
 * **Candidates:** `volconst="auto"` as calibration from a given starting volume was
