@@ -248,6 +248,7 @@ static void load_datafile(char *name)
   web.torus_body_flag = 0;
   torus_display_mode = TORUS_DEFAULT_MODE;
   former_torus_display_mode = TORUS_DEFAULT_MODE;
+  mumps_new_surface();   /* the factoring's ordering starts again too */
   surface_valid = 0;
   startup(name);
   surface_valid = 1;

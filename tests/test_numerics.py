@@ -156,3 +156,35 @@ def test_metric_edge_force_is_energy_gradient(load, fe_dir, tmp_path, metric):
             ev.command(f"set vertex[{v}] {c} {x0!r}")
             grad = (ep - em) / (2 * h)
             assert abs(grad + force[k]) <= 1e-6 * max(1.0, abs(grad))
+
+
+# A string with a conformal metric, outside quantities mode: its edge forces
+# (edge_force_l_metric()) lacked the 1/4 on the metric's derivative term (the
+# midpoint moves half as far as an end), off by order 1 near the throat.
+def test_conformal_metric_string_force_is_energy_gradient(load, fe_dir, tmp_path):
+    text = (fe_dir / "metric.fe").read_text()
+    general = "METRIC\nG11 0 \n0   G11\n"
+    assert general in text
+    path = tmp_path / "conformal.fe"
+    path.write_text(text.replace(general, "CONFORMAL_METRIC\nG11\n"))
+    ev = load(str(path))
+    ev.command("r; r; g 3")
+    assert float(ev.command("print everything_quantities")) == 0
+    ev.command("m 0; g 1")
+
+    def energy():
+        ev.command("recalc")
+        return ev.total_energy
+
+    for v in (2, 5, 9):
+        force = [float(ev.command(f"print vertex[{v}].v_velocity[{k}]")) for k in (1, 2)]
+        for k, c in enumerate("xy"):
+            x0 = float(ev.command(f"print vertex[{v}].{c}"))
+            h = 1e-6
+            ev.command(f"set vertex[{v}] {c} {x0 + h!r}")
+            ep = energy()
+            ev.command(f"set vertex[{v}] {c} {x0 - h!r}")
+            em = energy()
+            ev.command(f"set vertex[{v}] {c} {x0!r}")
+            grad = (ep - em) / (2 * h)
+            assert abs(grad + force[k]) <= 1e-6 * max(1.0, abs(grad))

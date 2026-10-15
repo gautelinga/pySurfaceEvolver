@@ -23,6 +23,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 /* volume coefficients, used only for quadratic volume */
 REAL vcoeff[FACET_CTRL][FACET_CTRL][FACET_CTRL];
@@ -87,7 +88,7 @@ void facet_force_q(facet_id f_id)
   }
   for ( i = 0 ; i < gauss2D_num ; i++ )  /*  integration point number */
   { /* calculate tangents and normals */ 
-    mat_mult(gpolypartial[i],x,tang,web.dimension,ctrl_num,SDIM);
+    fl_mat_mult(gpolypartial[i],x,tang,web.dimension,ctrl_num,SDIM);  /* pySE */
     cross_prod(tang[0],tang[1],normal);
     norm = sqrt(SDIM_dot(normal,normal));
     for ( n = 0 ; n < 2 ; n++ ) /* parameter number */
@@ -175,7 +176,7 @@ void facet_energy_q(
   for ( i = 0 ; i < gauss2D_num ; i++ )  /*  integration point number */
   {
     /* calculate tangents and normals */ 
-    mat_mult(gpolypartial[i],x,tang,web.dimension,ctrl_num,SDIM);
+    fl_mat_mult(gpolypartial[i],x,tang,web.dimension,ctrl_num,SDIM);  /* pySE */
     cross_prod(tang[0],tang[1],normal);
     norm = sqrt(SDIM_dot(normal,normal));
     energy += gauss2Dwt[i]*norm/2;

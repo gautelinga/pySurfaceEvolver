@@ -15,6 +15,13 @@
  * system, but the pattern changes only with the topology); freeing a system
  * frees the factors but keeps the analysis. The factors belong to one system
  * at a time (owner); a solve for another system refactors it first.
+ * The ordering is AMD, the fastest analysis; a pattern factored PORD_AFTER
+ * times is analysed again with PORD, slower to analyse but with less fill
+ * (4 threads: Newton steps 10-15% faster for Lagrange 2 and 4 and linear at
+ * 1.6M facets, the same at 98k; the extra analysis is worth a step or two at
+ * most). Many steps on one pattern are arclength()'s (6-9 per point; relax()
+ * takes 2-3). Each datafile starts again with AMD (mumps_new_surface()), so a
+ * run's results don't depend on what ran before it.
  * Null pivots, as Evolver's ZEROPIVOT, are pivots below hessian_epsilon
  * relative to the matrix norm; MUMPS fixes them so their solution
  * components are zero.
@@ -40,6 +47,8 @@ struct mumps_sys
   double *a;               /* values given to MUMPS (lambda subtracted) */
   int analysed;            /* analysis valid for irn, jcn, threads */
   int threads;             /* ICNTL(16) of the analysis */
+  int ordering;            /* ICNTL(7) of the analysis */
+  int factored;            /* factorizations with the analysis */
   struct linsys *owner;    /* system the current factors are of, or NULL */
 };
 
@@ -79,12 +88,16 @@ static void blas_threads(void)
   }
 }
 
+#define ORDERING_AMD 0
+#define ORDERING_PORD 4
+#define PORD_AFTER 6
+
 static void mumps_controls(struct mumps_sys *m)
 { blas_threads(); m->id.ICNTL(1) = -1;    /* no error messages */
   m->id.ICNTL(2) = -1;    /* no diagnostics */
   m->id.ICNTL(3) = -1;    /* no global information */
   m->id.ICNTL(4) = 0;
-  m->id.ICNTL(7) = 0;     /* AMD ordering: fastest analysis, good fill here */
+  m->id.ICNTL(7) = m->ordering;   /* AMD, or PORD for a much-used pattern */
   m->id.ICNTL(13) = 1;    /* no ScaLAPACK root: exact inertia */
   m->id.ICNTL(16) = fl_threads();   /* OpenMP threads */
   m->id.ICNTL(24) = 1;    /* null pivot detection */
@@ -147,8 +160,14 @@ void mumps_factor(struct linsys *S, int mtype)
   m->id.irn = m->irn;
   m->id.jcn = m->jcn;
   m->id.a = m->a;
+  if ( !same ) m->ordering = ORDERING_AMD;
+  else if ( m->ordering == ORDERING_AMD && m->factored + 1 >= PORD_AFTER )
+  { m->ordering = ORDERING_PORD;
+    same = 0;
+  }
   mumps_controls(m);
   job = same ? 2 : 4;     /* factor only, or analyse and factor */
+  if ( !same ) m->factored = 0;
   for ( tries = 0 ; ; tries++ )
   { m->id.job = job;
     fl_enter(); dmumps_c(&m->id); fl_leave();
@@ -160,6 +179,7 @@ void mumps_factor(struct linsys *S, int mtype)
   }
   m->analysed = m->id.INFOG(1) >= 0;
   m->threads = m->id.ICNTL(16);
+  m->factored++;
   mumps_check(m,"factorization");
   m->owner = S;
 
@@ -238,6 +258,11 @@ void mumps_free_system(struct linsys *S)
   if ( m->id.INFOG(1) < 0 ) m->analysed = 0;
 }
 
+/* A new surface: its first factorization analyses with AMD again. */
+void mumps_new_surface(void)
+{ if ( shared ) shared->analysed = 0;
+}
+
 int fl_have_mumps(void) { return 1; }
 
 #else  /* no MUMPS in this build */
@@ -255,6 +280,7 @@ void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype
   kb_error(6364,"This Evolver was built without MUMPS.\n",RECOVERABLE);
 }
 void mumps_free_system(struct linsys *S) { (void)S; }
+void mumps_new_surface(void) { }
 int fl_have_mumps(void) { return 0; }
 
 #endif

@@ -105,8 +105,18 @@ Open, for the user to pick (proposed 2026-10-13):
   (snap-in and pop-out at gaps 0.13-0.15, burst at 0.11; `throat_thickness` only
   means the lamella while the outer meniscus is outside the triangle of centres);
   docs CI parallel (`sphinx-build -j auto`, snippets `--jobs 4` in two jobs).
-* **Small loose ends:** PORD ordering for long Newton runs at 1.6M; quadratic/edge
-  setups on generic `mat_mult`; serial `r`; metric.c conformal 1/4 (unverified).
+* **Small loose ends, closed 2026-10-15:** PORD after six factorizations on one
+  pattern (4 threads: 10-15% faster steps in Lagrange 2/4 and linear 1.6M, same at
+  393k and below; `arclength` gains, `relax` with 2-3 a pattern unchanged; reset on
+  every load for reproducibility); the quadratic/Lagrange-edge setups' small products
+  inline (bit-identical; quadratic `g 1` -27% at 98k); `r` left serial (1.4 s
+  393k->1.6M, 40% first-touch zeroing of new elements, no hotspot; a non-atomic
+  attribute stamp in new_element was no faster); the conformal 1/4 is reachable
+  (linear strings) and tested. Found on the way: `arclength` failed at once in the
+  Lagrange model and for strings (equiangulate), and on fine Lagrange meshes its
+  corrector couldn't meet the step criterion at round-off: both fixed. Left: the
+  quadratic model's other facet loops are Evolver's serial ones (`g 1` at 98k 0.47 s
+  against the linear model's 0.03, both one thread).
 
 Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
 

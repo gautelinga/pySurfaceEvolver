@@ -118,6 +118,24 @@
   contact line further, and over 3 paired runs the worst errors went from 4-9% to
   170-1550%, with the snap 15-100% off (from 3-4%).
 
+### Speed
+
+- Newton steps: a sparsity pattern factored six times is analysed again with MUMPS's
+  PORD ordering instead of AMD (slower to analyse, less fill). At 4 threads the steps
+  after it are 10-15% faster in Lagrange 2 at 98k facets, Lagrange 4 at 24k and the
+  linear model at 1.6M, and about the same at 393k facets and below (its extra
+  analysis is 0.1 s at 98k, 1.25 s at 1.6M). `relax()` takes 2-3 steps on a pattern and
+  is unchanged; `arclength()` takes 6-9 a point: six points in Lagrange 2 at 98k
+  facets take 37-40 s instead of 41-42. Each datafile load starts again with AMD, so a
+  run's results don't depend on what ran before it.
+- The quadratic model's facet tangents and Gauss points, and the Lagrange model's edge
+  setup, multiply their small matrices inline instead of through `mat_mult` (the same
+  sums in the same order: bit-identical). Quadratic model at 98k facets, one thread:
+  `g 1` 0.64 -> 0.47 s, a Newton step 2.44 -> 2.35 s.
+- Not changed: `r` stays serial (refining 393k facets to 1.6M takes 1.4 s, less than
+  half a Newton step there; about 40% of it is zeroing new elements in fresh memory,
+  the rest walking edge loops: no single hotspot).
+
 ### Documentation
 
 - "Liquid in a sphere packing" (`docs/packing.md`): the curvature at which gas passes
@@ -207,6 +225,21 @@
   `tools/readme_figure.py` redraws the picture.
 
 ### Fixes
+
+- `arclength()` in the Lagrange model and for strings: tidying between points
+  equiangulated, which Evolver refuses there ("Cannot equiangulate LAGRANGE model"), so
+  the first point failed. It now tidies as `relax()` does (vertex averaging only). And
+  on fine Lagrange meshes the corrector waited for steps below `tol` that round-off
+  doesn't allow: in Lagrange 2 at 98k facets the vertices slide 2e-8 to 1e-7 a step
+  along the surface with the residual at 1e-9, so points failed, steps halved and runs
+  stopped after one or two points, at different points from run to run. A point is now
+  also converged when it is in equilibrium (residual below `tol`) and the steps have
+  stopped shrinking; a run of six points takes 38 s there.
+- The edge force of a string with a conformal metric (`CONFORMAL_METRIC`), fixed on
+  2026-10-08 (the metric's derivative term lacked a 1/4) but thought unreachable, is
+  reached by the linear string model outside quantities mode, and now tested against
+  the energy's gradient (`metric.fe` made conformal; the old formula was off by order
+  1 near the throat).
 
 - `arclength()` stopping at a point that doesn't settle after tidying leaves the surface
   at the last point (its vertices on the tidied mesh, Newton there), not at the

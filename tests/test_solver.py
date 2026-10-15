@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 
+import numpy as np
 import pytest
 
 import pysurfaceevolver as pyse
@@ -59,6 +60,25 @@ def newton_run(solver):
                             cwd=FE_DIR, env=env, timeout=600)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.skipif(not has_mumps(), reason="built without MUMPS")
+def test_many_steps_on_one_pattern_are_the_same_after_a_reload(load):
+    # a pattern factored six times is analysed again with PORD; a datafile
+    # starts again with AMD, or the second run would factor its first steps
+    # with the first run's PORD analysis (one thread: bit-reproducible)
+    runs = []
+    with pyse.threads_limit(1):
+        for _ in range(2):
+            ev = load("cube.fe")
+            ev.command("g 5; r; g 2")
+            steps = []
+            for _ in range(8):
+                ev.command("hessian")
+                steps.append(ev.vertices)
+            runs.append(steps)
+    for a, b in zip(*runs):
+        assert np.array_equal(a, b)
 
 
 @pytest.mark.skipif(not has_mumps(), reason="built without MUMPS")

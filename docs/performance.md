@@ -63,16 +63,30 @@ Lagrange 6 at 24k facets.
   parallel; selections of edges and vertices by attribute kept until the surface
   changes; link-time optimization.
 - Newton steps: MUMPS instead of Evolver's own factoring, with its analysis kept
-  from step to step and all constraint columns solved at once; the matrix pattern
+  from step to step and all constraint columns solved at once; a pattern factored six
+  times analysed again with PORD, slower to analyse than AMD but with less fill (at 4
+  threads, steps 10-15% faster in Lagrange 2 at 98k facets and Lagrange 4 at 24k, and in
+  the linear model at 1.6M; about the same at 393k and below). `arclength()` takes 6-9
+  steps a point on one pattern, `relax()` 2-3: a Lagrange 2 run of six points at 98k
+  facets took 37-40 s instead of 41-42. The matrix pattern
   kept from step to step and filled in parallel; vertex normals in parallel; the
   Lagrange element Hessians as BLAS matrix products, with each element's terms
   projected and entered once.
 - `u` and `V`: the edge-swap tests and the vertex-average search in parallel (the
   swaps themselves stay serial, in Evolver's order; results are identical), and
   `u` no longer recomputes every edge length five times.
+- The quadratic model's facet tangents and Gauss points (and the Lagrange edges'):
+  their small matrix products inline, with `mat_mult`'s sums in its order
+  (bit-identical): `g 1` at 98k facets 0.64 -> 0.47 s, a Newton step 2.44 -> 2.35 s
+  (one thread). The rest of the quadratic model's facet loops are Evolver's own,
+  serial ones.
 - What is left: the MUMPS factorization (about a third of a Lagrange 6 step and a
   third to a half of a large linear one), recording the matrix entries, and `r`
-  (refinement), which is still serial (about 1.3 s at 393k facets).
+  (refinement), which is still serial: refining 393k facets to 1.6M takes 1.4 s,
+  less than half a Newton step there at 4 threads. Its profile has no hotspot to
+  take out: about 40% is zeroing new elements in fresh memory (the atomic counter
+  that the profile puts it on isn't the cost: a plain one was no faster), the rest
+  walking edge loops and setting up the new edges and facets.
 
 ## `relax()` at scale
 
@@ -146,9 +160,10 @@ its five gradient steps, 3-5% faster). Merging the linear model's facet volume a
 energy loops the same way was slower (the fused loop cost more than the two) and
 was dropped.
 
-Tried and not kept: MUMPS's PORD ordering (its
-analysis costs more than it saves; METIS isn't built), storage reordering along a
-space-filling curve (gradient steps 2x slower).
+Tried and not kept: MUMPS's PORD ordering for every analysis (it costs more than it
+saves on the 2-3 steps `relax()` takes on a pattern; it is used after six, above;
+METIS isn't built), storage reordering along a space-filling curve (gradient steps
+2x slower).
 
 ## Threads and the Newton solver
 

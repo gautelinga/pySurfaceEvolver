@@ -104,6 +104,20 @@ def test_a_body_volume_as_the_value(cube):
     assert np.allclose(e/v**(2/3), e[0], rtol=2e-2)
 
 
+def test_a_body_volume_in_the_lagrange_model(cube):
+    # tidying between points vertex-averages only: Evolver can't flip edges
+    # in the Lagrange model ("Cannot equiangulate", the first point failed)
+    cube.refine()
+    cube.relax()
+    cube.command("lagrange 2")
+    steps = list(recipes.arclength(cube, cube.body(1), 0.1, 4))
+    v = np.array([s.value for s in steps])
+    assert len(steps) == 4 and np.all(np.diff(v) > 0)
+    e = np.array([s.energy for s in steps])
+    assert np.allclose(e/v**(2/3), e[0]/v[0]**(2/3), rtol=2e-2)
+    assert all(s.result.residual < 1e-8 for s in steps)
+
+
 def test_newton_target_does_not_depend_on_the_last_one(cube):
     # the corrector differences two Newton steps from one point; the second
     # had started from the pressures the first left

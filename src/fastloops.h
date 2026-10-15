@@ -69,6 +69,7 @@ void mumps_factor(struct linsys *S, int mtype);
 void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype);
 void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype);
 void mumps_free_system(struct linsys *S);
+void mumps_new_surface(void);
 int fl_have_mumps(void);   /* nonzero if this build has MUMPS */
 
 /* The Newton-step matrix pattern kept across steps (fasthess.c):
@@ -183,5 +184,22 @@ unsigned char *fl_edge_marks(int (*test)(edge_id));
 int fl_threads(void);
 int fl_thread_setting(void);   /* as set: 0 for the default */
 void fl_set_threads(int n);
+
+/* c = a b for distinct a (rows x inner), b (inner x cols) and c: the sums
+   mat_mult() makes, in its order (bit for bit: the build doesn't contract to
+   FMAs), without its aliasing and zero tests or a call; for the small
+   products of the quadratic and Lagrange element setups. */
+static inline void fl_mat_mult(REAL **a, REAL **b, REAL **c, int rows, int inner, int cols)
+{ int i, j, k;
+  for ( i = 0 ; i < rows ; i++ )
+  { REAL *ai = a[i], *ci = c[i];
+    for ( k = 0 ; k < cols ; k++ )
+    { REAL sum = 0.0;
+      for ( j = 0 ; j < inner ; j++ )
+        sum += ai[j]*b[j][k];
+      ci[k] = sum;
+    }
+  }
+}
 
 #endif

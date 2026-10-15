@@ -3842,7 +3842,7 @@ void q_edge_setup_lagrange(
   { /* tangent vectors at gauss points */
     int m;
     for ( m = 0 ; m < gl->gnumpts ; m++ )
-      mat_mult(gl->gpolypart[m],e_info->x,e_info->sides[m],dim,ctrl,SDIM);
+      fl_mat_mult(gl->gpolypart[m],e_info->x,e_info->sides[m],dim,ctrl,SDIM);
   }
   if ( needs & NEED_WINGS )
   { kb_error(1576,
@@ -3850,7 +3850,7 @@ void q_edge_setup_lagrange(
         RECOVERABLE);
   }
   if ( needs & NEED_GAUSS )
-     mat_mult(gl->gpoly,e_info->x,e_info->gauss_pt,gl->gnumpts,ctrl,SDIM);
+     fl_mat_mult(gl->gpoly,e_info->x,e_info->gauss_pt,gl->gnumpts,ctrl,SDIM);
 } // end q_edge_setup_lagrange()
 
 /*******************************************************************
@@ -3912,7 +3912,7 @@ void q_facet_setup(
   }
 
   if ( needs & NEED_GAUSS )
-    mat_mult(gpoly,f_info->x,f_info->gauss_pt,gauss2D_num,ctrl_num,SDIM);
+    fl_mat_mult(gpoly,f_info->x,f_info->gauss_pt,gauss2D_num,ctrl_num,SDIM);
 
   if ( needs & NEED_SURROUNDING_VERTICES )
   { // For soapfilm model, add outer vertices of neighbor facets.
@@ -3979,13 +3979,13 @@ void q_facet_setup_q(
 
   /* tangents at gauss points */
   for ( m = 0 ; m < gauss2D_num ; m++ )
-      mat_mult(gpolypartial[m],f_info->x,f_info->sides[m],
+      fl_mat_mult(gpolypartial[m],f_info->x,f_info->sides[m],
                    web.dimension,FACET_CTRL,SDIM);
 
   /* if ( needs & NEED_NORMAL ) */
 
   if ( needs & NEED_GAUSS )
-     mat_mult(gpoly,f_info->x,f_info->gauss_pt,gauss2D_num,FACET_CTRL,SDIM);
+     fl_mat_mult(gpoly,f_info->x,f_info->gauss_pt,gauss2D_num,FACET_CTRL,SDIM);
 } // end q_facet_setup_q()
 
 
@@ -4033,10 +4033,10 @@ void q_facet_setup_lagrange(
   { /* tangent vectors at gauss points */
     int m;
     for ( m = 0 ; m < gl->gnumpts ; m++ )
-      mat_mult(gl->gpolypart[m],f_info->x,f_info->sides[m],dim,ctrl,SDIM);
+      fl_mat_mult(gl->gpolypart[m],f_info->x,f_info->sides[m],dim,ctrl,SDIM);
   }
   /* always need gauss */
-  mat_mult(gl->gpoly,f_info->x,f_info->gauss_pt,gl->gnumpts,ctrl,SDIM);
+  fl_mat_mult(gl->gpoly,f_info->x,f_info->gauss_pt,gl->gnumpts,ctrl,SDIM);
 
 } // end q_facet_setup_lagrange()
 

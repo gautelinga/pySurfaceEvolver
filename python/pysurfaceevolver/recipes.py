@@ -341,6 +341,7 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
     ev.vertices = x_pred
     value = v_pred
     n = len(x_pred)
+    last = float("inf")
     for it in range(1, max_iter + 1):
         x = ev.vertices
         delta = 1e-6*max(1.0, abs(value))
@@ -358,8 +359,13 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
         _core.set_multipliers(m0 + dv*(m1 - m0)/delta)
         if reach is not None and _arc_norm2(x_new - x_pred, value - v_pred) > reach*reach:
             return False, it
-        if _arc_norm2(x_new - x, dv) < tol*tol and ev.residual() < tol:
+        # converged: in equilibrium, with steps below tol or no longer
+        # shrinking, which is round-off (Lagrange 2 at 98k facets: the
+        # vertices slide 2e-8 to 1e-7 a step with the residual at 1e-9)
+        step = _arc_norm2(x_new - x, dv)
+        if (step < tol*tol or step > 0.25*last) and ev.residual() < tol:
             return True, it
+        last = step
     return False, max_iter
 
 
@@ -380,11 +386,14 @@ def _arc_settle(ev, put, value: float, tol: float, tidy: bool,
     past its fold). Whether it is there, the negative eigenvalues (with the
     constraints held), the residual."""
     ok, residual = False, float("inf")
-    if tidy:
+    flip, spread = ev._tidy_kinds() if tidy else (False, False)
+    if flip or spread:
         start = ev._coords()
         for _ in range(2):
-            ev.vertex_average()
-            ev.equiangulate()
+            if spread:
+                ev.vertex_average()
+            if flip:
+                ev.equiangulate()
         ok, residual = _arc_back(ev, put, value, tol, tangent, reach)
         if not ok:
             _put_coords(ev, start)
@@ -521,7 +530,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     ``ds`` along the branch (each iteration: two Newton steps of Evolver's).
     No gradient steps: those would leave an unstable branch. Between points
     (``tidy=True``) the vertices are spread along the surface and edges
-    flipped, which Newton steps alone don't do.
+    flipped, which Newton steps alone don't do (as :meth:`Evolver.relax`
+    tidies: no flips in the Lagrange model or for strings).
 
     ``along`` (a displacement per vertex, such as ``ev.modes(1).vectors[0]``)
     starts on another branch: the first step goes a distance ``ds`` along it
