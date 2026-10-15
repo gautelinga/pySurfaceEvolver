@@ -1803,6 +1803,7 @@ void sp_Hessian_solver(
   }
 
   sp_hessian_solve(S,rhs,X,SET_PRESSURE);
+  fl_hessian_deflate(S,X);  /* rigid motions out of the step; fastloops.h (pySE) */
   if ( S->neg > 0 )
     { sprintf(msg,"Hessian not positive definite. Index: %d\n",S->neg);
       kb_error(1825,msg,WARNING);

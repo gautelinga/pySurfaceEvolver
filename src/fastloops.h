@@ -86,6 +86,7 @@ void fl_pattern_store(struct linsys *S, int rows, int cols, int index_start);
 /* PYSE_DUMP_HESSIAN debugging hooks around the factoring (fasthess.c) */
 void fl_hessian_before_factor(struct linsys *S);
 void fl_hessian_after_factor(struct linsys *S);
+void fl_hessian_deflate(struct linsys *S, REAL *X);   /* rigid motions out of a Newton step */
 /* Nonzero when PYSE_CHECK_FACET_CACHE is set: verify every cached answer. */
 int fl_check(void);
 

@@ -1276,6 +1276,203 @@ void fl_hessian_after_factor(struct linsys *S)
 #endif
 }
 
+/**************************************************************************
+ * Rigid motions out of the Newton step. A surface free to move as a whole
+ * (cube.fe: nothing fixed, no wall) makes the Newton system singular along
+ * its rigid motions: moving it changes neither the energy nor the volume.
+ * In exact arithmetic the step has no part there; in floating point the
+ * solve divides round-off by an eigenvalue near zero and the step wanders
+ * along it, the further the finer the mesh (cube.fe at 98k quadratic facets:
+ * steps of 4e-6 that hold the residual near 2e-6). The rigid motions, in the
+ * step's coordinates (along the normals with hessian_normal), are
+ * orthonormalized, leaving out those that only move the surface along itself
+ * (a sphere turning), and the matrix taken on their span (Rayleigh-Ritz:
+ * one product with the matrix each, so a rotation about an axis away from
+ * the centroid counts too). A direction there with an eigenvalue below
+ * DEFLATE_TOL times the mean diagonal, which no constraint gradient sees, is
+ * made the null vector by one solve with the factored matrix (a step of
+ * inverse iteration) and taken out of the step. (The projected motion is
+ * close, to a cosine of 1 - 1e-9 on that cube, but taking it out instead
+ * left the residual at 2e-8 against 1e-9.) Where no rigid motion is free (a
+ * wall, a fixed vertex) the eigenvalues are far larger: nothing is solved and
+ * nothing changes. PYSE_NO_DEFLATE=1 turns it off.
+ */
+
+#define DEFLATE_TOL 1e-10
+#define DEFLATE_CON 1e-3   /* largest cosine with a constraint gradient */
+#define DEFLATE_NEW 1e-3   /* a direction counts if this much of it is new */
+
+/* rigid motion k (translations, then rotations about c) in the step's
+   coordinates: each vertex's freedoms, as hessian_move() maps them. Returns
+   the motion's own squared length, over the vertices that move. */
+static REAL rigid_motion(int k, REAL *c, REAL *v, int N)
+{ vertex_id v_id;
+  int i, j;
+  REAL d[MAXCOORD], full = 0.0;
+  for ( i = 0 ; i < N ; i++ ) v[i] = 0.0;
+  FOR_ALL_VERTICES(v_id)
+  { struct hess_verlist *vh = get_vertex_vhead(v_id);
+    REAL *x = get_coord(v_id);
+    if ( vh->freedom <= 0 || (get_vattr(v_id) & BOUNDARY) ) continue;
+    for ( i = 0 ; i < SDIM ; i++ ) d[i] = 0.0;
+    if ( k < SDIM ) d[k] = 1.0;
+    else
+    { int a = SDIM == 2 ? 0 : (k - SDIM + 1) % 3;
+      int b = SDIM == 2 ? 1 : (k - SDIM + 2) % 3;
+      d[a] = -(x[b] - c[b]);
+      d[b] = x[a] - c[a];
+    }
+    full += SDIM_dot(d,d);
+    if ( vh->proj )        /* displacement = proj X: X = proj^T d */
+      for ( j = 0 ; j < vh->freedom ; j++ )
+      { REAL s = 0.0;
+        for ( i = 0 ; i < SDIM ; i++ ) s += vh->proj[i][j]*d[i];
+        v[vh->rownum + j] = s;
+      }
+    else
+      for ( j = 0 ; j < vh->freedom && j < SDIM ; j++ )
+        v[vh->rownum + j] = d[j];
+  }
+  return full;
+}
+
+/* the largest cosine between v (the first S->A_rows entries) and a
+   constraint gradient, however Evolver stores them (bk_constraint_setup) */
+static REAL constraint_cosine(struct linsys *S, REAL *v, REAL vv)
+{ int n = S->A_rows, CN = S->CN, i, j, c;
+  REAL *dot, *nrm, worst = 0.0;
+  if ( CN <= 0 ) return 0.0;
+  dot = (REAL*)temp_calloc(2*CN,sizeof(REAL));
+  nrm = dot + CN;
+  if ( augmented_hessian_mode )
+  { for ( i = 0 ; i < n ; i++ )
+      for ( j = S->IA[i]-A_OFF ; j < S->IA[i+1]-A_OFF ; j++ )
+        if ( (c = S->JA[j] - A_OFF - n) >= 0 && c < CN )
+        { dot[c] += S->A[j]*v[i];
+          nrm[c] += S->A[j]*S->A[j];
+        }
+  }
+  else if ( sparse_constraints_flag )
+  { for ( c = 0 ; c < CN ; c++ )
+      for ( j = S->CIA[c] ; j < S->CIA[c+1] ; j++ )
+      { dot[c] += S->CA[j]*v[S->CJA[j]];
+        nrm[c] += S->CA[j]*S->CA[j];
+      }
+  }
+  else
+  { for ( c = 0 ; c < CN ; c++ )
+      for ( i = 0 ; i < n ; i++ )
+      { dot[c] += S->C[c][i]*v[i];
+        nrm[c] += S->C[c][i]*S->C[c][i];
+      }
+  }
+  for ( c = 0 ; c < CN ; c++ )
+    if ( nrm[c] > 0.0 )
+    { REAL cs = fabs(dot[c])/sqrt(nrm[c]*vv);
+      if ( cs > worst ) worst = cs;
+    }
+  temp_free((char*)dot);
+  return worst;
+}
+
+/* x scaled to length 1 over its first n entries; 0 if it can't be */
+static int unit(REAL *x, int n)
+{ REAL s = dot(x,x,n);
+  int i;
+  if ( !(s > 0.0) || !isfinite(s) ) return 0;
+  s = 1.0/sqrt(s);
+  for ( i = 0 ; i < n ; i++ ) x[i] *= s;
+  return 1;
+}
+
+/* x made orthogonal to rows 0..m-1 of q (orthonormal), over n entries;
+   twice, which keeps it orthogonal to round-off */
+static void orthogonalize(REAL *x, REAL **q, int m, int n)
+{ int pass, j, i;
+  for ( pass = 0 ; pass < 2 ; pass++ )
+    for ( j = 0 ; j < m ; j++ )
+    { REAL s = dot(q[j],x,n);
+      for ( i = 0 ; i < n ; i++ ) x[i] -= s*q[j][i];
+    }
+}
+
+void fl_hessian_deflate(struct linsys *S, REAL *X)
+{ int n = S->A_rows, N = S->N, rows = S->total_rows > N ? S->total_rows : N;
+  int ncand = SDIM + (SDIM == 3 ? 3 : SDIM == 2 ? 1 : 0);
+  int i, j, k, m = 0, kept = 0;
+  REAL diag = 0.0, c[MAXCOORD];
+  long nv = 0;
+  REAL **q, **hq, **u, **K, **Y, *mu, *work, *w;
+  vertex_id v_id;
+  if ( n <= 0 || getenv("PYSE_NO_DEFLATE") ) return;
+  if ( S->lambda != 0.0 || S->low_rank ) return;   /* not a plain Newton step */
+  if ( web.symmetry_flag ) ncand = SDIM;     /* torus: translations only */
+  for ( i = 0 ; i < n ; i++ )
+  { int start = S->IA[i] - A_OFF;
+    if ( start < S->IA[i+1] - A_OFF && S->JA[start] - A_OFF == i )
+      diag += fabs(S->A[start]);
+  }
+  diag /= n;
+  if ( !(diag > 0.0) ) return;
+  for ( i = 0 ; i < SDIM ; i++ ) c[i] = 0.0;
+  FOR_ALL_VERTICES(v_id)
+  { REAL *x = get_coord(v_id);
+    if ( get_vertex_vhead(v_id)->freedom <= 0 ) continue;
+    for ( i = 0 ; i < SDIM ; i++ ) c[i] += x[i];
+    nv++;
+  }
+  if ( nv == 0 ) return;
+  for ( i = 0 ; i < SDIM ; i++ ) c[i] /= nv;
+
+  /* the rigid motions that change the shape's place, orthonormal */
+  q = dmatrix(0,ncand-1,0,N-1);
+  hq = dmatrix(0,ncand-1,0,N-1);
+  u = dmatrix(0,ncand-1,0,N-1);
+  for ( k = 0 ; k < ncand ; k++ )
+  { REAL full = rigid_motion(k,c,q[m],N);
+    orthogonalize(q[m],q,m,n);
+    if ( !(dot(q[m],q[m],n) > DEFLATE_NEW*DEFLATE_NEW*full) || !unit(q[m],n) ) continue;
+    m++;
+  }
+  /* the matrix on their span, and its eigenpairs */
+  K = dmatrix(0,ncand-1,0,ncand-1);
+  Y = dmatrix(0,ncand-1,0,ncand-1);
+  mu = (REAL*)temp_calloc(3*ncand,sizeof(REAL));
+  work = mu + ncand;
+  w = (REAL*)temp_calloc(rows,sizeof(REAL));   /* a right side: total_rows */
+  for ( k = 0 ; k < m ; k++ ) sp_hessian_mult(S,q[k],hq[k]);
+  for ( k = 0 ; k < m ; k++ )
+    for ( j = 0 ; j < m ; j++ )
+      K[k][j] = 0.5*(dot(q[k],hq[j],n) + dot(q[j],hq[k],n));
+  if ( m > 0 ) jacobi_eigenpairs(K,m,mu,Y,work);
+  for ( k = 0 ; k < m ; k++ )
+  { if ( !(fabs(mu[k]) < DEFLATE_TOL*diag) ) continue;
+    for ( i = 0 ; i < n ; i++ )
+    { REAL s = 0.0;
+      for ( j = 0 ; j < m ; j++ ) s += Y[j][k]*q[j][i];
+      w[i] = s;
+    }
+    if ( !unit(w,n) || !(constraint_cosine(S,w,1.0) < DEFLATE_CON) ) continue;
+    sp_hessian_solve(S,w,u[kept],NO_SET_PRESSURE);   /* (w is spent) */
+    for ( i = 0 ; i < rows ; i++ ) w[i] = 0.0;
+    if ( !unit(u[kept],n) ) continue;
+    orthogonalize(u[kept],u,kept,n);
+    if ( !(dot(u[kept],u[kept],n) > DEFLATE_NEW*DEFLATE_NEW) || !unit(u[kept],n) ) continue;
+    kept++;
+  }
+  for ( k = 0 ; k < kept ; k++ )
+  { REAL s = dot(u[k],X,n);
+    for ( i = 0 ; i < n ; i++ ) X[i] -= s*u[k][i];
+  }
+  temp_free((char*)w);
+  temp_free((char*)mu);
+  free_matrix(Y);
+  free_matrix(K);
+  free_matrix(u);
+  free_matrix(hq);
+  free_matrix(q);
+}
+
 /* ---- Lagrange facet area Hessian as matrix products ----------------------
  *
  * lagrange_facet_tension_hess() for 2D facets, regrouped. At each Gauss point

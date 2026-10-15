@@ -241,6 +241,20 @@
 
 ### Fixes
 
+- Newton steps on a surface free to move as a whole (nothing fixed, no wall, as
+  `cube.fe`): moving it changes neither the energy nor the volume, so the Newton system
+  is singular along its rigid motions, and round-off moved the surface along them, the
+  more the finer the mesh. On `cube.fe` at 98k quadratic facets each step moved it by
+  up to 4e-6 and the residual stayed near 2e-6: `relax()` stopped unconverged after 75
+  gradient steps and 3 Newton steps (34-38 s). The rigid motions (translations, and
+  rotations about any axis) are now checked with one product with the matrix each, and
+  those along which the system is singular (an eigenvalue below 1e-10 of the mean
+  diagonal) are taken out of the step, made exact first by one solve each with the
+  factored matrix; `relax()` there converges after 5 gradient steps and 2 Newton steps
+  (residual 1e-9, 6 s). The solves cost about 20% of a Newton step, on free surfaces
+  near equilibrium only. In the Lagrange model the same cube's residual settles at
+  2e-10 instead of 1e-9 to 3e-9. Surfaces held in place get Evolver's steps to the bit
+  (tested on `cat.fe` and `mound.fe`); `PYSE_NO_DEFLATE=1` turns it off.
 - `arclength()` in the Lagrange model and for strings: tidying between points
   equiangulated, which Evolver refuses there ("Cannot equiangulate LAGRANGE model"), so
   the first point failed. It now tidies as `relax()` does (vertex averaging only). And

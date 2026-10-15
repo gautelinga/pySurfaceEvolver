@@ -119,9 +119,21 @@ Open, for the user to pick (proposed 2026-10-13):
   facet energy/force/volume/volgrad loops, the named-quantity loops and Hessian
   assembly (area, volume, vertex integrals; fasthess.c), vertex normals; volume as
   pair sums (round-off). Cube 98k, 4 threads: `g 1` ~0.75 -> 0.18 s, Newton step
-  ~2.0 -> 0.95 s, `relax()` ~69 -> 36 s. Open: that `relax()` ends unconverged in both
-  builds (75 gradient steps, 3 Newton, residual 2e-6) where `g 5; hessian` x3 reaches
-  7e-11; quadratic edge and facet integral methods stay serial.
+  ~2.0 -> 0.95 s, `relax()` ~69 -> 36 s (unconverged; see the next item). Quadratic
+  edge and facet integral methods stay serial.
+* **Rigid motions out of Newton steps, 2026-10-15:** a free surface (cube.fe) makes the
+  Newton system singular along its rigid motions (eigenvalue ~1e-13 of a mean diagonal
+  4.7 at 98k quadratic facets, falling 50-80x per refinement); round-off moved each step
+  4e-6 along them and held the residual at 2e-6, so `relax()` ended unconverged.
+  `fl_hessian_deflate()` (fasthess.c, after the solve in `sp_Hessian_solver`): the rigid
+  motions projected onto the step's freedoms, orthonormalized (dropping those that only
+  slide the surface along itself), Rayleigh-Ritz on their span (6 products with the
+  matrix; rotations about any axis); a Ritz value below 1e-10 x mean diagonal with no
+  constraint gradient along it -> one solve (inverse iteration), taken out of the step.
+  Deflating along the projected motion itself (cosine 1 - 1e-9) left 2e-8. `relax()`
+  there: 5 gradient + 2 Newton, residual 1e-9, 6 s; the solves add ~0.25 s to a ~1.1 s
+  step. Held surfaces (mound sliding on its plane: quotient 1e-3 x diagonal)
+  bit-identical. Possible: reuse the null vectors between steps (they barely move).
 
 Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
 

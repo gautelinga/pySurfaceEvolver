@@ -83,7 +83,10 @@ Lagrange 6 at 24k facets.
   instead of Evolver's 216 a point (equal to round-off). Cube at 98k facets, 4
   threads: `g 1` 0.65-0.84 -> 0.17-0.19 s before the first Newton step and
   0.48-0.57 -> 0.21-0.27 s after it, a Newton step 1.8-2.1 -> 0.95 s, a default
-  `relax()` 67-71 -> 34-38 s. The small matrix products of the quadratic tangents and
+  `relax()` 67-71 -> 34-38 s, unconverged in both (round-off moved each Newton step
+  along the free cube's rigid motions, holding the residual at 2e-6). With those
+  taken out of the steps it converges in 6 s (5 gradient steps, 2 Newton; the three
+  extra solves add about 0.25 s to a step near equilibrium). The small matrix products of the quadratic tangents and
   Gauss points (and the Lagrange edges') are inline, in `mat_mult`'s order.
 - What is left: the MUMPS factorization (about a third of a Lagrange 6 step and a
   third to a half of a large linear one), recording the matrix entries, and `r`

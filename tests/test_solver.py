@@ -91,3 +91,39 @@ def test_mumps_newton_steps_match_evolver():
         for v, v0 in zip(vols, vols0):
             assert abs(v - v0) <= 1e-10 * abs(v0), name
         assert index0 == index00 and index1 == index10, name
+
+
+def test_newton_leaves_a_free_surface_where_it_is(load):
+    # nothing holds the cube: its rigid motions change neither energy nor
+    # volume, and the Newton system is singular along them. They are taken
+    # out of the step; left in, round-off moves the converged cube (24k
+    # quadratic facets) by 1e-7 a step and holds the residual near 1e-9
+    # (at 98k facets: 4e-6 and 2e-6, and relax() didn't converge)
+    ev = load("cube.fe")
+    ev.command("g 5; r; g 10; r; g 10; r; g 10; r; g 10; r; g 10; quadratic; g 5; "
+               "hessian; hessian")
+    for _ in range(3):
+        x = ev.vertices
+        ev.command("hessian")
+        assert np.abs(ev.vertices - x).max() < 1e-11
+    assert ev.residual() < 1e-10
+
+
+@pytest.mark.parametrize("name", ["cat.fe", "mound.fe"])
+def test_held_surfaces_get_evolvers_newton_steps(load, monkeypatch, name):
+    # fixed rings, a drop on a plane: no rigid motion is free, and the steps
+    # are the same to the bit with the check for free ones turned off
+    runs = []
+    with pyse.threads_limit(1):
+        for off in (False, True):
+            if off:
+                monkeypatch.setenv("PYSE_NO_DEFLATE", "1")
+            ev = load(name)
+            ev.command("g 10; r; g 10; r; g 20")
+            steps = []
+            for _ in range(3):
+                ev.command("hessian")
+                steps.append(ev.vertices)
+            runs.append(steps)
+    for a, b in zip(*runs):
+        assert np.array_equal(a, b)
