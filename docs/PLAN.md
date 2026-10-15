@@ -7,12 +7,14 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 
 ## Resume here (2026-10-13)
 
-**Released:** 0.7.4 (2026-10-12, tag v0.7.4; wheels as workflow artifacts, not on PyPI).
+**Released:** 0.7.5 (2026-10-15, tag v0.7.5) and 0.7.4 (2026-10-12, tag v0.7.4); wheels as
+workflow artifacts, not on PyPI.
 What each release changed is in CHANGELOG.md; how we got there (measurements, dropped
 experiments) in git: `git log -p docs/PLAN.md`, and the 0.7.0 condensation at
 `git show e8f7434:docs/PLAN.md`.
 
-**On main since 0.7.4** (CHANGELOG "Unreleased"): `continuation()`'s stop warning prints
+**In 0.7.5** (CHANGELOG 0.7.5; besides Python 3.11-3.14, the parallel quadratic model and
+the Newton fix for free surfaces below): `continuation()`'s stop warning prints
 plain numbers (NumPy 2 printed `np.float64(1.4)` and failed the snippet check on the
 v0.7.4 tag; main is green); a short README with a picture (`tools/readme_figure.py`),
 its API tour moved to `docs/tour.md` and the development notes to `docs/development.md`;

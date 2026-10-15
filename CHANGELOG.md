@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.7.5 (2026-10-15)
+
+Python 3.11 to 3.14. Pseudo-arclength continuation through folds (`recipes.arclength`)
+and a predicted start for each `continuation()` step; surfaces in worker processes of
+their own (`Evolver(process=True)`); the quadratic model in parallel, and Newton steps
+that converge on surfaces free to move as a whole. Breaking: `newton()` returns an
+`IterationResult`.
 
 ### Requirements
 
