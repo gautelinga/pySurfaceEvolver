@@ -5,7 +5,7 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
-## Resume here (2026-10-13)
+## Resume here (2026-10-15)
 
 **Released:** 0.7.5 (2026-10-15, tag v0.7.5) and 0.7.4 (2026-10-12, tag v0.7.4); wheels as
 workflow artifacts, not on PyPI.
@@ -38,11 +38,11 @@ crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a 
 (`_put_back`, in `relax()` too) restores them; `_core.multipliers()`/`set_multipliers()`.
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 471 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 480 tests.
 
-Open, for the user to pick (proposed 2026-10-13):
+Open, for the user to pick (proposed 2026-10-13, updated after 0.7.5):
 
-* **PyPI (as 0.7.5):** a publish job in `wheels.yml` on `v*` tags (trusted publishing,
+* **PyPI** (0.7.5 shipped without it): a publish job in `wheels.yml` on `v*` tags (trusted publishing,
   environment `pypi` with the user as reviewer; the user sets up the pending publisher
   on PyPI); Python 3.11-3.14 since 2026-10-15 (3.9/3.10 dropped, cp314 added). The name
   `pysurfaceevolver` was free on 2026-10-12.

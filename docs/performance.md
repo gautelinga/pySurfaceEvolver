@@ -198,7 +198,14 @@ level; with one thread they are reproducible bit for bit. Newton steps keep the
 matrix's sparsity pattern from one step to the next while the topology is unchanged,
 and add entries into it in parallel (`PYSE_NO_PATTERN=1` turns that off).
 `PYSE_NO_FAST_LOOPS=1` switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
-facet corner against Evolver's own topology (CI runs with it).
+facet corner against Evolver's own topology (CI runs with it). Narrower switches, for
+comparing against Evolver's own code: `PYSE_NO_FAST_MESH=1` (serial vertex averaging,
+and serial edge tests in equiangulation), `PYSE_NO_FAST_LAGRANGE=1` (Evolver's own
+area and volume Hessians for Lagrange elements instead of the BLAS ones), and
+`PYSE_NO_DEFLATE=1` (Newton steps keep a free surface's rigid motions: nothing holds a
+body that touches no wall, its Newton system is singular along them, and round-off
+there moves the converged surface and holds the residual up). `PYSE_DUMP_HESSIAN=path`
+writes each Newton matrix to `path` (Matrix Market) and prints its size, factoring time and inertia.
 
 Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.org/)
 (sequential, LDL^T with pivoting, inertia for the Hessian index) when pySE is built
