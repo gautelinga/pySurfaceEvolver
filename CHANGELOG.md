@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- `constraints.cylinder` with its default `gauge="azimuthal"`: on a fibre that isn't
+  vertical, a body's volume had the wetted face's part added instead of taken off
+  (a band of liquid round a fibre along x came out 2x too large in the test; the
+  energy was right). Found while computing drops on crossed fibres.
+
 ## 0.7.5 (2026-10-15)
 
 Python 3.11 to 3.14. Pseudo-arclength continuation through folds (`recipes.arclength`)

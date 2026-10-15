@@ -385,7 +385,11 @@ def cylinder(point, direction, radius: float, contact_angle: Optional[float] = N
     if gauge == "azimuthal":
         dphi = [f"({_n(e2[i])}*{a} - {_n(e1[i])}*{b})/{_n(R*R)}" for i in range(3)]
         energy = [f"{k.times(R)}*{ell}*{dp}" for dp in dphi] if k else None
-        q = f"(-{rnz}*({ell}*({_n(p[2])} + {rnz}) + {_n(d[2]/2)}*{ell}^2))"
+        # along the contact line (oriented by the facets) the integral of
+        # R l dphi is minus the wetted area, as for the energy: so Q is the
+        # integral over l of +z R n_z (a horizontal fibre's volume came out
+        # with the wetted face's part added instead of taken off)
+        q = f"({rnz}*({ell}*({_n(p[2])} + {rnz}) + {_n(d[2]/2)}*{ell}^2))"
         content = [f"{q}*{dp}" for dp in dphi] if has_content else None
     else:
         phi = f"atan2({b}, {a})"

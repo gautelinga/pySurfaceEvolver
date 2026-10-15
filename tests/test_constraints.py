@@ -174,6 +174,29 @@ def test_vertical_fibre_converges_to_exact():
     assert errors[-1][0] < errors[-2][0]/3
 
 
+@pytest.mark.parametrize("case", ["along x", "tilted", "turned"])
+def test_drop_round_a_fibre_has_its_volume_however_the_fibre_points(case):
+    # a band of liquid round a fibre: on a vertical fibre the wetted face
+    # adds nothing to z dx dy, turned it does, with the sign that keeps the
+    # volume (it was added instead of taken off)
+    from pysurfaceevolver import shapes
+    z = np.linspace(-1, 1, 9)
+    drop = shapes.revolve(np.sqrt(0.16 + 0.5*(1 - z*z)), z, nt=96)
+    rims = drop.rims["bottom"] + drop.rims["top"]
+    q, t = {"along x": (np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]]), np.zeros(3)),
+            "tilted": (_rigid("turned")[0], np.zeros(3)),
+            "turned": _rigid("turned")}[case]
+    volumes = []
+    for Q, shift in ((np.eye(3), np.zeros(3)), (q, t)):
+        ev = pyse.Evolver()
+        ev.load_arrays(drop.vertices @ Q.T + shift, drop.faces,
+                       constraints={"fibre": C.cylinder(shift, Q @ [0, 0, 1], 0.4,
+                                                        contact_angle=THETA)},
+                       vertex_constraints={"fibre": rims}, bodies=[pyse.Body(volume=None)])
+        volumes.append(ev.bodies().volume[0])
+    assert volumes[1] == pytest.approx(volumes[0], rel=1e-3)
+
+
 def _rigid(case):
     """A rigid motion x -> Q x + t."""
     if case == "identity":
