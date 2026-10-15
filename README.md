@@ -3,7 +3,7 @@
 [![tests](https://github.com/gautelinga/pySurfaceEvolver/actions/workflows/tests.yml/badge.svg)](https://github.com/gautelinga/pySurfaceEvolver/actions/workflows/tests.yml)
 [![docs](https://github.com/gautelinga/pySurfaceEvolver/actions/workflows/docs.yml/badge.svg)](https://gautelinga.github.io/pySurfaceEvolver/)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![python 3.11-3.13](https://img.shields.io/badge/python-3.11--3.13-blue.svg)
+![python 3.11-3.14](https://img.shields.io/badge/python-3.11--3.14-blue.svg)
 
 Soap films, bubbles, drops on walls, liquid bridges and solder joints from Python.
 pySurfaceEvolver runs Ken Brakke's

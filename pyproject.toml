@@ -42,7 +42,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.cibuildwheel]
-build = "cp311-* cp312-* cp313-*"
+build = "cp311-* cp312-* cp313-* cp314-*"
 # glibc (manylinux) only for now
 skip = "*-musllinux_*"
 # PyVista (VTK) is left out to keep wheel tests light; test_viz.py skips

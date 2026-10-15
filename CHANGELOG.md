@@ -4,9 +4,9 @@
 
 ### Requirements
 
-- Python 3.11 or later: 3.9 and 3.10 are past their end of life (October 2025 and
-  October 2026), and NumPy and SciPy releases have left them. No wheels for them, and
-  CI tests 3.11, 3.12 and 3.13.
+- Python 3.11 to 3.14: 3.9 and 3.10 are past their end of life (October 2025 and
+  October 2026), and NumPy and SciPy releases have left them; 3.14 is new (wheels and
+  CI). Wheels and CI cover 3.11, 3.12, 3.13 and 3.14.
 
 ### API
 
