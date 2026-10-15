@@ -9,6 +9,7 @@
 /* Three corner vertices per facet ordinal (tail order), or NULL when the
    cache doesn't apply (it is only built for soapfilm surfaces). */
 vertex_id *fl_facet_corners(void);
+vertex_id *fl_facet_ctrl(void);   /* quadratic: 6 control points per facet */
 /* Vertices or edges in FOR_ALL order (cached); *n gets their number. */
 element_id *fl_element_list(int type, long *n);
 /* Facets in FOR_ALL_FACETS order; *n gets their number. */

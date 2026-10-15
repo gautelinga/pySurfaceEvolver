@@ -518,7 +518,7 @@ REAL q_facet_tension_q(struct qinfo *f_info)
       proc_total_area[GET_THREAD_ID] += value;
      else
 #endif
-     binary_tree_add(web.total_area_addends,value);
+     fl_total_area_add(value);  /* thread-safe; fastloops.h (pySE) */
   }
   if ( METH_INSTANCE(f_info->method)->flags & USE_DENSITY )
       value *= get_facet_density(f_info->id);

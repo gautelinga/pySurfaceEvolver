@@ -182,6 +182,79 @@ def test_lagrange_newton_steps_match_original():
             assert index == index0, mode
 
 
+QUADRATIC_EVALUATE = r"""
+import json, sys, warnings
+warnings.simplefilter("ignore")
+from pysurfaceevolver import Evolver
+out = {}
+for path in sys.argv[2:]:
+    ev = Evolver(path)
+    ev.command(sys.argv[1])
+    residual = ev.residual()   # vertex normals (shape directions)
+    ev.command("m 0; g 1")   # forces, without moving
+    out[path] = dict(facets=ev.counts["facets"], energy=ev.eval("total_energy"),
+                     residual=residual,
+                     area=ev.eval("total_area"),
+                     volume=[float(v) for v in ev.bodies().volume],
+                     force=[ev.values("vertex", f"v_force[{i}]").tolist() for i in (1, 2, 3)])
+print(json.dumps(out))
+"""
+
+
+@pytest.mark.parametrize("setup", ["quadratic", "quadratic; convert_to_quantities"])
+def test_quadratic_single_evaluation_matches_original(dumps, setup):
+    """The quadratic model's facet loops: Evolver's own facet functions
+    before a Hessian, named quantities (src/fasthess.c) after one."""
+    results = {mode: run(QUADRATIC_EVALUATE, [setup, *dumps], env)
+               for mode, env in MODES.items() if mode != "8 threads"}
+    original = results.pop("original")
+    for path in dumps:
+        ref = original[path]
+        fmax = max(abs(f) for comp in ref["force"] for f in comp)
+        for mode, result in results.items():
+            got = result[path]
+            assert rel(got["energy"], ref["energy"]) < 1e-12, (path, mode)
+            assert rel(got["area"], ref["area"]) < 1e-12, (path, mode)
+            assert rel(got["residual"], ref["residual"]) < 1e-9, (path, mode)
+            for v, w in zip(got["volume"], ref["volume"]):
+                assert rel(v, w) < 1e-12, (path, mode)
+            for comp, refcomp in zip(got["force"], ref["force"]):
+                assert max(abs(f - g) for f, g in zip(comp, refcomp)) < 1e-12 * fmax, (path, mode)
+
+
+QUADRATIC = r"""
+import json, sys, warnings
+warnings.simplefilter("ignore")
+from pysurfaceevolver import Evolver
+out = {}
+for name in sys.argv[1:]:
+    ev = Evolver(name)
+    ev.command("g 5; r; g 5; r; g 5; r; g 10; quadratic; g 10")
+    row = [ev.eval("total_energy"), [float(v) for v in ev.bodies().volume]]
+    ev.command("hessian; hessian; hessian")
+    out[name] = row + [ev.eval("total_energy"), [float(v) for v in ev.bodies().volume],
+                       [float(v) for v in ev.bodies().pressure],
+                       ev.command("eigenprobe 0").strip()]
+print(json.dumps(out))
+"""
+
+
+def test_quadratic_iterations_and_newton_steps_match_original():
+    names = ["cube.fe", "mound.fe"]
+    original = run(QUADRATIC, names, MODES["original"])
+    for mode in ("1 thread", "4 threads"):
+        got = run(QUADRATIC, names, MODES[mode])
+        for name in names:
+            (e, vols, e1, vols1, pressures, index) = got[name]
+            (e0, vols0, e10, vols10, pressures0, index0) = original[name]
+            assert rel(e, e0) < 1e-10 and rel(e1, e10) < 1e-10, (name, mode)
+            for v, w in zip(vols + vols1, vols0 + vols10):
+                assert rel(v, w) < 1e-10, (name, mode)
+            for p, q in zip(pressures, pressures0):
+                assert abs(p - q) < 1e-8 * max(abs(q), 1.0), (name, mode)
+            assert index == index0, (name, mode)
+
+
 def test_reproducible_for_a_thread_count(dumps):
     env = {"OMP_NUM_THREADS": "4"}
     assert run(EVALUATE, dumps, env) == run(EVALUATE, dumps, env)

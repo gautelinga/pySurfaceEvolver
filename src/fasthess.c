@@ -12,8 +12,9 @@
  * then the additions are made serially in facet order. The matrix, right
  * side and method values are the same as calc_quant_hess() makes.
  *
- * Only for methods checked to be thread-safe (the Lagrange model's facet
- * area and volume methods); anything else runs calc_quant_hess() as is.
+ * Only for methods checked to be thread-safe (see safe_methods: in the
+ * quadratic model only the facet area and volume methods and vertex
+ * integrals); anything else runs calc_quant_hess() as is.
  */
 
 #include "include.h"
@@ -173,22 +174,23 @@ static int expr_ok(struct expnode *e)
 /* Methods checked to be thread-safe for the linear and Lagrange models:
    their setup, value, gradient and Hessian write only their qinfo (the area
    methods' total area goes through fl_total_area_add()). Integral methods
-   also need read-only integrands. */
+   also need read-only integrands. `quadratic`: their quadratic-model
+   versions checked too. */
 static const struct
 { REAL (*value)(QINFO), (*grad)(QINFO), (*hess)(QINFO);
-  int integrand;
+  int integrand, quadratic;
 } safe_methods[] = {
-  { q_facet_tension_value, q_facet_tension_gradient, q_facet_tension_hessian, 0 },
-  { q_facet_volume, q_facet_volume_grad, q_facet_volume_hess, 0 },
-  { NULL, NULL, lagrange_facet_volume_hess, 0 },
-  { facet_scalar_integral, facet_scalar_integral_grad, facet_scalar_integral_hess, 1 },
-  { facet_vector_integral, facet_vector_integral_grad, facet_vector_integral_hess, 1 },
-  { facet_2form_integral, facet_2form_integral_grad, facet_2form_integral_hess, 1 },
-  { facet_general_value, facet_general_grad, facet_general_hess, 1 },
-  { edge_scalar_integral, edge_scalar_integral_grad, edge_scalar_integral_hess, 1 },
-  { edge_vector_integral, edge_vector_integral_grad, edge_vector_integral_hess, 1 },
-  { edge_general_value, edge_general_grad, edge_general_hess, 1 },
-  { vertex_scalar_integral, vertex_scalar_integral_grad, vertex_scalar_integral_hess, 1 },
+  { q_facet_tension_value, q_facet_tension_gradient, q_facet_tension_hessian, 0, 1 },
+  { q_facet_volume, q_facet_volume_grad, q_facet_volume_hess, 0, 1 },
+  { NULL, NULL, lagrange_facet_volume_hess, 0, 0 },
+  { facet_scalar_integral, facet_scalar_integral_grad, facet_scalar_integral_hess, 1, 0 },
+  { facet_vector_integral, facet_vector_integral_grad, facet_vector_integral_hess, 1, 0 },
+  { facet_2form_integral, facet_2form_integral_grad, facet_2form_integral_hess, 1, 0 },
+  { facet_general_value, facet_general_grad, facet_general_hess, 1, 0 },
+  { edge_scalar_integral, edge_scalar_integral_grad, edge_scalar_integral_hess, 1, 0 },
+  { edge_vector_integral, edge_vector_integral_grad, edge_vector_integral_hess, 1, 0 },
+  { edge_general_value, edge_general_grad, edge_general_hess, 1, 0 },
+  { vertex_scalar_integral, vertex_scalar_integral_grad, vertex_scalar_integral_hess, 1, 1 },
 };
 
 enum { PASS_VALUE, PASS_GRAD, PASS_HESS };
@@ -206,6 +208,7 @@ static int method_safe(struct method_instance *mi, int pass)
     REAL (*g)(QINFO) = pass == PASS_VALUE ? gm->value
                      : pass == PASS_GRAD ? gm->gradient : gm->hessian;
     if ( !f || f != g ) continue;
+    if ( web.modeltype == QUADRATIC && !safe_methods[k].quadratic ) return 0;
     if ( safe_methods[k].integrand )
       for ( e = 0 ; e < MAXMEXPR ; e++ )
         if ( !expr_ok(mi->expr[e]) ) return 0;
@@ -218,7 +221,8 @@ static int method_safe(struct method_instance *mi, int pass)
 static int quant_ok(int type, int pass)
 { int mk;
   if ( fl_disabled() || threadflag || nprocs > 1
-       || (web.modeltype != LAGRANGE && web.modeltype != LINEAR)
+       || (web.modeltype != LAGRANGE && web.modeltype != LINEAR
+           && web.modeltype != QUADRATIC)
        || SDIM != 3 || web.dimension != 2 || web.representation != SOAPFILM
        || compound_quant_list_head >= 0 || (sym_flags & NEED_FORM_UNWRAPPING)
        || web.symmetry_flag || dirichlet_flag || sobolev_flag || web.torus_flag )
@@ -258,13 +262,36 @@ static int element_needs(int type, struct element *e_ptr, int global_needs, int 
 
 struct quant_ctx { struct qinfo *qi; int type, global_needs, meth_offset, mode; };
 
+/* q_facet_setup_q() from the facet's cached control points (c: six) */
+static void quadratic_setup(struct linsys *S, struct qinfo *q, vertex_id *c, int needs)
+{ int i, j, m;
+  q->S = S;
+  q->vcount = FACET_CTRL;
+  for ( i = 0 ; i < FACET_CTRL ; i++ )
+  { REAL *p = get_coord(c[i]);
+    q->v[i] = c[i];
+    q->x[i] = q->xx[i];
+    for ( j = 0 ; j < SDIM ; j++ ) q->xx[i][j] = p[j];
+  }
+  for ( m = 0 ; m < gauss2D_num ; m++ )
+    fl_mat_mult(gpolypartial[m],q->x,q->sides[m],web.dimension,FACET_CTRL,SDIM);
+  if ( needs & NEED_GAUSS )
+    fl_mat_mult(gpoly,q->x,q->gauss_pt,gauss2D_num,FACET_CTRL,SDIM);
+}
+
 /* q_setup[type]() for an element, from the facet's cached corners where
    q_facet_setup() would walk the facet's facet-edges for them: linear
    soapfilm facets without symmetry wraps, needing at most sides, normal and
-   Gauss points. The same vertices in the same (tail) order and the same
-   arithmetic as q_facet_setup(). */
+   Gauss points (quadratic ones: their control points, any needs). The same
+   vertices in the same (tail) order and the same arithmetic as
+   q_facet_setup(). */
 static void element_setup(struct linsys *S, struct qinfo *q, int type, vertex_id *c, int needs)
 { int i, j;
+  if ( type == FACET && c && web.modeltype == QUADRATIC && web.representation == SOAPFILM
+       && !web.symmetry_flag && !inverted(q->id) )
+  { quadratic_setup(S,q,c,needs);
+    return;
+  }
   if ( type != FACET || !c || web.modeltype != LINEAR || web.representation != SOAPFILM
        || web.symmetry_flag || inverted(q->id)
        || (needs & ALL_NEEDS & ~(NEED_SIDE|NEED_NORMAL|NEED_GAUSS)) )
@@ -795,6 +822,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   static struct hbuf serial;   /* elements redone serially */
   element_id *list;
   vertex_id *corners = NULL;
+  int stride = 3;   /* corners per facet */
   long n, start, chunk, k;
   long *fstart;   /* per chunk element: start, end in its thread's buffer */
   int *fthread;
@@ -805,6 +833,10 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   { corners = fl_facet_corners();
     list = fl_facet_list(&n);
     if ( !corners ) return 0;
+    if ( web.modeltype == QUADRATIC )   /* the control points instead */
+    { if ( !(corners = fl_facet_ctrl()) ) return 0;
+      stride = 6;
+    }
   }
   else list = fl_element_list(type,&n);
   if ( !list || n == 0 ) return 0;
@@ -823,7 +855,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
       direct = 0;
   }
 
-#define CORNERS(id) (corners ? corners + 3*ordinal(id) : NULL)
+#define CORNERS(id) (corners ? corners + stride*ordinal(id) : NULL)
   for ( start = 0 ; start < n && ok ; start += chunk )
   { long end = start + chunk < n ? start + chunk : n;
     for ( t = 0 ; t < threads ; t++ ) { buf[t].n = 0; buf[t].failed = 0; }

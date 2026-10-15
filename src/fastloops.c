@@ -40,10 +40,14 @@ static long fv_list_count = 0;
 static long fv_cache_stamp = -1;
 static long fv_cache_count = -1;
 static long fv_cache_maxord = -1;
-static vertex_id *fv_verts = NULL;     /* corner vertices by ordinal, or NULLID */
+static vertex_id *fv_verts = NULL;     /* corner vertices by ordinal, or NULLID
+                                          (and edge midpoints, quadratic model) */
 static long fv_verts_size = 0;
 static long fv_verts_count = 0;
 static int fv_check = -1;
+static vertex_id *fq_cache = NULL;      /* quadratic model: 6 per facet ordinal */
+static long fq_cache_size = 0;
+static int fq_valid = 0;                /* fq_cache built with fv_cache */
 
 /* PYSE_NO_FAST_LOOPS turns the parallel loops off (the original loops run),
    for comparing results. */
@@ -78,7 +82,12 @@ static int cache_valid(void)
 static int build_cache(void)
 { facet_id f_id;
   long k = 0;
+  int quad = web.modeltype == QUADRATIC;
+  fq_valid = 0;
   if ( web.representation != SOAPFILM ) return 0;
+  if ( quad && !ensure_size((void**)&fq_cache,&fq_cache_size,
+                            6*((long)web.skel[FACET].max_ord + 1),sizeof(vertex_id)) )
+    return 0;
   if ( !ensure_size((void**)&fv_cache,&fv_cache_size,
                     3*((long)web.skel[FACET].max_ord + 1),sizeof(vertex_id))
        || !ensure_size((void**)&fv_list,&fv_list_size,
@@ -98,6 +107,17 @@ static int build_cache(void)
     fv_verts[ordinal(c[0])] = c[0];
     fv_verts[ordinal(c[1])] = c[1];
     fv_verts[ordinal(c[2])] = c[2];
+    if ( quad )   /* the control points in q_facet_setup_q()'s order */
+    { vertex_id *q = fq_cache + 6*ordinal(f_id);
+      int i;
+      fe = get_facet_fe(f_id);
+      for ( i = 0 ; i < FACET_EDGES ; i++ )
+      { q[2*i] = get_fe_tailv(fe);
+        q[2*i+1] = get_fe_midv(fe);
+        fv_verts[ordinal(q[2*i+1])] = q[2*i+1];
+        fe = get_next_edge(fe);
+      }
+    }
     if ( k < fv_list_size ) fv_list[k] = f_id;
     k++;
   }
@@ -105,12 +125,41 @@ static int build_cache(void)
   fv_cache_stamp = top_timestamp;
   fv_cache_count = web.skel[FACET].count;
   fv_cache_maxord = (long)web.skel[FACET].max_ord;
+  fq_valid = quad;
   return k == web.skel[FACET].count;
 }
 
 vertex_id *fl_facet_corners(void)
 { if ( cache_valid() ) return fv_cache;
   return build_cache() ? fv_cache : NULL;
+}
+
+/* Quadratic model: each facet's six control points (corner, edge midpoint,
+   ... in facet-edge order, as q_facet_setup_q() lists them), by facet
+   ordinal; NULL otherwise. */
+static void check_ctrl(facet_id *list, long n, vertex_id *ctrl);
+
+vertex_id *fl_facet_ctrl(void)
+{ if ( web.modeltype != QUADRATIC || !fl_facet_corners() || !fq_valid ) return NULL;
+  if ( fl_check() ) check_ctrl(fv_list,fv_list_count,fq_cache);
+  return fq_cache;
+}
+
+/* Verify the cached control points against the facet-edges. */
+static void check_ctrl(facet_id *list, long n, vertex_id *ctrl)
+{ long k;
+  for ( k = 0 ; k < n ; k++ )
+  { facetedge_id fe = get_facet_fe(list[k]);
+    vertex_id *q = ctrl + 6*ordinal(list[k]);
+    int i;
+    for ( i = 0 ; i < FACET_EDGES ; i++ )
+    { if ( !equal_id(q[2*i],get_fe_tailv(fe)) || !equal_id(q[2*i+1],get_fe_midv(fe)) )
+      { fprintf(stderr,"facet control point cache mismatch at position %ld\n",k);
+        abort();
+      }
+      fe = get_next_edge(fe);
+    }
+  }
 }
 
 facet_id *fl_facet_list(long *n)
@@ -301,6 +350,81 @@ static void csum_add(csum *a, double x)
 }
 
 /**************************************************************************
+ * Quadratic model
+ *
+ * The quadratic facet loops take a facet's six control points from
+ * fl_facet_ctrl(). facet_volume_q()'s volume of a facet,
+ *   sum over a, b, c of vcoeff[a][b][c] z_a (x_b y_c - y_b x_c),
+ * is here summed over pairs b < c with w[a][b][c] = vcoeff[a][b][c] -
+ * vcoeff[a][c][b], and film_grad_q()'s gradient likewise: about 90
+ * products where those take 216 per point (the same sums in another
+ * order: equal to round-off).
+ */
+
+static REAL qw[FACET_CTRL][FACET_CTRL][FACET_CTRL];   /* w[a][b][c] */
+
+/* w for the current vcoeff (set when the model is) */
+static void quad_terms(void)
+{ int a, b, c;
+  for ( a = 0 ; a < FACET_CTRL ; a++ )
+    for ( b = 0 ; b < FACET_CTRL ; b++ )
+      for ( c = 0 ; c < FACET_CTRL ; c++ )
+        qw[a][b][c] = vcoeff[a][b][c] - vcoeff[a][c][b];
+}
+
+/* x_b y_c - y_b x_c for b < c */
+static void quad_pairs(REAL **x, REAL p[FACET_CTRL][FACET_CTRL])
+{ int b, c;
+  for ( b = 0 ; b < FACET_CTRL ; b++ )
+    for ( c = b+1 ; c < FACET_CTRL ; c++ )
+      p[b][c] = x[b][0]*x[c][1] - x[b][1]*x[c][0];
+}
+
+/* the volume's z gradient at control point a: w[a][b][c] p[b][c] over b < c */
+static REAL quad_zgrad(int a, REAL p[FACET_CTRL][FACET_CTRL])
+{ REAL sum = 0.0;
+  int b, c;
+  for ( b = 0 ; b < FACET_CTRL ; b++ )
+    for ( c = b+1 ; c < FACET_CTRL ; c++ )
+      sum += qw[a][b][c]*p[b][c];
+  return sum;
+}
+
+/* facet_volume_q()'s volume of the facet with control points x */
+static REAL quad_volume(REAL **x)
+{ REAL p[FACET_CTRL][FACET_CTRL], vol = 0.0;
+  int a;
+  quad_pairs(x,p);
+  for ( a = 0 ; a < FACET_CTRL ; a++ )
+    vol += x[a][2]*quad_zgrad(a,p);
+  return vol;
+}
+
+/* film_grad_q()'s gradient of a facet's volume at its control points
+   (g: 3 per point): the x component w[a][i][c] z_a y_c summed over a and
+   c, the y component minus the same with x_c */
+static void quad_volume_grad(REAL **x, double *g)
+{ REAL p[FACET_CTRL][FACET_CTRL];
+  int i, a, c;
+  quad_pairs(x,p);
+  for ( i = 0 ; i < FACET_CTRL ; i++ )
+  { REAL gx = 0.0, gy = 0.0;
+    for ( a = 0 ; a < FACET_CTRL ; a++ )
+    { REAL sx = 0.0, sy = 0.0;
+      for ( c = 0 ; c < FACET_CTRL ; c++ )
+      { sx += qw[a][i][c]*x[c][0];
+        sy += qw[a][i][c]*x[c][1];
+      }
+      gx += x[a][2]*sy;
+      gy -= x[a][2]*sx;
+    }
+    g[3*i] = gx;
+    g[3*i+1] = gy;
+    g[3*i+2] = quad_zgrad(i,p);
+  }
+}
+
+/**************************************************************************
  * Facet volumes
  */
 
@@ -317,15 +441,19 @@ static int fl_facet_volumes_impl(void)
   body_id *bodies;
   int threads, t;
 
+  int quad = web.modeltype == QUADRATIC;
+
   if ( fl_disabled() ) return 0;
   if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
-       || web.symmetric_content || web.modeltype != LINEAR || SDIM != 3
-       || calc_facet_volume != facet_volume_l || threadflag )
+       || web.symmetric_content || SDIM != 3 || threadflag
+       || !((web.modeltype == LINEAR && calc_facet_volume == facet_volume_l)
+            || (quad && calc_facet_volume == facet_volume_q)) )
     return 0;
-  corners = fl_facet_corners();
+  corners = quad ? fl_facet_ctrl() : fl_facet_corners();
   list = fl_facet_list(&n);
   if ( !corners || !list ) return 0;
   if ( fl_check() ) check_list(list,n);
+  if ( quad ) quad_terms();
   bodies = facet_bodies(list,n);
   if ( !bodies ) return 0;
   threads = loop_threads(n);
@@ -350,14 +478,23 @@ static int fl_facet_volumes_impl(void)
 #endif
     for ( k = 0 ; k < n ; k++ )
     { facet_id f_id = list[k];
-      vertex_id *c = corners + 3*ordinal(f_id);
-      REAL *x0, *x1, *x2, vol;
+      REAL vol;
       body_id b0 = bodies[2*k], b1 = bodies[2*k+1];
       if ( !valid_id(b0) && !valid_id(b1) ) continue;
-      x0 = get_coord(c[0]); x1 = get_coord(c[1]); x2 = get_coord(c[2]);
-      /* as facet_volume_l() */
-      vol = (x0[2]+x1[2]+x2[2])/6*
-         ((x1[0]-x0[0])*(x2[1]-x0[1])-(x1[1]-x0[1])*(x2[0]-x0[0]));
+      if ( quad )
+      { vertex_id *c = corners + 6*ordinal(f_id);
+        REAL *x[FACET_CTRL];
+        int i;
+        for ( i = 0 ; i < FACET_CTRL ; i++ ) x[i] = get_coord(c[i]);
+        vol = quad_volume(x);
+      }
+      else
+      { vertex_id *c = corners + 3*ordinal(f_id);
+        REAL *x0 = get_coord(c[0]), *x1 = get_coord(c[1]), *x2 = get_coord(c[2]);
+        /* as facet_volume_l() */
+        vol = (x0[2]+x1[2]+x2[2])/6*
+           ((x1[0]-x0[0])*(x2[1]-x0[1])-(x1[1]-x0[1])*(x2[0]-x0[0]));
+      }
       if ( valid_id(b0) )
       { csum_add(sums + ordinal(b0),vol);
         abss[ordinal(b0)] += fabs(vol);
@@ -392,6 +529,87 @@ static long energy_sums_size = 0;
 /* SDIM_dot for SDIM 3, summed in the same order as dot() */
 #define DOT3(a,b) (((a)[0]*(b)[0] + (a)[1]*(b)[1]) + (a)[2]*(b)[2])
 
+/* facet_energy_q(f_id,ALL_ENERGIES) for all facets: areas stored, the
+   area and energy sums per thread (Evolver adds the energies to
+   web.total_energy directly, so the merge does too) */
+static int quad_facet_energies(void)
+{ long n;
+  facet_id *list;
+  vertex_id *ctrl;
+  int threads, t;
+  REAL grav = web.grav_const;
+  int gravflag = web.gravflag;
+
+  if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
+       || SDIM != 3 || web.metric_flag || web.wulff_flag
+       || calc_facet_energy != facet_energy_q || threadflag
+       || ((square_curvature_flag | mean_curv_int_flag) & EVALUATE) )
+    return 0;
+  ctrl = fl_facet_ctrl();
+  list = fl_facet_list(&n);
+  if ( !ctrl || !list ) return 0;
+  if ( fl_check() ) check_list(list,n);
+  threads = loop_threads(n);
+  if ( !ensure_size((void**)&energy_sums,&energy_sums_size,2*threads,sizeof(csum)) )
+    return 0;
+  memset(energy_sums,0,2*threads*sizeof(csum));
+
+#ifdef _OPENMP
+  #pragma omp parallel num_threads(threads)
+#endif
+  { csum area_sum = {0.0,0.0}, energy_sum = {0.0,0.0};
+    long k;
+#ifdef _OPENMP
+    #pragma omp for schedule(static)
+#endif
+    for ( k = 0 ; k < n ; k++ )
+    { facet_id f_id = list[k];
+      vertex_id *c = ctrl + 6*ordinal(f_id);
+      REAL *x[FACET_CTRL], normal[MAXCOORD], energy = 0.0, u = 0.0, norm, z;
+      MAT2D(tang,MAXCOORD,MAXCOORD);
+      int grav_here = gravflag && !(get_fattr(f_id) & NONCONTENT);
+      int i, j;
+      for ( i = 0 ; i < FACET_CTRL ; i++ ) x[i] = get_coord(c[i]);
+      for ( i = 0 ; i < gauss2D_num ; i++ )
+      { fl_mat_mult(gpolypartial[i],x,tang,web.dimension,ctrl_num,SDIM);
+        cross_prod(tang[0],tang[1],normal);
+        norm = sqrt(SDIM_dot(normal,normal));
+        energy += gauss2Dwt[i]*norm/2;
+        if ( grav_here )
+        { z = 0.0;
+          for ( j = 0 ; j < FACET_CTRL ; j++ )
+            z += gpoly[i][j]*x[j][2];
+          u += 0.5*z*z*gauss2Dwt[i]/2*(tang[0][0]*tang[1][1] -
+                                          tang[0][1]*tang[1][0]);
+        }
+      }
+      set_facet_area(f_id,energy);
+      csum_add(&area_sum,energy);
+      energy *= get_facet_density(f_id);
+      if ( grav_here )
+      { body_id b_id = get_facet_body(f_id);
+        if ( valid_id(b_id) )
+          energy += u*get_body_density(b_id)*grav;
+        b_id = get_facet_body(facet_inverse(f_id));
+        if ( valid_id(b_id) )
+          energy -= u*get_body_density(b_id)*grav;
+      }
+      csum_add(&energy_sum,energy);
+    }
+    energy_sums[2*THREAD_NUM()] = area_sum;
+    energy_sums[2*THREAD_NUM()+1] = energy_sum;
+  }
+
+  /* merge in thread order */
+  for ( t = 0 ; t < threads ; t++ )
+  { REAL a = energy_sums[2*t].s + energy_sums[2*t].c;
+    REAL e = energy_sums[2*t+1].s + energy_sums[2*t+1].c;
+    if ( a != 0.0 ) binary_tree_add(web.total_area_addends,a);
+    web.total_energy = web.total_energy + e;
+  }
+  return 1;
+}
+
 static int fl_facet_energies_impl(void)
 { long n;
   facet_id *list;
@@ -401,6 +619,7 @@ static int fl_facet_energies_impl(void)
   int gravflag = web.gravflag;
 
   if ( fl_disabled() ) return 0;
+  if ( web.modeltype == QUADRATIC ) return quad_facet_energies();
   if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
        || web.modeltype != LINEAR || SDIM != 3 || web.metric_flag
        || web.wulff_flag || calc_facet_energy != facet_energy_l || threadflag
@@ -534,6 +753,115 @@ static long force_sums_size = 0;
 static unsigned char *wee_buf = NULL;
 static long wee_buf_size = 0;
 
+/* facet_force_q() for all facets: areas stored (density times area, as
+   there), forces added to the vertices via per-thread arrays */
+static int quad_facet_forces(void)
+{ long n, nv;
+  facet_id *list;
+  vertex_id *ctrl;
+  int threads;
+  int gravflag = web.gravflag;
+
+  if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
+       || SDIM != 3 || web.metric_flag || web.wulff_flag
+       || calc_facet_forces != facet_force_q || threadflag || itdebug
+       || ((square_curvature_flag | mean_curv_int_flag) & EVALUATE) )
+    return 0;
+  ctrl = fl_facet_ctrl();
+  list = fl_facet_list(&n);
+  if ( !ctrl || !list ) return 0;
+  if ( fl_check() ) check_list(list,n);
+  threads = loop_threads(n);
+  nv = fv_verts_count;
+  if ( !ensure_size((void**)&force_sums,&force_sums_size,threads*3*nv,sizeof(double)) )
+    return 0;
+
+#ifdef _OPENMP
+  #pragma omp parallel num_threads(threads)
+#endif
+  { double *fsum = force_sums + THREAD_NUM()*3*nv;
+    long kk;
+    memset(fsum,0,3*nv*sizeof(double));
+#ifdef _OPENMP
+    #pragma omp for schedule(static)
+#endif
+    for ( kk = 0 ; kk < n ; kk++ )
+    { facet_id f_id = list[kk];
+      vertex_id *c = ctrl + 6*ordinal(f_id);
+      REAL *x[FACET_CTRL], normal[MAXCOORD], summer[2][MAXCOORD];
+      REAL forces[FACET_CTRL][MAXCOORD];
+      REAL density = get_facet_density(f_id), area = 0.0, gdensity = 0.0, norm, z;
+      MAT2D(tang,MAXCOORD,MAXCOORD);
+      int grav_here = gravflag && !(get_fattr(f_id) & NONCONTENT);
+      int i, j, k, m;
+      memset((char*)forces,0,sizeof(forces));
+      for ( i = 0 ; i < FACET_CTRL ; i++ ) x[i] = get_coord(c[i]);
+      if ( grav_here )
+      { body_id b_id = get_facet_body(f_id);
+        if ( valid_id(b_id) )
+          gdensity += get_body_density(b_id)*web.grav_const;
+        b_id = get_facet_body(facet_inverse(f_id));
+        if ( valid_id(b_id) )
+          gdensity -= get_body_density(b_id)*web.grav_const;
+      }
+      for ( i = 0 ; i < gauss2D_num ; i++ )
+      { fl_mat_mult(gpolypartial[i],x,tang,web.dimension,ctrl_num,SDIM);
+        cross_prod(tang[0],tang[1],normal);
+        norm = sqrt(SDIM_dot(normal,normal));
+        for ( m = 0 ; m < 2 ; m++ )
+          cross_prod(normal,tang[m],summer[m]);
+        area += density*gauss2Dwt[i]/2*norm;
+        for ( k = 0 ; k < FACET_CTRL ; k++ )
+          for ( j = 0 ; j < SDIM ; j++ )
+            forces[k][j] -= density*gauss2Dwt[i]/2/norm*
+               (gpolypartial[i][1][k]*summer[0][j]
+                   - gpolypartial[i][0][k]*summer[1][j]);
+        if ( grav_here )
+        { z = 0.0;
+          for ( j = 0 ; j < FACET_CTRL ; j++ )
+            z += gpoly[i][j]*x[j][2];
+          for ( j = 0 ; j < FACET_CTRL ; j++ )
+          { forces[j][0] -= 0.5*z*z*gauss2Dwt[i]/2*gdensity
+                              *(gpolypartial[i][0][j]*tang[1][1] -
+                                    tang[0][1]*gpolypartial[i][1][j]);
+            forces[j][1] -= 0.5*z*z*gauss2Dwt[i]/2*gdensity
+                              *(tang[0][0]*gpolypartial[i][1][j] -
+                                    gpolypartial[i][0][j]*tang[1][0]);
+            forces[j][2] -= z*gpoly[i][j]*gauss2Dwt[i]/2*gdensity
+                              *(tang[0][0]*tang[1][1] - tang[0][1]*tang[1][0]);
+          }
+        }
+      }
+      for ( i = 0 ; i < FACET_CTRL ; i++ )
+      { double *fv = fsum + 3*ordinal(c[i]);
+        fv[0] += forces[i][0];
+        fv[1] += forces[i][1];
+        fv[2] += forces[i][2];
+      }
+      set_facet_area(f_id,area);
+    }
+
+    /* add the thread sums to the vertices, in thread order */
+#ifdef _OPENMP
+    #pragma omp for schedule(static)
+#endif
+    for ( kk = 0 ; kk < nv ; kk++ )
+    { vertex_id v_id = fv_verts[kk];
+      REAL *force;
+      int t;
+      if ( !valid_id(v_id) ) continue;
+      force = get_force(v_id);
+      for ( t = 0 ; t < THREAD_COUNT() ; t++ )
+      { double *fv = force_sums + (t*nv + kk)*3;
+        force[0] += fv[0];
+        force[1] += fv[1];
+        force[2] += fv[2];
+      }
+    }
+  }
+  return 1;
+}
+
 static int fl_facet_forces_impl(void)
 { long n, nv, k;
   facet_id *list;
@@ -544,6 +872,7 @@ static int fl_facet_forces_impl(void)
   int gravflag = web.gravflag;
 
   if ( fl_disabled() ) return 0;
+  if ( web.modeltype == QUADRATIC ) return quad_facet_forces();
   if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
        || web.modeltype != LINEAR || SDIM != 3 || web.metric_flag
        || web.wulff_flag || calc_facet_forces != facet_force_l || threadflag
@@ -621,43 +950,47 @@ static int fl_facet_forces_impl(void)
  * per-facet terms are computed in parallel, then each vertex (in parallel)
  * builds its chain and sums its facets' terms in facet order. Chains are in
  * the same order and the sums in the same order as film_grad_l(), so the
- * gradients are identical.
+ * gradients are identical. Likewise film_grad_q() for quadratic ones (its
+ * six control points per facet; fixed vertices get gradients too there).
  */
 
 extern int vgrad_attr;  /* fixvol.c */
 
 /* For each vertex ordinal, the volume gradient terms that go to it:
-   vg_start[ord]..vg_start[ord+1] index vg_terms, which holds 3k+j for
-   term j of the k-th facet in the list (term j goes to corner (j+2)%3,
-   as film_grad_l() visits them). Built with the facet corner cache. */
+   vg_start[ord]..vg_start[ord+1] index vg_terms, which holds nt*k+j for
+   term j of the k-th facet in the list (linear, nt = 3: term j goes to
+   corner (j+2)%3, as film_grad_l() visits them; quadratic, nt = 6: to
+   control point j). Built with the facet corner cache. */
 static long *vg_start = NULL;
 static long vg_start_size = 0;
 static long *vg_terms = NULL;
 static long vg_terms_size = 0;
 static long vg_stamp = -1;
 static long vg_count = -1;
+static int vg_nt = -1;
 
-static int build_vertex_terms(facet_id *list, vertex_id *corners, long n, long nv)
+static int build_vertex_terms(facet_id *list, vertex_id *corners, long n, long nv, int nt)
 { long k, v;
   int j;
   if ( !ensure_size((void**)&vg_start,&vg_start_size,nv+1,sizeof(long))
-       || !ensure_size((void**)&vg_terms,&vg_terms_size,3*n,sizeof(long)) )
+       || !ensure_size((void**)&vg_terms,&vg_terms_size,nt*n,sizeof(long)) )
     return 0;
   for ( v = 0 ; v <= nv ; v++ ) vg_start[v] = 0;
   for ( k = 0 ; k < n ; k++ )
-  { vertex_id *c = corners + 3*ordinal(list[k]);
-    for ( j = 0 ; j < 3 ; j++ ) vg_start[ordinal(c[j])+1]++;
+  { vertex_id *c = corners + nt*ordinal(list[k]);
+    for ( j = 0 ; j < nt ; j++ ) vg_start[ordinal(c[j])+1]++;
   }
   for ( v = 0 ; v < nv ; v++ ) vg_start[v+1] += vg_start[v];
   for ( k = 0 ; k < n ; k++ )
-  { vertex_id *c = corners + 3*ordinal(list[k]);
-    for ( j = 0 ; j < 3 ; j++ )
-      vg_terms[vg_start[ordinal(c[(j+2)%3])]++] = 3*k + j;
+  { vertex_id *c = corners + nt*ordinal(list[k]);
+    for ( j = 0 ; j < nt ; j++ )
+      vg_terms[vg_start[ordinal(c[nt == 3 ? (j+2)%3 : j])]++] = nt*k + j;
   }
   for ( v = nv ; v > 0 ; v-- ) vg_start[v] = vg_start[v-1];
   vg_start[0] = 0;
   vg_stamp = fv_cache_stamp;
   vg_count = n;
+  vg_nt = nt;
   return 1;
 }
 
@@ -680,46 +1013,56 @@ static int fl_film_grad_impl(void)
   facet_id *list;
   vertex_id *corners;
   int threads, overflow = 0;
+  int quad = web.modeltype == QUADRATIC, nt = quad ? 6 : 3;
 
   if ( fl_disabled() ) return 0;
   if ( web.representation != SOAPFILM || web.torus_flag || web.symmetry_flag
-       || web.symmetric_content || web.modeltype != LINEAR || SDIM != 3
-       || film_grad != film_grad_l || threadflag || one_sided_present )
+       || web.symmetric_content || SDIM != 3 || threadflag || one_sided_present
+       || !((web.modeltype == LINEAR && film_grad == film_grad_l)
+            || (quad && film_grad == film_grad_q)) )
     return 0;
-  corners = fl_facet_corners();
+  corners = quad ? fl_facet_ctrl() : fl_facet_corners();
   list = fl_facet_list(&n);
   if ( !corners || !list || n == 0 ) return 0;
   if ( fl_check() ) check_list(list,n);
+  if ( quad ) quad_terms();
   nv = fv_verts_count;
-  if ( vg_stamp != fv_cache_stamp || vg_count != n || vg_start_size < nv+1 )
-    if ( !build_vertex_terms(list,corners,n,nv) ) return 0;
-  if ( !ensure_size((void**)&vg_grad,&vg_grad_size,9*n,sizeof(double))
+  if ( vg_stamp != fv_cache_stamp || vg_count != n || vg_nt != nt || vg_start_size < nv+1 )
+    if ( !build_vertex_terms(list,corners,n,nv,nt) ) return 0;
+  if ( !ensure_size((void**)&vg_grad,&vg_grad_size,3*nt*n,sizeof(double))
        || !ensure_size((void**)&vg_fixnum,&vg_fixnum_size,2*n,sizeof(int))
        || !ensure_size((void**)&vg_body,&vg_body_size,2*n,sizeof(body_id))
        || !ensure_size((void**)&vg_first,&vg_first_size,nv+1,sizeof(long)) )
     return 0;
   threads = loop_threads(n);
 
-  /* pass 1: each facet's bodies and gradient terms, as film_grad_l() */
+  /* pass 1: each facet's bodies and gradient terms, as film_grad_l() or
+     film_grad_q() (which skips NONCONTENT facets) */
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) num_threads(threads)
 #endif
   for ( k = 0 ; k < n ; k++ )
   { facet_id f_id = list[k];
-    vertex_id *c = corners + 3*ordinal(f_id);
+    vertex_id *c = corners + nt*ordinal(f_id);
     body_id bi_id = get_facet_body(f_id);
     body_id bj_id = get_facet_body(facet_inverse(f_id));
-    REAL side[3][3], *x[3], z, normal2;
-    double *g = vg_grad + 9*k;
+    REAL side[3][3], *x[FACET_CTRL], z, normal2;
+    double *g = vg_grad + 3*nt*k;
     int i, j;
     vg_fixnum[2*k] = vg_fixnum[2*k+1] = -1;
     vg_body[2*k] = bi_id;
     vg_body[2*k+1] = bj_id;
+    if ( quad && (get_fattr(f_id) & NONCONTENT) ) continue;
     if ( valid_id(bi_id) && (get_battr(bi_id) & (FIXEDVOL|PRESSURE)) )
       vg_fixnum[2*k] = get_body_fixnum(bi_id);
     if ( valid_id(bj_id) && (get_battr(bj_id) & (FIXEDVOL|PRESSURE)) )
       vg_fixnum[2*k+1] = get_body_fixnum(bj_id);
     if ( vg_fixnum[2*k] < 0 && vg_fixnum[2*k+1] < 0 ) continue;
+    if ( quad )
+    { for ( i = 0 ; i < FACET_CTRL ; i++ ) x[i] = get_coord(c[i]);
+      quad_volume_grad(x,g);
+      continue;
+    }
     for ( i = 0 ; i < 3 ; i++ )
     { REAL *t = get_coord(c[i]), *h = get_coord(c[(i+1)%3]);
       for ( j = 0 ; j < 3 ; j++ ) side[i][j] = h[j] - t[j];
@@ -743,9 +1086,9 @@ static int fl_film_grad_impl(void)
     int seen[VG_MAXBODIES], count = 0, m;
     long e;
     vg_first[k] = 0;
-    if ( !valid_id(v_id) || (get_vattr(v_id) & FIXED) ) continue;
+    if ( !valid_id(v_id) || (!quad && (get_vattr(v_id) & FIXED)) ) continue;
     for ( e = vg_start[k] ; e < vg_start[k+1] ; e++ )
-    { long f = vg_terms[e]/3;
+    { long f = vg_terms[e]/nt;
       int s;
       for ( s = 0 ; s < 2 ; s++ )
       { int fixnum = vg_fixnum[2*f+s];
@@ -782,7 +1125,7 @@ static int fl_film_grad_impl(void)
     long e;
     if ( vg_first[k+1] == vg_first[k] ) continue;
     for ( e = vg_start[k] ; e < vg_start[k+1] ; e++ )
-    { long f = vg_terms[e]/3;
+    { long f = vg_terms[e]/nt;
       double *g = vg_grad + 3*vg_terms[e];
       int s;
       for ( s = 0 ; s < 2 ; s++ )
@@ -814,7 +1157,7 @@ static int fl_film_grad_impl(void)
   }
 
   /* film_grad_l() leaves int_val at the last facet */
-  int_val = ordinal(get_original(list[n-1])) + 1;
+  if ( !quad ) int_val = ordinal(get_original(list[n-1])) + 1;
   return 1;
 }
 
@@ -1169,7 +1512,12 @@ static int fl_calc_leftside_impl(REAL **rleftside, struct linsys *S, int fixcoun
    (VN_ORIENTED); a node inside an edge of one or two facets, their plain
    sum, and a node inside a facet, its facet's normal (VN_SUM). Any other
    vertex (triple or bare edges, degenerate facets) is left to
-   new_calc_vertex_normal(). */
+   new_calc_vertex_normal().
+
+   The quadratic model as the Lagrange one: quadratic_facet_normal() is
+   lagrange_facet_normal() of order 2 with its nodes renumbered, the edge
+   midpoints (Q_MIDPOINT) are the nodes inside edges, and the nodes are
+   numbered as fl_facet_ctrl() lists them. */
 #define VN_OTHER 0
 #define VN_ORIENTED 1
 #define VN_SUM 2
@@ -1189,7 +1537,8 @@ static long vn_lnorm_size = 0;
 
 static int vn_applicable(void)
 { return web.representation == SOAPFILM
-      && (web.modeltype == LINEAR || (web.modeltype == LAGRANGE && web.dimension == 2))
+      && (web.modeltype == LINEAR || (web.modeltype == LAGRANGE && web.dimension == 2)
+          || (web.modeltype == QUADRATIC && web.skel[FACET].ctrlpts == FACET_CTRL))
       && !web.symmetry_flag && SDIM == 3 && !hessian_special_normal_flag
       && !hessian_normal_one_flag;
 }
@@ -1222,7 +1571,8 @@ static int vn_push(long *m, long n, facet_id f_id, vertex_id v_id, int lag)
     }
   }
   if ( lag )
-  { vertex_id *v = get_facet_vertices(f_id);
+  { vertex_id *v = web.modeltype == QUADRATIC ? fq_cache + 6*ordinal(f_id)
+                                              : get_facet_vertices(f_id);
     int ctrl = web.skel[FACET].ctrlpts, i;
     for ( i = 0 ; i < ctrl ; i++ ) if ( v[i] == v_id ) break;
     if ( i >= ctrl ) return 0;
@@ -1236,6 +1586,9 @@ static int vn_push(long *m, long n, facet_id f_id, vertex_id v_id, int lag)
    listed; -1: out of memory */
 static int vn_lagrange_vertex(vertex_id v_id, long *m, long n)
 { ATTR attr = get_vattr(v_id);
+  if ( web.modeltype == QUADRATIC && (attr & (Q_MIDEDGE|Q_MIDFACET)) ) return VN_OTHER;
+  if ( web.modeltype == QUADRATIC && (attr & Q_MIDPOINT) )
+    attr = (attr & ~Q_MIDPOINT) | Q_MIDEDGE;   /* the same case */
   if ( attr & Q_MIDFACET )
     return vn_push(m,n,get_vertex_facet(v_id),v_id,1) ? VN_SUM : -1;
   if ( attr & Q_MIDEDGE )
@@ -1269,7 +1622,8 @@ static int vn_lagrange_vertex(vertex_id v_id, long *m, long n)
 
 static int vn_build(vertex_id *list, long n)
 { long k, m = 0;
-  int lag = web.modeltype == LAGRANGE;
+  int lag = web.modeltype == LAGRANGE || web.modeltype == QUADRATIC;
+  if ( web.modeltype == QUADRATIC && !fl_facet_ctrl() ) return 0;
   if ( vn_list == list && vn_stamp == top_timestamp && vn_count == n
        && vn_maxord == (long)web.skel[VERTEX].max_ord && vn_model == web.modeltype
        && vn_order == web.lagrange_order )
@@ -1372,11 +1726,52 @@ static int vn_lagrange_normals(void)
   return 1;
 }
 
+/* Quadratic: each facet's unit normal at each of its nodes, as
+   quadratic_facet_normal() computes it for the facet's positive orientation
+   (same sums, same kernel_basis_rows()); NAN where that is not one vector */
+static int qlconvert_[6] = { 0, 1, 2, 4, 5, 3 };   /* utility.c's qlconvert */
+static int lqconvert_[6] = { 0, 1, 2, 5, 3, 4 };   /* and lqconvert */
+static int vn_quadratic_normals(void)
+{ facet_id *facets;
+  vertex_id *ctrl = fl_facet_ctrl();
+  long nf, j;
+  struct gauss_lag *gl = &gauss_lagrange[web.dimension][web.gauss2D_order];
+  if ( !ctrl || !(facets = fl_facet_list(&nf)) || !gl->lpolypart ) return 0;
+  if ( !ensure_size((void**)&vn_lnorm,&vn_lnorm_size,
+                    ((long)web.skel[FACET].max_ord + 1)*FACET_CTRL,sizeof(double[3])) )
+    return 0;
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(loop_threads(nf))
+#endif
+  for ( j = 0 ; j < nf ; j++ )
+  { long o = (long)ordinal(facets[j]);
+    vertex_id *c = ctrl + 6*o;
+    MAT2D(sides,MAXCOORD,MAXCOORD);
+    MAT2D(nrm,MAXCOORD,MAXCOORD);
+    REAL *vx[FACET_CTRL];
+    int i, jj, p, kk;
+    for ( p = 0 ; p < FACET_CTRL ; p++ ) vx[p] = get_coord(c[p]);
+    for ( p = 0 ; p < FACET_CTRL ; p++ )   /* node p of the control points */
+    { double *out = vn_lnorm[o*FACET_CTRL + p];
+      int k = qlconvert_[p];
+      for ( i = 1 ; i <= 2 ; i++ )
+        for ( jj = 0 ; jj < SDIM ; jj++ )
+          for ( kk = 0, sides[i][jj] = 0.0 ; kk < FACET_CTRL ; kk++ )
+            sides[i][jj] += gl->lpolypart[k][i-1][kk]*vx[lqconvert_[kk]][jj];
+      if ( kernel_basis_rows(sides+1,nrm,2,SDIM) == 1 )
+        for ( i = 0 ; i < 3 ; i++ ) out[i] = nrm[0][i];
+      else
+        out[0] = out[1] = out[2] = NAN;
+    }
+  }
+  return 1;
+}
+
 /* new_calc_vertex_normal() for the k-th vertex of the list vn_build() saw */
 static int vn_vertex_normal(long k, vertex_id v_id, REAL **norm)
 { long j;
   int i, d;
-  int lag = vn_model == LAGRANGE;
+  int lag = vn_model == LAGRANGE || vn_model == QUADRATIC;
   int ctrl = web.skel[FACET].ctrlpts;
   if ( vn_kind[k] == VN_OTHER ) return new_calc_vertex_normal(v_id,norm);
   for ( d = 0 ; d < SDIM ; d++ )
@@ -1409,7 +1804,8 @@ static int vn_vertex_normal(long k, vertex_id v_id, REAL **norm)
 /* set up the cached normals for the vertices of list; 0: not applicable */
 static int vn_prepare(vertex_id *list, long n)
 { if ( !vn_applicable() || !vn_build(list,n) ) return 0;
-  return web.modeltype == LAGRANGE ? vn_lagrange_normals() : vn_facet_normals();
+  return web.modeltype == LAGRANGE ? vn_lagrange_normals()
+       : web.modeltype == QUADRATIC ? vn_quadratic_normals() : vn_facet_normals();
 }
 
 /* hessian_init()'s vertex normals, see fastloops.h. The normals only read

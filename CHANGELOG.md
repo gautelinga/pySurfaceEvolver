@@ -134,10 +134,19 @@
   is unchanged; `arclength()` takes 6-9 a point: six points in Lagrange 2 at 98k
   facets take 37-40 s instead of 41-42. Each datafile load starts again with AMD, so a
   run's results don't depend on what ran before it.
+- The quadratic model runs in parallel like the linear and Lagrange ones: its facet
+  energies, forces, volumes and volume gradients, its named-quantity loops and Hessian
+  assembly (after `hessian` converts to quantities) and its vertex normals, from a
+  cached table of each facet's six control points. The volume and its gradient are
+  summed over pairs of control points (about a sixth of the products; results agree
+  with Evolver's to round-off). Cube at 98k facets, 4 threads: `g 1` 0.65-0.84 ->
+  0.17-0.19 s (0.48-0.57 -> 0.21-0.27 s after a Newton step), a Newton step 1.8-2.1
+  -> 0.95 s, a default `relax()` 67-71 -> 34-38 s. Only the area and volume methods
+  and vertex integrals are taken in parallel in the quadratic model; other named
+  quantities run Evolver's loops as before.
 - The quadratic model's facet tangents and Gauss points, and the Lagrange model's edge
   setup, multiply their small matrices inline instead of through `mat_mult` (the same
-  sums in the same order: bit-identical). Quadratic model at 98k facets, one thread:
-  `g 1` 0.64 -> 0.47 s, a Newton step 2.44 -> 2.35 s.
+  sums in the same order: bit-identical).
 - Not changed: `r` stays serial (refining 393k facets to 1.6M takes 1.4 s, less than
   half a Newton step there; about 40% of it is zeroing new elements in fresh memory,
   the rest walking edge loops: no single hotspot).

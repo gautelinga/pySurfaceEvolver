@@ -114,9 +114,14 @@ Open, for the user to pick (proposed 2026-10-13):
   attribute stamp in new_element was no faster); the conformal 1/4 is reachable
   (linear strings) and tested. Found on the way: `arclength` failed at once in the
   Lagrange model and for strings (equiangulate), and on fine Lagrange meshes its
-  corrector couldn't meet the step criterion at round-off: both fixed. Left: the
-  quadratic model's other facet loops are Evolver's serial ones (`g 1` at 98k 0.47 s
-  against the linear model's 0.03, both one thread).
+  corrector couldn't meet the step criterion at round-off: both fixed.
+* **Quadratic model in parallel, 2026-10-15:** a 6-control-point facet cache; Evolver's
+  facet energy/force/volume/volgrad loops, the named-quantity loops and Hessian
+  assembly (area, volume, vertex integrals; fasthess.c), vertex normals; volume as
+  pair sums (round-off). Cube 98k, 4 threads: `g 1` ~0.75 -> 0.18 s, Newton step
+  ~2.0 -> 0.95 s, `relax()` ~69 -> 36 s. Open: that `relax()` ends unconverged in both
+  builds (75 gradient steps, 3 Newton, residual 2e-6) where `g 5; hessian` x3 reaches
+  7e-11; quadratic edge and facet integral methods stay serial.
 
 Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
 

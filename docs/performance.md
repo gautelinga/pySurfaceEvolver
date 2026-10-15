@@ -75,11 +75,16 @@ Lagrange 6 at 24k facets.
 - `u` and `V`: the edge-swap tests and the vertex-average search in parallel (the
   swaps themselves stay serial, in Evolver's order; results are identical), and
   `u` no longer recomputes every edge length five times.
-- The quadratic model's facet tangents and Gauss points (and the Lagrange edges'):
-  their small matrix products inline, with `mat_mult`'s sums in its order
-  (bit-identical): `g 1` at 98k facets 0.64 -> 0.47 s, a Newton step 2.44 -> 2.35 s
-  (one thread). The rest of the quadratic model's facet loops are Evolver's own,
-  serial ones.
+- The quadratic model's facet loops in parallel, from a cached table of each facet's
+  six control points: Evolver's own energies, forces, volumes and volume gradients
+  (used until the first Newton step), the named-quantity loops and Hessian assembly
+  that `hessian` switches to, and the vertex normals (as in the Lagrange model). The
+  volume and its gradient are summed over pairs of control points, 90 products
+  instead of Evolver's 216 a point (equal to round-off). Cube at 98k facets, 4
+  threads: `g 1` 0.65-0.84 -> 0.17-0.19 s before the first Newton step and
+  0.48-0.57 -> 0.21-0.27 s after it, a Newton step 1.8-2.1 -> 0.95 s, a default
+  `relax()` 67-71 -> 34-38 s. The small matrix products of the quadratic tangents and
+  Gauss points (and the Lagrange edges') are inline, in `mat_mult`'s order.
 - What is left: the MUMPS factorization (about a third of a Lagrange 6 step and a
   third to a half of a large linear one), recording the matrix entries, and `r`
   (refinement), which is still serial: refining 393k facets to 1.6M takes 1.4 s,

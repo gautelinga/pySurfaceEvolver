@@ -65,10 +65,11 @@ if [ "$quick" = 0 ]; then
   done
 fi
 
-# OpenMP: refined five times, Newton steps in the linear and Lagrange models
-omp_script='g 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nu\nV\nu\ng 5\nhessian\nhessian\nlagrange 2\ng 2\nhessian\nq\n'
+# OpenMP: refined five times, iterations in the quadratic model, Newton steps in
+# the linear, Lagrange and quadratic models
+omp_script='g 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nu\nV\nu\ng 5\nquadratic\ng 3\nlinear\nhessian\nhessian\nlagrange 2\ng 2\nhessian\nquadratic\ng 2\nhessian\nq\n'
 # the same in quantity mode (as after hessian_seek with constraint integrals)
-omp_quantities='g 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\nconvert_to_quantities\ng 5\nu\nV\nu\ng 5\nhessian\nhessian\nq\n'
+omp_quantities='g 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\ng 5\nr\nconvert_to_quantities\ng 5\nu\nV\nu\ng 5\nhessian\nhessian\nquadratic\ng 2\nhessian\nq\n'
 build_evolver "$build/openmp" "-fopenmp"
 cd "$root/fe"
 if [ "$quick" = 1 ]; then
