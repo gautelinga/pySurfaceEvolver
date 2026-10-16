@@ -187,6 +187,40 @@ def test_a_sharp_fold_is_turned_along_the_tangent():
     assert s.result.negative_modes == 1
 
 
+def _disk_bridge_quadratic():
+    """A bridge between two disks of radius 1 a height 1 apart, pinned on
+    their edges (the upper disk's volume by its wire's content integral),
+    relaxed once refined, then quadratic."""
+    tube = shapes.tube(1.0, 0.0, 1.0, nz=4, nt=24)
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   boundaries={1: C.circle(),
+                               2: C.circle((0, 0, 1), content=("-y/2", "x/2", "0"))},
+                   vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=np.pi)])
+    ev.relax(levels=1)
+    ev.command("quadratic")
+    return ev
+
+
+def test_a_quadratic_surface_is_not_spread_between_points():
+    # taking liquid from the bridge to its least volume (pi*0.2544, where it
+    # pinches): spreading the vertices between points left the quadratic
+    # surface a little worse each time (Newton steps don't move nodes along
+    # it), the run went 2.3% past the exact fold and stopped there
+    ev = _disk_bridge_quadratic()
+    values = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        warnings.simplefilter("ignore", pyse.EvolverWarning)
+        for s in recipes.arclength(ev, ev.body(1), -0.04*np.pi, 60, halvings=6):
+            values.append(s.value/np.pi)
+            if len(values) > 3 and values[-1] > values[-2] > values[-3]:
+                break
+    assert min(values) == pytest.approx(0.2544, rel=5e-3)
+    assert s.result.negative_modes == 1
+
+
 def test_remeshing_keeps_the_unstable_branch():
     # the catenoid stretches to its fold and its neck then thins: without
     # remeshing the facets degrade and the run loses the unstable branch

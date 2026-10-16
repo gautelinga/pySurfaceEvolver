@@ -387,6 +387,12 @@ def _arc_settle(ev, put, value: float, tol: float, tidy: bool,
     constraints held), the residual."""
     ok, residual = False, float("inf")
     flip, spread = ev._tidy_kinds() if tidy else (False, False)
+    # spreading only in the linear model: in the quadratic and Lagrange models
+    # the energy depends on where the nodes sit along the surface, which
+    # Newton steps (along the normals) don't move back, so each spreading left
+    # a slightly worse equilibrium (a bridge between disks ended 2.3% short of
+    # its fold, the quadratic model's 0.3% without it)
+    spread = spread and ev.model == "linear"
     if flip or spread:
         start = ev._coords()
         for _ in range(2):
@@ -532,7 +538,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     No gradient steps: those would leave an unstable branch. Between points
     (``tidy=True``) the vertices are spread along the surface and edges
     flipped, which Newton steps alone don't do (as :meth:`Evolver.relax`
-    tidies: no flips in the Lagrange model or for strings).
+    tidies: no flips in the Lagrange model or for strings; the vertices are
+    spread in the linear model only, since in the others the energy depends
+    on where the nodes sit along the surface and Newton steps don't move
+    them back).
 
     ``along`` (a displacement per vertex, such as ``ev.modes(1).vectors[0]``)
     starts on another branch: the first step goes a distance ``ds`` along it
