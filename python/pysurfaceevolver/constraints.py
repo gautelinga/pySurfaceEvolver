@@ -419,25 +419,39 @@ class Boundary:
     ``formulas`` give x, y, z in terms of the parameter ``p1``;
     ``parameter(xyz)`` gives each vertex's parameter from its coordinates
     (an ``(n, 3)`` array in, ``n`` values out).
+
+    ``content``, three expressions in x, y, z, is a vector field integrated
+    along the body's edges on the wire and added to its volume (Evolver's
+    content integral, oriented by the facets as on a constraint): the volume
+    of a face that bounds the body but isn't in the surface. For a flat face
+    at height h spanning the wire, ``("-h*y/2", "h*x/2", "0")`` adds its
+    z dx dy (a bridge pinned on the rim of a disk at z = h).
     """
 
     formulas: Tuple[str, str, str]
     parameter: Any = field(compare=False)
+    content: Optional[Tuple[str, str, str]] = None
 
     def text(self) -> str:
         """The boundary's body in a datafile (after ``boundary n parameters 1``)."""
-        return "".join(f"x{i + 1}: {f}\n" for i, f in enumerate(self.formulas))
+        out = "".join(f"x{i + 1}: {f}\n" for i, f in enumerate(self.formulas))
+        if self.content is not None:
+            out += "content:\n" + "".join(f"c{i + 1}: {c}\n" for i, c in enumerate(self.content))
+        return out
 
 
-def curve(x: str, y: str, z: str, parameter) -> Boundary:
+def curve(x: str, y: str, z: str, parameter, content=None) -> Boundary:
     """A curve x(p1), y(p1), z(p1) given as datafile expressions, with
-    ``parameter(xyz)`` mapping vertex coordinates to p1 (see :class:`Boundary`)."""
-    return Boundary((x, y, z), parameter)
+    ``parameter(xyz)`` mapping vertex coordinates to p1, and an optional
+    ``content`` integral (see :class:`Boundary`)."""
+    return Boundary((x, y, z), parameter, None if content is None else tuple(content))
 
 
-def circle(center=(0.0, 0.0, 0.0), radius: float = 1.0, normal=(0.0, 0.0, 1.0)) -> Boundary:
+def circle(center=(0.0, 0.0, 0.0), radius: float = 1.0, normal=(0.0, 0.0, 1.0),
+           content=None) -> Boundary:
     """A circular wire of ``radius`` about ``center`` in the plane normal to
-    ``normal``, parametrized by the angle p1 (radians)."""
+    ``normal``, parametrized by the angle p1 (radians), with an optional
+    ``content`` integral (see :class:`Boundary`)."""
     c = np.asarray(center, dtype=float)
     n = _unit(normal, "normal")
     u, v = _frame(n)
@@ -450,4 +464,5 @@ def circle(center=(0.0, 0.0, 0.0), radius: float = 1.0, normal=(0.0, 0.0, 1.0)) 
     def parameter(xyz):
         d = np.asarray(xyz, dtype=float)[:, :3] - c
         return np.arctan2(d @ v, d @ u)
-    return Boundary(formulas, parameter)  # type: ignore[arg-type]
+    return Boundary(formulas, parameter,  # type: ignore[arg-type]
+                    None if content is None else tuple(content))

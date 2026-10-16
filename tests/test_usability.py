@@ -140,6 +140,23 @@ def test_film_on_a_circular_wire_stays_round():
     assert ev.total_area == pytest.approx(np.pi, rel=3e-3)
 
 
+def test_a_wires_content_integral_closes_the_body():
+    # a tube between two round wires: its sides add nothing to z dx dy, the
+    # disk at the top all of it, through the upper wire's content integral
+    nt, H = 16, 1.5
+    tube = shapes.tube(1.0, 0.0, H, nz=3, nt=nt)
+    volumes = []
+    for content in (None, (f"-{H}*y/2", f"{H}*x/2", "0")):
+        ev = pyse.Evolver()
+        ev.load_arrays(tube.vertices, tube.faces,
+                       boundaries={1: C.circle(), 2: C.circle((0, 0, H), content=content)},
+                       vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                       bodies=[pyse.Body(volume=None)])
+        volumes.append(ev.bodies().volume[0])
+    assert volumes[0] == pytest.approx(0.0, abs=1e-12)
+    assert volumes[1] == pytest.approx(H*nt/2*np.sin(2*np.pi/nt), rel=1e-12)
+
+
 def test_shapes_are_closed_and_outward():
     box = shapes.box((1, 2, 3), n=2)
     a, b, c = (box.vertices[box.faces[:, i]] for i in range(3))
