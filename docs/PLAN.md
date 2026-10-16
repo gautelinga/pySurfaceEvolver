@@ -219,7 +219,14 @@ Stages:
   liquid); the rest goes on under the run's control. Optional, later: `Body(pressure=p)`
   (Evolver's body pressure) and relaxing through a lost equilibrium at fixed pressure,
   only to compare directly with pressure-controlled pore-network curves.
-* **C. Pinch-off surgery** (1-2 weeks): tests: a bridge between spheres pulled past
+* **C. Pinch-off surgery** (1-2 weeks): Evolver's own commands do it (tried
+  2026-10-16, tests/test_topology.py): on a bridge between disks losing liquid, the
+  tiny-edge deletion of `remesh()` shrinks the neck to a vertex, `pop vertex` splits
+  it, `rebody` makes the pieces bodies with their volumes (after a fix: it left a
+  wire's content integral with the old body), and the drops relax and continue with
+  `arclength`. Left to do: detect it (more edge-connected pieces than bodies), drive
+  the neck to the vertex inside `arclength`, and check the other content and
+  `volconst` bookkeeping (constraints' content integrals, merges) the same way. Tests: a bridge between spheres pulled past
   its rupture distance against Lian/Willett and the exact bridge (liquid_bridge.ipynb),
   Rayleigh-Plateau column breakup into drops (stress case 1), the trimer bursting into
   bridges (packing.md); volumes conserved to round-off.

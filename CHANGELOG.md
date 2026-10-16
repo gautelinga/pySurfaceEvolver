@@ -64,6 +64,12 @@
   bridge between disks under gravity, and a drop on a ring with large steps, short of
   their folds), but not below `ds/4**halvings`, where a run near a dead end only crept
   on.
+- Evolver's `rebody` command in quantity mode (pySE's) left a wire's content integral
+  with the old body: after a bridge between disks pinched off, the drop at the top
+  disk lost the disk's volume and the bottom one gained it (1.98 and 1.98 read as
+  11.17 and -7.21), and refining the wire changed it again. `rebody` now rebuilds the
+  bodies' quantities (Evolver's `reconvert_bodies_to_quantities`, which only `tordup`
+  called).
 
 ## 0.7.5 (2026-10-15)
 

@@ -5032,6 +5032,8 @@ skip: ;
         outstring(msg);
         sprintf(msg,"Merged bodies: %d\n",merge_bodies());
         outstring(msg);
+        if ( everything_quantities_flag )
+          reconvert_bodies_to_quantities(); /* move boundary content methods to the new bodies */
         calc_content(Q_FIXED|Q_INFO);
         FOR_ALL_BODIES(b_id)
             if ( get_battr(b_id) & FIXEDVOL )  
