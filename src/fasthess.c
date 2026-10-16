@@ -1396,10 +1396,85 @@ static void orthogonalize(REAL *x, REAL **q, int m, int n)
     }
 }
 
+/* the last step's null directions, refined, as each vertex's displacement
+   (the step's coordinates are rebuilt each step: the normals move): while
+   the topology is the same, the next step's are nearly them, and a mat-vec
+   checks that instead of a solve each (a free surface's steps near
+   equilibrium) */
+static REAL *dc_d = NULL;      /* [kept][vertex ordinal][SDIM] */
+static int dc_kept = 0;
+static long dc_nv = 0, dc_stamp = -1;
+
+/* the step's coordinates of displacement d (per vertex ordinal), as
+   rigid_motion() maps a motion; and back */
+static void displacement_to_step(REAL *d, REAL *v, int N)
+{ vertex_id v_id;
+  int i, j;
+  for ( i = 0 ; i < N ; i++ ) v[i] = 0.0;
+  FOR_ALL_VERTICES(v_id)
+  { struct hess_verlist *vh = get_vertex_vhead(v_id);
+    REAL *dv = d + (size_t)loc_ordinal(v_id)*SDIM;
+    if ( vh->freedom <= 0 || (get_vattr(v_id) & BOUNDARY) ) continue;
+    if ( vh->proj )
+      for ( j = 0 ; j < vh->freedom ; j++ )
+      { REAL s = 0.0;
+        for ( i = 0 ; i < SDIM ; i++ ) s += vh->proj[i][j]*dv[i];
+        v[vh->rownum + j] = s;
+      }
+    else
+      for ( j = 0 ; j < vh->freedom && j < SDIM ; j++ )
+        v[vh->rownum + j] = dv[j];
+  }
+}
+
+static void step_to_displacement(REAL *v, REAL *d)
+{ vertex_id v_id;
+  int i, j;
+  FOR_ALL_VERTICES(v_id)
+  { struct hess_verlist *vh = get_vertex_vhead(v_id);
+    REAL *dv = d + (size_t)loc_ordinal(v_id)*SDIM;
+    for ( i = 0 ; i < SDIM ; i++ ) dv[i] = 0.0;
+    if ( vh->freedom <= 0 || (get_vattr(v_id) & BOUNDARY) ) continue;
+    if ( vh->proj )
+      for ( i = 0 ; i < SDIM ; i++ )
+        for ( j = 0 ; j < vh->freedom ; j++ ) dv[i] += vh->proj[i][j]*v[vh->rownum + j];
+    else
+      for ( j = 0 ; j < vh->freedom && j < SDIM ; j++ ) dv[j] = v[vh->rownum + j];
+  }
+}
+
+static int deflate_reuse(struct linsys *S, REAL **u, int want, REAL diag, REAL *w)
+{ int n = S->A_rows, N = S->N, k, i;
+  long nv = (long)web.skel[VERTEX].max_ord + 1;
+  if ( want == 0 || want != dc_kept || dc_nv != nv || dc_stamp != top_timestamp || !dc_d )
+    return 0;
+  for ( k = 0 ; k < want ; k++ )
+  { displacement_to_step(dc_d + (size_t)k*nv*SDIM,u[k],N);
+    orthogonalize(u[k],u,k,n);
+    if ( !unit(u[k],n) ) return 0;
+    for ( i = 0 ; i < N ; i++ ) w[i] = 0.0;     /* (sp_hessian_mult adds into it) */
+    sp_hessian_mult(S,u[k],w);
+    if ( !(sqrt(dot(w,w,n)) < DEFLATE_TOL*diag) || !(constraint_cosine(S,u[k],1.0) < DEFLATE_CON) )
+      return 0;
+  }
+  return 1;
+}
+
+static void deflate_keep(REAL **u, int kept)
+{ int k;
+  long nv = (long)web.skel[VERTEX].max_ord + 1;
+  free(dc_d);
+  dc_d = kept > 0 ? (REAL*)malloc((size_t)kept*nv*SDIM*sizeof(REAL)) : NULL;
+  dc_kept = dc_d ? kept : 0;
+  for ( k = 0 ; k < dc_kept ; k++ ) step_to_displacement(u[k],dc_d + (size_t)k*nv*SDIM);
+  dc_nv = nv;
+  dc_stamp = top_timestamp;
+}
+
 void fl_hessian_deflate(struct linsys *S, REAL *X)
 { int n = S->A_rows, N = S->N, rows = S->total_rows > N ? S->total_rows : N;
   int ncand = SDIM + (SDIM == 3 ? 3 : SDIM == 2 ? 1 : 0);
-  int i, j, k, m = 0, kept = 0;
+  int i, j, k, m = 0, kept = 0, want = 0;
   REAL diag = 0.0, c[MAXCOORD];
   long nv = 0;
   REAL **q, **hq, **u, **K, **Y, *mu, *work, *w;
@@ -1445,6 +1520,8 @@ void fl_hessian_deflate(struct linsys *S, REAL *X)
     for ( j = 0 ; j < m ; j++ )
       K[k][j] = 0.5*(dot(q[k],hq[j],n) + dot(q[j],hq[k],n));
   if ( m > 0 ) jacobi_eigenpairs(K,m,mu,Y,work);
+  /* the Ritz directions near null, each refined by one solve (inverse
+     iteration), or the last step's refined ones if they still are */
   for ( k = 0 ; k < m ; k++ )
   { if ( !(fabs(mu[k]) < DEFLATE_TOL*diag) ) continue;
     for ( i = 0 ; i < n ; i++ )
@@ -1452,13 +1529,22 @@ void fl_hessian_deflate(struct linsys *S, REAL *X)
       for ( j = 0 ; j < m ; j++ ) s += Y[j][k]*q[j][i];
       w[i] = s;
     }
-    if ( !unit(w,n) || !(constraint_cosine(S,w,1.0) < DEFLATE_CON) ) continue;
-    sp_hessian_solve(S,w,u[kept],NO_SET_PRESSURE);   /* (w is spent) */
-    for ( i = 0 ; i < rows ; i++ ) w[i] = 0.0;
-    if ( !unit(u[kept],n) ) continue;
-    orthogonalize(u[kept],u,kept,n);
-    if ( !(dot(u[kept],u[kept],n) > DEFLATE_NEW*DEFLATE_NEW) || !unit(u[kept],n) ) continue;
-    kept++;
+    if ( unit(w,n) && constraint_cosine(S,w,1.0) < DEFLATE_CON )
+    { for ( i = 0 ; i < n ; i++ ) hq[want][i] = w[i];      /* (hq is spent) */
+      want++;
+    }
+  }
+  if ( deflate_reuse(S,u,want,diag,w) ) kept = want;
+  else
+  { for ( k = 0 ; k < want ; k++ )
+    { for ( i = 0 ; i < rows ; i++ ) w[i] = i < n ? hq[k][i] : 0.0;
+      sp_hessian_solve(S,w,u[kept],NO_SET_PRESSURE);   /* (w is spent) */
+      if ( !unit(u[kept],n) ) continue;
+      orthogonalize(u[kept],u,kept,n);
+      if ( !(dot(u[kept],u[kept],n) > DEFLATE_NEW*DEFLATE_NEW) || !unit(u[kept],n) ) continue;
+      kept++;
+    }
+    deflate_keep(u,kept);
   }
   for ( k = 0 ; k < kept ; k++ )
   { REAL s = dot(u[k],X,n);

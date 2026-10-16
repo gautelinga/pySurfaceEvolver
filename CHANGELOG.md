@@ -8,6 +8,13 @@
   volume of a face that bounds a body but isn't in the surface, such as the disk a
   bridge is pinned on (Evolver's content integral on a boundary).
 
+### Speed
+
+- Newton steps on a surface free to move as a whole reuse the last step's null
+  directions while the topology is the same (checked by a product with the matrix)
+  instead of a solve for each: about 0.1-0.2 s of a 1.1 s step on the free 98k
+  quadratic cube.
+
 ### Documentation
 
 - Four pages of classic results, each against an exact reference computed on the
