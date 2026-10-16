@@ -230,7 +230,17 @@ Stages:
   its rupture distance against Lian/Willett and the exact bridge (liquid_bridge.ipynb),
   Rayleigh-Plateau column breakup into drops (stress case 1), the trimer bursting into
   bridges (packing.md); volumes conserved to round-off.
-* **D. Merge surgery** (2-3 weeks): tests: two drops on a plane coalescing (volume and
+* **D. Merge surgery** (2-3 weeks): Evolver's own commands do it too (tried
+  2026-10-16, tests/test_topology.py): `facet_merge` on the closest facet pair, unset
+  one body on the glued facet and `dissolve` it (and the unused edges and vertices),
+  then move the second body's facets to the first (`set facet frontbody/backbody`;
+  `rebody`'s own `merge_bodies` only joins bodies on the two sides of a facet, not drops
+  with the outside behind them), `rebody`, `dissolve` the empty body, and the target is
+  the sum of the volumes before (`facet_merge` adds the glued gap's). Two spheres merge
+  into the sphere (area and pressure 0.1% off at 1496 facets) and `arclength` goes
+  on. On a solid a merge brings stage E at once: two 120-degree drops on a plane merge
+  0.44 above it, and some 15 gradient steps later the neck's underside goes through the
+  plane (the contact lines must meet). Tests: two drops on a plane coalescing (volume and
   final cap exact), two menisci meeting in the symmetric pore (packing.md), the clam
   shell closing into a barrel (fibres.md).
 * **E. Contact-line events** (2-3 weeks): tests: a meniscus advancing onto a bead

@@ -82,3 +82,51 @@ def test_a_bridge_that_pinches_off_splits_into_two_drops_with_their_volumes():
         # the drop is a cap on the rim: its pressure is 4h/(1 + h^2)
         h = np.roots([np.pi/6, 0, np.pi/2, -volume]).real.max()
         assert ev.body(int(body[0])).pressure == pytest.approx(4*h/(1 + h*h), rel=0.02)
+
+
+def test_two_drops_that_touch_merge_into_one_with_both_volumes():
+    # two spheres 0.02 apart: facet_merge glues the closest facets, dissolving
+    # the glued facet opens the neck, and the second body's facets go to the
+    # first (rebody's own merge only joins bodies on the two sides of a facet);
+    # rebody then rebuilds the bodies' quantities (not needed here, where no
+    # wire carries a content integral, as in the pinch-off). The drop holding
+    # both volumes relaxes to the sphere
+    gap = 0.02
+    t = np.linspace(0, np.pi, 9)
+    ball = shapes.revolve(np.sin(t), -np.cos(t), 16)
+    n, nf = len(ball.vertices), len(ball.faces)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[ball.vertices - [1 + gap/2, 0, 0], ball.vertices + [1 + gap/2, 0, 0]],
+                   np.r_[ball.faces, ball.faces + n],
+                   bodies=[pyse.Body(faces=range(nf), volume=None),
+                           pyse.Body(faces=range(nf, 2*nf), volume=None)])
+    for i in (1, 2):
+        ev.body(i).target = ev.body(i).volume
+    total = ev.bodies().volume.sum()
+    m = ev.mesh()
+    centre = ev.vertices[np.asarray(m.facets)].mean(axis=1)
+    body = np.asarray(m.facet_bodies).max(axis=1)
+    a = np.where(body == 1)[0][np.argmax(centre[body == 1, 0])]
+    b = np.where(body == 2)[0][np.argmin(centre[body == 2, 0])]
+    fa, fb = int(m.facet_ids[a]), int(m.facet_ids[b])
+    for command in (f"facet_merge({fa},{fb})", f"unset facet[{fa}] frontbody",
+                    f"dissolve facet[{fa}]", "dissolve edges; dissolve vertices",
+                    "set facet frontbody 1 where frontbody == 2",
+                    "set facet backbody 1 where backbody == 2", "rebody", "dissolve body[2]"):
+        ev.command(command)
+    assert len(_pieces(ev)) == 1 and list(ev.bodies().ids) == [1]
+    f = np.asarray(ev.mesh().facets)
+    e = np.sort(np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]], axis=1)
+    assert np.all(np.unique(e, axis=0, return_counts=True)[1] == 2)      # closed, manifold
+    assert ev.body(1).volume == pytest.approx(total, rel=0.01)   # and the glued gap's
+    ev.body(1).target = total
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for _ in range(60):                       # the neck widens: keep its edges even
+            ev.command("g 5")
+            ev.remesh(target=0.35)
+        assert ev.relax(levels=1).converged
+    R = (3*total/(4*np.pi))**(1/3)
+    assert ev.body(1).volume == pytest.approx(total, rel=1e-8)
+    assert ev.energy == pytest.approx(4*np.pi*R*R, rel=0.005)
+    assert ev.body(1).pressure == pytest.approx(2/R, rel=0.005)
