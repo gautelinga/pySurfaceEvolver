@@ -346,7 +346,7 @@ def wrap_angle(ev, delta):
 
 def crossed(delta, theta, volume, half_length=2.0, h=0.25):
     """Liquid at the crossing of two fibres (see above), contact angle
-    ``theta``: starts from a box between them, ``half_length`` each way
+    ``theta`` (the datafile parameter ``theta``): starts from a box between them, ``half_length`` each way
     along the x axis, its sides the planes y = +-w as wide apart as the
     fibres allow at its ends, and relaxes it to ``volume``."""
     th = np.radians(delta)/2
@@ -391,7 +391,7 @@ def crossed(delta, theta, volume, half_length=2.0, h=0.25):
         out = np.array([np.sign(m[0]), 0.0, 0.0]) if end else np.array([0.0, m[1], 0.0])
         if np.cross(b2 - a, c - a) @ out < 0:
             f[k] = tri[[0, 2, 1]]
-    walls = crossed_fibres(delta, theta)
+    walls = crossed_fibres(delta, "theta")     # the angle a parameter: it can be lowered
     rows = {}
     for name, z in (("upper", 1.0), ("lower", -1.0)):
         axis = np.array(walls[name].shape[2])
@@ -399,7 +399,7 @@ def crossed(delta, theta, volume, half_length=2.0, h=0.25):
         rows[name] = np.flatnonzero(np.abs(r - 1) < 1e-9).tolist()
     ev = pyse.Evolver()
     ev.load_arrays(v, f, constraints=walls, vertex_constraints=rows,
-                   bodies=[pyse.Body(volume=volume)])
+                   bodies=[pyse.Body(volume=volume)], parameters={"theta": float(theta)})
     ev.relax()
     return ev
 

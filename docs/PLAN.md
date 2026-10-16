@@ -40,9 +40,9 @@ crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a 
 **Since 0.7.5** (CHANGELOG "Unreleased", 2026-10-16): four literature pages, each by an
 agent in a worktree, against exact references in their helpers: `disk_bridge.md`
 (Slobozhanin and Perales' table to the last digit), `pendant_drop.md` (0.2-0.3%, Michael
-and Williams' 3.219), `fibres.md` (barrel onset exact within 1%, Princen, crossed fibres
+and Williams' 3.219), `fibres.md` (barrel onset exact within 1%, Princen, crossed fibres at 0 degrees
 against Sauret's model; no symmetry breaking before the ends close round the fibres at
-30 degrees crossing), `floating_lens.md` (1e-4, second order). Found and fixed on the
+30 degrees crossing, volume 70-80 against the model's 88), `floating_lens.md` (1e-4, second order). Found and fixed on the
 way: `cylinder()`'s azimuthal content sign on turned fibres; `arclength` at sharp folds
 (tangent after a failed step, sliding scaled to the shape change; still stops at Bond 1
 on a ring of radius 1 with steps of 3% of Tate's volume); `Boundary(content=...)`.

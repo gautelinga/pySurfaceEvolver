@@ -77,8 +77,10 @@ def column_run(d):
 def crossed_run(delta, theta, volumes, keep):
     """(volume, half length, wrap angle) as the column grows, and its surface at
     the volumes in ``keep``."""
-    ev = H.crossed(delta, theta, volumes[0])
+    ev = H.crossed(delta, 20.0, volumes[0])       # relaxed at 20 degrees, then lowered
     ev.relax(levels=1)
+    for _ in recipes.continuation(ev, "theta", [a for a in (15, 10, 5, 2) if a > theta] + [theta]):
+        pass
     rows, shapes = [], {}
     for volume in volumes:
         ev.body(1).target = volume
@@ -113,9 +115,9 @@ def main():
     clam, clam_shapes = clamshell_run(30, [10, 15, 20, 25, 30, 35, 40, 50])
     gaps = (0.5, 0.75, 1.0, 1.3)
     columns = [column_run(d) for d in gaps]
-    delta, theta = 30.0, 20.0
-    volumes = (5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120)
-    crossing, crossing_shapes = crossed_run(delta, theta, volumes, keep=(30, 120))
+    delta, theta = 30.0, 0.0
+    volumes = (5, 10, 20, 30, 40, 50, 60, 70)
+    crossing, crossing_shapes = crossed_run(delta, theta, volumes, keep=(30, 70))
 
     fig, axes = plt.subplots(1, 4, figsize=(16, 3.9))
     ax = axes[0]
@@ -186,7 +188,7 @@ def main():
                "30 degrees)", position="upper_left", font_size=9, color="black")
     view(p, (0.0, -1.0, 0.3), (0, 0, 0), 5.5)
     h = np.radians(delta)/2
-    for col, volume in ((1, 30), (2, 120)):
+    for col, volume in ((1, 30), (2, 70)):
         p.subplot(0, col)
         p.add_mesh(polydata(*crossing_shapes[volume]), **LIQUID)
         for z, s in ((1.0, 1), (-1.0, -1)):
@@ -194,7 +196,7 @@ def main():
                                    radius=1.0, height=26.0, resolution=60), opacity=0.45, **SOLID)
         p.add_text(f"liquid at crossed fibres, volume {volume}", position="upper_left",
                    font_size=9, color="black")
-        view(p, (0.2, -0.5, 1.0), (0, 0, 0), {30: 7.0, 120: 10.0}[volume])
+        view(p, (0.2, -0.5, 1.0), (0, 0, 0), {30: 7.0, 70: 9.0}[volume])
     p.screenshot(os.path.join(STATIC, "fibres_shapes.png"))
     p.close()
     print("wrote", os.path.normpath(STATIC) + "/fibres*.png")

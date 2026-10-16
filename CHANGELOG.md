@@ -27,9 +27,10 @@
     (0.2-0.3%), and on wide rings the drop tipping sideways first (Michael and
     Williams' 3.219 capillary lengths).
   - `fibres.md`: a barrel on a fibre rolling up into a clam shell (an exact onset,
-    where the inflexion of its profile reaches the contact line), Princen's column
-    between two fibres, and the column at crossed fibres against Sauret et al.'s
-    model.
+    where the inflexion of its profile reaches the contact line; the energies'
+    crossover extrapolated from three meshes), Princen's column between two fibres,
+    and a perfectly wetting column at crossed fibres (relaxed at 20 degrees, lowered
+    by continuation in the contact angle) against Sauret et al.'s model.
   - `floating_lens.md`: a lens floating on a liquid, three tensions meeting at
     Neumann's triangle (1e-4 against the exact caps), and under gravity against the
     axisymmetric equations and Langmuir's puddle thickness.

@@ -79,23 +79,32 @@ it; it wets one side of the fibre. Its energy against the barrel's (exact) at th
 volume, at 30 degrees, on two meshes:
 
 ```python
+import numpy as np
 from pysurfaceevolver import recipes
 from fibres_helpers import barrel, barrel_onset, clamshell
 
 theta = 30
 print(f"the barrel is unstable below volume {barrel_onset(theta)['volume']:.1f}")
-for levels, volumes in ((2, [10, 15, 20, 25, 30, 35, 40, 50]), (3, [30, 35, 40])):
+near = {}                                       # around the crossover, on each mesh
+for levels, volumes in ((1, [30, 35, 40]), (2, [10, 15, 20, 25, 30, 35, 40, 50]), (3, [30, 35, 40])):
     ev = clamshell(theta, volumes[0], levels=levels)
     rows = []
     for step in recipes.continuation(ev, ev.body(1), volumes):
         rows.append((step.value, ev.energy, barrel(theta, step.value)["energy"], step.result.stable))
+    near[levels] = np.array([[clam - bar for v, clam, bar, _ in rows if v == w][0]
+                             for w in (30, 35, 40)])
+    if levels == 1:
+        continue
     print(f"{ev.counts['facets']} facets:")
     for v, clam, bar, stable in rows:
         print(f"  volume {v:2.0f}: clam shell {clam:7.3f} ({'stable' if stable else 'unstable'}), "
               f"barrel {bar:7.3f}")
-    (v0, c0, b0, _), (v1, c1, b1, _) = next((a, b) for a, b in zip(rows, rows[1:])
-                                             if (a[1] - a[2])*(b[1] - b[2]) <= 0)
-    print(f"  equal energies at volume {v0 + (v1 - v0)*(c0 - b0)/((c0 - b0) - (c1 - b1)):.1f}")
+    print(f"  equal energies at volume {np.interp(0, near[levels], [30, 35, 40]):.1f}")
+# extrapolated to no mesh size (Richardson), at the order the three meshes show
+order = np.log2((near[1] - near[2])/(near[2] - near[3]))
+limit = near[3] + (near[3] - near[2])/(2**order - 1)
+print(f"order of convergence {order.min():.2f} to {order.max():.2f}; extrapolated, "
+      f"equal energies at volume {np.interp(0, limit, [30, 35, 40]):.1f}")
 ```
 
 ```text
@@ -115,12 +124,16 @@ the barrel is unstable below volume 17.8
   volume 35: clam shell  33.673 (stable), barrel  33.716
   volume 40: clam shell  37.435 (stable), barrel  37.379
   equal energies at volume 37.2
+order of convergence 1.56 to 1.59; extrapolated, equal energies at volume 38.7
 ```
 
 Small drops sit best on one side, large ones round the fibre. The two energies differ
 by a fraction of a percent near the crossover, so it moves with the mesh: from 34.4 to
 37.2 here, the clam shell's energy still falling with refinement (the barrel's is
-exact). Between the barrel's onset and the crossover both shapes are stable: a barrel
+exact). Its differences from mesh to mesh shrink at an order of about 1.6, a little
+below the second order of a smooth surface (the contact line on the curved fibre), and
+extrapolated to no mesh size the two shapes have equal energies at a volume of about
+39. Between the barrel's onset and the crossover both shapes are stable: a barrel
 shrunk below the crossover stays a barrel until its onset, and a clam shell grown past
 it stays a clam shell. Chou et al. mapped this coexistence with Surface Evolver, and
 Eral et al. switched drops between the two shapes with electrowetting. Every barrel with
@@ -192,62 +205,62 @@ drop at one end of the column, breaking the symmetry. `crossed_column` gives the
 model's column length for a volume, and the longest column with the volume it holds.
 
 `crossed` starts a column between the fibres, crossing at 30 degrees, with flat sides
-and ends, and relaxes it; adding liquid, it grows along the gap. `shift` is the
-eigenvalue of the mode that moves the liquid along the fibres, toward one end, and
-`wrap_angle` how far round the fibres the liquid reaches (180: the far side). At a
-contact angle of 20 degrees:
+and ends, and relaxes it. From such a start a perfectly wetting liquid doesn't relax
+(its contact lines lie along the fibres in the narrow gap near the crossing), so it
+relaxes at 20 degrees first, the contact angle a datafile parameter `theta`, and
+{func}`~pysurfaceevolver.recipes.continuation` lowers it to 0. Adding liquid, the
+column grows along the gap. `shift` is the eigenvalue of the mode that moves the liquid
+along the fibres, toward one end, and `wrap_angle` how far round the fibres the liquid
+reaches (180: the far side):
 
 ```python
+from pysurfaceevolver import recipes
 from fibres_helpers import crossed, crossed_column, shift, wrap_angle
 
-delta, theta = 30.0, 20.0
-model = crossed_column(delta, theta)
+delta = 30.0
+model = crossed_column(delta, 0.0)
 print(f"model: longest column {model['half_length_max']:.2f} each way, "
       f"holding {model['volume_max']:.1f}")
-ev = crossed(delta, theta, 5.0)
+ev = crossed(delta, 20.0, 5.0)
 ev.relax(levels=1)
-for volume in (5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120):
+for step in recipes.continuation(ev, "theta", [15, 10, 5, 2, 0]):
+    pass                                                      # down to perfect wetting
+for volume in (5, 10, 20, 30, 40, 50, 60, 70):
     ev.body(1).target = volume
     ev.remesh(target=0.22, keep_boundary=False)
     ev.relax()
     x = ev.vertices
     half = (x[:, 0].max() - x[:, 0].min())/2                  # the column's half length
-    L = crossed_column(delta, theta, volume)["half_length"]
-    print(f"volume {volume:3d}: half length {half:.2f} (model {'-   ' if L is None else f'{L:.2f}'}), "
+    L = crossed_column(delta, 0.0, volume)["half_length"]
+    print(f"volume {volume:2d}: half length {half:.2f} (model {L:.2f}, {half/L - 1:+.1%}), "
           f"pressure {ev.bodies().pressure[0]:.3f}, shift along the fibres {shift(ev, axes=(0,)):.3f}, "
           f"wraps {wrap_angle(ev, delta):.0f} degrees")
 ```
 
 ```text
-model: longest column 7.46 each way, holding 64.9
-volume   5: half length 3.69 (model 4.14), pressure -0.264, shift along the fibres 1.757, wraps 87 degrees
-volume  10: half length 4.43 (model 4.88), pressure 0.084, shift along the fibres 0.943, wraps 104 degrees
-volume  20: half length 5.36 (model 5.75), pressure 0.287, shift along the fibres 0.451, wraps 122 degrees
-volume  30: half length 6.03 (model 6.32), pressure 0.358, shift along the fibres 0.263, wraps 134 degrees
-volume  40: half length 6.56 (model 6.74), pressure 0.394, shift along the fibres 0.183, wraps 143 degrees
-volume  50: half length 7.01 (model 7.08), pressure 0.412, shift along the fibres 0.127, wraps 150 degrees
-volume  60: half length 7.39 (model 7.35), pressure 0.425, shift along the fibres 0.096, wraps 156 degrees
-volume  70: half length 7.75 (model -   ), pressure 0.432, shift along the fibres 0.074, wraps 161 degrees
-volume  80: half length 8.06 (model -   ), pressure 0.437, shift along the fibres 0.058, wraps 165 degrees
-volume  90: half length 8.37 (model -   ), pressure 0.438, shift along the fibres 0.042, wraps 169 degrees
-volume 100: half length 8.64 (model -   ), pressure 0.439, shift along the fibres 0.032, wraps 172 degrees
-volume 110: half length 8.89 (model -   ), pressure 0.440, shift along the fibres 0.024, wraps 175 degrees
-volume 120: half length 9.14 (model -   ), pressure 0.440, shift along the fibres 0.017, wraps 178 degrees
+model: longest column 8.20 each way, holding 87.7
+volume  5: half length 3.77 (model 4.20, -10.2%), pressure -0.468, shift along the fibres 2.323, wraps 94 degrees
+volume 10: half length 4.53 (model 4.96, -8.6%), pressure -0.066, shift along the fibres 1.313, wraps 115 degrees
+volume 20: half length 5.55 (model 5.86, -5.2%), pressure 0.180, shift along the fibres 0.585, wraps 136 degrees
+volume 30: half length 6.27 (model 6.45, -2.8%), pressure 0.273, shift along the fibres 0.354, wraps 149 degrees
+volume 40: half length 6.79 (model 6.90, -1.6%), pressure 0.323, shift along the fibres 0.257, wraps 158 degrees
+volume 50: half length 7.31 (model 7.27, +0.6%), pressure 0.348, shift along the fibres 0.185, wraps 166 degrees
+volume 60: half length 7.70 (model 7.57, +1.7%), pressure 0.366, shift along the fibres 0.144, wraps 172 degrees
+volume 70: half length 8.04 (model 7.83, +2.7%), pressure 0.379, shift along the fibres 0.116, wraps 178 degrees
 ```
 
-While the model holds, the column's length agrees with it: 10% shorter for a small
-column, whose rounded ends count for more, within 3% from a volume of 40 and 1% from
-50. The
-model's column ends at a volume of 65, where its end cross-sections reach the fold of
-Princen's balance at 151 degrees round the fibres. The computed column goes on: its
-ends are not long columns, and they wrap further round the fibres instead, to 178
-degrees at a volume of 120. All the way, moving the liquid toward one end raises the
-energy: the eigenvalue falls but stays positive. So here the symmetric column doesn't
-break its symmetry by itself; it goes on until its ends close round the fibres (at a
-volume of about 125), a change of topology the mesh can't follow and past which,
-presumably, the liquid gathers at one end. The model's threshold for that comes at
-half the volume. These fibres cross at a wider angle than most of Sauret et al.'s
-experiments, where the columns are far longer than wide and the model fits better.
+The column's length follows the model: 10% shorter for a small column, whose rounded
+ends count for more, and within 3% from a volume of 30. The model's column ends at a
+volume of 88, where its end cross-sections reach Princen's limit, the liquid all the
+way round the fibres. The computed column gets there first: its ends wrap further round
+the fibres than a long column's cross-section, and close round them between volumes 70
+and 80 (at 178 degrees at 70), a change of topology the mesh can't follow; past it the
+runs don't converge. Up to there, moving the liquid toward one end raises the energy:
+the eigenvalue falls but stays positive. So here the symmetric column doesn't break its
+symmetry by itself before its ends close round the fibres, and what Sauret et al. saw,
+liquid gathering at one end, would come after that change of topology. These fibres
+cross at a wider angle than most of their experiments, where the columns are far
+longer than wide and the model fits better.
 
 ## Pictures
 
@@ -265,12 +278,12 @@ dashed). Drawn by `tools/fibres_figure.py`.
 ```
 
 ```{figure} _static/fibres_shapes.png
-:alt: A clam shell and a barrel of the same volume on a fibre, and liquid at two crossed fibres at volumes 30 and 120
+:alt: A clam shell and a barrel of the same volume on a fibre, and liquid at two crossed fibres at volumes 30 and 70
 :width: 100%
 
 Left, a clam shell and a barrel holding the same volume (30, at 30 degrees). Middle
-and right, the column at crossed fibres at volumes 30 and 120, the second nearly closed
-round the fibres near its ends.
+and right, the column at crossed fibres at volumes 30 and 70 (perfectly wetting), the
+second nearly closed round the fibres near its ends.
 ```
 
 ## Notes and limits
@@ -283,13 +296,14 @@ round the fibres near its ends.
   changes by moving vertices along the surface, which `relax()`'s residual and Newton
   steps leave aside (gradient steps do move it, slowly): started 5% short, a column
   ends 5% short with a residual of 1e-9. The slice has no ends.
-* **Small contact angles.** At 0 degrees the liquid at crossed fibres doesn't relax
-  from this start (its contact lines lie along the fibres in the narrow gap near the
-  crossing), hence 20 degrees there. For parallel fibres at 0 degrees, gaps below about
-  1 leave the two menisci of the slice nearly touching in its middle, and the flat
-  start doesn't relax.
-* **The clam shell's energy** converges slowly with the mesh near its contact line on
-  the curved fibre; the crossover volume carries that error.
+* **Small contact angles.** For parallel fibres at 0 degrees, gaps below about 1 leave
+  the two menisci of the slice nearly touching in its middle, and the flat start
+  doesn't relax. At crossed fibres the column relaxes at 20 degrees and is lowered to 0
+  by continuation in the contact angle.
+* **The clam shell's energy** converges a little more slowly than second order near its
+  contact line on the curved fibre; the crossover is extrapolated from three meshes.
+  A fourth (93 thousand facets) took minutes and came out above the third at two of the
+  three volumes, which a converging mesh doesn't, so it isn't used.
 
 ## References
 
