@@ -66,9 +66,11 @@ Still open:
 * The 5-degree dimer (packing.md) stops at volume 0.196 (d = 0.07) instead of 0.190
   (d = 0.06) since the fold fix: each predictor can land on a point from which every
   step fails the reach check; going back a point would fix it (not built).
-* OpenMP waiting under oversubscription: 16 busy processes made a 4-thread test run
-  244-348 s with the default spin-waiting, 82-95 s with OMP_WAIT_POLICY=passive;
-  unloaded, passive was slower (17-23 s against 14-15 s).
+* OpenMP waiting under oversubscription (documented in performance.md, default
+  unchanged): with 16 busy processes a 4-thread test run took 185-348 s spinning,
+  82-98 s with OMP_WAIT_POLICY=passive; GOMP_SPINCOUNT 1000/10000 didn't help reliably
+  (153/338 s). Idle, passive costs 9% (tests) to 30% (gradient steps). Switching
+  automatically would need the load at OpenMP's start (libgomp reads it once).
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
 band) with `ev.remesh(target=h)` each step, as its notebook runs it. 491 tests.

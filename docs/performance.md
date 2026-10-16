@@ -193,8 +193,15 @@ Threads default to the number of physical cores. `pyse.set_threads(n)` /
 `with pyse.threads_limit(n):` sets them for a block, and `ev.relax(...,
 threads=n)` / `ev.newton(threads=n)` for one call; `pyse.map`
 workers run single-threaded by default, since for sweeps more processes beat more
-threads. With several threads, results can differ from run to run at round-off
-level; with one thread they are reproducible bit for bit. Newton steps keep the
+threads. On a machine already busy, with more threads wanted than cores free (several
+pySE processes on all cores each, say), OpenMP's threads spin while they wait for each
+other and take cores from the threads doing the work: a 4-thread test run with 16 other
+busy processes took 185 to 350 s instead of 15, and 82 to 98 s with
+`OMP_WAIT_POLICY=passive` (set before Python starts), which makes waiting threads sleep.
+On an idle machine passive waiting costs 10 to 30%, so it isn't the default; fewer
+threads per process is the better cure where it is possible. With several threads,
+results can differ from run to run at round-off level; with one thread they are
+reproducible bit for bit. Newton steps keep the
 matrix's sparsity pattern from one step to the next while the topology is unchanged,
 and add entries into it in parallel (`PYSE_NO_PATTERN=1` turns that off).
 `PYSE_NO_FAST_LOOPS=1` switches back to the original loops; `PYSE_CHECK_FACET_CACHE=1` verifies every cached
