@@ -185,8 +185,9 @@ Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
 Why: every example stops where the liquid's connectivity changes (a bridge
 ruptures, a trimer bursts, menisci meet in a pore, a clam shell closes round its
 fibre, a column's ends close round crossed fibres), and drainage through a bead pack
-is a chain of such events. Detection is cheap; handling them needs mesh surgery and
-relaxation through non-equilibrium jumps. The level-set method (Prodanovic and Bryant)
+is a chain of such events. Detection is cheap; handling them needs mesh surgery, done
+under volume control so that each event happens on a branch `arclength` follows. The
+level-set method (Prodanovic and Bryant)
 gets topology for free; pySE's case for doing it on meshes is exact menisci, contact
 angles, stability and saddles. Near term, bead packs go the hybrid way instead: exact
 throat thresholds from `arclength` runs, a pore network (invasion percolation) for
@@ -196,8 +197,8 @@ contact lines keep off the sphere constraints' poles, one pore 27% below MSP).
 
 Events (each needs detection, surgery, and a test):
 1. **Pinch-off**: a neck thins (bridge rupture, snap-off, a column breaking up): cut
-   at the narrowest ring, cap both sides, two bodies (volumes split by the cut, or each
-   at the pressure). Easiest; start here.
+   at the narrowest ring, cap both sides, two bodies (the volume split by the cut; a
+   part cut off from the rest keeps its volume, stage B). Easiest; start here.
 2. **Meniscus merge**: two free sheets meet (menisci from two throats in a pore, drops
    coalescing, a clam shell closing round its fibre): delete the facets where they
    touch and stitch the two openings (Evolver's `vertex_merge`, `edge_merge`,
