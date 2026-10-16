@@ -216,11 +216,6 @@ Bond 0.5, Λ = 1.29 at its least volume, the neck above the middle.
   the exact bridge goes sideways. For a perfectly wetting liquid that is where it
   starts to spread over the disks; Slobozhanin and Perales note that the two limits
   coincide. The figure's curves start at Λ = 0.45 for that reason.
-* **How the runs are set up.** `to_limit` follows the bridges without spreading the
-  vertices or flipping edges between points (`arclength(tidy=False)`): in the
-  quadratic model the tidying stalled the runs short of the fold. It lets a step be cut
-  in half six times (`halvings=6`; the default 3 wasn't enough at some folds with
-  gravity).
 * **Accuracy.** In the linear model the same meshes give the limits within about 1%
   (the folds of short bridges, where the neck is sharp, least well); the quadratic
   model does better than refining once more.

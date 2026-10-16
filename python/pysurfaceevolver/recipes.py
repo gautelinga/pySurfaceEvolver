@@ -510,7 +510,7 @@ def _remesher(ev, remesh: Any) -> Optional[Callable[[Callable[[], None]], bool]]
 
 def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
-              tidy: bool = True, halvings: int = 3, along: Optional[np.ndarray] = None,
+              tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
               remesh: Union[None, float, dict, Callable[[Any], Any]] = None) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s

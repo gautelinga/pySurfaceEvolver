@@ -187,20 +187,34 @@ def test_a_sharp_fold_is_turned_along_the_tangent():
     assert s.result.negative_modes == 1
 
 
-def _disk_bridge_quadratic():
-    """A bridge between two disks of radius 1 a height 1 apart, pinned on
+def _disk_bridge(height, bond=0.0):
+    """A bridge between two disks of radius 1 a ``height`` apart, pinned on
     their edges (the upper disk's volume by its wire's content integral),
-    relaxed once refined, then quadratic."""
-    tube = shapes.tube(1.0, 0.0, 1.0, nz=4, nt=24)
+    holding the cylinder's volume, relaxed once refined."""
+    tube = shapes.tube(1.0, 0.0, height, nz=max(2, round(height*24/(2*np.pi))), nt=24)
     ev = pyse.Evolver()
-    ev.load_arrays(tube.vertices, tube.faces,
-                   boundaries={1: C.circle(),
-                               2: C.circle((0, 0, 1), content=("-y/2", "x/2", "0"))},
+    top = C.circle((0, 0, height), content=(f"-{height!r}*y/2", f"{height!r}*x/2", "0"))
+    ev.load_arrays(tube.vertices, tube.faces, boundaries={1: C.circle(), 2: top},
                    vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
-                   bodies=[pyse.Body(volume=np.pi)])
+                   bodies=[pyse.Body(volume=np.pi*height, density=1.0 if bond else None)],
+                   gravity=bond if bond else None)
     ev.relax(levels=1)
-    ev.command("quadratic")
     return ev
+
+
+def _to_least_volume(ev, ds, **kwargs):
+    """Take liquid away with arclength (warnings as errors) until the volume
+    has risen for three points; the reduced volumes and the last step."""
+    cylinder = ev.body(1).target
+    values = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        warnings.simplefilter("ignore", pyse.EvolverWarning)
+        for s in recipes.arclength(ev, ev.body(1), ds*cylinder, 80, **kwargs):
+            values.append(s.value/cylinder)
+            if len(values) > 3 and values[-1] > values[-2] > values[-3]:
+                break
+    return values, s
 
 
 def test_a_quadratic_surface_is_not_spread_between_points():
@@ -208,16 +222,19 @@ def test_a_quadratic_surface_is_not_spread_between_points():
     # pinches): spreading the vertices between points left the quadratic
     # surface a little worse each time (Newton steps don't move nodes along
     # it), the run went 2.3% past the exact fold and stopped there
-    ev = _disk_bridge_quadratic()
-    values = []
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        warnings.simplefilter("ignore", pyse.EvolverWarning)
-        for s in recipes.arclength(ev, ev.body(1), -0.04*np.pi, 60, halvings=6):
-            values.append(s.value/np.pi)
-            if len(values) > 3 and values[-1] > values[-2] > values[-3]:
-                break
+    ev = _disk_bridge(1.0)
+    ev.command("quadratic")
+    values, s = _to_least_volume(ev, -0.04, halvings=6)
     assert min(values) == pytest.approx(0.2544, rel=5e-3)
+    assert s.result.negative_modes == 1
+
+
+def test_the_default_halvings_get_round_a_fold_with_gravity():
+    # a bridge between disks 3.92 apart (radius 1, Bond 0.2) at its least
+    # volume, 0.7730 of the cylinder's (Slobozhanin and Perales): the step
+    # into the fold needed five halvings, and the default was three
+    values, s = _to_least_volume(_disk_bridge(3.92, bond=0.2), -0.04)
+    assert min(values) == pytest.approx(0.7730, rel=5e-3)
     assert s.result.negative_modes == 1
 
 

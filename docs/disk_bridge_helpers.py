@@ -75,7 +75,7 @@ def kind(ev, mode, slenderness):
     return _axisymmetric(odd)
 
 
-def to_limit(ev, slenderness, ds, steps=200, tidy=False):
+def to_limit(ev, slenderness, ds, steps=200):
     """Follow the bridge with recipes.arclength in its volume, in steps of ds
     times the cylinder's volume (ds < 0: taking liquid away), to the first
     point with a negative eigenvalue (the volume held), and up to three
@@ -86,15 +86,11 @@ def to_limit(ev, slenderness, ds, steps=200, tidy=False):
     greatest) volume of a parabola through the three points around the turn,
     against the distance travelled. Otherwise it is where the lowest
     eigenvalue crosses zero: from a parabola through the three points up to
-    the first unstable one, the volume against the eigenvalue.
-
-    Between points the surface isn't tidied by default (in the quadratic model
-    that stalls the run near the fold here), and a failed step is halved up to
-    six times (three weren't enough at some folds)."""
+    the first unstable one, the volume against the eigenvalue."""
     cylinder = 2*np.pi*slenderness
     sign = np.sign(ds)
     rows, how, first, turned = [], None, None, False   # rows: distance, volume, eigenvalue, vertices
-    for step in recipes.arclength(ev, ev.body(1), ds*cylinder, steps, halvings=6, tidy=tidy):
+    for step in recipes.arclength(ev, ev.body(1), ds*cylinder, steps):
         x = ev.vertices
         dist = 0.0 if not rows else rows[-1][0] + np.hypot(
             step.value - rows[-1][1], np.sqrt(((x - rows[-1][3])**2).sum(axis=1).mean()))
