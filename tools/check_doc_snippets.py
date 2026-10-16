@@ -10,8 +10,8 @@ compared again).
 
 Default pages: docs/stress_cases.md, docs/several_surfaces.md,
 docs/bridge_rupture.md and docs/packing.md. Exit status 1 if an output
-differs (or a block fails); ``--update`` writes the new outputs into the page
-instead. ``--jobs n`` runs up to n blocks at a time (each in its own process
+differs (or a block fails); ``--update`` writes the new outputs of the blocks
+that differ into the page instead. ``--jobs n`` runs up to n blocks at a time (each in its own process
 as always; give each fewer threads with OMP_NUM_THREADS).
 """
 import argparse
@@ -96,7 +96,10 @@ def main() -> int:
                 print("  shown:\n    " + m.group(2).rstrip().replace("\n", "\n    "))
                 print("  now:\n    " + got.rstrip().replace("\n", "\n    "))
             status |= not ok
-            out.append(text[pos:m.start(2)] + (got if args.update and not error else m.group(2)))
+            # (only blocks that differ are rewritten: a block within the
+            # tolerance keeps its digits)
+            out.append(text[pos:m.start(2)] + (got if args.update and not ok and not error
+                                               else m.group(2)))
             pos = m.end(2)
         if args.update:
             with open(page, "w") as fh:
