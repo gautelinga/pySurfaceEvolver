@@ -241,7 +241,13 @@ Design points to settle before C: surgery in C (fast, near Evolver's element
 structures) or in Python on `mesh()` with a reload (simpler, slower, loses element
 attributes unless carried); how bodies split and merge in the datafile model (body
 ids, volconst, pressures); keeping the mesh good after surgery (remesh around the
-seam; the line-following Newton fix must accept new lines); thread safety of the fast
+seam; the line-following Newton fix must accept new lines); whether that remeshing
+needs C (start C with `ev.remesh()` limited to the seam's neighbourhood and measure,
+on a small test mesh of a few hundred facets so each event runs in seconds, the
+Newton steps right after each event and the time per event; build the C remesher
+toward a size field only if seam quality or speed limits it, and then together with
+the surgery if that is in C; `remesh()` is linear-only, so events in a quadratic run
+go through linear around the event); thread safety of the fast
 loops' caches (facet cache, pattern reuse: invalidate on surgery; the deflation cache
 is keyed by top_timestamp already). Reference for robust collision handling and
 topology changes on explicit meshes: El Topo (Brochu and Bridson, SIAM J. Sci. Comput.
