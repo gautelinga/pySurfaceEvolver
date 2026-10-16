@@ -590,6 +590,9 @@ NB_MODULE(_core, m) {
     return pyse_set_solver(name.c_str()) != 0;
   }, "name"_a);
   m.def("solver", []() { Lock lock; return std::string(pyse_solver()); });
+  m.def("set_follow", [](bool on) { Lock lock; return bool(pyse_set_follow(on)); }, "on"_a,
+        "whether Newton steps carry the mesh along a line they move past the edges "
+        "beside it (default on); returns the previous setting");
   m.def("count", [](int type) { Lock lock; return pyse_count(type); }, "type"_a);
   m.def("sdim", []() { Lock lock; return pyse_sdim(); });
   m.def("representation", []() { Lock lock; return pyse_representation(); });

@@ -1801,6 +1801,8 @@ void pyse_set_multipliers(const double *in, long n)
     GEN_QUANT(i)->pressure = (REAL)in[row++];
 }
 
+int pyse_set_follow(int on) { return fl_set_follow(on); }
+
 double pyse_total_energy(void) { return (double)web.total_energy; }
 double pyse_total_area(void) { return (double)web.total_area; }
 const char *pyse_datafilename(void) { return datafilename; }

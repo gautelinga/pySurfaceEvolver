@@ -294,10 +294,16 @@ def _newton_target(ev, put: Callable[[Any], None],
                    value: float) -> "tuple[np.ndarray, np.ndarray]":
     """Where one plain Newton step at ``value`` takes the vertices and the
     Lagrange multipliers (undone, both: the step's Hessian uses the
-    multipliers, so two steps from the same point need the same ones)."""
+    multipliers, so two steps from the same point need the same ones).
+    Plain: without the mesh following a line the step moves far, which
+    isn't linear in the step, and the corrector's two steps must be."""
     put(value)
     start = ev._coords()
-    _hessian(ev)
+    was = _core.set_follow(False)
+    try:
+        _hessian(ev)
+    finally:
+        _core.set_follow(was)
     x, multipliers = ev.vertices, _core.multipliers()
     ev._put_back(start)
     return x, multipliers

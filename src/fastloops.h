@@ -87,6 +87,12 @@ void fl_pattern_store(struct linsys *S, int rows, int cols, int index_start);
 void fl_hessian_before_factor(struct linsys *S);
 void fl_hessian_after_factor(struct linsys *S);
 void fl_hessian_deflate(struct linsys *S, REAL *X);   /* rigid motions out of a Newton step */
+/* The mesh following a Newton step (fasthess.c): hessian_move() calls
+   fl_follow_begin() before moving the vertices (nonzero: it saved them) and
+   then fl_follow_end() before projecting onto the constraints. */
+int fl_follow_begin(void);
+void fl_follow_end(void);
+int fl_set_follow(int on);   /* on (default) or off; returns the previous setting */
 /* Nonzero when PYSE_CHECK_FACET_CACHE is set: verify every cached answer. */
 int fl_check(void);
 

@@ -201,10 +201,12 @@ and add entries into it in parallel (`PYSE_NO_PATTERN=1` turns that off).
 facet corner against Evolver's own topology (CI runs with it). Narrower switches, for
 comparing against Evolver's own code: `PYSE_NO_FAST_MESH=1` (serial vertex averaging,
 and serial edge tests in equiangulation), `PYSE_NO_FAST_LAGRANGE=1` (Evolver's own
-area and volume Hessians for Lagrange elements instead of the BLAS ones), and
+area and volume Hessians for Lagrange elements instead of the BLAS ones),
 `PYSE_NO_DEFLATE=1` (Newton steps keep a free surface's rigid motions: nothing holds a
 body that touches no wall, its Newton system is singular along them, and round-off
-there moves the converged surface and holds the residual up). `PYSE_DUMP_HESSIAN=path`
+there moves the converged surface and holds the residual up), and `PYSE_NO_FOLLOW=1`
+(the mesh doesn't follow a contact or triple line that a Newton step moves past the
+edges beside it). `PYSE_DUMP_HESSIAN=path`
 writes each Newton matrix to `path` (Matrix Market) and prints its size, factoring time and inertia.
 
 Newton steps (`hessian`) factor the Hessian with [MUMPS](https://mumps-solver.org/)

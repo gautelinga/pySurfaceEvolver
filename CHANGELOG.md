@@ -37,6 +37,16 @@
 
 ### Fixes
 
+- Newton steps carry the mesh along a moving contact or triple line. With
+  `hessian_normal` a step moves each vertex only along its normal (across the line,
+  on a line), so a line that moved further than the edges beside it inverted them:
+  a lens near spreading started 5% off its rim, and the lens under gravity refined
+  twice, ended unconverged with collapsed facets. Where the plain step squashes the
+  facets beside a line (and none inside a surface), the vertices beside the line now
+  move along their surface with it (Jacobi sweeps of the lines' motion in each
+  vertex's tangent directions); any other step is Newton's own, so convergence is as
+  before, and `arclength`'s corrector takes plain steps. Both lenses now converge to
+  their references (rims within 0.02%). `PYSE_NO_FOLLOW=1` turns it off.
 - `constraints.cylinder` with its default `gauge="azimuthal"`: on a fibre that isn't
   vertical, a body's volume had the wetted face's part added instead of taken off
   (a band of liquid round a fibre along x came out 2x too large in the test; the

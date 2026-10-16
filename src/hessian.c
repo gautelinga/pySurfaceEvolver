@@ -2257,6 +2257,7 @@ void hessian_move(
   int i,j;
   struct hess_verlist *vc;              /* current  vertex */
   vertex_id v_id;
+  int follow;
 
   last_hessian_scale = stepsize;
 
@@ -2273,6 +2274,7 @@ void hessian_move(
     }
   }
   /* move vertices */
+  follow = mode == ACTUAL_MOVE && stepsize != 0.0 && fl_follow_begin();  /* pySE */
   #ifdef MPI_EVOLVER
   if ( this_task == 0 ) 
     mpi_hessian_move(stepsize,mode,X);
@@ -2322,6 +2324,7 @@ void hessian_move(
   #endif
 
   if ( mode == SET_VELOCITY ) return;
+  if ( follow ) fl_follow_end();   /* pySE: the mesh follows the step */
   if ( hess_move_con_flag )
   {
      calc_all_grads(CALC_VOLGRADS);

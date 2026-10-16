@@ -1559,6 +1559,352 @@ void fl_hessian_deflate(struct linsys *S, REAL *X)
   free_matrix(q);
 }
 
+/* ---- the mesh following a Newton step ------------------------------------
+ *
+ * With hessian_normal a Newton step moves each vertex only in its normal
+ * space: along the normal inside the surface, across the line on a contact
+ * line, a triple line or a mirror. Where such a line moves, its motion runs
+ * along the surfaces next to it (a lens's rim moving out over a flat bath:
+ * in the bath's plane), and the vertices beside it, held to their normals,
+ * can't follow: a step that moves the line by more than the edges beside it
+ * inverts them (a lens near spreading started 5% off, or under gravity
+ * refined twice, stopped with its facets collapsed).
+ *
+ * Here such a step is extended into the surface by moves t along it. Each
+ * vertex moves only in its mesh directions, those Newton left out (its
+ * constraints' tangent less the columns of its projection: the tangent
+ * plane inside a surface, the line's direction on a line, none at a corner,
+ * on a wire or at a fixed vertex), so the shape changes at second order
+ * only. What drives t is a vertex's motion against that of its neighbours
+ * on a line or held (fewer than two mesh directions); two vertices inside a
+ * surface, both moving along their normals, drive nothing. Jacobi sweeps
+ * spread it: t = M (mean of the neighbours' t + that drive), t = 0 where
+ * held.
+ *
+ * Only a step that squashes the facets beside a line gets the moves: a
+ * facet's area vector after the step along the one before, over the one
+ * before squared (1 kept, 0 collapsed, below 0 inverted), below FOLLOW_NONE
+ * for some facet with a corner on a line, and for none inside a surface;
+ * all of them below FOLLOW_ALL, in proportion between. Facets of worse shape
+ * than FOLLOW_SHAPE before the step don't count: slivers beside a contact
+ * line flip under any step (a pore between spheres stopped unconverged with
+ * them counted). A step that wrecks facets inside a surface too, far from
+ * equilibrium, is left for relax() to undo; a step that squashes nothing is
+ * Newton's own, so Newton keeps its quadratic convergence. (Gated on how far
+ * a line slips past its neighbours instead, the moves kept a contact line at
+ * 0 degrees from converging: each perturbed the equilibrium as much as the
+ * next step corrected.) arclength()'s corrector turns it off
+ * (fl_set_follow): its two Newton steps must respond linearly to the value.
+ * Linear and quadratic soapfilm models in 3D (a midpoint takes the mean of
+ * its ends' moves), not with symmetry groups. PYSE_NO_FOLLOW=1 turns it off.
+ */
+
+#define FOLLOW_ALL 0.1     /* a facet squashed to this: all of the moves */
+#define FOLLOW_NONE 0.5    /* every facet kept more than this: none */
+#define FOLLOW_SHAPE 0.3   /* facets of worse shape than this don't count */
+#define FOLLOW_TOL 0.005    /* sweeps stop below this correction per edge */
+#define FOLLOW_SWEEPS 200
+
+static REAL *fw_old = NULL;   /* coordinates before the step, by vertex ordinal */
+static long fw_size = 0;
+static int fw_off = 0;        /* fl_set_follow(0): plain Newton steps */
+
+int fl_set_follow(int on)
+{ int was = !fw_off;
+  fw_off = !on;
+  return was;
+}
+
+static int follow_disabled(void)
+{ static int disabled = -1;
+  if ( disabled < 0 ) disabled = getenv("PYSE_NO_FOLLOW") != NULL;
+  return disabled;
+}
+
+int fl_follow_begin(void)
+{ vertex_id v_id;
+  long n;
+  if ( fw_off || follow_disabled() || web.representation != SOAPFILM || web.symmetry_flag || SDIM != 3
+       || (web.modeltype != LINEAR && web.modeltype != QUADRATIC) )
+    return 0;
+  n = (long)(web.skel[VERTEX].max_ord + 1)*SDIM;
+  if ( n > fw_size )
+  { REAL *p = (REAL*)realloc(fw_old,n*sizeof(REAL));
+    if ( !p ) return 0;
+    fw_old = p;
+    fw_size = n;
+  }
+  FOR_ALL_VERTICES(v_id)
+  { REAL *x = get_coord(v_id);
+    memcpy(fw_old + (long)loc_ordinal(v_id)*SDIM,x,SDIM*sizeof(REAL));
+  }
+  return 1;
+}
+
+/* the projection onto v's mesh directions, into m (SDIM x SDIM, by rows):
+   an orthonormal basis of its constraints' tangent with the step's own
+   directions (the columns of its projection, taken into that tangent)
+   removed; returns their number */
+static int mesh_directions(vertex_id v_id, struct hess_verlist *vh, REAL *m)
+{ MAT2D(pc,MAXCOORD,MAXCOORD);
+  MAT2D(q,MAXCOORD,MAXCOORD);
+  MAT2D(b,MAXCOORD,MAXCOORD);
+  int i, j, k, nq = 0, nb = 0;
+  if ( get_vattr(v_id) & CONSTRAINT ) constr_proj_matrix(v_id,pc);
+  else
+    for ( i = 0 ; i < SDIM ; i++ )
+      for ( j = 0 ; j < SDIM ; j++ ) pc[i][j] = i == j ? 1.0 : 0.0;
+  /* the step's directions, in the tangent, orthonormal */
+  for ( k = 0 ; k < vh->freedom && nq < SDIM ; k++ )
+  { REAL s;
+    for ( i = 0 ; i < SDIM ; i++ )
+    { q[nq][i] = 0.0;
+      for ( j = 0 ; j < SDIM ; j++ ) q[nq][i] += pc[i][j]*vh->proj[j][k];
+    }
+    for ( j = 0 ; j < nq ; j++ )
+    { s = SDIM_dot(q[j],q[nq]);
+      for ( i = 0 ; i < SDIM ; i++ ) q[nq][i] -= s*q[j][i];
+    }
+    s = sqrt(SDIM_dot(q[nq],q[nq]));
+    if ( s > 1e-6 )
+    { for ( i = 0 ; i < SDIM ; i++ ) q[nq][i] /= s;
+      nq++;
+    }
+  }
+  /* the tangent's directions less those */
+  for ( k = 0 ; k < SDIM ; k++ )
+  { REAL s;
+    for ( i = 0 ; i < SDIM ; i++ ) b[nb][i] = pc[i][k];
+    for ( j = 0 ; j < nq ; j++ )
+    { s = SDIM_dot(q[j],b[nb]);
+      for ( i = 0 ; i < SDIM ; i++ ) b[nb][i] -= s*q[j][i];
+    }
+    for ( j = 0 ; j < nb ; j++ )
+    { s = SDIM_dot(b[j],b[nb]);
+      for ( i = 0 ; i < SDIM ; i++ ) b[nb][i] -= s*b[j][i];
+    }
+    s = sqrt(SDIM_dot(b[nb],b[nb]));
+    if ( s > 1e-6 )
+    { for ( i = 0 ; i < SDIM ; i++ ) b[nb][i] /= s;
+      nb++;
+    }
+  }
+  for ( i = 0 ; i < SDIM ; i++ )
+    for ( j = 0 ; j < SDIM ; j++ )
+    { REAL s = 0.0;
+      for ( k = 0 ; k < nb ; k++ ) s += b[k][i]*b[k][j];
+      m[i*SDIM + j] = s;
+    }
+  return nb;
+}
+
+void fl_follow_end(void)
+{ vertex_id v_id;
+  edge_id e_id;
+  long nv = web.skel[VERTEX].max_ord + 1, n = 0, i, nn = 0, it;
+  int j;
+  long *list = NULL, *start = NULL, *nb = NULL;
+  REAL *d = NULL, *T = NULL, *Tn = NULL, *G = NULL, *M = NULL, *h = NULL;
+  char *dim = NULL;
+  REAL slip = 0.0, squash = 1.0, w;
+
+  /* the movable corner vertices, their mesh directions and neighbours */
+  list = (long*)malloc(nv*sizeof(long));
+  start = (long*)malloc((nv + 1)*sizeof(long));
+  M = (REAL*)malloc(nv*SDIM*SDIM*sizeof(REAL));
+  h = (REAL*)malloc(nv*sizeof(REAL));
+  d = (REAL*)malloc(nv*SDIM*sizeof(REAL));
+  dim = (char*)calloc(nv,1);
+  if ( !list || !start || !M || !h || !d || !dim ) goto done;
+  FOR_ALL_VERTICES(v_id)
+  { long o = loc_ordinal(v_id);
+    REAL *x = get_coord(v_id);
+    for ( j = 0 ; j < SDIM ; j++ ) d[o*SDIM + j] = x[j] - fw_old[o*SDIM + j];
+    h[o] = -1.0;
+  }
+  FOR_ALL_VERTICES(v_id)
+  { struct hess_verlist *vh = get_vertex_vhead(v_id);
+    ATTR attr = get_vattr(v_id);
+    long o = loc_ordinal(v_id);
+    if ( attr & (FIXED|BOUNDARY|Q_MIDPOINT|AXIAL_POINT) || vh->freedom <= 0 || !vh->proj )
+      continue;
+    e_id = get_vertex_edge(v_id);
+    if ( !valid_id(e_id) ) continue;
+    dim[o] = (char)mesh_directions(v_id,vh,M + o*SDIM*SDIM);
+    if ( dim[o] <= 0 ) continue;
+    list[n++] = o;
+  }
+  if ( n == 0 ) goto done;
+  /* how far the plain step squashes the facets of fair shape (corners
+     only), and whether one inside a surface is among them (see above) */
+  { facet_id f_id;
+    int inside = 0;
+    FOR_ALL_FACETS(f_id)
+    { facetedge_id fe = get_facet_fe(f_id);
+      vertex_id c[3];
+      REAL a0[MAXCOORD], b0[MAXCOORD], a1[MAXCOORD], b1[MAXCOORD], n0[MAXCOORD], n1[MAXCOORD];
+      REAL *x0, *x1, *x2, *y0, *y1, *y2, nn;
+      c[0] = get_fe_tailv(fe);
+      c[1] = get_fe_headv(fe);
+      c[2] = get_fe_headv(get_next_edge(fe));
+      x0 = fw_old + loc_ordinal(c[0])*SDIM;
+      x1 = fw_old + loc_ordinal(c[1])*SDIM;
+      x2 = fw_old + loc_ordinal(c[2])*SDIM;
+      y0 = get_coord(c[0]); y1 = get_coord(c[1]); y2 = get_coord(c[2]);
+      for ( j = 0 ; j < SDIM ; j++ )
+      { a0[j] = x1[j] - x0[j]; b0[j] = x2[j] - x0[j];
+        a1[j] = y1[j] - y0[j]; b1[j] = y2[j] - y0[j];
+      }
+      cross_prod(a0,b0,n0);
+      cross_prod(a1,b1,n1);
+      nn = SDIM_dot(n0,n0);
+      { REAL e2 = SDIM_dot(a0,a0) + SDIM_dot(b0,b0), cc[MAXCOORD];
+        for ( j = 0 ; j < SDIM ; j++ ) cc[j] = b0[j] - a0[j];
+        e2 += SDIM_dot(cc,cc);
+        /* shape before the step: 1 equilateral, 0 a sliver */
+        if ( !(e2 > 0.0) || 2.0*sqrt(3.0)*sqrt(nn)/e2 < FOLLOW_SHAPE ) continue;
+      }
+      if ( nn > 0.0 )
+      { REAL q = SDIM_dot(n0,n1)/nn;
+        if ( q < squash ) squash = q;
+        if ( q < FOLLOW_NONE && dim[loc_ordinal(c[0])] >= 2 && dim[loc_ordinal(c[1])] >= 2
+             && dim[loc_ordinal(c[2])] >= 2 )
+          inside = 1;
+      }
+    }
+    if ( !(squash < FOLLOW_NONE) || inside ) goto done;
+  }
+  /* neighbours (corner to corner), CSR by position in list */
+  for ( i = 0 ; i < n ; i++ ) start[i] = 0;
+  { long cap = 8*n;
+    nb = (long*)malloc(cap*sizeof(long));
+    if ( !nb ) goto done;
+    i = 0;
+    FOR_ALL_VERTICES(v_id)
+    { long o = loc_ordinal(v_id);
+      edge_id first;
+      REAL shortest = -1.0;
+      if ( i >= n || list[i] != o ) continue;
+      start[i] = nn;
+      e_id = first = get_vertex_edge(v_id);
+      do
+      { vertex_id u = get_edge_headv(e_id);
+        REAL side[MAXCOORD], len;
+        get_edge_side(e_id,side);
+        len = sqrt(SDIM_dot(side,side));
+        if ( shortest < 0.0 || len < shortest ) shortest = len;
+        if ( nn == cap )
+        { long *p = (long*)realloc(nb,2*cap*sizeof(long));
+          if ( !p ) goto done;
+          nb = p;
+          cap *= 2;
+        }
+        nb[nn++] = loc_ordinal(u);
+        e_id = get_next_tail_edge(e_id);
+      } while ( !equal_id(e_id,first) );
+      h[o] = shortest;
+      i++;
+    }
+    start[n] = nn;
+  }
+
+  /* what drives it: each vertex's motion against that of its neighbours on
+     a line or held (fewer than two mesh directions), in its own mesh
+     directions; between two vertices inside a surface, both moving along
+     their normals, nothing (a surface without lines gets no moves) */
+  T = (REAL*)calloc(nv*SDIM,sizeof(REAL));
+  Tn = (REAL*)calloc(nv*SDIM,sizeof(REAL));
+  G = (REAL*)calloc(n*SDIM,sizeof(REAL));
+  if ( !T || !Tn || !G ) goto done;
+  for ( i = 0 ; i < n ; i++ )
+  { long o = list[i], a, deg = start[i+1] - start[i];
+    REAL g[MAXCOORD], gg = 0.0, *m = M + o*SDIM*SDIM;
+    int kk;
+    for ( j = 0 ; j < SDIM ; j++ ) g[j] = 0.0;
+    for ( a = start[i] ; a < start[i+1] ; a++ )
+      if ( dim[nb[a]] < 2 )
+        for ( j = 0 ; j < SDIM ; j++ ) g[j] += d[nb[a]*SDIM + j] - d[o*SDIM + j];
+    for ( j = 0 ; j < SDIM ; j++ )
+    { REAL c = 0.0;
+      for ( kk = 0 ; kk < SDIM ; kk++ ) c += m[j*SDIM + kk]*g[kk];
+      G[i*SDIM + j] = deg ? c/(REAL)deg : 0.0;
+      gg += G[i*SDIM + j]*G[i*SDIM + j];
+      T[o*SDIM + j] = G[i*SDIM + j];       /* the first sweep, from t = 0 */
+    }
+    if ( h[o] > 0.0 && sqrt(gg)/h[o] > slip ) slip = sqrt(gg)/h[o];
+  }
+  if ( !(slip > 0.0) ) goto done;             /* no line moved past its neighbours */
+  /* Jacobi sweeps: t = M (mean of the neighbours' t + g), t = 0 where held */
+  for ( it = 1 ; it < FOLLOW_SWEEPS ; it++ )
+  { REAL worst = 0.0;
+    #ifdef _OPENMP
+    #pragma omp parallel for reduction(max:worst) schedule(static)
+    #endif
+    for ( i = 0 ; i < n ; i++ )
+    { long o = list[i], a, deg = start[i+1] - start[i];
+      REAL mean[MAXCOORD], cc = 0.0, *m = M + o*SDIM*SDIM;
+      int jj, kk;
+      for ( jj = 0 ; jj < SDIM ; jj++ ) mean[jj] = 0.0;
+      for ( a = start[i] ; a < start[i+1] ; a++ )
+        for ( jj = 0 ; jj < SDIM ; jj++ ) mean[jj] += T[nb[a]*SDIM + jj];
+      for ( jj = 0 ; jj < SDIM ; jj++ )
+      { REAL c = G[i*SDIM + jj];
+        for ( kk = 0 ; kk < SDIM ; kk++ ) c += m[jj*SDIM + kk]*mean[kk]/(REAL)deg;
+        Tn[o*SDIM + jj] = c;
+        cc += (c - T[o*SDIM + jj])*(c - T[o*SDIM + jj]);
+      }
+      if ( h[o] > 0.0 && sqrt(cc)/h[o] > worst ) worst = sqrt(cc)/h[o];
+    }
+    for ( i = 0 ; i < n ; i++ )
+      memcpy(T + list[i]*SDIM,Tn + list[i]*SDIM,SDIM*sizeof(REAL));
+    if ( worst < FOLLOW_TOL ) break;
+  }
+  w = squash <= FOLLOW_ALL ? 1.0 : (FOLLOW_NONE - squash)/(FOLLOW_NONE - FOLLOW_ALL);
+
+  /* the moves: corners, then quadratic midpoints by their ends; none if
+     something went wrong (smoothing can't make them longer than the step) */
+  { REAL step = 0.0, move = 0.0;
+    FOR_ALL_VERTICES(v_id)
+    { long o = loc_ordinal(v_id);
+      REAL s = SDIM_dot(d + o*SDIM,d + o*SDIM);
+      if ( s > step ) step = s;
+    }
+    for ( i = 0 ; i < n ; i++ )
+    { long o = list[i];
+      REAL s = 0.0;
+      for ( j = 0 ; j < SDIM ; j++ )
+      { Tn[o*SDIM + j] = w*T[o*SDIM + j];
+        s += Tn[o*SDIM + j]*Tn[o*SDIM + j];
+      }
+      if ( s > move ) move = s;
+    }
+    if ( !(move <= 4.0*step) ) goto done;
+  }
+  FOR_ALL_VERTICES(v_id)
+  { long o = loc_ordinal(v_id);
+    REAL *x;
+    if ( h[o] < 0.0 ) continue;          /* not moved here */
+    x = get_coord(v_id);
+    for ( j = 0 ; j < SDIM ; j++ ) x[j] += Tn[o*SDIM + j];
+  }
+  if ( web.modeltype == QUADRATIC )
+    FOR_ALL_EDGES(e_id)
+    { vertex_id mid = get_edge_midv(e_id);
+      long a = loc_ordinal(get_edge_tailv(e_id)), b = loc_ordinal(get_edge_headv(e_id));
+      struct hess_verlist *vh = get_vertex_vhead(mid);
+      REAL *x;
+      if ( (get_vattr(mid) & (FIXED|BOUNDARY)) || vh->freedom <= 0 ) continue;
+      if ( h[a] < 0.0 && h[b] < 0.0 ) continue;
+      x = get_coord(mid);
+      for ( j = 0 ; j < SDIM ; j++ )
+        x[j] += 0.5*((h[a] < 0.0 ? 0.0 : Tn[a*SDIM + j]) + (h[b] < 0.0 ? 0.0 : Tn[b*SDIM + j]));
+    }
+
+done:
+  free(list); free(start); free(nb); free(M); free(h); free(d); free(T); free(Tn); free(G);
+  free(dim);
+}
+
 /* ---- Lagrange facet area Hessian as matrix products ----------------------
  *
  * lagrange_facet_tension_hess() for 2D facets, regrouped. At each Gauss point

@@ -128,6 +128,9 @@ int pyse_thread_setting(void);   /* 0: the default */
    "evolver" (Evolver's own minimal degree). Returns 0 if unknown/unavailable. */
 int pyse_set_solver(const char *name);
 const char *pyse_solver(void);
+/* Whether Newton steps carry the mesh along a line they move past the edges
+   beside it (on by default); returns the previous setting. */
+int pyse_set_follow(int on);
 
 /* ---- Information about the last guarded call. ---------------------------- */
 int pyse_last_errnum(void);
