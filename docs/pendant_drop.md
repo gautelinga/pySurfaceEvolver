@@ -185,10 +185,11 @@ starts (red; dotted, the largest volume there); dots, pySE. Right, the drop at B
   together, in the surface's own units. On a ring of radius 1 the volumes are a few
   units while the shape changes by a few hundredths a step, so in that measure the
   branch turns almost at a right angle at the fold. After a failed step `arclength`
-  predicts along the branch's tangent, which turns it there with steps up to about
-  2% of Tate's volume; with 3% it still stopped at Bond 1. On a ring of radius 1/4 a
-  volume is 64 times smaller and a displacement 4 times, and the fold is round
-  enough to turn with the steps used here. Results are scaled back to the ring's
+  predicts along the branch's tangent and halves the step up to six times, which
+  turns it there with steps up to 8% of Tate's volume (Bond 1 to 8; with three
+  halvings it stopped at Bond 1 with 3%). On a ring of radius 1/4 a volume is 64
+  times smaller and a displacement 4 times, and the fold is round enough to turn
+  without either. Results are scaled back to the ring's
   radius; the Bond number is unchanged (gravity Bond/R²).
 * **Pinned on a wire.** The ring is a circular wire (`C.circle`): its vertices are
   fixed, and refining puts the new ones on the circle, so the ring stays round.
