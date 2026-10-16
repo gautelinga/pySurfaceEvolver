@@ -404,10 +404,20 @@ def crossed(delta, theta, volume, half_length=2.0, h=0.25):
     return ev
 
 
+def _inside(polygon, points):
+    """Whether each point is inside the closed polygon (even-odd rule: a ray
+    to +x crosses its edges an odd number of times)."""
+    x, y = points[:, :1], points[:, 1:2]
+    x0, y0 = polygon[:, 0], polygon[:, 1]
+    x1, y1 = np.roll(x0, -1), np.roll(y0, -1)
+    spans = (y0 > y) != (y1 > y)
+    at = x0 + (y - y0)*(x1 - x0)/np.where(y1 != y0, y1 - y0, 1.0)
+    return (spans & (x < at)).sum(axis=1) % 2 == 1
+
+
 def _planar_patch(rim, h):
     """Triangles filling the planar polygon ``rim`` (closed, in order), with
     points about h apart inside: its points and the triangles."""
-    from matplotlib.path import Path
     from scipy.spatial import Delaunay
     o = rim.mean(axis=0)
     n = np.cross(rim[1] - rim[0], rim[len(rim)//3] - rim[0])
@@ -416,12 +426,11 @@ def _planar_patch(rim, h):
     e1 /= np.linalg.norm(e1)
     e2 = np.cross(n, e1)
     uv = np.c_[(rim - o) @ e1, (rim - o) @ e2]
-    path = Path(uv)
     lo, hi = uv.min(axis=0), uv.max(axis=0)
     g = np.array([[x, y] for x in np.arange(lo[0], hi[0], h) for y in np.arange(lo[1], hi[1], h)])
     edge_dist = np.min(np.linalg.norm(g[:, None, :] - uv[None, :, :], axis=2), axis=1)
-    inner = g[path.contains_points(g) & (edge_dist > 0.6*h)]
+    inner = g[_inside(uv, g) & (edge_dist > 0.6*h)]
     allp = np.vstack([uv, inner])
     tri = Delaunay(allp).simplices
-    keep = path.contains_points(allp[tri].mean(axis=1))
+    keep = _inside(uv, allp[tri].mean(axis=1))
     return o + allp[:, :1]*e1 + allp[:, 1:]*e2, tri[keep]
