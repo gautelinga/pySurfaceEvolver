@@ -201,12 +201,14 @@ around them (grey).
 
 ## Notes and limits
 
-* **The rim moving over the mesh.** A rim that has to travel more than an edge length or
-  two squashes the facets ahead of it: equiangulation can't swap the rim's edges, and
-  vertex averaging doesn't move the rim's vertices. Near spreading, where the three
-  surfaces meet almost flat, the lens above started from a rim 5% too small ends
-  unconverged, with collapsed edges. Hence the starts at the exact rim (without
-  gravity) or the reference's (with it), with the caps' angles wrong instead.
+* **The rim moving over the mesh.** A Newton step moves each vertex along its normal
+  only, and the rim along the surfaces beside it, so a rim that moves further than an
+  edge or two would squash the facets ahead of it; pySE's Newton steps carry the
+  vertices beside the rim along with it (`PYSE_NO_FOLLOW=1` turns that off). The lens
+  near spreading started from a rim 5% too small or too large converges to the exact
+  rim (1.4703 against 1.4702, refined twice). The runs above start at the exact rim
+  (without gravity) or the reference's (with it) all the same, with the caps' angles
+  wrong instead.
 * **Measuring angles.** `ev.contact_angles()` is for walls. Here a sphere is fitted to
   each cap's vertices, which is accurate to second order, as the energy is; with gravity
   the caps aren't spheres, and `lens_shape`'s angles mean nothing.
@@ -216,7 +218,8 @@ around them (grey).
   has. They also stop it drifting: a whole lens can slide along the water at no cost,
   a direction in which the Newton steps' matrix is singular.
 * **Refining further** under gravity, a second time (56 thousand facets at volume 4),
-  `relax()` ended unconverged (residual 0.04); once is what the runs above use.
+  gives the rim 2.5960 and the thickness 0.2193 (axisymmetric 2.5966 and 0.2192) in
+  12 seconds; once is what the runs above use.
 
 ## References
 

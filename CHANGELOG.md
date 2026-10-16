@@ -56,6 +56,14 @@
   last two points points off the branch by an angle that halving the step doesn't
   shrink, and the run stopped at the fold. Once a step fails, the shorter ones go
   along the branch's tangent at the last point (two more Newton steps).
+- `recipes.arclength` in the quadratic and Lagrange models no longer spreads the
+  vertices between points: Newton steps move nodes only along the normals, so the
+  spreading's rearrangement stayed, and the surface settled on a slightly different
+  equilibrium each time (a bridge between disks drifted 2.3% past its fold).
+- `recipes.arclength` halves a failed step up to six times by default (three left a
+  bridge between disks under gravity, and a drop on a ring with large steps, short of
+  their folds), but not below `ds/4**halvings`, where a run near a dead end only crept
+  on.
 
 ## 0.7.5 (2026-10-15)
 

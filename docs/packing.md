@@ -136,7 +136,7 @@ print(f"dimer: from there down to volume {V[-1]:.3f} (d = {d[-1]:.2f}), "
 ```text
 trimer: stable down to volume 0.185 (d = 0.65), the snap-in
 between: up to 1 negative mode, back up to volume 0.224 (d = 0.27), the pop-out
-dimer: from there down to volume 0.190 (d = 0.06), 0 negative modes
+dimer: from there down to volume 0.196 (d = 0.07), 0 negative modes
 ```
 
 Along the way the run passes two folds. The trimer is stable down to volume 0.185;
@@ -287,10 +287,10 @@ for base in (0.03, 0.01):
 ```
 
 ```text
-bottom gaps 0.03: the curvature peaks at 9.533 (volume 0.291); the bottom meniscus at -0.182 there, -0.090 at the end
+bottom gaps 0.03: the curvature peaks at 9.532 (volume 0.292); the bottom meniscus at -0.184 there, -0.087 at the end
    the branch turns at volume 0.2877; a negative mode from volume 0.291
-bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.251); the bottom meniscus at -0.294 there, -0.379 at the end
-   the branch doesn't turn; a negative mode from volume 0.186
+bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.253); the bottom meniscus at -0.294 there, -0.372 at the end
+   the branch doesn't turn; a negative mode from volume 0.190
 ```
 
 With the bottom throat the widest (gaps 0.03 against 0.02), the curvature peaks at

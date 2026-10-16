@@ -46,19 +46,32 @@ against Sauret's model; no symmetry breaking before the ends close round the fib
 way: `cylinder()`'s azimuthal content sign on turned fibres; `arclength` at sharp folds
 (tangent after a failed step, sliding scaled to the shape change; still stops at Bond 1
 on a ring of radius 1 with steps of 3% of Tate's volume); `Boundary(content=...)`.
-Found, not fixed:
-* `arclength(tidy=True)` stalls in the quadratic model near a bridge's fold (steps
-  down to 7e-7, disk_bridge.md runs `tidy=False`); `halvings=3` too few at some folds
-  with gravity (`halvings=6` there).
-* A contact line (or a lens's rim) can't travel more than an edge or two: equiangulation
-  doesn't swap boundary edges and vertex averaging doesn't move boundary vertices
-  (floating_lens.md starts at the exact rim). Under gravity a second refinement of the
-  lens didn't converge (residual 0.04, 56k facets).
-* `relax()` doesn't settle a long finite column's length (tangential motion; residual
-  and Newton steps are normal only): fibres.md uses a periodic slice.
+Then (user: "fix the Evolver code, the straightforward and the fixable"; two agents in
+worktrees plus me): Newton steps carry the mesh along a moving contact or triple line
+(fasthess.c follow, hook in hessian_move; the real cause was the normal-only step, not
+V or u; lens near spreading and the gravity lens refined twice converge; arclength's
+corrector takes plain steps via `_core.set_follow`); `arclength` doesn't spread vertices
+outside the linear model (the quadratic model settled on a different equilibrium each
+time), halvings=6 by default with a floor at ds/4**halvings; the deflation reuses the
+last step's null directions (as per-vertex displacements: the normal coordinates are
+rebuilt each step; `sp_hessian_mult` adds into its output); crossed fibres at 0 degrees
+by continuation in the contact angle; the clam shell's crossover extrapolated (order
+1.6, volume about 39); `check_doc_snippets --update` rewrites only differing blocks.
+Tried and dropped: weighting the value in `arclength`'s step measure (halvings=6 alone
+turned the drop's fold; the weighting cost the catenoid 10-60% more points).
+Still open:
+* A long finite column's length (fibres.md uses a periodic slice): discretization
+  error, converged lengths differ by 1e-4 in energy; neither the follow fix nor
+  full-coordinate Newton helps.
+* The 5-degree dimer (packing.md) stops at volume 0.196 (d = 0.07) instead of 0.190
+  (d = 0.06) since the fold fix: each predictor can land on a point from which every
+  step fails the reach check; going back a point would fix it (not built).
+* OpenMP waiting under oversubscription: 16 busy processes made a 4-thread test run
+  244-348 s with the default spin-waiting, 82-95 s with OMP_WAIT_POLICY=passive;
+  unloaded, passive was slower (17-23 s against 14-15 s).
 
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 485 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 491 tests.
 
 Open, for the user to pick (proposed 2026-10-13, updated after 0.7.5):
 

@@ -62,8 +62,8 @@ for theta in (30, 45, 60):
 ```
 
 ```text
-contact angle 30: rolls up below volume 17.64 (exact 17.83, -1.1%), pressure 0.869 (cos theta 0.866)
-contact angle 45: rolls up below volume 55.00 (exact 55.36, -0.7%), pressure 0.709 (cos theta 0.707)
+contact angle 30: rolls up below volume 17.71 (exact 17.83, -0.7%), pressure 0.868 (cos theta 0.866)
+contact angle 45: rolls up below volume 54.99 (exact 55.36, -0.7%), pressure 0.709 (cos theta 0.707)
 contact angle 60: rolls up below volume 212.02 (exact 214.74, -1.3%), pressure 0.502 (cos theta 0.500)
 ```
 
@@ -116,15 +116,15 @@ the barrel is unstable below volume 17.8
   volume 25: clam shell  25.793 (stable), barrel  25.993
   volume 30: clam shell  29.835 (stable), barrel  29.928
   volume 35: clam shell  33.729 (stable), barrel  33.716
-  volume 40: clam shell  37.497 (stable), barrel  37.379
+  volume 40: clam shell  37.496 (stable), barrel  37.379
   volume 50: clam shell  44.721 (stable), barrel  44.399
   equal energies at volume 34.4
-23528 facets:
+23464 facets:
   volume 30: clam shell  29.786 (stable), barrel  29.928
   volume 35: clam shell  33.673 (stable), barrel  33.716
   volume 40: clam shell  37.435 (stable), barrel  37.379
   equal energies at volume 37.2
-order of convergence 1.56 to 1.59; extrapolated, equal energies at volume 38.7
+order of convergence 1.56 to 1.60; extrapolated, equal energies at volume 38.7
 ```
 
 Small drops sit best on one side, large ones round the fibre. The two energies differ
@@ -184,7 +184,7 @@ for d in (0.5, 0.75, 1.0, 1.3):
 ```text
 gap 1.0: area 2.437 (Princen 2.441), pressure -0.1073 (Princen -0.1073), wetting 82 degrees around each fibre
 gap 1.5: area 5.374 (Princen 5.376), pressure 0.1579 (Princen 0.1579), wetting 109 degrees around each fibre
-gap 2.0: area 9.893 (Princen 9.902), pressure 0.2522 (Princen 0.2522), wetting 132 degrees around each fibre
+gap 2.0: area 9.894 (Princen 9.902), pressure 0.2526 (Princen 0.2522), wetting 132 degrees around each fibre
 gap 2.6: area 19.468 (Princen 19.492), pressure 0.2896 (Princen 0.2896), wetting 160 degrees around each fibre
 ```
 
