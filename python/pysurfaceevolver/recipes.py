@@ -671,8 +671,12 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         # secant (the vertices keep spreading as the surface stretches)
         tx, tv, sx = _arc_secant(ev, x0, v0, x1, v1)
         last = ev._coords()
-        corrected = exact = False
-        for k in range(halvings + 1):
+        corrected = exact = ok = False
+        # up to ``halvings`` halvings of the step as it stands (a run near a
+        # fold carries short steps on), but not below ds/4**halvings, where it
+        # only crept on (a dimer between beads: six points within 1e-13)
+        smallest = max(h/2**halvings, abs(ds)/4**halvings)
+        while True:
             ok, iterations = _arc_correct(ev, put, x1 + h*sx, v1 + h*tv, tx, tv, tol, 12, h)
             if ok:
                 corrected = True
@@ -702,28 +706,34 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                                   UserWarning, stacklevel=2)
                     return
             put(v1)
+            if h/2 < smallest*(1 - 1e-9):
+                break
+            h /= 2
             if not exact:
-                # where the branch turns sharply between points (a drop
+                # the shorter steps along the branch's tangent at the last
+                # point: where the branch turns sharply between points (a drop
                 # hanging from a ring at its largest volume: the value's change
                 # dwarfs the shape's), the secant points off it by an angle
                 # that halving the step doesn't shrink, and the corrector's
-                # point lands farther than the step: the shorter steps go
-                # along the branch's tangent at the last point. The vertices'
-                # sliding along the surface comes from the secant, per unit of
-                # its shape change (per unit of the step, it is mostly the
-                # value's there, the sliding came out too large and the drop
-                # still stopped; without it a catenoid's coarse mesh doesn't
-                # settle on its unstable branch)
+                # point lands farther than the step. The vertices' sliding
+                # along the surface comes from the secant, per unit of its
+                # shape change (per unit of the step, it is mostly the value's
+                # there, the sliding came out too large and the drop still
+                # stopped; without it a catenoid's coarse mesh doesn't settle
+                # on its unstable branch). Not for the full step: there the
+                # tangent put a catenoid on its stable branch. (Trying the
+                # secant too at each shorter step got a dimer between beads
+                # further but left a bridge between disks creeping on with
+                # short steps short of its largest volume.)
                 ex, ev_ = _arc_tangent(ev, put, v1, tx, tv)
                 shape = _rms(tx)
                 slide = (sx - _normal_part(ev, sx))*(_rms(ex)/shape if shape > 0 else 0.0)
                 tx, tv, sx, exact = ex, ev_, ex + slide, True
-            h /= 2
         if not ok:
             why = (" that settles again after tidying its mesh (too coarse there? refine)"
                    if corrected else "")
             warnings.warn(f"arclength(): no equilibrium found past {v1:.6g}{why} (even with "
-                          f"steps of {h*2:.3g}); the surface is back at the last point",
+                          f"steps of {h:.3g}); the surface is back at the last point",
                           UserWarning, stacklevel=2)
             return
         v = float(_current(ev, what))       # (settling back can move it a little)
