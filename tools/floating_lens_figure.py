@@ -126,10 +126,10 @@ def main():
             v = x*[sx, sy, stretch]
             for j, colour in enumerate(colours):
                 sel = f[kinds == j]
-                if j == 2:
-                    cen = x[sel].mean(axis=1)
-                    sel = sel[np.hypot(cen[:, 0], cen[:, 1]) < limit]
                 mesh = pv.PolyData(v, np.c_[np.full(len(sel), 3), sel].ravel())
+                if j == 2:              # the water cut round at radius ``limit``
+                    mesh["r"] = np.hypot(v[:, 0], v[:, 1])
+                    mesh = mesh.clip_scalar("r", value=limit, invert=True)
                 p.add_mesh(mesh, color=colour, smooth_shading=True, ambient=0.3, diffuse=0.7)
         p.camera_position = [(1.6*limit, -2.4*limit, 1.3*limit), (0, 0, -0.1*stretch), (0, 0, 1)]
         p.camera.zoom(0.9)

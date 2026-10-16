@@ -1,11 +1,13 @@
 """Draw the picture of docs/pendant_drop.md: the largest drops on a ring at four
 Bond numbers against the exact profiles, the largest volume and the tipping
 onset against the Bond number, and a drop at Bond 12 pushed along its tipping
-mode. Needs matplotlib and SciPy; takes about three minutes.
+mode; and the shapes: the largest drops at Bond 1 and 8, and the drop at Bond 12
+pushed along its tipping mode. Needs matplotlib, SciPy and PyVista; takes about
+three minutes.
 
     OMP_NUM_THREADS=4 python tools/pendant_drop_figure.py
 
-writes docs/_static/pendant_drop.png.
+writes docs/_static/pendant_drop.png and docs/_static/pendant_drop_shapes.png.
 """
 import os
 import sys
@@ -25,11 +27,14 @@ import pendant_drop_helpers as H  # noqa: E402
 STATIC = os.path.join(HERE, "..", "docs", "_static")
 COLOURS = ("#1f77b4", "#ff7f0e", "#2ca02c", "#9467bd")
 R = H.RING
+LIQUID = dict(color="#a6cee3", show_edges=True, edge_color="#7aa9d0", line_width=0.2,
+              smooth_shading=False, ambient=0.25, diffuse=0.75)
+SOLID = dict(color="#c8c8c8", ambient=0.3, diffuse=0.7)
 
 
 def largest(bond):
-    """The run to the fold as on the page: the fold's volume and the vertices
-    (in units of R) at the point of largest volume."""
+    """The run to the fold as on the page: the fold's volume, the vertices (in
+    units of R) at the point of largest volume, and the facets."""
     ev = H.hanging_drop(bond, np.pi/bond)
     rows, best = [], (0.0, None)
     for step in recipes.arclength(ev, ev.body(1), 0.01*R, 300):
@@ -38,7 +43,7 @@ def largest(bond):
             best = (rows[-1][0], ev.vertices/R)
         if len(rows) > 3 and rows[-1][0] < rows[-2][0] < rows[-3][0]:
             break
-    return H.fold(rows)[0], best[1]
+    return H.fold(rows)[0], best[1], ev.mesh().facets.copy()
 
 
 def tipping(bond):
@@ -64,8 +69,10 @@ def tipping(bond):
     before = section()
     ev.vertices = x + 0.08*u*R/np.abs(u).max()
     after = section()
+    ev.vertices = x + 0.2*u*R/np.abs(u).max()      # further, for the picture in 3D
+    pushed = (ev.vertices/R, ev.mesh().facets.copy(), d)
     ev.vertices = x
-    return v0 + (v1 - v0)*e0/(e0 - e1), before, after
+    return v0 + (v1 - v0)*e0/(e0 - e1), before, after, pushed
 
 
 def main():
@@ -73,10 +80,11 @@ def main():
     fig, ax = plt.subplots(1, 3, figsize=(13, 4.2), gridspec_kw=dict(width_ratios=[1, 1.2, 1]))
 
     # the largest drops
-    folds = {}
+    folds, drops = {}, {}
     for bond, colour in zip((1, 2, 4, 8), COLOURS):
-        volume, x = largest(bond)
+        volume, x, facets = largest(bond)
         folds[bond] = volume
+        drops[bond] = (x, facets)
         exact = H.largest_drop(bond)
         p = H.profile(bond, exact["c"], exact["s"], dense=True)
         s = np.linspace(p.t[0], exact["s"], 400)
@@ -108,11 +116,11 @@ def main():
     ax[1].semilogy(side_bonds, onsets, color="#d62728", lw=1.2, label="tipping starts")
     ax[1].semilogy(list(folds), list(folds.values()), "ko", ms=4, label="pySE")
     for bond in (11, 12, 13):
-        onset, before, after = tipping(bond)
+        onset, before, after, pushed = tipping(bond)
         ax[1].semilogy(bond, onset, "o", color="#d62728", ms=4)
         print(f"Bond {bond}: tipping from {onset:.4f}", flush=True)
         if bond == 12:
-            sections = before, after
+            sections, tipped = (before, after), pushed
     ax[1].axvline(critical, color="0.7", lw=0.8)
     ax[1].axvline(14.68, color="0.7", lw=0.8)
     ax[1].text(critical, 0.055, "10.363 ", fontsize=8, color="0.4", ha="right")
@@ -138,6 +146,39 @@ def main():
 
     fig.tight_layout()
     fig.savefig(os.path.join(STATIC, "pendant_drop.png"), dpi=150)
+    plt.close(fig)
+    shapes(drops, tipped)
+
+
+def shapes(drops, tipped):
+    """The largest drops at Bond 1 and 8 and the drop at Bond 12 pushed along
+    its tipping mode (seen across the way it tips), hanging from the end of a
+    tube; each panel to its own scale."""
+    import pyvista as pv
+    p = pv.Plotter(shape=(1, 3), off_screen=True, window_size=(1320, 520), border=False,
+                   lighting="three lights")
+    p.set_background("white")
+    across = np.cross(tipped[2], [0.0, 0.0, 1.0])
+    panels = [(drops[1], (0.0, -1.0, 0.0), "the largest drop at Bond 1"),
+              (drops[8], (0.0, -1.0, 0.0), "the largest drop at Bond 8"),
+              (tipped[:2], tuple(across), "Bond 12, pushed along its tipping mode")]
+    for col, ((x, facets), side, title) in enumerate(panels):
+        p.subplot(0, col)
+        p.add_mesh(pv.PolyData(np.asarray(x, float),
+                               np.hstack([np.full((len(facets), 1), 3), facets]).ravel()),
+                   **LIQUID)
+        p.add_mesh(pv.Cylinder(center=(0, 0, 0.15), direction=(0, 0, 1), radius=1.0,
+                               height=0.3, resolution=80, capping=False), **SOLID)
+        p.add_text(title, position="upper_left", font_size=9, color="black")
+        bottom = float(np.asarray(x)[:, 2].min())
+        middle = 0.5*(bottom + 0.3)
+        p.camera.focal_point = (0.0, 0.0, middle)
+        p.camera.position = tuple(np.array([0.0, 0.0, middle]) + 30*np.r_[side[:2], 0.12])
+        p.camera.up = (0, 0, 1)
+        p.camera.parallel_projection = True
+        p.camera.parallel_scale = max(0.6*(0.3 - bottom) + 0.25, 1.4)   # (the width too)
+    p.screenshot(os.path.join(STATIC, "pendant_drop_shapes.png"))
+    p.close()
 
 
 if __name__ == "__main__":

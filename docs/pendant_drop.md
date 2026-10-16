@@ -175,7 +175,19 @@ the axis against height) on the exact profiles (lines). Middle, the largest volu
 against the Bond number (black) and, past Bond 10.363, the volume where tipping
 starts (red; dotted, the largest volume there); dots, pySE. Right, the drop at Bond
 12 just past the tipping onset (grey) and pushed along its first unstable mode
-(red, exaggerated): their sections through the axis, in the plane the drop tips in. Drawn by `tools/pendant_drop_figure.py`.
+(red, exaggerated): their sections through the axis, in the plane the drop tips in.
+Drawn by `tools/pendant_drop_figure.py`.
+```
+
+```{figure} _static/pendant_drop_shapes.png
+:alt: The largest drop hanging from a tube at Bond 1, long with a neck, and at Bond 8, a shallow cap; and a drop at Bond 12 leaning to one side, pushed along its tipping mode
+:width: 100%
+
+The drops as pySE computes them, each to its own scale, hanging from the end of a
+tube of radius R. Left and middle, the largest drops at Bond 1 and 8: on a narrow
+ring a long drop that necks before it falls, on a wide one a shallow cap. Right, the
+drop at Bond 12 just past the tipping onset, pushed further along its first unstable
+mode, seen across the way it tips: the liquid runs out to one side.
 ```
 
 ## Notes and limits
