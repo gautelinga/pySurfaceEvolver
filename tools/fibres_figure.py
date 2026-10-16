@@ -196,7 +196,7 @@ def main():
                                    radius=1.0, height=26.0, resolution=60), opacity=0.45, **SOLID)
         p.add_text(f"liquid at crossed fibres, volume {volume}", position="upper_left",
                    font_size=9, color="black")
-        view(p, (0.2, -0.5, 1.0), (0, 0, 0), {30: 7.0, 70: 9.0}[volume])
+        view(p, (0.2, -0.5, 1.0), (0, 0, 0), {30: 9.0, 70: 12.0}[volume])
     p.screenshot(os.path.join(STATIC, "fibres_shapes.png"))
     p.close()
     print("wrote", os.path.normpath(STATIC) + "/fibres*.png")
