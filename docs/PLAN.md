@@ -213,9 +213,11 @@ Stages:
   edge loops, a Hessian eigenvalue at zero), stop at the last good state, and put it in
   the result (`result.event`). Useful on its own; every page's "runs stop at a change
   of topology" note becomes a stated event.
-* **B. Prescribed pressure and jumps** (days): `Body(pressure=p)` (Evolver's body
-  pressure) and a relax that goes through a lost equilibrium at fixed pressure, with
-  gradient steps (no Newton across the jump), checking for events on the way.
+* **B. Bodies that split off** (days): when a pinch-off or a closure cuts a blob of
+  liquid off from the rest, it becomes a body of its own with its volume fixed (trapped
+  liquid); the rest goes on under the run's control. Optional, later: `Body(pressure=p)`
+  (Evolver's body pressure) and relaxing through a lost equilibrium at fixed pressure,
+  only to compare directly with pressure-controlled pore-network curves.
 * **C. Pinch-off surgery** (1-2 weeks): tests: a bridge between spheres pulled past
   its rupture distance against Lian/Willett and the exact bridge (liquid_bridge.ipynb),
   Rayleigh-Plateau column breakup into drops (stress case 1), the trimer bursting into
@@ -225,9 +227,14 @@ Stages:
   shell closing into a barrel (fibres.md).
 * **E. Contact-line events** (2-3 weeks): tests: a meniscus advancing onto a bead
   (throat to pore), contact lines meeting on a fibre (crossed fibres, past volume 75).
-* **F. Drainage through a bead pack in full** (after A-E): gas at rising pressure into
-  a Finney cut, every Haines jump relaxed and every event handled; against the hybrid
-  network run (same pack, same thresholds where they apply).
+* **F. Drainage through a bead pack in full** (after A-E): volume-controlled, as a
+  slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or
+  come closer to that than to a fixed pressure): `arclength` in the liquid's volume, a
+  Finney cut, every event handled. Passing a throat is then continuous (the pressure
+  drops, the other menisci pull back; the pilot's pore stayed stable past its widest
+  throat), the pressure trace shows each Haines event as a drop, and the
+  pressure-controlled answer follows from the same run (from each pressure peak, the
+  next state at that pressure). Against the hybrid network run on the same pack.
 
 Design points to settle before C: surgery in C (fast, near Evolver's element
 structures) or in Python on `mesh()` with a reload (simpler, slower, loses element
@@ -237,8 +244,9 @@ seam; the line-following Newton fix must accept new lines); thread safety of the
 loops' caches (facet cache, pattern reuse: invalidate on surgery; the deflation cache
 is keyed by top_timestamp already). Reference for robust collision handling and
 topology changes on explicit meshes: El Topo (Brochu and Bridson, SIAM J. Sci. Comput.
-2009). Risks: merges and contact-line events are the hard part; relaxing through jumps
-at fixed pressure on fine meshes is slow (gradient steps only).
+2009). Risks: merges and contact-line events are the hard part; under volume control
+the events happen on a branch `arclength` follows, so the surgery must leave a state
+it can go on from (a point near equilibrium on the new mesh).
 
 ## Decisions (agreed with the user)
 
