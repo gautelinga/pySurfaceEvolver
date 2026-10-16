@@ -41,7 +41,7 @@ jobs:
   # The Markdown pages with code show its outputs but aren't executed in the
   # build: run them and compare (numbers within 1e-3; at 1, 2 and 4 threads
   # they agree to the printed digits). Not a gate for deploying the docs; a
-  # failure means the page needs `--update`. Two jobs, each running its
+  # failure means the page needs `--update`. Three jobs, each running its
   # pages' blocks four at a time on one thread each.
   snippets:
     runs-on: ubuntu-latest
@@ -51,6 +51,7 @@ jobs:
         pages:
           - docs/packing.md
           - docs/stress_cases.md docs/bridge_rupture.md docs/several_surfaces.md
+          - docs/disk_bridge.md docs/pendant_drop.md docs/fibres.md docs/floating_lens.md
     steps:
       - uses: actions/checkout@v4
 

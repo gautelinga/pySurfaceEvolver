@@ -23,18 +23,10 @@ from pysurfaceevolver import constraints as C, recipes, shapes
 
 # ---- the bridge in pySE --------------------------------------------------------
 
-class _Rim(C.Boundary):
-    """A circular wire with a content integral: the volume Evolver leaves out
-    over the disk the wire bounds (its z dx dy, at height ``z``)."""
-
-    def __init__(self, z):
-        f = C.circle((0, 0, z), 1.0)
-        super().__init__(f.formulas, f.parameter)
-        object.__setattr__(self, "z", float(z))
-
-    def text(self):
-        z = repr(self.z)
-        return super().text() + f"content:\nc1: -{z}*y/2\nc2: {z}*x/2\nc3: 0\n"
+def _rim(z):
+    """The disk's rim at height ``z``, a circular wire with the volume Evolver
+    leaves out over the disk (its z dx dy) as a content integral."""
+    return C.circle((0, 0, z), 1.0, content=(f"-{z!r}*y/2", f"{z!r}*x/2", "0"))
 
 
 def disk_bridge(slenderness, volume=1.0, bond=0.0, nt=24):
@@ -45,7 +37,7 @@ def disk_bridge(slenderness, volume=1.0, bond=0.0, nt=24):
     tube = shapes.tube(1.0, 0.0, H, nz=max(2, round(H*nt/(2*np.pi))), nt=nt)
     ev = pyse.Evolver()
     ev.load_arrays(tube.vertices, tube.faces,
-                   boundaries={1: _Rim(0.0), 2: _Rim(H)},
+                   boundaries={1: _rim(0.0), 2: _rim(H)},
                    vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
                    bodies=[pyse.Body(volume=volume*np.pi*H, density=1.0 if bond else None)],
                    gravity=bond if bond else None)
@@ -96,38 +88,27 @@ def to_limit(ev, slenderness, ds, steps=200, tidy=False):
     eigenvalue crosses zero: from a parabola through the three points up to
     the first unstable one, the volume against the eigenvalue.
 
-    A point can land so close to a fold that ``arclength`` finds no way on
-    from it; then the run starts again two points back with steps 0.7 times
-    as long (twice at most). Between points the surface isn't tidied by
-    default (in the quadratic model that stalls the run near the fold here)."""
+    Between points the surface isn't tidied by default (in the quadratic model
+    that stalls the run near the fold here), and a failed step is halved up to
+    six times (three weren't enough at some folds)."""
     cylinder = 2*np.pi*slenderness
     sign = np.sign(ds)
-    rows, how, first = [], None, None      # rows: distance, volume, eigenvalue, vertices, snapshot
-    for attempt in range(3):
-        for step in recipes.arclength(ev, ev.body(1), ds*cylinder, steps, halvings=6,
-                                      tidy=tidy):
-            x = ev.vertices
-            dist = 0.0 if not rows else rows[-1][0] + np.hypot(
-                step.value - rows[-1][1], np.sqrt(((x - rows[-1][3])**2).sum(axis=1).mean()))
-            lowest = ev.modes(1)
-            rows.append((dist, step.value, lowest.values[0], x, ev.save()))
-            if first is None and step.result.negative_modes and len(rows) >= 3:
-                first, how = len(rows) - 1, kind(ev, lowest.vectors[0], slenderness)
-            if first is not None:
-                volumes = np.array([r[1] for r in rows])
-                turned = volumes[-1] > volumes.min() if sign < 0 else volumes[-1] < volumes.max()
-                if turned or len(rows) - 1 - first == 3:
-                    break
-        else:
-            if first is not None:                  # stopped past the limit: enough
+    rows, how, first, turned = [], None, None, False   # rows: distance, volume, eigenvalue, vertices
+    for step in recipes.arclength(ev, ev.body(1), ds*cylinder, steps, halvings=6, tidy=tidy):
+        x = ev.vertices
+        dist = 0.0 if not rows else rows[-1][0] + np.hypot(
+            step.value - rows[-1][1], np.sqrt(((x - rows[-1][3])**2).sum(axis=1).mean()))
+        lowest = ev.modes(1)
+        rows.append((dist, step.value, lowest.values[0], x))
+        if first is None and step.result.negative_modes and len(rows) >= 3:
+            first, how = len(rows) - 1, kind(ev, lowest.vectors[0], slenderness)
+        if first is not None:
+            volumes = np.array([r[1] for r in rows])
+            turned = volumes[-1] > volumes.min() if sign < 0 else volumes[-1] < volumes.max()
+            if turned or len(rows) - 1 - first == 3:
                 break
-            if len(rows) >= 3:                     # stopped short of the limit
-                ev.restore(rows[-2][4])
-                rows = rows[:-2]
-                ds *= 0.7
-                continue
-            raise RuntimeError("no limit found")
-        break
+    if first is None:
+        raise RuntimeError("no limit found")
     dist, volumes, values = np.array([r[:3] for r in rows]).T
     j = int(np.argmin(volumes) if sign < 0 else np.argmax(volumes))
     if turned and j <= first + 1:                    # a fold where it turned unstable

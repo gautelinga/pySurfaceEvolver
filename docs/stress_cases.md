@@ -891,10 +891,10 @@ wires 0.6000 apart: area 3.70990 (exact 3.71143), negative modes 0
 wires 0.8455 apart: area 5.14115 (exact 5.14237), negative modes 0
 wires 1.0843 apart: area 6.43144 (exact 6.43177), negative modes 0
 wires 1.2996 apart: area 7.43873 (exact 7.43826), negative modes 0
-wires 1.1825 apart: area 7.16939 (exact 7.17002), negative modes 1
-wires 0.9649 apart: area 6.79371 (exact 6.79555), negative modes 1
-wires 0.7521 apart: area 6.55399 (exact 6.55609), negative modes 1
-wires 0.5432 apart: area 6.40821 (exact 6.40729), negative modes 1
+wires 1.1858 apart: area 7.17625 (exact 7.17707), negative modes 1
+wires 0.9688 apart: area 6.79914 (exact 6.80090), negative modes 1
+wires 0.7568 apart: area 6.55847 (exact 6.56035), negative modes 1
+wires 0.5491 apart: area 6.41272 (exact 6.41052), negative modes 1
 ```
 
 Both branches match the exact areas within 0.04%. Between points the vertices are

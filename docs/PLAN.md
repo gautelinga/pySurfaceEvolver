@@ -37,8 +37,28 @@ state; the second step had started from the first one's pressures and the correc
 crawled or diverged, stopping at the bridge's fold in half the runs). Undoing a step
 (`_put_back`, in `relax()` too) restores them; `_core.multipliers()`/`set_multipliers()`.
 
+**Since 0.7.5** (CHANGELOG "Unreleased", 2026-10-16): four literature pages, each by an
+agent in a worktree, against exact references in their helpers: `disk_bridge.md`
+(Slobozhanin and Perales' table to the last digit), `pendant_drop.md` (0.2-0.3%, Michael
+and Williams' 3.219), `fibres.md` (barrel onset exact within 1%, Princen, crossed fibres
+against Sauret's model; no symmetry breaking before the ends close round the fibres at
+30 degrees crossing), `floating_lens.md` (1e-4, second order). Found and fixed on the
+way: `cylinder()`'s azimuthal content sign on turned fibres; `arclength` at sharp folds
+(tangent after a failed step, sliding scaled to the shape change; still stops at Bond 1
+on a ring of radius 1 with steps of 3% of Tate's volume); `Boundary(content=...)`.
+Found, not fixed:
+* `arclength(tidy=True)` stalls in the quadratic model near a bridge's fold (steps
+  down to 7e-7, disk_bridge.md runs `tidy=False`); `halvings=3` too few at some folds
+  with gravity (`halvings=6` there).
+* A contact line (or a lens's rim) can't travel more than an edge or two: equiangulation
+  doesn't swap boundary edges and vertex averaging doesn't move boundary vertices
+  (floating_lens.md starts at the exact rim). Under gravity a second refinement of the
+  lens didn't converge (residual 0.04, 56k facets).
+* `relax()` doesn't settle a long finite column's length (tangential motion; residual
+  and Newton steps are normal only): fibres.md uses a periodic slice.
+
 **State:** all 14 stress cases pass, 13 on `relax()`'s defaults and case 8 (the drainage
-band) with `ev.remesh(target=h)` each step, as its notebook runs it. 480 tests.
+band) with `ev.remesh(target=h)` each step, as its notebook runs it. 485 tests.
 
 Open, for the user to pick (proposed 2026-10-13, updated after 0.7.5):
 

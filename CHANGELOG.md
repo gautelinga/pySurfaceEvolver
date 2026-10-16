@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### API
+
+- `constraints.Boundary`, `curve()` and `circle()` take a `content` integral: the
+  volume of a face that bounds a body but isn't in the surface, such as the disk a
+  bridge is pinned on (Evolver's content integral on a boundary).
+
+### Documentation
+
+- Four pages of classic results, each against an exact reference computed on the
+  page's helpers:
+  - `disk_bridge.md`: the stability limits of a liquid bridge between two equal
+    disks, without gravity (the least volume, pinching or moving to one disk; the
+    largest, sideways where the surface meets the edges flat) and at three Bond
+    numbers (Slobozhanin and Perales' Table I to its last digit).
+  - `pendant_drop.md`: the largest drop a ring can hold against the Bond number
+    (0.2-0.3%), and on wide rings the drop tipping sideways first (Michael and
+    Williams' 3.219 capillary lengths).
+  - `fibres.md`: a barrel on a fibre rolling up into a clam shell (an exact onset,
+    where the inflexion of its profile reaches the contact line), Princen's column
+    between two fibres, and the column at crossed fibres against Sauret et al.'s
+    model.
+  - `floating_lens.md`: a lens floating on a liquid, three tensions meeting at
+    Neumann's triangle (1e-4 against the exact caps), and under gravity against the
+    axisymmetric equations and Langmuir's puddle thickness.
+
 ### Fixes
 
 - `constraints.cylinder` with its default `gauge="azimuthal"`: on a fibre that isn't

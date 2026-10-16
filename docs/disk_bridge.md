@@ -23,7 +23,8 @@ upper one at z = 2Λ. `disk_bridge` in `docs/disk_bridge_helpers.py` builds a cy
 between the disks' edges, which are round wires ({func}`~pysurfaceevolver.constraints.circle`
 boundaries, so refining keeps them round; their vertices are fixed). The disks
 themselves aren't part of the surface: the volume Evolver computes misses the slab of
-liquid over the upper disk, and a content integral on that wire adds it back. With
+liquid over the upper disk, and a content integral on that wire adds it back
+(`circle(..., content=...)`). With
 gravity (along -z) the body weighs `bond` per unit volume, the Bond number
 ρgR²/σ.
 
@@ -66,8 +67,8 @@ for slenderness in (0.5, 1.5, 2.5):
 ```
 
 ```text
-slenderness 0.5: stable down to volume 0.2538 (pinching), exact 0.2544 (pinching, -0.25%)
-slenderness 1.5: stable down to volume 0.4751 (pinching), exact 0.4751 (pinching, -0.00%)
+slenderness 0.5: stable down to volume 0.2537 (pinching), exact 0.2544 (pinching, -0.29%)
+slenderness 1.5: stable down to volume 0.4751 (pinching), exact 0.4751 (pinching, +0.01%)
 slenderness 2.5: stable down to volume 0.6894 (to one disk), exact 0.6895 (to one disk, -0.01%)
 ```
 
@@ -167,8 +168,8 @@ for bond, slenderness in ((0.2, 1.96), (0.5, 1.29), (1.0, 0.93)):
 ```
 
 ```text
-Bond 0.2, slenderness 1.96: down to volume 0.7730 (axisymmetric), exact 0.7730 (-0.00%); without gravity 0.5588
-Bond 0.5, slenderness 1.29: down to volume 0.4943 (axisymmetric), exact 0.4943 (-0.01%); without gravity 0.4384
+Bond 0.2, slenderness 1.96: down to volume 0.7731 (axisymmetric), exact 0.7730 (+0.01%); without gravity 0.5588
+Bond 0.5, slenderness 1.29: down to volume 0.4943 (axisymmetric), exact 0.4943 (+0.00%); without gravity 0.4384
 Bond 1.0, slenderness 0.93: down to volume 0.4059 (axisymmetric), exact 0.4060 (-0.03%); without gravity 0.3737
 ```
 
@@ -218,10 +219,8 @@ Bond 0.5, Λ = 1.29 at its least volume, the neck above the middle.
 * **How the runs are set up.** `to_limit` follows the bridges without spreading the
   vertices or flipping edges between points (`arclength(tidy=False)`): in the
   quadratic model the tidying stalled the runs short of the fold. It lets a step be cut
-  in half six times (`halvings=6`; the default 3 wasn't enough at some folds of the
-  linear model). And where a point lands right at a fold (the lowest eigenvalue near
-  zero), `arclength` can find no way on from it; `to_limit` then starts again two points
-  back with shorter steps.
+  in half six times (`halvings=6`; the default 3 wasn't enough at some folds with
+  gravity).
 * **Accuracy.** In the linear model the same meshes give the limits within about 1%
   (the folds of short bridges, where the neck is sharp, least well); the quadratic
   model does better than refining once more.

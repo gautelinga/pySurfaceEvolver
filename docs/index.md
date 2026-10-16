@@ -21,6 +21,10 @@ written out for finite-element meshing.
   long quasi-static run ({doc}`slit_drainage`), following a bridge through its
   instability and fold ({doc}`bridge_rupture`), and liquid in throats and pores of a
   sphere packing ({doc}`packing`).
+* Classic results from the literature, each against an exact reference: the
+  stability limits of a bridge between two disks ({doc}`disk_bridge`), the largest
+  drop a ring can hold ({doc}`pendant_drop`), drops on one, two and crossed fibres
+  ({doc}`fibres`), and a lens floating on a liquid ({doc}`floating_lens`).
 * Brakke's sample datafiles run as they come, each with his own recipe and with
   `relax()` side by side: a gallery of what Evolver can model.
 * The reference has the API, fourteen stress cases with exact references, performance
@@ -53,6 +57,10 @@ slit_droplet
 slit_drainage
 bridge_rupture
 packing
+disk_bridge
+pendant_drop
+fibres
+floating_lens
 ```
 
 ```{toctree}

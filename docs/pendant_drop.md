@@ -184,12 +184,12 @@ starts (red; dotted, the largest volume there); dots, pySE. Right, the drop at B
   of the value (here the volume) and the vertices' root mean square displacement
   together, in the surface's own units. On a ring of radius 1 the volumes are a few
   units while the shape changes by a few hundredths a step, so in that measure the
-  branch turns almost at a right angle at the fold, and the secant prediction from
-  the last two points misses the branch by more than a step: `arclength` stops at
-  the fold, even with halved steps. On a ring of radius 1/4 a volume is 64 times
-  smaller and a displacement 4 times, and the fold is round enough to turn. Results
-  are scaled back to the ring's radius; the Bond number is unchanged (gravity
-  Bond/R²).
+  branch turns almost at a right angle at the fold. After a failed step `arclength`
+  predicts along the branch's tangent, which turns it there with steps up to about
+  2% of Tate's volume; with 3% it still stopped at Bond 1. On a ring of radius 1/4 a
+  volume is 64 times smaller and a displacement 4 times, and the fold is round
+  enough to turn with the steps used here. Results are scaled back to the ring's
+  radius; the Bond number is unchanged (gravity Bond/R²).
 * **Pinned on a wire.** The ring is a circular wire (`C.circle`): its vertices are
   fixed, and refining puts the new ones on the circle, so the ring stays round.
 * **The pressure** that pySE reports for a body under gravity is the one at z = 0,
