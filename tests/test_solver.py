@@ -97,8 +97,9 @@ def test_newton_leaves_a_free_surface_where_it_is(load):
     # nothing holds the cube: its rigid motions change neither energy nor
     # volume, and the Newton system is singular along them. They are taken
     # out of the step; left in, round-off moves the converged cube (24k
-    # quadratic facets) by 1e-7 a step and holds the residual near 1e-9
-    # (at 98k facets: 4e-6 and 2e-6, and relax() didn't converge)
+    # quadratic facets) by 4e-8 to 3e-7 a step, with the residual at 1e-10 to
+    # 2e-9 (at 98k facets: 4e-6 and 2e-6, and relax() didn't converge). Taken
+    # out: steps of 1e-14, the residual 1e-11 to 1e-10 (more with more threads)
     ev = load("cube.fe")
     ev.command("g 5; r; g 10; r; g 10; r; g 10; r; g 10; r; g 10; quadratic; g 5; "
                "hessian; hessian")
@@ -106,7 +107,7 @@ def test_newton_leaves_a_free_surface_where_it_is(load):
         x = ev.vertices
         ev.command("hessian")
         assert np.abs(ev.vertices - x).max() < 1e-11
-    assert ev.residual() < 1e-10
+    assert ev.residual() < 1e-9
 
 
 @pytest.mark.parametrize("name", ["cat.fe", "mound.fe"])
