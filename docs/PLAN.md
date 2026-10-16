@@ -243,7 +243,19 @@ Stages:
   plane (the contact lines must meet). Tests: two drops on a plane coalescing (volume and
   final cap exact), two menisci meeting in the symmetric pore (packing.md), the clam
   shell closing into a barrel (fibres.md).
-* **E. Contact-line events** (2-3 weeks): tests: a meniscus advancing onto a bead
+* **E. Contact-line events** (2-3 weeks): also Evolver's own commands (tried
+  2026-10-16, tests/test_topology.py): when the merged 120-degree drops' neck reaches
+  the plane, `dissolve` the facets under it (those near the plane between the patches,
+  facing down) and put their border on the plane's constraint (`set vertex/edge ...
+  constraint 1`); the two contact lines become one in that step, the volume is right
+  at once, and the drop relaxes to the cap (energy 0.04% off, contact radius 0.906
+  against 0.905) and goes on with `arclength`. The catch: the wetting energy is a line
+  integral that Evolver takes along each edge as stored, with the sign its orientation
+  has when the edge goes on the constraint, so an edge stored against its facet needs
+  `set edge[e] orientation -1` before `constraint 1` (after, or `reverse_orientation`,
+  leaves the energy wrong, and gradient steps then run off through the plane). A pySE
+  helper for "put this border on constraint k" should do it. Which facets go (the
+  selection rule) is the real work, with stage A's detection. Tests: a meniscus advancing onto a bead
   (throat to pore), contact lines meeting on a fibre (crossed fibres, past volume 75).
 * **F. Drainage through a bead pack in full** (after A-E): volume-controlled, as a
   slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or

@@ -36,6 +36,30 @@ def _pieces(ev):
     return out
 
 
+def _border(ev):
+    """The edges (vertex rows) with one facet."""
+    f = np.asarray(ev.mesh().facets)
+    e = np.sort(np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]], axis=1)
+    u, count = np.unique(e, axis=0, return_counts=True)
+    return u[count == 1]
+
+
+def _merge(ev):
+    """Glue bodies 1 and 2 where they come closest (their closest facets) and
+    make them one body, 1."""
+    m = ev.mesh()
+    centre = ev.vertices[np.asarray(m.facets)].mean(axis=1)
+    body = np.asarray(m.facet_bodies).max(axis=1)
+    a = np.where(body == 1)[0][np.argmax(centre[body == 1, 0])]
+    b = np.where(body == 2)[0][np.argmin(centre[body == 2, 0])]
+    fa, fb = int(m.facet_ids[a]), int(m.facet_ids[b])
+    for command in (f"facet_merge({fa},{fb})", f"unset facet[{fa}] frontbody",
+                    f"dissolve facet[{fa}]", "dissolve edges; dissolve vertices",
+                    "set facet frontbody 1 where frontbody == 2",
+                    "set facet backbody 1 where backbody == 2", "rebody", "dissolve body[2]"):
+        ev.command(command)
+
+
 def test_a_bridge_that_pinches_off_splits_into_two_drops_with_their_volumes():
     # a bridge between disks 3 apart, pinned at their rims (the top one closes
     # the body through its content integral), loses liquid until it pinches:
@@ -103,21 +127,12 @@ def test_two_drops_that_touch_merge_into_one_with_both_volumes():
     for i in (1, 2):
         ev.body(i).target = ev.body(i).volume
     total = ev.bodies().volume.sum()
-    m = ev.mesh()
-    centre = ev.vertices[np.asarray(m.facets)].mean(axis=1)
-    body = np.asarray(m.facet_bodies).max(axis=1)
-    a = np.where(body == 1)[0][np.argmax(centre[body == 1, 0])]
-    b = np.where(body == 2)[0][np.argmin(centre[body == 2, 0])]
-    fa, fb = int(m.facet_ids[a]), int(m.facet_ids[b])
-    for command in (f"facet_merge({fa},{fb})", f"unset facet[{fa}] frontbody",
-                    f"dissolve facet[{fa}]", "dissolve edges; dissolve vertices",
-                    "set facet frontbody 1 where frontbody == 2",
-                    "set facet backbody 1 where backbody == 2", "rebody", "dissolve body[2]"):
-        ev.command(command)
+    _merge(ev)
     assert len(_pieces(ev)) == 1 and list(ev.bodies().ids) == [1]
+    assert len(_border(ev)) == 0                  # closed (and no edge with three facets:)
     f = np.asarray(ev.mesh().facets)
     e = np.sort(np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]], axis=1)
-    assert np.all(np.unique(e, axis=0, return_counts=True)[1] == 2)      # closed, manifold
+    assert np.unique(e, axis=0, return_counts=True)[1].max() == 2
     assert ev.body(1).volume == pytest.approx(total, rel=0.01)   # and the glued gap's
     ev.body(1).target = total
     with warnings.catch_warnings():
@@ -130,3 +145,100 @@ def test_two_drops_that_touch_merge_into_one_with_both_volumes():
     assert ev.body(1).volume == pytest.approx(total, rel=1e-8)
     assert ev.energy == pytest.approx(4*np.pi*R*R, rel=0.005)
     assert ev.body(1).pressure == pytest.approx(2/R, rel=0.005)
+
+
+def test_drops_merged_on_a_plane_wet_it_between_them():
+    # two 120-degree drops on a plane, merged where they touch above it: the
+    # neck sinks onto the plane, and where it gets there the facets under it
+    # go and their border becomes contact line on the plane's constraint. Its
+    # wetting energy is a line integral along the edges as their facets go
+    # round them, and Evolver takes each edge's integral along the edge as
+    # stored, with the sign its orientation has when the edge is put on the
+    # constraint: so "orientation -1" first on an edge stored the other way
+    # (reverse_orientation keeps the integral as it was, and setting the
+    # orientation after doesn't change it). The two contact lines become one,
+    # and the drop relaxes to the cap
+    theta, R, gap = 120.0, 0.84, 0.02
+    t = np.radians(theta)
+    drop = shapes.cap(R, R*(1 - np.cos(t)), nr=6, nt=24)
+    n, nf = len(drop.vertices), len(drop.faces)
+    rim = np.asarray(drop.rims["rim"])
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[drop.vertices - [R + gap/2, 0, 0], drop.vertices + [R + gap/2, 0, 0]],
+                   np.r_[drop.faces, drop.faces + n],
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=theta)},
+                   vertex_constraints={1: np.r_[rim, rim + n]},
+                   bodies=[pyse.Body(faces=range(nf), volume=None),
+                           pyse.Body(faces=range(nf, 2*nf), volume=None)])
+    for i in (1, 2):
+        ev.body(i).target = ev.body(i).volume
+
+    def wetting_energy():
+        f, x = np.asarray(ev.mesh().facets), ev.vertices
+        a = 0.5*np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
+        return np.linalg.norm(a, axis=1).sum() - np.cos(t)*abs(a[:, 2].sum())
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert ev.relax().converged
+        total = ev.bodies().volume.sum()
+        _merge(ev)
+        ev.body(1).target = total
+        for i in range(100):                      # until the neck reaches the plane
+            ev.command("g 2")
+            if i % 3 == 0:
+                ev.remesh(target=0.2)
+            free = ~np.asarray(ev.on_constraint(1))
+            if ev.vertices[free, 2].min() < 0.01:
+                break
+        assert ev.vertices[free, 2].min() < 0.01
+        assert len(_pieces(ev)) == 1
+        m = ev.mesh()
+        f, x = np.asarray(m.facets), ev.vertices
+        c = x[f].mean(axis=1)
+        down = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])[:, 2] < 0
+        under = (c[:, 2] < 0.12) & (np.abs(c[:, 0]) < 0.3) & down
+        ev.command("; ".join(f"dissolve facet[{int(i)}]" for i in m.facet_ids[under]))
+        ev.command("dissolve edges; dissolve vertices")
+        m = ev.mesh()
+        f, edges = np.asarray(m.facets), np.asarray(m.edges)
+        along = {(r[i], r[(i + 1) % 3]) for r in f for i in range(3)}
+        row = {tuple(sorted(e)): i for i, e in enumerate(edges)}
+        on = np.asarray(ev.on_constraint(1))
+        for a, b in _border(ev):
+            for v in (a, b):
+                if not on[v]:
+                    ev.command(f"set vertex[{int(m.vertex_ids[v])}] constraint 1")
+                    on[v] = True
+            i = row[(a, b)]
+            e = int(m.edge_ids[i])
+            if not ev.eval(f"edge[{e}].on_constraint 1"):
+                if tuple(edges[i]) not in along:
+                    ev.command(f"set edge[{e}] orientation -1")
+                ev.command(f"set edge[{e}] constraint 1")
+        assert len(_border(ev)) > 0 and _loops(_border(ev)) == 1
+        assert ev.energy == pytest.approx(wetting_energy(), rel=1e-10)
+        for _ in range(60):
+            ev.command("g 5")
+            ev.remesh(target=0.2)
+        assert ev.relax(levels=1).converged
+    assert ev.body(1).volume == pytest.approx(total, rel=1e-8)
+    assert ev.energy == pytest.approx(wetting_energy(), rel=1e-10)
+    Rs = (total/(np.pi*(2 - 3*np.cos(t) + np.cos(t)**3)/3))**(1/3)
+    h, a = Rs*(1 - np.cos(t)), Rs*np.sin(t)
+    assert ev.energy == pytest.approx(2*np.pi*Rs*h - np.cos(t)*np.pi*a*a, rel=0.002)
+    x = ev.vertices[np.asarray(ev.on_constraint(1))]
+    assert np.hypot(x[:, 0] - x[:, 0].mean(), x[:, 1] - x[:, 1].mean()).mean() == \
+        pytest.approx(a, rel=0.01)
+
+
+def _loops(edges):
+    """How many closed loops the edges make."""
+    parent = {}
+    def root(v):
+        while parent.setdefault(v, v) != v:
+            v = parent[v]
+        return v
+    for a, b in edges:
+        parent[root(a)] = root(b)
+    return len({root(v) for v in parent})
