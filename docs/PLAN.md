@@ -104,7 +104,8 @@ Open, for the user to pick (proposed 2026-10-13, updated after 0.7.5):
   vertices further, the worst errors went from 4-9% to 170-1550% over 3 paired runs.
   The slivers build up within each step; tangential motion in Newton steps would be
   remeshing by another name.
-* **Long-term:** isotropic remeshing in C toward a size field; phase E (not now).
+* **Long-term:** isotropic remeshing in C toward a size field; phase E (not now);
+  topology changes (planned below, "Future: topology changes").
 * **After the multiplier fix (2026-10-13):** restoring the pressures on undo leaves the
   stress cases and 40/42 sample datafiles as they were; bga-6 (no equilibrium) takes
   20 undone steps instead of 12 to give up. `relax()`'s inertia cache keyed by the
@@ -178,6 +179,66 @@ Open, for the user to pick (proposed 2026-10-13, updated after 0.7.5):
   bit-identical. Possible: reuse the null vectors between steps (they barely move).
 
 Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
+
+## Future: topology changes (planned 2026-10-16, not started)
+
+Why: every example stops where the liquid's connectivity changes (a bridge
+ruptures, a trimer bursts, menisci meet in a pore, a clam shell closes round its
+fibre, a column's ends close round crossed fibres), and drainage through a bead pack
+is a chain of such events. Detection is cheap; handling them needs mesh surgery and
+relaxation through non-equilibrium jumps. The level-set method (Prodanovic and Bryant)
+gets topology for free; pySE's case for doing it on meshes is exact menisci, contact
+angles, stability and saddles. Near term, bead packs go the hybrid way instead: exact
+throat thresholds from `arclength` runs, a pore network (invasion percolation) for
+where the gas goes (procedure agreed with the user, not run yet; pilot in the session
+scratchpad: random 40-bead cell, MSP generalized to irregular throats, pores turned so
+contact lines keep off the sphere constraints' poles, one pore 27% below MSP).
+
+Events (each needs detection, surgery, and a test):
+1. **Pinch-off**: a neck thins (bridge rupture, snap-off, a column breaking up): cut
+   at the narrowest ring, cap both sides, two bodies (volumes split by the cut, or each
+   at the pressure). Easiest; start here.
+2. **Meniscus merge**: two free sheets meet (menisci from two throats in a pore, drops
+   coalescing, a clam shell closing round its fibre): delete the facets where they
+   touch and stitch the two openings (Evolver's `vertex_merge`, `edge_merge`,
+   `facet_merge`, `dissolve` are the primitives; volumes add).
+3. **Sheet meets a solid**: part of a free surface touches a bead or wall and becomes a
+   new contact line on that constraint (a meniscus advancing into the next pore).
+4. **Contact lines meet on a solid**: wetted patches on one constraint merge or split
+   (the crossed-fibre ends, the trimer's contact lines closing in).
+
+Stages:
+* **A. Detect and stop well** (days): during `relax`, `arclength`, `continuation`,
+  report the coming event, its kind and place (self gap, wall gap, neck radius from
+  edge loops, a Hessian eigenvalue at zero), stop at the last good state, and put it in
+  the result (`result.event`). Useful on its own; every page's "runs stop at a change
+  of topology" note becomes a stated event.
+* **B. Prescribed pressure and jumps** (days): `Body(pressure=p)` (Evolver's body
+  pressure) and a relax that goes through a lost equilibrium at fixed pressure, with
+  gradient steps (no Newton across the jump), checking for events on the way.
+* **C. Pinch-off surgery** (1-2 weeks): tests: a bridge between spheres pulled past
+  its rupture distance against Lian/Willett and the exact bridge (liquid_bridge.ipynb),
+  Rayleigh-Plateau column breakup into drops (stress case 1), the trimer bursting into
+  bridges (packing.md); volumes conserved to round-off.
+* **D. Merge surgery** (2-3 weeks): tests: two drops on a plane coalescing (volume and
+  final cap exact), two menisci meeting in the symmetric pore (packing.md), the clam
+  shell closing into a barrel (fibres.md).
+* **E. Contact-line events** (2-3 weeks): tests: a meniscus advancing onto a bead
+  (throat to pore), contact lines meeting on a fibre (crossed fibres, past volume 75).
+* **F. Drainage through a bead pack in full** (after A-E): gas at rising pressure into
+  a Finney cut, every Haines jump relaxed and every event handled; against the hybrid
+  network run (same pack, same thresholds where they apply).
+
+Design points to settle before C: surgery in C (fast, near Evolver's element
+structures) or in Python on `mesh()` with a reload (simpler, slower, loses element
+attributes unless carried); how bodies split and merge in the datafile model (body
+ids, volconst, pressures); keeping the mesh good after surgery (remesh around the
+seam; the line-following Newton fix must accept new lines); thread safety of the fast
+loops' caches (facet cache, pattern reuse: invalidate on surgery; the deflation cache
+is keyed by top_timestamp already). Reference for robust collision handling and
+topology changes on explicit meshes: El Topo (Brochu and Bridson, SIAM J. Sci. Comput.
+2009). Risks: merges and contact-line events are the hard part; relaxing through jumps
+at fixed pressure on fine meshes is slow (gradient steps only).
 
 ## Decisions (agreed with the user)
 
