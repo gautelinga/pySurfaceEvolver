@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C, shapes
+from pysurfaceevolver import constraints as C, recipes, shapes
 
 
 def _pieces(ev):
@@ -242,3 +242,121 @@ def _loops(edges):
     for a, b in edges:
         parent[root(a)] = root(b)
     return len({root(v) for v in parent})
+
+
+# ---- stage A: events coming (Evolver.events, and runs stopping at them) ----------
+
+def _two_spheres(gap):
+    t = np.linspace(0, np.pi, 9)
+    ball = shapes.revolve(np.sin(t), -np.cos(t), 16)
+    n, nf = len(ball.vertices), len(ball.faces)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[ball.vertices - [1 + gap/2, 0, 0], ball.vertices + [1 + gap/2, 0, 0]],
+                   np.r_[ball.faces, ball.faces + n],
+                   bodies=[pyse.Body(faces=range(nf), volume=None),
+                           pyse.Body(faces=range(nf, 2*nf), volume=None)])
+    return ev
+
+
+def _two_drops(theta, gap, R=0.84):
+    """Two drops on the plane z = 0 at contact angle theta, their contact
+    lines gap apart (theta <= 90) or their equators (theta > 90)."""
+    t = np.radians(theta)
+    drop = shapes.cap(R, R*(1 - np.cos(t)), nr=6, nt=24)
+    n, nf = len(drop.vertices), len(drop.faces)
+    rim = np.asarray(drop.rims["rim"])
+    s = (R*np.sin(t) if theta <= 90 else R) + gap/2
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[drop.vertices - [s, 0, 0], drop.vertices + [s, 0, 0]],
+                   np.r_[drop.faces, drop.faces + n],
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=theta)},
+                   vertex_constraints={1: np.r_[rim, rim + n]},
+                   bodies=[pyse.Body(faces=range(nf), volume=None),
+                           pyse.Body(faces=range(nf, 2*nf), volume=None)])
+    return ev
+
+
+def test_two_spheres_about_to_touch_are_an_event():
+    assert _two_spheres(0.5).events() == []
+    found = _two_spheres(0.02).events()
+    assert [e.kind for e in found] == ["touch"]
+    assert found[0].gap == pytest.approx(0.02, abs=1e-9)
+    assert np.linalg.norm(found[0].where) < 0.05
+
+
+def test_contact_lines_about_to_meet_are_an_event():
+    assert _two_drops(60.0, 0.3).events() == []
+    found = [e for e in _two_drops(60.0, 0.02).events() if e.kind == "contact lines"]
+    assert len(found) == 1 and found[0].constraint == 1
+    assert found[0].gap == pytest.approx(0.02, abs=1e-9)
+
+
+def test_a_thinning_bridge_is_a_neck_before_it_pinches():
+    # the bridge between disks of the pinch-off test, losing liquid: the neck
+    # is an event while it is still a ring of about five edges, before
+    # Evolver's tiny-edge deletion closes it (here at the last look before:
+    # each look is 10 gradient steps and a remesh apart)
+    H, nt = 3.0, 16
+    tube = shapes.tube(1.0, 0.0, H, nz=8, nt=nt)
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   boundaries={1: C.circle((0, 0, 0)),
+                               2: C.circle((0, 0, H), content=(f"-{H}*y/2", f"{H}*x/2", "0"))},
+                   vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=np.pi*H)])
+    first = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax()
+        full, v = ev.body(1).volume, 1.0
+        for i in range(100):
+            if len(_pieces(ev)) == 2:
+                break
+            necks = [e for e in ev.events() if e.kind == "neck"]
+            if necks and first is None:
+                first = (i, necks[0])
+            x = ev.vertices
+            middle = np.abs(x[:, 2] - H/2) < 0.9
+            if np.hypot(x[middle, 0], x[middle, 1]).min() > 0.3:
+                v -= 0.02
+                ev.body(1).target = v*full
+            ev.command("g 10")
+            ev.remesh(target=0.25)
+    assert first is not None and first[0] < i
+    assert abs(first[1].where[2] - H/2) < 0.5 and first[1].gap > 0.2
+
+
+def _drop_under_a_sphere():
+    """A hemispherical drop on the plane z = 0 (90 degrees, radius 0.7) under
+    a solid sphere of radius 1 whose bottom is at height 1."""
+    drop = shapes.cap(0.7, 0.7, nr=6, nt=24)
+    ev = pyse.Evolver()
+    ev.load_arrays(drop.vertices, drop.faces,
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                                2: C.sphere((0, 0, 2.0), 1.0, contact_angle=90.0)},
+                   vertex_constraints={1: drop.rims["rim"]},
+                   bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    return ev
+
+
+def test_arclength_stops_before_a_growing_drop_touches_a_solid():
+    ev = _drop_under_a_sphere()
+    with pytest.warns(UserWarning, match="stopped at .* constraint 2"):
+        steps = list(recipes.arclength(ev, ev.body(1), 0.1, 60))
+    last = steps[-1]
+    assert [e.kind for e in last.events] == ["solid"] and last.events[0].between == "outside"
+    assert 0 <= last.events[0].gap < 0.5*last.events[0].scale
+    assert steps[-2].events and all(not s.events for s in steps[:-2])     # closer at the last
+    top = ev.vertices[:, 2].max()
+    assert 0.9 < top < 1.0                  # below the sphere's bottom, close to it
+
+
+def test_continuation_stops_before_a_growing_drop_touches_a_solid():
+    ev = _drop_under_a_sphere()
+    v0 = ev.body(1).volume
+    with pytest.warns(UserWarning, match="stopped at .* constraint 2"):
+        steps = list(recipes.continuation(ev, ev.body(1), v0*np.linspace(1.1, 4.0, 30)))
+    assert steps[-1].events and steps[-1].events[0].kind == "solid"
+    assert ev.vertices[:, 2].max() < 1.0
+    assert len(steps) < 30

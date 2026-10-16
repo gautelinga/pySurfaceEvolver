@@ -10,6 +10,7 @@ import numpy as np
 from . import _core
 from ._engine import _Engine
 from ._errors import EvolverError, _num
+from ._events import Event, find as _find_events
 from ._geometry import _chains, _crossed, _grow, _self_gap
 from ._mesh import Mesh, MeshQuality
 from ._results import EigenCounts, Health, Modes, Stability
@@ -25,6 +26,7 @@ _CROSS_TOL = 0.01
 _TARGET_LOST = 1e-4
 _DEGENERATE = 1.0              # a facet with an angle below this (degrees) is degenerate
 _NEAR = 0.1                    # health(): a gap below this many median edges is an issue
+EVENT_FACTOR = 0.5             # events(): a gap below this many local edge lengths
 
 # Evolver's methods whose in-plane forces are physical (membranes)
 _ELASTIC_METHODS = frozenset({
@@ -237,6 +239,27 @@ class _Analysis(_Engine):
             triple = valence == 3
             count = np.bincount(m.edges[triple].ravel(), minlength=len(free))
             return bad + int(((count > 4) & free).sum())
+
+    def events(self, factor: float = EVENT_FACTOR) -> List[Event]:
+        """The changes of topology that are coming, closest first (relative to
+        the edges there), as :class:`Event` records: a neck about to pinch
+        off (the surface within ``factor`` local edge lengths of itself across
+        a body), the surface about to touch itself across the outside, a
+        stretch of surface that close to a constraint it isn't on (away from
+        its contact lines there; or gone through it), and contact lines on one
+        constraint that close to each other while far apart along them (or on
+        different lines). Empty when nothing is that close.
+
+        :func:`recipes.arclength` and :func:`recipes.continuation` put the
+        events on each :class:`Step` and stop at the first point where one
+        is coming (there at the last point too, and closer now; see their
+        ``events=``); :meth:`relax` puts them on its result.
+
+        The gaps are measured from vertices to facets and to the constraints'
+        level sets (curved elements by their corners); a surface that has
+        crossed itself between two looks isn't found. Not in a torus or with
+        a symmetry group."""
+        return _find_events(self, float(factor))
 
     def stability(self, nearest: int = 6, *, eigenvalues: bool = False) -> Stability:
         """Whether the surface sits at a stable equilibrium (a minimum, as far as

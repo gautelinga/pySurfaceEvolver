@@ -48,6 +48,7 @@ class Step:
     extra: dict = field(default_factory=dict)   # yours: kept in checkpoints
     substeps: int = 1          # relaxes it took (more after halving, see continuation)
     predicted: bool = False    # relaxed from the secant prediction (see continuation)
+    events: list = field(default_factory=list)  # Evolver.events() there (see events=)
 
 
 def _setter(what: Any) -> Callable[[Any, Any], None]:
@@ -88,7 +89,7 @@ def _save(prefix: str, ev, steps: List[Step]) -> None:
     ev.dump(prefix + ".dmp.tmp")
     os.replace(prefix + ".dmp.tmp", prefix + ".dmp")
     kept = [Step(s.index, s.value, s.energy, s.volumes, s.pressures, None, s.extra, s.substeps,
-                 s.predicted) for s in steps]
+                 s.predicted, s.events) for s in steps]
     with open(prefix + ".steps.tmp", "wb") as f:
         pickle.dump(kept, f)
     os.replace(prefix + ".steps.tmp", prefix + ".steps")
@@ -157,6 +158,41 @@ def _unconverged(result: Any) -> bool:
     return getattr(result, "converged", True) is False or bool(getattr(result, "collapsed", 0))
 
 
+def _event_factor(events: Union[bool, float, None]) -> Optional[float]:
+    """events= as a factor for Evolver.events(), or None (off)."""
+    if events is None or events is False:
+        return None
+    if events is True:
+        from ._analysis import EVENT_FACTOR
+        return EVENT_FACTOR
+    factor = float(events)
+    if not factor > 0:
+        raise ValueError("events must be True, False or a factor > 0")
+    return factor
+
+
+def _through(found: list) -> list:
+    """The events of a surface gone through a solid."""
+    return [e for e in found if e.kind == "solid" and e.gap < 0]
+
+
+def _coming(found: list, before: list) -> list:
+    """The events at this point that were at the last one too (the same kind,
+    on the same constraint, within a few edge lengths) and are closer now, by
+    a hundredth of an edge at least: a neck that widens after a merge, or a
+    gap that stays as it is while its flag comes and goes (a vertex next to
+    a contact line, about as close as the line's wedge), isn't coming."""
+    out = []
+    for e in found:
+        same = [b.gap - 0.01*max(b.scale, e.scale) for b in before
+                if b.kind == e.kind and b.constraint == e.constraint
+                and np.linalg.norm(np.asarray(b.where) - np.asarray(e.where))
+                < 4*max(b.scale, e.scale)]
+        if same and e.gap < min(same):
+            out.append(e)
+    return out
+
+
 def _failed(result: Any, stop_on: Optional[str]) -> bool:
     if stop_on is None:
         return False
@@ -174,7 +210,8 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
                  checkpoint: Optional[str] = None,
                  resume: Optional[str] = None,
                  stop_on: Optional[str] = None, halvings: int = 0,
-                 predictor: bool = True) -> Iterator[Step]:
+                 predictor: bool = True,
+                 events: Union[bool, float] = True) -> Iterator[Step]:
     """Step through ``values``: for each, set ``what`` to it, relax, and
     yield a :class:`Step`.
 
@@ -210,6 +247,15 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
     continuations. A predicted step that comes out unconverged is relaxed
     again from the last equilibrium's positions before anything else;
     ``Step.predicted`` says whether the prediction was kept.
+
+    ``events`` (on by default; a number sets :meth:`Evolver.events`'s
+    ``factor``, False turns it off): each step's :meth:`Evolver.events` go
+    on its ``Step.events``, and the run ends, with a warning, after the
+    first step with an event that is coming (there at the last step too, and
+    closer now): a neck about to pinch off, the surface about to touch itself, a
+    solid or contact lines about to meet. A step whose surface has gone
+    through a solid ends the run before it, the surface back at the last
+    good step.
     """
     if stop_on not in (None, "unconverged", "unstable"):
         raise ValueError("stop_on must be None, 'unconverged' or 'unstable'")
@@ -217,6 +263,7 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
         raise ValueError("halvings must be non-negative")
     if halvings and stop_on is None:
         raise ValueError("halvings retries the steps stop_on rejects: give stop_on too")
+    factor = _event_factor(events)
     values = list(values)
     set_value = _setter(what)
     relax_fn = _relax_with(relax)
@@ -241,9 +288,10 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
             history[:] = (history + [_snapshot(ev, v)])[-2:]
         return result, predicted
 
+    before = ev.events(factor) if factor is not None else []
     for index in range(len(done), len(values)):
         value = values[index]
-        good = ev.save() if stop_on is not None else None
+        good = ev.save() if stop_on is not None or factor is not None else None
         good_history = list(history)
         result, predicted = relax_to(value)
         substeps = 1
@@ -268,15 +316,31 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
                           "there; the surface is back at the last good step",
                           UserWarning, stacklevel=2)
             return
+        found = [] if factor is None else \
+            result.events if factor == _event_factor(True) and \
+            isinstance(getattr(result, "events", None), list) else ev.events(factor)
+        if _through(found):
+            ev.restore(good)
+            at = np.asarray(value).tolist()
+            warnings.warn(f"continuation() stopped before {at}: {_through(found)[0]}; the "
+                          "surface is back at the last good step", UserWarning, stacklevel=2)
+            return
         previous = value
         bodies = ev.bodies()
         step = Step(index, value, ev.energy, np.array(bodies.volume),
                     np.array(bodies.pressure), result, substeps=substeps,
-                    predicted=predicted)
+                    predicted=predicted, events=found)
         done.append(step)
+        coming = _coming(found, before)
+        before = found
         yield step
         if checkpoint is not None:
             _save(checkpoint, ev, done)
+        if coming:
+            at = np.asarray(value).tolist()
+            warnings.warn(f"continuation() stopped at {at}: {coming[0]} (see Step.events)",
+                          UserWarning, stacklevel=2)
+            return
 
 
 # ---- through folds: pseudo-arclength continuation --------------------------------
@@ -517,7 +581,8 @@ def _remesher(ev, remesh: Any) -> Optional[Callable[[Callable[[], None]], bool]]
 def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
               tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
-              remesh: Union[None, float, dict, Callable[[Any], Any]] = None) -> Iterator[Step]:
+              remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
+              events: Union[bool, float] = True) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
     target volume or ``ev.quantity(name)``'s target).
@@ -579,6 +644,14 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     lands farther from the prediction than the step itself: on the branch's
     plane, but on some other branch or none. ``tol``
     bounds the residual of each point, as in :meth:`Evolver.relax`.
+
+    ``events`` (on by default; a number sets :meth:`Evolver.events`'s
+    ``factor``, False turns it off): each point's :meth:`Evolver.events` go
+    on its ``Step.events``, and the run ends, with a warning, at the first
+    point with an event that is coming (there at the last point too, and
+    closer now), the surface there: a neck about to pinch off, the surface about
+    to touch itself, a solid or contact lines about to meet. A point whose
+    surface has gone through a solid counts as a failed step (halved).
     """
     if ds == 0 or steps < 0 or halvings < 0:
         raise ValueError("arclength() needs ds != 0, steps >= 0 and halvings >= 0")
@@ -595,19 +668,28 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                              f"shape {ev.vertices.shape}")
         along /= rms
     remesh_now = _remesher(ev, remesh)
+    factor = _event_factor(events)
+
+    def look() -> list:
+        return ev.events(factor) if factor is not None else []
 
     def put(v: float) -> None:
         set_value(ev, v)
         ev.command("recalc")        # boundaries follow a parameter (assigning one doesn't)
 
-    def step(index: int, v: float, iterations: int, negative: int, residual: float) -> Step:
+    def step(index: int, v: float, iterations: int, negative: int, residual: float,
+             found: list) -> Step:
         bodies = ev.bodies()
         none = np.empty(0)
         result = IterationResult(none, none, none, "", converged=True, newton_steps=iterations,
                                  residual=residual, negative_modes=negative,
                                  stable=negative == 0)
         return Step(index, v, ev.energy, np.array(bodies.volume), np.array(bodies.pressure),
-                    result)
+                    result, events=found)
+
+    def stop(v: float, coming: list) -> None:
+        warnings.warn(f"arclength(): stopped at {v:.6g}: {coming[0]} (see Step.events)",
+                      UserWarning, stacklevel=3)
 
     def outside(v: float) -> bool:
         return bounds is not None and not (min(bounds) <= v <= max(bounds))
@@ -620,7 +702,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         return
     ok, negative, residual = _arc_settle(ev, put, float(value), tol, False)
     points = [(float(value), ev.vertices)]
-    yield step(0, float(value), 0, negative, residual)
+    before = look()
+    yield step(0, float(value), 0, negative, residual, before)
     if steps < 2:
         return
     # the first step in the value alone (or along ``along`` at the value),
@@ -634,6 +717,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             iterations, ok = kept.newton_steps, False
             if kept.converged:
                 ok, negative, residual = _arc_settle(ev, put, float(value + first), tol, tidy)
+                found = look() if ok else []
+                ok = ok and not _through(found)
         else:
             tangent = (np.sign(first)*along, 0.0)
             ok, iterations = _arc_correct(ev, put, x_start + first*along, float(value),
@@ -641,6 +726,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             if ok:
                 ok, negative, residual = _arc_settle(ev, put, float(_current(ev, what)), tol,
                                                      tidy, tangent, abs(first))
+                found = look() if ok else []
+                ok = ok and not _through(found)
         if ok:
             break
         if not ev._put_back(start):
@@ -655,7 +742,12 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         return
     v = float(_current(ev, what))
     points.append((v, ev.vertices))
-    yield step(1, v, iterations, negative, residual)
+    coming = _coming(found, before)
+    before = found
+    yield step(1, v, iterations, negative, residual, found)
+    if coming:
+        stop(v, coming)
+        return
     h = abs(first)              # (and back up to ds below)
     for index in range(2, steps):
         if remesh_now is not None:
@@ -678,6 +770,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         tx, tv, sx = _arc_secant(ev, x0, v0, x1, v1)
         last = ev._coords()
         corrected = exact = ok = False
+        through = None
         # up to ``halvings`` halvings of the step as it stands (a run near a
         # fold carries short steps on), but not below ds/4**halvings, where it
         # only crept on (a dimer between beads: six points within 1e-13)
@@ -694,6 +787,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 # then tidied and settled again, or a failed step too (put back
                 # untidied, so the last point's mesh)
                 ok, negative, residual = _arc_settle(ev, put, v, tol, tidy, (tx, tv), h)
+                found = look() if ok else []
+                if _through(found):
+                    ok, through = False, _through(found)[0]
                 if ok:
                     break
             # back at the last point: on the mesh as tidying left it (flips
@@ -736,7 +832,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 slide = (sx - _normal_part(ev, sx))*(_rms(ex)/shape if shape > 0 else 0.0)
                 tx, tv, sx, exact = ex, ev_, ex + slide, True
         if not ok:
-            why = (" that settles again after tidying its mesh (too coarse there? refine)"
+            why = (f" where the surface doesn't go through a solid ({through})" if through else
+                   " that settles again after tidying its mesh (too coarse there? refine)"
                    if corrected else "")
             warnings.warn(f"arclength(): no equilibrium found past {v1:.6g}{why} (even with "
                           f"steps of {h:.3g}); the surface is back at the last point",
@@ -744,7 +841,12 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             return
         v = float(_current(ev, what))       # (settling back can move it a little)
         points = [points[-1], (v, ev.vertices)]
-        yield step(index, v, iterations, negative, residual)
+        coming = _coming(found, before)
+        before = found
+        yield step(index, v, iterations, negative, residual, found)
+        if coming:
+            stop(v, coming)
+            return
         h = min(abs(ds), 2*h)       # back up to ds after halving
 
 

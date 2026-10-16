@@ -8,6 +8,16 @@
   volume of a face that bounds a body but isn't in the surface, such as the disk a
   bridge is pinned on (Evolver's content integral on a boundary).
 
+- `Evolver.events()`: the changes of topology that are coming, as `Event` records
+  (`pysurfaceevolver.Event`): a neck about to pinch off, the surface about to touch
+  itself, a solid it isn't on (away from its contact lines there, or gone through
+  it), or contact lines on one solid about to meet, each with its gap, the edge length
+  there, the place, the vertices and the constraint. `recipes.arclength` and
+  `recipes.continuation` put them on each `Step` (`Step.events`) and stop, with a
+  warning, at the first point where one is coming (`events=True` by default; a number
+  sets the gap's factor, `False` turns it off); a point whose surface has gone through
+  a solid is a failed step. `relax()` puts them on its result (`result.events`).
+
 ### Speed
 
 - Newton steps on a surface free to move as a whole reuse the last step's null
@@ -36,6 +46,11 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- packing.md's 5-degree dimer ran on into bead 3 (from volume 0.203 to 0.196, where
+  `arclength` stalled): it now stops at 0.206, where its meniscus comes down onto the
+  bead. The pore wedge with a narrow bottom throat now stops at volume 0.204, where its
+  liquid is about to pinch off at a mirror plane.
 
 - Newton steps carry the mesh along a moving contact or triple line. With
   `hessian_normal` a step moves each vertex only along its normal (across the line,

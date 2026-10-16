@@ -136,13 +136,17 @@ print(f"dimer: from there down to volume {V[-1]:.3f} (d = {d[-1]:.2f}), "
 ```text
 trimer: stable down to volume 0.185 (d = 0.65), the snap-in
 between: up to 1 negative mode, back up to volume 0.224 (d = 0.27), the pop-out
-dimer: from there down to volume 0.196 (d = 0.07), 0 negative modes
+dimer: from there down to volume 0.206 (d = 0.11), 0 negative modes
 ```
 
 Along the way the run passes two folds. The trimer is stable down to volume 0.185;
 there its branch turns, and the surface the run follows back up is unstable, with one
 negative mode. At volume 0.224 it turns again into stable dimers, which go on down to
-where the outer meniscus reaches bead 3 (d near 0, where the two bridges come apart).
+volume 0.206. There `arclength` stops by itself: the outer meniscus has come down onto
+bead 3, the film of liquid under it 6e-5 thick (an event on the step, see
+{meth}`~pysurfaceevolver.Evolver.events`), where the two bridges come apart. Followed on
+regardless, the meniscus goes into the bead (below volume 0.203; before events stopped
+the run it went on to 0.196 that way).
 Between 0.185 and 0.224, a trimer and a dimer hold the same liquid. A draining trimer
 snaps in at 0.185, and a dimer being filled pops out at 0.224.
 
@@ -283,14 +287,16 @@ for base in (0.03, 0.01):
     turns = np.flatnonzero(np.diff(V[k:]) > 0)       # a fold: the volume turns back up
     print("   " + (f"the branch turns at volume {V[k + turns[0]]:.4f}" if len(turns)
                    else "the branch doesn't turn")
-          + f"; a negative mode from volume {V[-1]:.3f}")
+          + "; " + ("a negative mode" if step.result.negative_modes else
+                    f"the surface about to touch {step.events[0].constraint}")
+          + f" at volume {V[-1]:.3f}")
 ```
 
 ```text
 bottom gaps 0.03: the curvature peaks at 9.532 (volume 0.292); the bottom meniscus at -0.184 there, -0.087 at the end
-   the branch turns at volume 0.2877; a negative mode from volume 0.291
-bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.253); the bottom meniscus at -0.294 there, -0.372 at the end
-   the branch doesn't turn; a negative mode from volume 0.190
+   the branch turns at volume 0.2877; a negative mode at volume 0.291
+bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.253); the bottom meniscus at -0.294 there, -0.346 at the end
+   the branch doesn't turn; the surface about to touch mirror_0 at volume 0.204
 ```
 
 With the bottom throat the widest (gaps 0.03 against 0.02), the curvature peaks at
@@ -300,7 +306,10 @@ while the other three pull back, and the branch turns at a fold just below the p
 volume. Draining further, there is no equilibrium nearby to follow: gas breaks through
 the widest throat and the pore empties, a Haines jump. With the bottom throat the
 narrowest (gaps 0.01), the other three go first, at a curvature of 10.002, and the
-bottom meniscus pulls back out. In the wedge those three can only move together;
+bottom meniscus pulls back out. The run stops at volume 0.204, where the surface comes
+within 0.006 of one of the mirror planes with liquid between: in the whole pore, the
+liquid there is about to pinch off against its mirror image (followed on regardless, the
+run reaches a negative mode at 0.190). In the wedge those three can only move together;
 whether one of them would go alone is what the mirrors leave out. Either way the pore
 empties through its widest throat, at that throat's entry curvature. With all four
 throats alike, the wedge's run goes on past the peak (9.877) onto the second kind of
@@ -338,7 +347,9 @@ in the middle, with the four menisci drawn deep into the throats.
   follows a surface once it has relaxed.
 * **Topology changes are where the runs stop.** A burst, a Haines jump or a pore
   emptying changes how the liquid is connected, which the mesh can't follow. The runs
-  find where each happens; the state after it needs a new surface.
+  find where each happens, and `arclength` stops by itself where the surface is about
+  to touch a bead, a mirror or itself (`Step.events`); the state after it needs a new
+  surface.
 * **Mirror planes.** The throat is computed in a prism with mirror planes, so modes that
   break the layer's symmetry don't show; likewise the pore's wedge, which keeps only
   shapes with its three-fold symmetry. The trimer and the full pore are whole surfaces.

@@ -395,6 +395,10 @@ class _Relaxing(_Analysis):
                 health: Optional[Health] = self._health(residual, stable, modes, tol)
             except EvolverError:
                 health = None
+            try:
+                events: Optional[list] = self.events()
+            except EvolverError:
+                events = None
             settled = trace.settled and not residual < tol
         # (refinements this call made were relaxed after; a converged surface
         # starts the count over)
@@ -403,7 +407,7 @@ class _Relaxing(_Analysis):
                                np.array(trace.scale), "".join(trace.output),
                                bool(residual < tol or (crystalline and settled)), steps,
                                np.array(trace.level, dtype=int), residual, stable, modes,
-                               health, popped, collapsed, settled)
+                               health, popped, collapsed, settled, events)
 
     def derivative(self, name: str, step: Optional[float] = None, *,
                    move: Optional[Callable[[np.ndarray], np.ndarray]] = None,

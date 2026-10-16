@@ -34,6 +34,7 @@ from ._evolver import (
     SharedEngineWarning,
     UnstableEquilibriumWarning,
 )
+from ._events import Event
 from ._mesh import (Bodies, BodySurface, LargeTessellationWarning, Mesh, MeshQuality, Quantity,
                     is_watertight)
 from ._viz import LiveView
@@ -114,6 +115,7 @@ __all__ = [
     "BodySurface",
     "BodyView",
     "EigenCounts",
+    "Event",
     "Evolver",
     "EvolverBusyError",
     "EvolverError",

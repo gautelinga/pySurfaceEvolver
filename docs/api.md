@@ -18,6 +18,8 @@ handle to it.
 .. autoclass:: IterationResult
 .. autoclass:: Health
    :members: ok
+.. autoclass:: Event
+   :no-members:
 .. autoclass:: BodyView
 .. autoclass:: QuantityView
 .. autoclass:: EigenCounts

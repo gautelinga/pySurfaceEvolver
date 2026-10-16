@@ -108,6 +108,7 @@ class IterationResult:
     # with the energy settled (surfaces without a Hessian; a crystalline energy,
     # which then counts as converged)
     settled: Optional[bool] = None
+    events: Optional[list] = None      # relax(): Evolver.events() at the end
 
     def __repr__(self) -> str:
         n = len(self.energy)

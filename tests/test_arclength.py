@@ -242,12 +242,13 @@ def test_remeshing_keeps_the_unstable_branch():
     # the catenoid stretches to its fold and its neck then thins: without
     # remeshing the facets degrade and the run loses the unstable branch
     # (back to no negative mode at 0.85, areas 30% off); remeshing between
-    # points keeps it, down to wires 0.5 apart
+    # points keeps it, down to wires 0.5 apart (where the neck is a ring of
+    # four edges: events would stop the run before, at five)
     ev = _wire_catenoid(1)
     ev.parameters["ht"] = 0.8
     h = float(np.median(ev.mesh().edge_lengths()))
     n = len(ev.vertices)
-    steps = list(recipes.arclength(ev, "ht", 0.05, 33, remesh=h))
+    steps = list(recipes.arclength(ev, "ht", 0.05, 33, remesh=h, events=False))
     values = np.array([s.value for s in steps])
     negative = np.array([s.result.negative_modes for s in steps])
     turn = int(np.argmax(values))

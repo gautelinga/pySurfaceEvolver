@@ -63,9 +63,6 @@ Still open:
 * A long finite column's length (fibres.md uses a periodic slice): discretization
   error, converged lengths differ by 1e-4 in energy; neither the follow fix nor
   full-coordinate Newton helps.
-* The 5-degree dimer (packing.md) stops at volume 0.196 (d = 0.07) instead of 0.190
-  (d = 0.06) since the fold fix: each predictor can land on a point from which every
-  step fails the reach check; going back a point would fix it (not built).
 * Seen while timing, not investigated: the 98k cube switched to quadratic from an
   unconverged linear state (`g 10` after each refinement, no Newton steps) and
   relaxed ends unconverged after 28 s (residual 3e-7), and plain `hessian` steps
@@ -209,11 +206,40 @@ Events (each needs detection, surgery, and a test):
    (the crossed-fibre ends, the trimer's contact lines closing in).
 
 Stages:
-* **A. Detect and stop well** (days): during `relax`, `arclength`, `continuation`,
-  report the coming event, its kind and place (self gap, wall gap, neck radius from
-  edge loops, a Hessian eigenvalue at zero), stop at the last good state, and put it in
-  the result (`result.event`). Useful on its own; every page's "runs stop at a change
-  of topology" note becomes a stated event.
+* **A. Detect and stop well** (done 2026-10-17, the pilot bead pack as the case):
+  `Evolver.events(factor=0.5)` (`_events.py`, NumPy) returns `Event`s of four kinds:
+  "neck" and "touch" (the surface within factor*h of a facet across a body / the
+  outside, facing it; a neck within 3*factor*h/order: a ring of five edges in the
+  linear model), "solid" (within factor*h of a constraint it isn't on, from Evolver's
+  f/|grad f|; kept when the stretch doesn't reach a contact line on it, or is closer
+  than 0.7 of the contact line's wedge, s*sin(angle) at a distance s from the line's
+  edges, angle through what lies between; gone through: negative gap) and "contact
+  lines" (on one constraint, within factor*h, far apart along the line). h: each
+  vertex's mean edge, from edges between free vertices where it has some (a pad
+  drawn in large fixed facets made bga-3's joint a "neck"). Left out: vertices in a
+  fold of the mesh, facets within two edges, self events covering half their piece
+  (a mesh too coarse for it: qmound.fe unrefined), tori. Candidates: vertex pairs
+  within reach with facing normals, then the facets round the far one. `arclength` and `continuation`
+  (`events=True` by default) put them on `Step.events` and stop, with a warning, at
+  the first point where one is coming (there at the last point too and closer by 0.01
+  of an edge); a point gone through a solid is a failed step (halved). `relax` puts
+  them on `result.events`. The pilot pores (1 and 2, 20 and 40 degrees, 661 facets)
+  stop at the meniscus coming down on the bead opposite the draining throat (a film
+  0.004-0.016 thick), before the surface goes through it (before: through it, then
+  stalled); one level finer the same. Found on the way: packing.md's 5-degree dimer
+  ended inside bead 3 (its "stops at 0.196" open item: the meniscus reaching the bead,
+  now stopped at 0.206), and the pore wedge with the narrow bottom throat stops at
+  0.204 where the liquid is about to pinch at a mirror plane (before: on to a negative
+  mode at 0.190). Cost: 11 ms per look at 661 facets, 90 ms at 17k, 360 ms at 68k
+  (health(): 89 ms there). Default `events=True` checked against the tests, the
+  stress suite, every docs snippet and the executed notebooks: only packing.md's two
+  runs above changed (an early version stopped a barrel on a fibre, a 30-degree drop
+  and bga-3, all fixed). Limits: a
+  surface that crosses itself between two looks isn't found; at small contact angles
+  next to a contact line, a curved meniscus can come within the wedge rule (a 5-degree
+  meniscus did, truly); a barrel on a thin fibre stays above 0.9 of its wedge.
+  Not done: the Hessian eigenvalue at zero (arclength's negative_modes already says
+  it); relax doesn't stop (its pinch-offs go through `collapsed`).
 * **B. Bodies that split off** (days): when a pinch-off or a closure cuts a blob of
   liquid off from the rest, it becomes a body of its own with its volume fixed (trapped
   liquid); the rest goes on under the run's control. Optional, later: `Body(pressure=p)`
