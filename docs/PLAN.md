@@ -66,6 +66,11 @@ Still open:
 * The 5-degree dimer (packing.md) stops at volume 0.196 (d = 0.07) instead of 0.190
   (d = 0.06) since the fold fix: each predictor can land on a point from which every
   step fails the reach check; going back a point would fix it (not built).
+* Seen while timing, not investigated: the 98k cube switched to quadratic from an
+  unconverged linear state (`g 10` after each refinement, no Newton steps) and
+  relaxed ends unconverged after 28 s (residual 3e-7), and plain `hessian` steps
+  from there raise the residual to 5e-4. From a Newton-converged linear cube it
+  converges in 5-6 s.
 * OpenMP waiting under oversubscription (documented in performance.md, default
   unchanged): with 16 busy processes a 4-thread test run took 185-348 s spinning,
   82-98 s with OMP_WAIT_POLICY=passive; GOMP_SPINCOUNT 1000/10000 didn't help reliably
