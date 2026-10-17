@@ -99,6 +99,13 @@
   nearest to coming is made. Each removed a way a 16-bead pack's runs ended; they
   still end, from 87.5 at 57 to 83 run to run.
 
+- Fixed in the changes of topology: contact lines joined where they ran the same
+  way left a facet turned over (Evolver's pop then failed with an internal error);
+  they aren't joined there now. Facets lying flat on a solid with next to no area
+  (a merged neck sunk onto the plane between two drops) are taken away as a
+  roofed-over channel's are; they had ended the descent as degenerate facets, and
+  a test of two drops merging failed one run in four.
+
 ### Speed
 
 - Newton steps on a surface free to move as a whole reuse the last step's null

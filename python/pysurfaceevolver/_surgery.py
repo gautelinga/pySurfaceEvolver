@@ -669,6 +669,18 @@ def contact(ev, event, keep=None) -> None:
         ring = np.unique(f[(f == k).any(axis=1)])
         core = np.union1d(core, ring[~on[ring] & ~held[ring]])
         gone = (f == k).any(axis=1)
+    _dissolve_onto(ev, m, gone, event.constraint)
+
+
+def _dissolve_onto(ev, m, gone, key) -> None:
+    """The facets gone (mask over m's rows) taken away, their vertices put
+    onto the wall key first, the new border edges on it as contact lines,
+    the volumes kept (volconst)."""
+    nums, _, dist, names = ev._constraint_gaps()
+    c = _column(nums, names, key)
+    num = int(nums[c])
+    x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
+    on = np.isnan(dist[:, c])
     # onto the solid first (so taking the facets away moves no liquid), then
     # the volumes the bodies hold, which the new contact line keeps
     _, grad = ev._call(_core.constraint_normals, num)
@@ -690,11 +702,39 @@ def contact(ev, event, keep=None) -> None:
     except Exception:
         ev.restore(snapshot)
         raise
-    _poles(ev, event.constraint, added)
+    _poles(ev, key, added)
     for i in bodies:
         if i in [int(j) for j in ev.bodies().ids]:
             b = ev.body(i)
             b.volconst = b.volconst + volume[i] - b.volume
+
+
+def drop_flat(ev, h: float) -> int:
+    """Facets with their corners on one wall and next to no area (under a
+    hundredth of h squared: the surface lying on the solid, as a merged
+    neck's sank onto the plane between two drops, its contact lines a chord
+    0.011 apart that edge deletion can't take, the lines would pinch) taken
+    away as contact() takes a roofed channel's. Returns how many."""
+    m = ev.mesh()
+    f = np.asarray(m.facets)
+    if not len(f):
+        return 0
+    x = np.asarray(m.vertices, float)
+    area = 0.5*np.linalg.norm(np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]]), axis=1)
+    small = area < 0.01*h*h
+    if not small.any():
+        return 0
+    nums, _, dist, names = ev._constraint_gaps()
+    for key in surface.walls:
+        try:
+            c = _column(nums, names, key)
+        except ValueError:
+            continue
+        gone = small & np.isnan(dist[:, c])[f].all(axis=1)
+        if gone.any():
+            _dissolve_onto(ev, m, gone, key)
+            return int(gone.sum())
+    return 0
 
 
 def _pinched(m, edges, rows) -> "int | None":
@@ -961,6 +1001,12 @@ def _join_lines(ev, m, x, f, a, b, keep) -> None:
     if ring[a] & ring[b] or ring[a2] & ring[b2]:
         raise ValueError("contact(): the contact lines meet where the mesh already joins "
                          "them (shared neighbours): not joined there")
+    # the glued edge's two facets must go round it opposite ways (lines facing
+    # across dry ground run opposite ways; a pack's two lines running the same
+    # way, glued, left a facet turned over, and Evolver's pop then failed)
+    turns = {(int(r[i]), int(r[(i + 1) % 3])) for r in f.tolist() for i in range(3)}
+    if ((a, a2) in turns) == ((b, b2) in turns):
+        raise ValueError("contact(): the contact lines run the same way there: not joined")
     fb = np.asarray(m.facet_bodies)
     bodies = sorted({int(v) for r in range(len(f))
                      if {a, a2} <= set(f[r].tolist()) or {b, b2} <= set(f[r].tolist())
@@ -1163,8 +1209,9 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             if not chunk.converged:
                 continue
             if chunk.stable is not False and not _sound(chunk.health):
-                # (a facet squashed in the change, a patch shrunk to nothing:
-                # tidied, and once more)
+                # (a facet squashed in the change, a patch shrunk to nothing,
+                # the surface lying on a solid: tidied, and once more)
+                drop_flat(ev, h0)
                 close_patches(ev, h0)
                 ev.command("u")
                 _keep_edges(ev, h0)
