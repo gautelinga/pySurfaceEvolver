@@ -827,12 +827,16 @@ def _nearest(found: list) -> Any:
 def _change(ev, event, factor: float, tol: float, keep) -> "tuple[Any, list, str]":
     """Make the change a coming event announces, then down to a stable state
     (as _fall). The cut of a neck settles as pinch_off's does; a merge or a
-    contact relaxes from there."""
+    contact relaxes from there. A change refused (ValueError: the surface is
+    left as it was) is passed over, as the descent passes over one: down
+    from here, the changes coming on the way made."""
     from ._errors import EvolverError
     from ._surgery import _settle, apply, descend
     try:
         apply(ev, event, keep)
-    except (ValueError, EvolverError) as error:
+    except ValueError:
+        return descend(ev, factor, tol, falling=False, keep=keep)
+    except EvolverError as error:
         return None, [], str(error)
     if event.kind == "neck":
         r = _settle(ev, tol)

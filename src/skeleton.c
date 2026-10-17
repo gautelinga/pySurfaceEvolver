@@ -1766,6 +1766,8 @@ void set_v_constraint_map(
      if ( everything_quantities_flag )
         apply_method_num(v_id,constr->energy_method);
   }
+  /* apply_method_num() can expand the vertex attributes, moving map */
+  map = get_v_constraint_map(v_id);
   if ( (constr->attr & CON_CONTENT) && (web.representation == STRING) )
   { 
     set_attr(v_id, BDRY_CONTENT);
@@ -2129,6 +2131,8 @@ void set_e_constraint_map(
        apply_method_num(positive_id(e_id),constr->energy_method);
 /* positive_id() to agree with old way */
   }
+  /* apply_method_num() can expand the edge attributes, moving map */
+  map = get_e_constraint_map(e_id);
   if ( constr->attr & CON_CONTENT )
   { set_attr(e_id, BDRY_CONTENT);  /* BIG PROBLEM HERE GETTING RIGHT BODY!!! */
     if ( everything_quantities_flag )

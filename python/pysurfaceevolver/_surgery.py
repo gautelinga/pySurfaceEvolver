@@ -186,7 +186,7 @@ def move_poles(ev, force=()) -> list:
                 body = ev.body(i)
                 body.volconst = body.volconst + 4*np.pi*R**3/3*round(float(side @ spheres))
         cos = np.cos(np.radians(getattr(wall, "contact_angle")))
-        surface.energy_shift.append((1, repr(4*np.pi*R*R*cos*round(float(spheres.sum())))))
+        surface.energy_shift.append((1, _num(4*np.pi*R*R*cos*round(float(spheres.sum())))))
         moved.append(name)
     return moved
 
@@ -1047,7 +1047,8 @@ def _join_lines(ev, m, x, f, a, b, keep) -> None:
 
 _FALL_STEP = 0.3        # a fall's step along the unstable mode: at most this many median edges
 _FALL_GRADIENT = 5      # gradient steps after each
-_FALL_ITERATIONS = 200
+_FALL_ITERATIONS = 200     # iterations of a descent since its last change, at most
+_FALL_TOTAL = 10           # ... and this many times that in all
 _FALL_NEAR = 0.05       # the residual below which Newton steps try to finish a descent
 _FALL_TRY = 10          # iterations between such tries
 _FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
@@ -1105,7 +1106,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         h0 = _median_edge(ev.mesh())
     if not falling:
         guard(ev)
-    for _ in range(_FALL_ITERATIONS):
+    since = 0
+    for _ in range(_FALL_TOTAL*_FALL_ITERATIONS):
+        since += 1
+        if since > _FALL_ITERATIONS:
+            break
         orient_lines(ev)
         close_patches(ev, h0)
         move_poles(ev)
@@ -1152,7 +1157,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     refused = f"{e}: {error}"
         if neck is not None:
             changes.append(neck)
-            way, before = None, []
+            way, before, since = None, [], 0
             r = _settle(ev, tol)
             if r is None:
                 return None, changes, "the pieces didn't relax after the cut"
@@ -1195,7 +1200,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             e = made
             changes.append(e)
             guard(ev)
-            way, before, tried = None, [], 0
+            way, before, tried, since = None, [], 0, 0
             falling, remeshing = False, True
             continue
         through = [e for e in resting if e.kind == "solid" and e.gap < 0
@@ -1261,8 +1266,10 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             sign = float(np.sign(_common(way, u))) or 1.0
         way = sign*u
         ev.vertices = ev.vertices + _FALL_STEP*h*way/np.linalg.norm(u, axis=1).max()
-    return None, changes, (f"no stable state within {_FALL_ITERATIONS} steps"
-                           + (f" (the last change not made: {refused})" if refused else ""))
+    return None, changes, (f"no stable state within {_FALL_ITERATIONS} steps of the last "
+                           f"change" if since > _FALL_ITERATIONS else
+                           f"no stable state within {_FALL_TOTAL*_FALL_ITERATIONS} steps") \
+        + (f" (the last change not made: {refused})" if refused else "")
 
 
 def _common(a, b) -> float:

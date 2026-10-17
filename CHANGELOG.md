@@ -106,6 +106,15 @@
   roofed-over channel's are; they had ended the descent as degenerate facets, and
   a test of two drops merging failed one run in four.
 
+- Evolver fix (src/skeleton.c): putting an edge or a vertex on a constraint with
+  energy and content integrals read its constraint list after Evolver had moved it
+  (applying the energy method can expand the element attributes): a crash in a
+  contact on a finer mesh (AddressSanitizer: heap-use-after-free).
+
+- `arclength(topology=True)` passes over a change it can't make (descending from
+  there instead of stopping), and a descent may go on for 200 steps after each
+  change it makes (2000 in all), not 200 in all.
+
 ### Speed
 
 - Newton steps on a surface free to move as a whole reuse the last step's null
