@@ -106,3 +106,19 @@ def test_collapsing_neck_pinches_off(load):
     ev.command("g 5")
     assert ev.total_energy == pytest.approx(13.7128791344603, rel=1e-9)
     assert ev.command("check").strip() == ""
+
+
+def test_equiangulation_doesnt_swap_two_diagonals_onto_one_edge():
+    # a flattened octahedron on a long rectangle: both long sides want their
+    # diagonal swapped onto the two poles; Evolver 2.70a swapped both in one
+    # pass (a doubled edge, four non-manifold facets)
+    from collections import Counter
+    v = np.array([[-1, -0.3, 0], [1, -0.3, 0], [1, 0.3, 0], [-1, 0.3, 0],
+                  [0, 0, 0.15], [0, 0, -0.15]], float)
+    f = [(4, i, (i + 1) % 4) for i in range(4)] + [(5, (i + 1) % 4, i) for i in range(4)]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, bodies=[pyse.Body(volume=None)])
+    ev.command("u")
+    pairs = Counter(tuple(sorted(e)) for e in np.asarray(ev.mesh().edges).tolist())
+    assert max(pairs.values()) == 1
+    assert (4, 5) in pairs                      # (one swap made)

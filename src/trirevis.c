@@ -1163,7 +1163,9 @@ void edge_histogram()
 *           parallel edges without that, and loop edges, as when a ring of
 *           edges around a collapsing neck closes (each merge leaves a
 *           parallel edge, the last one a loop, which delete_edge removes;
-*           'o' then pops the pinched vertex).
+*           'o' then pops the pinched vertex). An edge of the surface's
+*           border (on one facet) keeps the strict link condition: no shared
+*           neighbour off its facet, no second edge between its ends.
 *
 *  Input:    edge id
 *
@@ -1197,6 +1199,7 @@ static int collapse_keeps_manifold(edge_id short_edge)
   facetedge_id fe,first;
   edge_id e1,e2;
   int guard1 = 0;
+  int border;
 
   if ( equal_id(v1,v2) ) return 1;     /* a loop edge: delete_edge removes it */
   first = fe = get_edge_fe(short_edge);
@@ -1205,6 +1208,12 @@ static int collapse_keeps_manifold(edge_id short_edge)
     { if ( nthird < 64 ) third[nthird++] = get_fe_headv(get_next_edge(fe));
       fe = get_next_facet(fe);
     } while ( valid_id(fe) && !equal_id(fe,first) );
+  /* pySE: an edge of the surface's border (one facet: a contact line) keeps
+     the strict link condition. Merging its ends where they share another
+     neighbour pinches the border into a figure eight; a contact line's spike
+     (a vertex whose neighbours along the line are joined by an edge) came
+     out as a facet with a corner twice once 't' had gone on. */
+  border = valid_id(first) && equal_id(get_next_facet(first),first);
 
   e1 = get_vertex_edge(v1);
   if ( !valid_id(e1) ) return 1;
@@ -1212,7 +1221,7 @@ static int collapse_keeps_manifold(edge_id short_edge)
   { vertex_id n1 = get_edge_headv(e1);
     int k, guard2 = 0;
     if ( equal_id(n1,v2) && !equal_element(e1,short_edge)
-         && facets_share_third(e1,short_edge) )
+         && (border || facets_share_third(e1,short_edge)) )
       return 0;   /* another edge between the ends, with a facet like one on this */
     if ( !equal_id(n1,v2) && !equal_id(n1,v1) )
     { e2 = get_vertex_edge(v2);
@@ -1221,7 +1230,7 @@ static int collapse_keeps_manifold(edge_id short_edge)
         { if ( equal_id(get_edge_headv(e2),n1) )
           { for ( k = 0 ; k < nthird ; k++ )
               if ( equal_id(third[k],n1) ) break;
-            if ( k == nthird && facets_share_third(e1,e2) )
+            if ( k == nthird && (border || facets_share_third(e1,e2)) )
               return 0;   /* a common neighbour off the edge, and facets that would coincide */
           }
           e2 = get_next_tail_edge(e2);
@@ -2129,6 +2138,7 @@ edge_id edge_refine(edge_id e_id)
 * return: 1 if edge swapped, 0 if not.
 */
 int did_global_edge_calc = 0;  /* efficiency measure */
+static int vertices_joined(vertex_id,vertex_id);
 
 /* pySE: equiangulate_edge()'s test, without the swap. stored: take edge
    lengths as stored (set for all edges by fl_calc_edges()) instead of
@@ -2217,6 +2227,8 @@ static int equiangulate_test(edge_id e_id, int stored)
         return 0;
     if ( eartest(get_fe_tailv(fe_c),get_fe_headv(fe_d), get_edge_tailv(e_id),
           get_edge_headv(e_id)) ) 
+       return 0;
+    if ( vertices_joined(get_fe_tailv(fe_c),get_fe_headv(fe_d)) )
        return 0;
   }
 
@@ -2375,6 +2387,23 @@ void thread_calc_edges()
       }
   )
 } // end thread_calc_edges()
+
+/* pySE: whether an edge already joins v1 and v2. Swapping a diagonal onto
+   them would make a second edge with the same ends (one pass of
+   equiangulation swapped two quadrilaterals' diagonals onto one pair of
+   vertices: a doubled edge, its four facets non-manifold, and later
+   cone_analyze's ERROR 1303); eartest() only refuses a doubled facet. */
+static int vertices_joined(vertex_id v1, vertex_id v2)
+{ edge_id e_id,start_id;
+
+  e_id = start_id = get_vertex_edge(v1);
+  if ( !valid_id(e_id) ) return 0;
+  do
+  { if ( equal_id(v2,get_edge_headv(e_id)) ) return 1;
+    e_id = get_next_tail_edge(e_id);
+  } while ( !equal_id(e_id,start_id) );
+  return 0;
+}
 
 /*************************************************************************
 *
@@ -2542,6 +2571,13 @@ int edgeswap(edge_id e_id)
                      get_edge_headv(e_id)) )
     { if (verbose_flag )
       { sprintf(msg,"Not swapping edge %s. Would create two facets with same vertices.\n",
+                ELNAME(e_id)); outstring(msg);
+      }
+      return 0;
+    }
+    if ( vertices_joined(get_fe_tailv(fe_c),get_fe_headv(fe_d)) )
+    { if (verbose_flag )
+      { sprintf(msg,"Not swapping edge %s. Would create two edges with same vertices.\n",
                 ELNAME(e_id)); outstring(msg);
       }
       return 0;

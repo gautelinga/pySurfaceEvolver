@@ -88,6 +88,16 @@
 
 ### Fixes
 
+- Evolver's equiangulation (`u`, and `edgeswap`) could swap two quadrilaterals'
+  diagonals onto one pair of vertices in a single pass: a doubled edge with four
+  non-manifold facets, and later ERROR 1303 in `o` (cone_analyze). A swap onto
+  vertices an edge already joins is refused.
+
+- Evolver's edge deletion (`t`, `delete`) keeps the strict link condition for an edge
+  of the surface's border (on one facet, as along a contact line): merging its ends
+  where they share another neighbour pinched the border into a figure eight, and a
+  contact line's spike came out as a facet with a corner twice.
+
 - `Evolver.remesh(protect=...)` with `min_edge`: the mask was applied after the
   deletion had renumbered the edges (now carried by id).
 
