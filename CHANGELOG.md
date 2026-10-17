@@ -113,7 +113,16 @@
 
 - `arclength(topology=True)` passes over a change it can't make (descending from
   there instead of stopping), and a descent may go on for 200 steps after each
-  change it makes (2000 in all), not 200 in all.
+  change it makes (2000 in all), not 200 in all. Three falls without a change stop
+  a run only when no step was taken between them.
+
+- `contact()` splits a contact line that runs through a vertex twice by making one
+  fan of facets again on a new vertex there (Evolver's `pop`, used before, made a
+  junction of three facets on one edge, a facet turned over, and Evolver's popping
+  in `relax()` later failed with an internal error). Falls flip edges where they
+  split contact-line edges (facets had gone to 0 degrees in a pack's fall), and shrunk contact-line loops
+  are covered only within a fifth of an edge (within half, a contact's one-facet
+  hole on a wall was opened and covered again over and over).
 
 ### Speed
 

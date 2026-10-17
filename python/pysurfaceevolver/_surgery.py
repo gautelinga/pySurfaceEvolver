@@ -629,9 +629,9 @@ def contact(ev, event, keep=None) -> None:
         pinched = _pinched(m, edges, rows[on[rows]])
         if pinched is not None:
             # the lines already meet at a vertex (the border through it
-            # twice): Evolver's pop splits it, and the lines are then two
-            # (a pore's contact lines on one bead after its liquid jumped)
-            ev.command(f"pop vertex[{int(m.vertex_ids[pinched])}]")
+            # twice): split there, and the lines are then two (a pore's
+            # contact lines on one bead after its liquid jumped)
+            _split_pinch(ev, m, pinched, num)
             return
         a, b = _closest_pair(x, rows, on)
         if _wet_between(ev, m, x, f, on, num, a, b):
@@ -737,6 +737,69 @@ def drop_flat(ev, h: float) -> int:
     return 0
 
 
+def _split_pinch(ev, m, v: int, num: int) -> None:
+    """Split vertex row v, where two fans of facets meet (a contact line
+    through it twice): the smaller fan's facets made again on a new vertex
+    at the same place, on constraint num with its two border edges as
+    contact lines. (Evolver's pop, made for films, turned it into a junction
+    of three facets on an edge, one facet turned over.)"""
+    f = np.asarray(m.facets)
+    edges = np.asarray(m.edges)
+    mine = np.flatnonzero((f == v).any(axis=1))
+    # the fans: facets at v joined across their edges from v
+    fan = {int(i): int(i) for i in mine}
+
+    def root(i):
+        while fan[i] != i:
+            i = fan[i]
+        return i
+    for i in mine:
+        for j in mine:
+            if i < j and len(set(f[i]) & set(f[j])) == 2:
+                fan[root(int(j))] = root(int(i))
+    groups: dict = {}
+    for i in mine:
+        groups.setdefault(root(int(i)), []).append(int(i))
+    if len(groups) != 2:
+        raise ValueError("contact(): the contact lines meet at a vertex the facets "
+                         "don't split into two fans there")
+    moving = min(groups.values(), key=len)
+    eid = {(int(a), int(b)): int(e) for (a, b), e in zip(edges, m.edge_ids)}
+
+    def oriented(a, b):
+        return eid[(a, b)] if (a, b) in eid else -eid[(b, a)]
+    x = np.asarray(m.vertices, float)[v]
+    vids, fids = np.asarray(m.vertex_ids), np.asarray(m.facet_ids)
+    fb = np.asarray(m.facet_bodies)
+    ring = sorted({int(u) for i in moving for u in f[i] if u != v})
+    was_border = set(np.asarray(m.edge_ids)[m.edge_valence() == 1].tolist())
+    bodies = [int(i) for i in ev.bodies().ids]
+    volume = {i: ev.body(i).volume for i in bodies}
+    snapshot = ev.save()
+    try:
+        commands = [f"pyse_split := new_vertex({x[0]!r}, {x[1]!r}, {x[2]!r})",
+                    "set vertex[pyse_split] constraint " + str(num)]
+        commands += [f"pyse_split_{u} := new_edge(pyse_split, {int(vids[u])})" for u in ring]
+        for i in moving:
+            k = list(f[i]).index(v)
+            a, b = int(f[i][(k + 1) % 3]), int(f[i][(k + 2) % 3])
+            commands.append(f"pyse_splitf := new_facet(pyse_split_{a}, {oriented(a, b)}, "
+                            f"-pyse_split_{b})")
+            for side, body in (("frontbody", fb[i, 0]), ("backbody", fb[i, 1])):
+                if body:
+                    commands.append(f"set facet[pyse_splitf] {side} {int(body)}")
+        commands += [f"dissolve facet[{int(fids[i])}]" for i in moving]
+        ev.command("; ".join(commands))
+        ev.command("dissolve edges")
+        _onto(ev, num, was_border)
+    except Exception:
+        ev.restore(snapshot)
+        raise
+    for i in bodies:
+        b = ev.body(i)
+        b.volconst = b.volconst + volume[i] - b.volume
+
+
 def _pinched(m, edges, rows) -> "int | None":
     """A vertex among rows that four or more border edges meet at."""
     border = edges[m.edge_valence() == 1]
@@ -821,14 +884,16 @@ def orient_lines(ev) -> int:
 
 
 def close_patches(ev, h: float) -> int:
-    """Contact-line loops within 0.5 h of their first vertex (a patch shrunk
+    """Contact-line loops within 0.2 h of their first vertex (a patch shrunk
     to nothing: none of its edges can be deleted, the two left would be
     doubled, and relax() ended with a pack's three-edge loop 0.003 across as
     degenerate facets) covered: Evolver's new_facet over the loop, with the
     bodies of the facet beside it, the loop's edges and vertices taken off
     the wall (the tidying then deletes them). Not where that moved the
-    energy (a loop round a pole). The lines oriented (orient_lines). Returns
-    how many were closed."""
+    energy (a loop round a pole). (Within half an edge, the one-facet holes
+    contacts open on a wall were closed and opened again over and over,
+    piling vertices up.) The lines oriented (orient_lines). Returns how many
+    were closed."""
     m = ev.mesh()
     f, edges = np.asarray(m.facets), np.asarray(m.edges)
     x = np.asarray(m.vertices)
@@ -851,7 +916,7 @@ def close_patches(ev, h: float) -> int:
             if v != start or not 3 <= len(loop) <= 6:
                 continue
             corners = edges[loop, 0]
-            if np.linalg.norm(x[corners] - x[corners[0]], axis=1).max() > 0.5*h:
+            if np.linalg.norm(x[corners] - x[corners[0]], axis=1).max() > 0.2*h:
                 continue
             a, b = edges[loop[0]]
             beside = np.flatnonzero(((f == a) & (np.roll(f, -1, axis=1) == b)).any(axis=1))
@@ -1120,8 +1185,12 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             ev.command(f"g {_FALL_GRADIENT}")
             # (a fall doesn't remesh, but its contact lines are kept fine: a
             # pack's stretched to edges 1.6 long, and their integrals along
-            # the chords went 1.5 off)
-            _split_lines(ev, h0)
+            # the chords went 1.5 off; the facets the splits halve flipped,
+            # which moves no vertex: a pack's fall went to facets of 0 degrees
+            # in 15 steps. Not otherwise: flipping in a catenoid's fall kept
+            # it from ever settling)
+            if _split_lines(ev, h0):
+                ev.equiangulate()
         else:
             # after a change, relax() in short runs (a merged neck widening
             # takes thousands of gradient steps on a fine mesh), looking at
@@ -1278,19 +1347,21 @@ def _common(a, b) -> float:
     return float((a[:n]*b[:n]).sum())
 
 
-def _split_lines(ev, h0: float) -> None:
+def _split_lines(ev, h0: float) -> bool:
     """Contact-line edges (border edges on a wall) longer than _REMESH[1] h0
     split till none is (Evolver's edge refinement: the midpoint goes onto
-    the wall)."""
+    the wall). Whether any was."""
+    split = False
     for _ in range(6):
         m = ev.mesh()
         long = (m.edge_valence() == 1) & (m.edge_lengths() > _REMESH[1]*h0)
+        if long.any():
+            long &= _on_walls(ev)
         if not long.any():
-            return
-        long &= _on_walls(ev)
-        if not long.any():
-            return
+            break
         ev.command(f"refine edge{ev._mark(_core.EDGE, long)}")
+        split = True
+    return split
 
 
 def _gradient_run(ev, tol: float) -> Any:

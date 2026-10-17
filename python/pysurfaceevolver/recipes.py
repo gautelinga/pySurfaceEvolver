@@ -738,6 +738,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 break
         if index >= steps:
             return
+        if moved:
+            quiet = 0                   # (falls without a change between steps aren't a stall)
         stalled = not (lost or event is not None)
         if stalled and not start and not moved:
             # not a step from where a change or fall ended: the change
