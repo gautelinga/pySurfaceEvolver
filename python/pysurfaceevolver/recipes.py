@@ -350,11 +350,20 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
 
 def _hessian(ev) -> None:
     """A plain Newton step (Evolver's ``hessian``), without the warning that
-    the Hessian isn't positive definite: on an unstable branch it isn't."""
-    from ._errors import EvolverWarning
+    the Hessian isn't positive definite: on an unstable branch it isn't.
+    (Evolver needs pressures from a gradient step first: one is taken if
+    none was, as for a flat meniscus that relax() found in equilibrium
+    without iterating.)"""
+    from ._errors import EvolverError, EvolverWarning
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
-        ev.command("hessian")
+        try:
+            ev.command("hessian")
+        except EvolverError as e:
+            if e.errnum != 1606:            # "Pressures invalid": not iterated yet
+                raise
+            ev.command("g 1")
+            ev.command("hessian")
 
 
 def _newton_target(ev, put: Callable[[Any], None],
@@ -697,6 +706,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     factor = _event_factor(events) or EVENT_FACTOR
     set_value = _setter(what)
     from ._views import BodyView
+    from ._surgery import _resting
     keep = what.number if isinstance(what, BodyView) else None
     index, quiet, start = 0, 0, True
     run_remesh = remesh
@@ -719,6 +729,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 lost = True
                 break
             coming = _coming(step.events, last[-2].events) if len(last) > 1 else []
+            coming += [e for e in step.events if _resting(e) and not any(e is c for c in coming)]
             if coming:
                 event = coming[0]       # (the run would stop here: made instead)
                 break

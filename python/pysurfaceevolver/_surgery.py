@@ -9,10 +9,86 @@ from typing import Any, List
 import numpy as np
 
 from . import _core
-from ._engine import surface
+from ._engine import GUARD_PREFIX, surface
 from ._errors import _num
 
 _SEAM = 3.0     # the cut's tips are tidied within this many median edges
+_TOUCH = 0.05   # a solid this close (in its event's edges): the surface resting on it
+_GUARD_REACH = 5.0  # free vertices are guarded from the walls within this many median edges
+
+
+def guard(ev) -> None:
+    """Keep free vertices out of the solids in the descent after a change
+    (descend(), not falling: gradient steps move the vertices): each
+    wall with a contact angle gets a one-sided copy of its constraint
+    (no integrals, named GUARD_PREFIX + its key), put on the vertices on
+    no wall and not fixed, for the two walls nearest each within
+    _GUARD_REACH median edges (a contact line's vertex in the 0.03 gap
+    between two beads hit the next bead's guard and a third, and a free
+    vertex three guards: Evolver's ERROR 5883, more constraints than
+    dimensions); called again as the vertices move. Evolver stops a vertex there; the energy and the
+    volumes don't change, and the surface resting on the solid is a
+    contact to make (a film thinned away). Gradient steps took vertices
+    through a sphere beside its contact line, contact after contact, until
+    the mesh broke; Newton steps there followed integrals the tangled
+    line made wrong (an energy of -76 for 29). Not where vertices are put
+    by steps (a fall along a mode, arclength's predictor: one put inside
+    stayed on the solid, and the drops a bridge fell into came out on a
+    squashed mesh, 0.9% from exact caps; there a vertex through a solid is
+    a failed step, or put back out)."""
+    walls = {k: w for k, w in surface.walls.items()
+             if getattr(w, "contact_angle", None) is not None and getattr(w, "formula", None)}
+    if not walls:
+        return
+    nums, _, dist, names = ev._constraint_gaps(guards=True)
+    names = [str(n) for n in names]
+    defined = []
+    for key, wall in walls.items():
+        name = f"{GUARD_PREFIX}{key}"
+        if name not in names:
+            ev.command(f"define constraint {name} nonnegative formula: {getattr(wall, 'formula')}")
+            defined.append(name)
+    if defined:
+        nums, _, dist, names = ev._constraint_gaps(guards=True)
+        names = [str(n) for n in names]
+    _unguard(ev, names)
+    m = ev.mesh()
+    free = ~np.asarray(m.fixed, dtype=bool)
+    real = [i for i, n in enumerate(names) if not n.startswith(GUARD_PREFIX)]
+    if real:
+        free &= ~np.isnan(dist[:, real]).any(axis=1)
+    cols = [_column(nums, names, key) for key in walls]
+    gap = np.abs(dist[:, cols])
+    gap[~free] = np.inf
+    gap[gap > _GUARD_REACH*_median_edge(m)] = np.inf
+    # the two nearest walls only (three hits: Evolver's ERROR 5883)
+    order = np.argsort(gap, axis=1)[:, :2]
+    chosen = np.zeros_like(gap, dtype=bool)
+    rows = np.arange(len(gap))[:, None]
+    chosen[rows, order] = np.isfinite(gap[rows, order])
+    for j, key in enumerate(walls):
+        if chosen[:, j].any():
+            ev.set_constraint("vertex", f"{GUARD_PREFIX}{key}", where=chosen[:, j])
+
+
+def _guarded(ev) -> bool:
+    """Whether a vertex is on a guard."""
+    _, _, dist, names = ev._constraint_gaps(guards=True)
+    cols = [i for i, n in enumerate(names) if str(n).startswith(GUARD_PREFIX)]
+    return bool(cols) and bool(np.isnan(dist[:, cols]).any())
+
+
+def _unguard(ev, names=None) -> None:
+    """Take the guards off every vertex (guard() puts them back): Evolver
+    deletes an edge only if one end's constraints are among the other's or
+    the edge's, and a guarded vertex next to a contact line's (a guard, a
+    wall) is neither, so the edges there didn't go and their facets
+    degenerated (0.3 degrees)."""
+    if names is None:
+        _, _, _, names = ev._constraint_gaps(guards=True)
+    for name in names:
+        if str(name).startswith(GUARD_PREFIX):
+            ev.command(f"unset vertex constraint {name}")
 
 
 def pinch_off(ev, event, relax: bool = True) -> List[int]:
@@ -523,16 +599,21 @@ def _poles(ev, key, added) -> None:
         else None
     if centre is None:
         return                      # a centre that follows a parameter: no constant to keep
+    from .constraints import _frame
+    e3 = np.asarray(getattr(wall, "pole_axis", None) or (0.0, 0.0, 1.0), float)
+    e1, e2 = _frame(e3) if e3[2] != 1.0 else (np.eye(3)[0], np.eye(3)[1])
     m = ev.mesh()
     rows = np.flatnonzero(np.isin(np.asarray(m.edge_ids), added))
-    x = np.asarray(m.vertices, float)
+    x = np.asarray(m.vertices, float) - centre
     edges = np.asarray(m.edges)[rows]
-    phi = np.arctan2(x[:, 1] - centre[1], x[:, 0] - centre[0])
+    phi = np.arctan2(x @ e2, x @ e1)
     turn = np.angle(np.exp(1j*(phi[edges[:, 1]] - phi[edges[:, 0]]))).sum()
     winding = int(round(turn/(2*np.pi)))
     if winding == 0:
         return
-    north = x[edges].reshape(-1, 3)[:, 2].mean() > centre[2]
+    north = (x[edges].reshape(-1, 3) @ e3).mean() > 0
+    if not north and getattr(wall, "south_regular", False):
+        return                      # (sphere(axis=): the integrals are regular there)
     sign = winding*(1 if north else -1)     # +1: the pole now wet (anticlockwise round it)
     surface.energy_shift.append((int(np.sign(sign)), str(getattr(wall, "pole_energy"))))
 
@@ -669,6 +750,7 @@ _FALL_TRY = 10          # iterations between such tries
 _FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
 _REMESH = (0.4, 2.0)    # after a merge or contact: edges kept within these many median edges
 _CHUNK = 50             # after a change: relax() runs of this many gradient steps at most
+_SAFE_STEPS = 5         # ... or, where a run went wrong, this many plain gradient steps
 
 
 def _median_edge(m) -> float:
@@ -677,7 +759,9 @@ def _median_edge(m) -> float:
 
 
 def apply(ev, event, keep=None) -> None:
-    """Make the change an event announces (without relaxing)."""
+    """Make the change an event announces (without relaxing; the guards
+    off, see _unguard)."""
+    _unguard(ev)
     if event.kind == "neck":
         pinch_off(ev, event, relax=False)
     elif event.kind == "touch":
@@ -696,6 +780,8 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
         return _descend(ev, factor, tol, falling=falling, keep=keep, h0=h0, changes=changes)
     except EvolverError as error:
         return None, changes, f"Evolver: {error}"
+    finally:
+        _unguard(ev)
 
 
 def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
@@ -714,6 +800,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     remeshing = not falling
     if h0 is None:
         h0 = _median_edge(ev.mesh())
+    if not falling:
+        guard(ev)
     for _ in range(_FALL_ITERATIONS):
         x = ev.vertices
         chunk = None
@@ -722,8 +810,18 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         else:
             # after a change, relax() in short runs (a merged neck widening
             # takes thousands of gradient steps on a fine mesh), looking at
-            # the events between them
+            # the events between them; a run that went wrong is undone for
+            # a few plain gradient steps
+            start, energy = ev.save(), ev.energy
             chunk = ev.relax(tol, max_iter=_CHUNK)
+            if not _plausible(ev, energy):
+                ev.restore(start)
+                ev.command(f"g {_SAFE_STEPS}")
+                chunk = _unconverged()
+                if not _plausible(ev, energy):
+                    ev.restore(start)
+                    return None, changes, "the descent ran away (volumes or energy)"
+            guard(ev)
         moved = ev.vertices - x if len(x) == len(ev.vertices) else None
         if remeshing and not (chunk is not None and chunk.converged):
             _keep_edges(ev, h0)
@@ -737,6 +835,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         for e in _coming(found, before):
             if e.kind == "neck":
                 try:
+                    _unguard(ev)
                     pinch_off(ev, e, relax=False)
                     neck = e
                     break
@@ -752,19 +851,29 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 return r, changes, ""
             falling, remeshing = True, False
             continue
-        # a solid beside its contact line is the mesh's (the gradient steps
-        # bring vertices to it and through it: put back out); elsewhere, gone
-        # through or coming, a contact, as are touches and contact lines
-        # coming (merges, wetted or dry patches)
-        beside = [e for e in found if e.kind == "solid" and _beside_line(ev, e, h)]
-        through = [e for e in beside if e.gap < 0]
-        if through:
-            _push_out(ev, through, h)
-        coming = [e for e in _coming(found, before)
-                  if e.kind in ("touch", "contact lines")
-                  or (e.kind == "solid" and not any(e is b for b in beside))]
-        coming += [e for e in found if e.kind == "solid" and e.gap < 0
-                   and not any(e is b for b in beside) and not any(e is c for c in coming)]
+        # the surface resting on a solid (held there by its guard) or gone
+        # through it: a contact (beside a contact line, the patch grows: the
+        # line moves on past a vertex at the solid, which held the gradient
+        # steps up); coming elsewhere, a contact too, as are touches and
+        # contact lines coming (merges, wetted or dry patches). Coming beside
+        # a contact line is the line's own (it moves there).
+        resting = [e for e in found if _resting(e)]
+        if falling:
+            # (a fall's path is the mode's, not the liquid's: only a surface
+            # gone through a solid counts, put back out beside a contact line,
+            # a contact elsewhere. Made contacts, a bridge's surface lying on
+            # the sphere it drained from grew the lines there, and the pieces
+            # cut after didn't settle)
+            resting = [e for e in resting if e.kind == "solid" and e.gap < 0]
+            held = [e for e in resting if _beside_line(ev, e, h)]
+            resting = [e for e in resting if not any(e is r for r in held)]
+            _push_out(ev, held, h)
+        beside = [e for e in found if e.kind == "solid" and (falling or not _resting(e))
+                  and _beside_line(ev, e, h)]
+        coming = resting + [e for e in _coming(found, before)
+                            if not any(e is r for r in resting)
+                            and (e.kind in ("touch", "contact lines")
+                                 or (e.kind == "solid" and not any(e is b for b in beside)))]
         made = None
         for e in coming:
             try:
@@ -776,23 +885,26 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         if made is not None:
             e = made
             changes.append(e)
+            guard(ev)
             way, before, tried = None, [], 0
             falling, remeshing = False, True
             continue
+        through = [e for e in resting if e.kind == "solid" and e.gap < 0
+                   and _beside_line(ev, e, h)]
+        if through:
+            _push_out(ev, through, h)
         before = [e for e in found if not (e.kind == "solid" and e.gap < 0)]
         residual = ev.residual()
         tried += 1
         if chunk is not None:
             if not chunk.converged:
                 continue
-            if chunk.stable is not False and not (chunk.health is not None
-                                                  and chunk.health.ok):
+            if chunk.stable is not False and not _sound(chunk.health):
                 # (a facet squashed in the change: tidied, and once more)
                 ev.command("u")
                 _keep_edges(ev, h0)
                 chunk = ev.relax(tol)
-            if chunk.converged and chunk.stable is not False and chunk.health is not None \
-                    and chunk.health.ok:
+            if chunk.converged and chunk.stable is not False and _sound(chunk.health):
                 return chunk, changes, ""
             if chunk.stable is not False:
                 return None, changes, f"relaxed, but {chunk.health}"
@@ -813,11 +925,12 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 if finish == "newton" and not ev.newton(20, tol=tol).converged:
                     continue
                 r = ev.relax(tol=tol)
-                if r.converged and r.stable is not False and r.health is not None \
-                        and r.health.ok:
+                if r.converged and r.stable is not False and _sound(r.health):
                     return r, changes, ""
                 ev.restore(start)
             continue                    # a saddle, or not there yet: on down
+        if not falling:
+            _unguard(ev)
         falling = True
         # the way the gradient steps went along the mode; the first step,
         # where that is round-off (at a symmetric start: a bridge fell to
@@ -840,6 +953,38 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                            + (f" (the last change not made: {refused})" if refused else ""))
 
 
+def _unconverged() -> Any:
+    from ._results import IterationResult
+    none = np.empty(0)
+    return IterationResult(none, none, none, "", converged=False)
+
+
+def _plausible(ev, energy: float) -> bool:
+    """Whether a run of the descent kept its volumes (within 1e-3 of their
+    targets) and lowered the energy by less than a quarter of the area: a
+    run past that is one the integrals got wrong (relax() runs after a
+    contact took a pack's liquid from 80.3 to 83.5, conjugate gradients a
+    drop's from 31.5 to 44.5 and its energy to -12136)."""
+    if ev._target_gap()[0] > 1e-3:
+        return False
+    return energy - ev.energy < 0.25*_core.total_area()
+
+
+def _sound(health) -> bool:
+    """Whether a descent may end in this state: healthy but for coming
+    near a wall or itself (a contact or merge to come: after a drop's top
+    dried on one bead the film over the next was 0.015 thick)."""
+    return health is not None and all(i.startswith("the surface nearly touches")
+                                      for i in health.issues)
+
+
+def _resting(e) -> bool:
+    """Whether a solid event is the surface resting on the solid (or
+    through it), or contact lines have met (they stay met, so aren't
+    coming: the facets between them squashed flat while they waited)."""
+    return e.kind in ("solid", "contact lines") and e.gap < _TOUCH*float(e.scale)
+
+
 def _coming(found: list, before: list) -> list:
     from .recipes import _coming as coming
     return coming(found, before)
@@ -859,6 +1004,17 @@ def _keep_edges(ev, h0: float) -> None:
     lengths = m.edge_lengths()
     if not ((lengths < lo*h0).any() or (lengths > hi*h0).any()):
         return
+    guarded = _guarded(ev)
+    _unguard(ev)
+    try:
+        _keep_edges_unguarded(ev, h0, m)
+    finally:
+        if guarded:
+            guard(ev)
+
+
+def _keep_edges_unguarded(ev, h0: float, m) -> None:
+    lo, hi = _REMESH
     _, _, dist, _ = ev._constraint_gaps()
     on = np.isnan(dist).any(axis=1) if dist.size else np.zeros(len(m.vertices), dtype=bool)
     for _ in range(5):

@@ -349,7 +349,31 @@ Stages:
   dry patches form depend on the way down. Not done: a contact line leaving a solid
   altogether (a drop detaching), merges across a body (films, foams), quadratic and
   Lagrange models.
-* **F. Drainage through a bead pack in full** (after A-E): volume-controlled, as a
+* **F. Drainage through a bead pack in full** (in progress 2026-10-17; design agreed:
+  a cluster of ~16 beads settled in a box with hard walls, so that the 90-degree
+  mirror walls cut no bead; gas on top; each bead's `sphere(axis=)` pointing at its
+  nearest contact; robustness first; a run and a docs page). Done: the Evolver
+  fixes bfe1131 (equiangulation's doubled edge, a border spike under `t`: these
+  made the ERROR 1303 that ended stage E's long drying runs); `sphere(axis=)`
+  (three constructions: two from the z frame left points where singular terms
+  cancelled only on the sphere, and dry patches opened there ran away along the
+  chords; the third uses the area form about the axis with a denominator that
+  vanishes inside the sphere only on the axis at the north pole); guards (one-sided
+  copies `pyse_guard_<wall>` of the walls on free vertices, the two nearest within
+  5 edges, only in the descent after a merge or contact; off around surgery and
+  tidying, as Evolver won't delete an edge between differently constrained
+  vertices; three hits at once is Evolver's ERROR 5883); a surface resting on a
+  solid and contact lines met are changes (they never come closer); a descent may
+  end near a wall; a run of the descent that went wrong is undone. A fall keeps the
+  old rules (contacts made from its mode steps' surface spoiled a bridge's cut).
+  Results: the pilot pore drains to 0.045 at both mesh levels (the finer died at
+  0.41); the 16-bead pack (scratchpad f/cluster.py) from 87.5 to about 68 through
+  ~12 dry patches. Open: relax()'s runs in the descent after a contact run away
+  (a dry patch on a sphere inside a drop, the pack later); plain gradient steps
+  from the same states don't: next, a descent of guarded gradient steps with
+  tidying between, Newton steps only near equilibrium. Then the pack, the
+  thresholds against MSP, the docs page.
+  Original aim (after A-E): volume-controlled, as a
   slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or
   come closer to that than to a fixed pressure): `arclength` in the liquid's volume, a
   Finney cut, every event handled. Passing a throat is then continuous (the pressure

@@ -484,3 +484,36 @@ def test_relax_lowers_a_small_contact_angle_in_stages():
     assert C.sphere((0, 0, 0), 1.0, contact_angle=5.0).floored
     assert C.sphere((0, 0, 0), 1.0, contact_angle="theta").floored
     assert not C.sphere((0, 0, 0), 1.0, contact_angle=40.0).floored
+
+
+@pytest.mark.parametrize("angles", [(30, 20, 10), (90, 0, 0), (150, -40, 70)])
+def test_sphere_axis_gives_the_same_bridge_turned(angles):
+    # the bridge between two spheres turned as a whole, the spheres' axes
+    # (their integrals' one singular pole: inside the lower one's wetted patch,
+    # outside the upper one's) turned with it: Evolver's volume (z dx dy)
+    # isn't turned with it, the forms are. The same as unturned (and as the
+    # default z-axis spheres, to the mesh's error: 0.26% here, 0.017% two
+    # levels finer)
+    from scipy.spatial.transform import Rotation
+    from pysurfaceevolver import shapes
+    c, a = 1.3, 0.35
+    zb = c - np.sqrt(1 - a*a)
+    tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
+
+    def bridge(rot, **kw):
+        ev = pyse.Evolver()
+        ev.load_arrays(tube.vertices @ rot.T, tube.faces,
+                       constraints={1: C.sphere(rot @ [0, 0, -c], 1.0, 40.0, wet_poles=("north",),
+                                                **kw),
+                                    2: C.sphere(rot @ [0, 0, c], 1.0, 40.0,
+                                                **(kw if kw else {"wet_poles": ("south",)}))},
+                       vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                       bodies=[pyse.Body(volume=0.09)])
+        assert ev.relax(levels=2).converged
+        return ev.body(1).pressure, ev.energy
+    p0, e0 = bridge(np.eye(3))
+    p1, e1 = bridge(np.eye(3), axis=(0, 0, 1))
+    assert p1 == pytest.approx(p0, rel=4e-3) and e1 == pytest.approx(e0, rel=5e-3)
+    rot = Rotation.from_euler("xyz", angles, degrees=True).as_matrix()
+    p, e = bridge(rot, axis=rot @ [0, 0, 1.0])
+    assert p == pytest.approx(p1, rel=1e-4) and e == pytest.approx(e1, rel=1e-4)

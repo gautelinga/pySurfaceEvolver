@@ -78,6 +78,11 @@ _mesh_cache_lock = threading.Lock()
 
 
 
+# the names of the one-sided copies of walls that keep free vertices out of
+# solids during changes of topology (_surgery.guard)
+GUARD_PREFIX = "pyse_guard_"
+
+
 class _SurfaceMemory:
     """What pySE remembers about the loaded surface: reset when a surface is
     loaded, kept by restore() (the same surface)."""
@@ -526,11 +531,21 @@ class _Engine:
             return np.zeros(0, dtype=bool)
         return self.values(name, f"on_constraint {constraint}") != 0
 
-    def _constraint_gaps(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
+    def _constraint_gaps(self, guards: bool = False
+                         ) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
         """Constraint numbers, attribute bits, per vertex the signed distance
-        to each (NaN where on it), and their names ("" if unnamed)."""
+        to each (NaN where on it), and their names ("" if unnamed). Without
+        ``guards``, not the one-sided copies of walls that changes of
+        topology keep free vertices out of solids with (named
+        GUARD_PREFIX...: see _surgery.guard)."""
         _, gaps = self._call(_core.constraint_gaps)
-        return gaps.data
+        nums, attrs, dist, names = gaps.data
+        if guards or not any(str(n).startswith(GUARD_PREFIX) for n in names):
+            return gaps.data
+        keep = [i for i, n in enumerate(names) if not str(n).startswith(GUARD_PREFIX)]
+        return (np.asarray(nums)[keep], np.asarray(attrs)[keep],
+                np.asarray(dist)[:, keep] if np.asarray(dist).ndim == 2 else np.asarray(dist),
+                [names[i] for i in keep])
 
     def set_constraint(self, element: str, constraint: Union[int, str], where=None,
                        on: bool = True) -> None:

@@ -104,6 +104,11 @@ class Constraint:
     # constant (a contact line that comes to wind round a pole adds or takes
     # it: Evolver.contact), as a datafile expression
     pole_energy: Optional[str] = field(default=None, compare=False, repr=False)
+    # a sphere's: the direction from its centre to its north pole, and
+    # whether its integrals are regular at the south pole (sphere(axis=))
+    pole_axis: Optional[Tuple[float, float, float]] = field(default=None, compare=False,
+                                                            repr=False)
+    south_regular: bool = field(default=False, compare=False, repr=False)
 
     @property
     def floored(self) -> bool:
@@ -282,9 +287,15 @@ def mirror(axis, at: float = 0.0) -> Constraint:
 
 def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
            wet_poles: Iterable[str] = (), span: float = 2*np.pi,
-           tension: float = 1.0, nonnegative: bool = False) -> Constraint:
+           tension: float = 1.0, nonnegative: bool = False, axis=None) -> Constraint:
     """A solid sphere, the liquid outside. The azimuth runs about the z axis
-    through the centre; its poles are ``center +- radius*z``.
+    through the centre; its poles are ``center +- radius*z``, where the
+    integrals are singular: keep contact lines off them.
+
+    ``axis``: the azimuth runs about it instead, and the integrals are
+    singular only at the north pole, ``center + radius*axis`` (regular at
+    the south pole). In a pack of beads, point each bead's axis at a
+    neighbour it nearly touches, where a ring of liquid stays.
 
     ``wet_poles``: the poles ("north", "south") inside the wetted region, and
     ``span``: the azimuthal extent of the computed piece (2 pi for a whole
@@ -297,13 +308,19 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     moves the sphere (and :func:`pysurfaceevolver.recipes.arclength` can
     follow the parameter). The volume over a wet pole is then in the line
     integral itself rather than in ``volconst``, which can't follow the
-    parameter; with both poles wet the centre must be numbers.
+    parameter; with both poles wet the centre must be numbers. With
+    ``axis``, the centre must be numbers and ``span`` 2 pi.
     """
     c = tuple(center)
     R = float(radius)
     if len(c) != 3 or R <= 0:
         raise ValueError("center must be a 3-vector and radius positive")
     moving = any(isinstance(x, str) for x in c)
+    if axis is not None:
+        if moving or span != 2*np.pi:
+            raise ValueError("a sphere with an axis needs a centre of numbers and span 2 pi")
+        return _axis_sphere(tuple(float(x) for x in c), R, contact_angle, _unit(axis, "axis"),
+                            set(wet_poles), tension, nonnegative)
     text = [f"({x})" if isinstance(x, str) else _n(float(x)) for x in c]
     poles = set(wet_poles)
     if not poles <= {"north", "south"}:
@@ -341,7 +358,65 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
                       shape=("sphere", c if moving else tuple(float(x) for x in c), R),
                       energy_constant_text=(f"-{k.expr}*{_n(area)}" if k.expr and area else None),
                       parameters=tuple(sorted(set(names))), contact_angle=contact_angle,
-                      pole_energy=f"-({k.times(R*R*span)})" if k else None)
+                      pole_energy=f"-({k.times(R*R*span)})" if k else None,
+                      pole_axis=(0.0, 0.0, 1.0))
+
+
+def _axis_sphere(c: Tuple[float, ...], R: float, contact_angle: Optional[float],
+                 e3: np.ndarray, poles: set, tension: float,
+                 nonnegative: bool) -> Constraint:
+    """sphere() with an axis e3: the integrals singular only at the north
+    pole c + R e3, smooth everywhere else near the sphere.
+
+    The wetted area is the integral of R (R + h) dphi about e3 (x - c = a e1 +
+    b e2 + h e3), smooth at the south pole. Evolver's volume, z dx dy, on the
+    sphere is c_z dx dy + R (n_z^2 - 1/3) dA + R/3 dA: the first two have no
+    total over the sphere and polynomial forms (-c_z X dY, -(Z/3)(X dY - Y dX)),
+    the last is the area's. Evolver integrates along chords, a little inside
+    the sphere, so where the forms are singular in space counts too: dphi's
+    denominator a^2 + b^2 (zero along the whole axis, which the chords near
+    the south pole pass) is written a^2 + b^2 + (R^2 - r^2)(R - h)/(2R),
+    equal on the sphere, zero inside it only on the axis at the north pole.
+    (Two earlier constructions from the z frame left points where singular
+    terms cancelled only on the sphere: dry patches opened there ran away.)"""
+    if not poles <= {"north", "south"}:
+        raise ValueError("wet_poles may hold 'north' and 'south'")
+    e1, e2 = _frame(e3)
+    k = _Coefficient(contact_angle, tension)
+    C = np.asarray(c)
+    a, b, h = (_lin(e, -float(np.dot(e, C))) for e in (e1, e2, e3))
+    X, Y, Z = (f"(x - {_n(c[0])})", f"(y - {_n(c[1])})", f"(z - {_n(c[2])})")
+    cz = float(C[2])
+    D = (f"({a}^2 + {b}^2 + ({_n(R*R)} - {a}^2 - {b}^2 - {h}^2)*({_n(R)} - {h})/{_n(2*R)})")
+    # R (R + h) dphi, dphi = (a db - b da)/D
+    area = [f"{_n(R)}*({_n(R)} + {h})*({_n(e2[i])}*{a} - {_n(e1[i])}*{b})/{D}" for i in range(3)]
+    energy = [f"{k.times(1.0)}*{t}" for t in area] if k else None
+    dX, dY = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)
+    content = []
+    for i in range(3):
+        terms = [f"{_n(R/3)}*{area[i]}"]
+        xy = dY[i]*1.0                       # -c_z X dY - (Z/3)(X dY - Y dX)
+        if i == 1:
+            terms.append(f"(-({_n(cz)} + {Z}/3)*{X})")
+        if i == 0:
+            terms.append(f"({Z}/3*{Y})")
+        del xy
+        content.append(" + ".join(terms))
+    del dX
+    span = 2*np.pi
+    north = "north" in poles
+    r_a = 2*R*R                              # R (R + h) at the north pole
+    volconst = -span*r_a*R/3 if north else 0.0
+    area_c = span*r_a if north else 0.0
+    formula = (f"(x - {_n(c[0])})^2 + (y - {_n(c[1])})^2 + (z - {_n(c[2])})^2 = "
+               f"{float(R*R)!r}")
+    return Constraint(formula, energy, content, volconst, k.energy(area_c), nonnegative, area_c,
+                      shape=("sphere", c, R),
+                      energy_constant_text=(f"-{k.expr}*{_n(area_c)}" if k.expr and area_c
+                                            else None),
+                      parameters=k.names, contact_angle=contact_angle,
+                      pole_energy=f"-({k.times(span*r_a)})" if k else None,
+                      pole_axis=(float(e3[0]), float(e3[1]), float(e3[2])), south_regular=True)
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,

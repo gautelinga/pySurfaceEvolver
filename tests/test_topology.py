@@ -610,7 +610,10 @@ def test_contact_lines_of_two_drops_meet_and_join():
         ev.relax()
         steps = list(recipes.arclength(ev, ev.body(1), 0.1, 10, topology=True))
     fell = [s for s in steps if s.fell]
-    assert len(fell) == 1 and [e.kind for e in fell[0].changes] == ["contact lines"]
+    # (the joined surface may come to rest on the plane between them: wetted)
+    kinds = [(e.kind, e.constraint) for e in fell[0].changes]
+    assert len(fell) == 1 and kinds[0][0] == "contact lines"
+    assert all(k == ("solid", 1) for k in kinds[1:])
     k = steps.index(fell[0])
     assert fell[0].volumes == pytest.approx([steps[k - 1].value + other], rel=1e-8)
     assert _loops(_border(ev)) == 1

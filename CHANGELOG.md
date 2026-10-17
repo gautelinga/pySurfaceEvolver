@@ -59,6 +59,23 @@
   pore drained from volume 0.69 to 0.05 through ten drying changes (a coarse mesh;
   one level finer it got to 0.41).
 
+- `constraints.sphere(axis=...)`: the sphere's integrals singular only at its north
+  pole, `center + radius*axis`, so that it can point at a neighbouring bead where a
+  ring of liquid stays, and contact lines are free to cover the rest. (The default
+  azimuth about z is singular at both poles.) The volume's form is made of the
+  wetted area's about the axis and two polynomial forms; Evolver integrates along
+  chords just inside the sphere, so the forms are written to be smooth there too.
+  The same bridge turned as a whole gives the same answer to 1e-4.
+
+- Changes of topology keep free vertices out of solids: in the descent after a merge
+  or contact, each wall with a contact angle gets a one-sided copy (a constraint named
+  `pyse_guard_<wall>`, without integrals) on the free vertices near it, its two
+  nearest. The surface resting on a solid, or contact lines that have met, are
+  changes to make (they stay put, so they never came closer); a descent may end
+  close to a wall (a contact to come), and a run of it that went wrong (a volume off
+  its target, the energy fallen by more than a quarter of the area) is undone for
+  plain gradient steps. `Evolver.events()` and the rest leave the guards out.
+
 ### Speed
 
 - Newton steps on a surface free to move as a whole reuse the last step's null
@@ -97,6 +114,10 @@
   of the surface's border (on one facet, as along a contact line): merging its ends
   where they share another neighbour pinched the border into a figure eight, and a
   contact line's spike came out as a facet with a corner twice.
+
+- `recipes.arclength` from a surface `relax()` found in equilibrium without
+  iterating (a flat meniscus): Newton steps failed with "Pressures invalid"; a
+  gradient step is taken first, as `saddle()` does.
 
 - `Evolver.remesh(protect=...)` with `min_edge`: the mask was applied after the
   deletion had renumbered the edges (now carried by id).
