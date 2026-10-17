@@ -786,6 +786,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                      if stalled else f"the fall from {last[-1].value:.6g}")
             warnings.warn(f"arclength(): {what_} stopped: {why}", UserWarning, stacklevel=2)
             return
+        _smooth(ev, factor, tol)
         bodies = ev.bodies()
         settled = Step(index, _current(ev, what), ev.energy, np.array(bodies.volume),
                        np.array(bodies.pressure), result, events=ev.events(factor),
@@ -798,6 +799,22 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             warnings.warn("arclength(): three falls in a row ended without a change of "
                           "topology: stopping", UserWarning, stacklevel=2)
             return
+
+
+def _smooth(ev, factor: float, tol: float) -> None:
+    """The mesh evened where a change or fall ended: vertex averaging and edge
+    flips, Newton steps back to the equilibrium after each, five times.
+    Newton's steps from there converged only linearly (a pack's contact line
+    beside facets of 7 degrees: x0.7 a step, and the run's first step
+    failed), x20 once evened (18 degrees). Undone where Newton doesn't get
+    back, or the surface went through a solid."""
+    start = ev.save()
+    for _ in range(5):
+        ev.vertex_average()
+        ev.equiangulate()
+        ev.newton(3, tol=tol)
+    if not ev.newton(20, tol=tol).converged or _through(ev.events(factor)):
+        ev.restore(start)
 
 
 def _nearest(found: list) -> Any:

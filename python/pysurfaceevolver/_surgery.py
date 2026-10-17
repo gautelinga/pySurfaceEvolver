@@ -156,6 +156,8 @@ def move_poles(ev, force=()) -> list:
         if near >= _POLE_MARGIN and key not in force:
             continue
         reach = np.linalg.norm(cand[:, None, :] - line[None, :, :], axis=2).min(axis=1)
+        if key not in force and reach.max() < 1.5*near:
+            continue            # (no farther place: a bead's pole moved 19 times)
         axis = cand[int(np.argmax(reach))]
         new = C.sphere(tuple(centre), R, contact_angle=getattr(wall, "contact_angle"),
                        axis=tuple(axis))

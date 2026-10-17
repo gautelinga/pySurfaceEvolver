@@ -15,7 +15,9 @@ This page drains two shapes this way. The first is a drop with a solid sphere in
 it; the second is one pore of a bead pack. Both use spheres whose wetting integrals
 have a single singular point, put where the liquid never goes or always is
 (`constraints.sphere(axis=...)`). The default azimuth about z is singular at both
-poles, and a contact line that crossed one would carry the integrals with it.
+poles, and a contact line that crossed one would carry the integrals with it. Where
+a contact line still comes near a sphere's singular point, the run moves the point
+to the far side of the sphere from the lines, keeping the volume and energy.
 
 ## A drop draining over a sphere
 
@@ -60,9 +62,9 @@ print(f"at volume {steps[-1].value:.0f} the contact angle along the ball's line 
 ```
 
 ```text
-first dry patch at volume 31.5 (the drop full at 53.5), the last change at 13
+first dry patch at volume 31.5 (the drop full at 53.5), the last change at 11
 the volume held at every point to round-off
-at volume 10 the contact angle along the ball's line is 26 to 29 degrees (set: 30)
+at volume 10 the contact angle along the ball's line is 26 to 30 degrees (set: 30)
 ```
 
 The first patch opens where the drop's surface comes within half an edge of the
@@ -116,8 +118,8 @@ print(f"then on to {V[-1]:.2f}, curvature {k[-1]:.1f}")
 ```text
 full: volume 0.68, curvature 4.6
 before the jump: bead4 drying from 0.54, a patch at a time; curvature up to 4.8
-at 0.43 the liquid jumps: curvature from 4.5 to 3.1 at the same volume, bead2, bead3, bead4 drying
-then on to 0.20, curvature 5.6
+at 0.43 the liquid jumps: curvature from 4.5 to 3.1 at the same volume, bead2, bead4 drying
+then on to 0.19, curvature 5.7
 ```
 
 ```{figure} _static/drainage_pore.png
@@ -133,7 +135,7 @@ First the menisci come down onto bead 4, and dry patches open on it one after th
 other while the curvature stays near 4.5. At a volume of 0.43, the last liquid across
 the pore's middle can no longer hold its place. With the volume fixed, the liquid
 rearranges at once into the wedges between the beads, at a curvature of 3.1, drying
-three beads where the strip was. This is the analogue of a Haines jump at a fixed
+two beads where the strip was. This is the analogue of a Haines jump at a fixed
 volume: the same rearrangement under a fixed pressure would be a sudden loss of
 liquid. Past it, the curvature rises again as the wedges drain.
 
@@ -155,7 +157,6 @@ The liquid just before the jump (left) and just after it (right), at the same vo
 - Drained further, this pore stops at a volume of about 0.16. Newton's steps
   converge only slowly in a strongly curved part of the remaining liquid, and the run
   can't step on. A finer mesh and a run down to the pendular rings are open.
-- A pack of many beads isn't done yet. As a meniscus sweeps past a bead, its contact
-  line can come near the point where the bead's wetting integrals are singular, and
-  crossing it moves the wetted area by the whole sphere. Representing the beads'
-  wetted parts by facets instead of integrals is the next step (PLAN, stage F).
+- A pack of many beads isn't done yet. Sixteen beads in a box drain from a volume of
+  87.5 to between 57 and 80, run to run, through many dry patches, before a descent
+  that doesn't settle or a step that doesn't converge ends the run (PLAN, stage F).

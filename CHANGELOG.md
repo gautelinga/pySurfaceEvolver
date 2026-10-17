@@ -90,6 +90,15 @@
   crossing a pole had put them a whole sphere off), but for lines a fall leaves with
   long edges.
 
+- `arclength(topology=True)` goes further through a bead pack: a contact-line loop
+  that has shrunk within half an edge (a patch closing up) is covered over; falls
+  keep contact-line edges within two median edges (their chord integrals went 1.5
+  off); where a change or fall ends, the mesh is evened (vertex averaging and edge
+  flips, Newton steps back between: Newton's steps from there had converged only
+  linearly); and where the branch still can't take a step from there, the change
+  nearest to coming is made. Each removed a way a 16-bead pack's runs ended; they
+  still end, from 87.5 at 57 to 83 run to run.
+
 ### Speed
 
 - Newton steps on a surface free to move as a whole reuse the last step's null

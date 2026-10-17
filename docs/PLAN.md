@@ -390,10 +390,19 @@ Stages:
   one relax() run swept a line from 0.83 to 0.32 beyond) are redone with the pole
   moved; contact-line edges stored against their facet are turned round
   (`orient_lines`; two of 35 seen once, the energy below what the beads can give).
-  Pack runs now end at 64-69 (2 threads, run to run): three falls in a row without a
-  change at ~69, or no stable state, after falls left contact-line edges 1-1.9 long
-  (no remeshing in falls; their chord integrals off by up to 3.5) and facets
-  degenerate. Next: line edges kept in range in falls, then the fall loop at ~69.
+  Then (branch stage-f-pack): shrunk contact-line loops covered (`close_patches`:
+  a three-edge loop 0.003 across ended a third of the runs at the first change);
+  falls split line edges past 2 h0 (`_split_lines`; chord integrals 1.5 off at
+  edges 1.6); where a change or fall ends the mesh is evened (`recipes._smooth`:
+  vertex averaging, flips, Newton between, five times; Newton's first step from a
+  7-degree mesh converged x0.7 a step and failed, x20 once evened); a branch
+  that can't take one step from where a fall ended makes the nearest change
+  (`_nearest`); unforced pole moves need 1.5 times the distance (a bead's pole
+  moved 19 times). Pack runs (6 per variant, 2 threads): final volumes 57-83
+  run to run, medians 64-71 between batches of the same code: six runs don't
+  resolve a variant. Remaining stops: no stable state within 200 steps, the
+  descent running away, Evolver internal errors (1303 cone_analyze, 1374 detach
+  edge) in the surgery. Next: reproduce single failures at 1 thread.
   Original aim (after A-E): volume-controlled, as a
   slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or
   come closer to that than to a fixed pressure): `arclength` in the liquid's volume, a
