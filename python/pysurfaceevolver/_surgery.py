@@ -741,6 +741,16 @@ def _onto(ev, num: int, was_border: set) -> np.ndarray:
     return np.asarray(m.edge_ids)[border]
 
 
+def _on_walls(ev) -> np.ndarray:
+    """Which edges (mesh() rows) are on a wall."""
+    names = {n or int(k) for k, n in zip(*ev._constraint_gaps()[::3])}
+    out = np.zeros(ev.counts["edges"], dtype=bool)
+    for key in surface.walls:
+        if key in names:
+            out |= ev.on_constraint(key, "edge")
+    return out
+
+
 def orient_lines(ev) -> int:
     """Every contact line's edges (border edges on a wall) stored the way
     their facet goes round them, with orientation 1, as make_datafile and
@@ -755,12 +765,7 @@ def orient_lines(ev) -> int:
     n = len(m.vertices)
     turns = np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]
     along = np.isin(edges[:, 0]*n + edges[:, 1], turns[:, 0]*n + turns[:, 1])
-    lines = np.zeros(len(edges), dtype=bool)
-    names = {n or int(k) for k, n in zip(*ev._constraint_gaps()[::3])}
-    for key in surface.walls:
-        if key in names:
-            lines |= ev.on_constraint(key, "edge")
-    lines &= m.edge_valence() == 1
+    lines = _on_walls(ev) & (m.edge_valence() == 1)
     wrong = np.flatnonzero(lines & (~along | (ev.values("edge", "orientation") < 0)))
     commands = []
     for i in wrong:
@@ -771,6 +776,66 @@ def orient_lines(ev) -> int:
     if commands:
         ev.command("; ".join(commands))
     return len(wrong)
+
+
+def close_patches(ev, h: float) -> int:
+    """Contact-line loops within 0.5 h of their first vertex (a patch shrunk
+    to nothing: none of its edges can be deleted, the two left would be
+    doubled, and relax() ended with a pack's three-edge loop 0.003 across as
+    degenerate facets) covered: Evolver's new_facet over the loop, with the
+    bodies of the facet beside it, the loop's edges and vertices taken off
+    the wall (the tidying then deletes them). Not where that moved the
+    energy (a loop round a pole). The lines oriented (orient_lines). Returns
+    how many were closed."""
+    m = ev.mesh()
+    f, edges = np.asarray(m.facets), np.asarray(m.edges)
+    x = np.asarray(m.vertices)
+    names = {n or int(k): (n or int(k)) for k, n in zip(*ev._constraint_gaps()[::3])}
+    valence = m.edge_valence()
+    closed = 0
+    for key in [k for k in surface.walls if k in names]:
+        line = np.flatnonzero(ev.on_constraint(key, "edge") & (valence == 1))
+        degree = np.bincount(edges[line].ravel(), minlength=len(x))
+        after = {int(edges[i, 0]): i for i in line if degree[edges[i]].max() == 2}
+        seen: set = set()
+        for start in list(after):
+            if start in seen:
+                continue
+            loop, v = [], start
+            while v in after and v not in seen:
+                seen.add(v)
+                loop.append(after[v])
+                v = int(edges[after[v], 1])
+            if v != start or not 3 <= len(loop) <= 6:
+                continue
+            corners = edges[loop, 0]
+            if np.linalg.norm(x[corners] - x[corners[0]], axis=1).max() > 0.5*h:
+                continue
+            a, b = edges[loop[0]]
+            beside = np.flatnonzero(((f == a) & (np.roll(f, -1, axis=1) == b)).any(axis=1))
+            if not len(beside):
+                continue
+            front, back = (int(i) for i in np.asarray(m.facet_bodies)[beside[0]])
+            ids = [int(m.edge_ids[i]) for i in loop]
+            energy, saved = ev.energy, ev.save()
+            body = "" if len(ids) == 3 else " where original == pyse_patch"
+            commands = [f"pyse_patch := new_facet({', '.join(str(-e) for e in reversed(ids))})"]
+            for side, b_id in (("frontbody", front), ("backbody", back)):
+                if b_id:
+                    commands.append(f"set facet{body or '[pyse_patch]'} {side} {b_id}")
+            commands += [f"unset edge[{e}] constraint {names[key]}" for e in ids]
+            commands += [f"unset vertex[{int(m.vertex_ids[c])}] constraint {names[key]}"
+                         for c in corners]
+            ev.command("; ".join(commands))
+            if abs(ev.energy - energy) > 0.05:
+                ev.restore(saved)
+                continue
+            closed += 1
+            m = ev.mesh()
+            f, edges, x = np.asarray(m.facets), np.asarray(m.edges), np.asarray(m.vertices)
+            valence = m.edge_valence()
+            break
+    return closed
 
 
 def _poles(ev, key, added) -> None:
@@ -994,11 +1059,16 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         guard(ev)
     for _ in range(_FALL_ITERATIONS):
         orient_lines(ev)
+        close_patches(ev, h0)
         move_poles(ev)
         x = ev.vertices
         chunk = None
         if falling:
             ev.command(f"g {_FALL_GRADIENT}")
+            # (a fall doesn't remesh, but its contact lines are kept fine: a
+            # pack's stretched to edges 1.6 long, and their integrals along
+            # the chords went 1.5 off)
+            _split_lines(ev, h0)
         else:
             # after a change, relax() in short runs (a merged neck widening
             # takes thousands of gradient steps on a fine mesh), looking at
@@ -1012,7 +1082,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 if chunk is None:
                     return None, changes, "the descent ran away (volumes or energy)"
             guard(ev)
-        moved = ev.vertices - x if len(x) == len(ev.vertices) else None
+        # (vertices a split added come last: the rows before are the same)
+        moved = ev.vertices[:len(x)] - x if len(x) <= len(ev.vertices) else None
         if remeshing and not (chunk is not None and chunk.converged):
             _keep_edges(ev, h0)
             moved = None if moved is None or len(moved) != len(ev.vertices) else moved
@@ -1090,7 +1161,9 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             if not chunk.converged:
                 continue
             if chunk.stable is not False and not _sound(chunk.health):
-                # (a facet squashed in the change: tidied, and once more)
+                # (a facet squashed in the change, a patch shrunk to nothing:
+                # tidied, and once more)
+                close_patches(ev, h0)
                 ev.command("u")
                 _keep_edges(ev, h0)
                 chunk = ev.relax(tol)
@@ -1128,19 +1201,40 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         # mode itself (modes() can turn it from one step to the next, so not
         # after that)
         u = modes.vectors[0]
-        along = float((moved*u).sum()) if moved is not None else 0.0
-        clear = _FALL_CLEAR*float(np.linalg.norm(moved)*np.linalg.norm(u)) \
+        along = _common(moved, u) if moved is not None else 0.0
+        clear = _FALL_CLEAR*float(np.linalg.norm(moved)*np.linalg.norm(u[:len(moved)])) \
             if moved is not None else 0.0
-        if way is None or way.shape != u.shape:
+        if way is None:
             sign = float(np.sign(along)) if clear > 0 and abs(along) > clear else 1.0
         elif along != 0.0:
             sign = float(np.sign(along))
         else:
-            sign = float(np.sign((way*u).sum())) or 1.0
+            sign = float(np.sign(_common(way, u))) or 1.0
         way = sign*u
         ev.vertices = ev.vertices + _FALL_STEP*h*way/np.linalg.norm(u, axis=1).max()
     return None, changes, (f"no stable state within {_FALL_ITERATIONS} steps"
                            + (f" (the last change not made: {refused})" if refused else ""))
+
+
+def _common(a, b) -> float:
+    """The dot product of two per-vertex arrays over the rows both have."""
+    n = min(len(a), len(b))
+    return float((a[:n]*b[:n]).sum())
+
+
+def _split_lines(ev, h0: float) -> None:
+    """Contact-line edges (border edges on a wall) longer than _REMESH[1] h0
+    split till none is (Evolver's edge refinement: the midpoint goes onto
+    the wall)."""
+    for _ in range(6):
+        m = ev.mesh()
+        long = (m.edge_valence() == 1) & (m.edge_lengths() > _REMESH[1]*h0)
+        if not long.any():
+            return
+        long &= _on_walls(ev)
+        if not long.any():
+            return
+        ev.command(f"refine edge{ev._mark(_core.EDGE, long)}")
 
 
 def _gradient_run(ev, tol: float) -> Any:

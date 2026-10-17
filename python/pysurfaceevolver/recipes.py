@@ -714,13 +714,14 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     while index < steps:
         last = last[-1:]                # (the state a change ended in: events coming from it)
         seen: List[np.ndarray] = []
-        lost, event = False, None
+        lost, event, moved = False, None, False
         for step in _branch(ev, what, ds, steps - index + (0 if start else 1), bounds=bounds,
                             tol=tol, tidy=tidy, halvings=halvings,
                             along=along if start else None, remesh=run_remesh, events=events,
                             report=start):
             if not start and step.index == 0:
                 continue                # where the fall ended, yielded already
+            moved = True
             step.index = index
             index += 1
             yield step
@@ -738,6 +739,14 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         if index >= steps:
             return
         stalled = not (lost or event is not None)
+        if stalled and not start and not moved:
+            # not a step from where a change or fall ended: the change
+            # nearest to coming there is made (the descent from there alone
+            # came back to it, a pack's film over a bead beside its contact
+            # line too thick to be resting, and the run stalled again and
+            # again)
+            event = _nearest(ev.events(factor))
+            stalled = event is None
         if stalled:
             value = _current(ev, what)
             if start or (bounds is not None and not (min(bounds) <= value <= max(bounds))):
@@ -789,6 +798,13 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             warnings.warn("arclength(): three falls in a row ended without a change of "
                           "topology: stopping", UserWarning, stacklevel=2)
             return
+
+
+def _nearest(found: list) -> Any:
+    """Of the events, the solid, contact-line or touch one with the smallest
+    gap for its edges, or None."""
+    return min((e for e in found if e.kind in ("solid", "contact lines", "touch")),
+               key=lambda e: e.gap/float(e.scale), default=None)
 
 
 def _change(ev, event, factor: float, tol: float, keep) -> "tuple[Any, list, str]":
