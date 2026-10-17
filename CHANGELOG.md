@@ -85,6 +85,11 @@
 
 ### Documentation
 
+- New page "Draining through changes of topology" (docs/drainage_topology.md): a drop
+  draining over a sphere inside it (a dry patch opening and growing, its contact angle
+  as set) and one pore of a bead pack (dry patches on one bead, then the liquid's jump
+  at a fixed volume, curvature 4.5 to 3.1), with what it can't do yet.
+
 - Four pages of classic results, each against an exact reference computed on the
   page's helpers:
   - `disk_bridge.md`: the stability limits of a liquid bridge between two equal
@@ -104,6 +109,10 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- `Evolver.contact()` on contact lines that already meet at a vertex (the border
+  through it twice, after a pore's liquid rearranged): Evolver's `pop` splits the
+  vertex, and the lines are joined as two.
 
 - Evolver's equiangulation (`u`, and `edgeswap`) could swap two quadrilaterals'
   diagonals onto one pair of vertices in a single pass: a doubled edge with four

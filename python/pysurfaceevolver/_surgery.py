@@ -482,6 +482,13 @@ def contact(ev, event, keep=None) -> None:
     rows = np.asarray(event.vertices, int)
     flat = None
     if kind == "contact lines":
+        pinched = _pinched(m, edges, rows[on[rows]])
+        if pinched is not None:
+            # the lines already meet at a vertex (the border through it
+            # twice): Evolver's pop splits it, and the lines are then two
+            # (a pore's contact lines on one bead after its liquid jumped)
+            ev.command(f"pop vertex[{int(m.vertex_ids[pinched])}]")
+            return
         a, b = _closest_pair(x, rows, on)
         if _wet_between(ev, m, x, f, on, num, a, b):
             core = _strip(x, a, b, on, float(event.scale))
@@ -544,6 +551,15 @@ def contact(ev, event, keep=None) -> None:
         if i in [int(j) for j in ev.bodies().ids]:
             b = ev.body(i)
             b.volconst = b.volconst + volume[i] - b.volume
+
+
+def _pinched(m, edges, rows) -> "int | None":
+    """A vertex among rows that four or more border edges meet at."""
+    border = edges[m.edge_valence() == 1]
+    for v in rows:
+        if int((border == v).any(axis=1).sum()) >= 4:
+            return int(v)
+    return None
 
 
 def _column(nums, names, key) -> int:

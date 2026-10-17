@@ -19,8 +19,9 @@ written out for finite-element meshing.
   ({doc}`liquid_bridge`), forces and optimizing parameters from Brakke's datafiles
   ({doc}`solder_joints`), several walls and mirror planes ({doc}`slit_droplet`), and a
   long quasi-static run ({doc}`slit_drainage`), following a bridge through its
-  instability and fold ({doc}`bridge_rupture`), and liquid in throats and pores of a
-  sphere packing ({doc}`packing`).
+  instability and fold ({doc}`bridge_rupture`), liquid in throats and pores of a
+  sphere packing ({doc}`packing`), and draining through changes of topology: dry
+  patches opening and a pore's liquid jumping ({doc}`drainage_topology`).
 * Classic results from the literature, each against an exact reference: the
   stability limits of a bridge between two disks ({doc}`disk_bridge`), the largest
   drop a ring can hold ({doc}`pendant_drop`), drops on one, two and crossed fibres
@@ -57,6 +58,7 @@ slit_droplet
 slit_drainage
 bridge_rupture
 packing
+drainage_topology
 disk_bridge
 pendant_drop
 fibres
