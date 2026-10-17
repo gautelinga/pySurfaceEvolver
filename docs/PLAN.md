@@ -368,11 +368,19 @@ Stages:
   old rules (contacts made from its mode steps' surface spoiled a bridge's cut).
   Results: the pilot pore drains to 0.045 at both mesh levels (the finer died at
   0.41); the 16-bead pack (scratchpad f/cluster.py) from 87.5 to about 68 through
-  ~12 dry patches. Open: relax()'s runs in the descent after a contact run away
-  (a dry patch on a sphere inside a drop, the pack later); plain gradient steps
-  from the same states don't: next, a descent of guarded gradient steps with
-  tidying between, Newton steps only near equilibrium. Then the pack, the
-  thresholds against MSP, the docs page.
+  ~12 dry patches. The descent after a change: a relax() run that goes wrong is
+  undone for 10 plain gradient steps (one, where those go wrong too), relax() once
+  near equilibrium; the dry patch on a sphere inside a draining drop now goes the
+  whole run (from 53.5 to 6.3 through 9 changes; plain gradient runs alone took it
+  to 2.6 but were too slow for merges and the pack). Open, the pack: a contact
+  line's step across a bead's singular north pole (its winding round the axis
+  changed: the integrals jump by the whole sphere, 4 pi cos 20 = 11.8, and the
+  volume constraint then drives the surface off) ends it in 1-12 changes. Tried:
+  one-sided balls round the poles on the contact-line vertices (0.15 R: chords
+  still crossed; 0.25-0.5 R with near-pole edges split: lines stalled at the balls,
+  arclength couldn't step). The line integrals on spheres may be the limit for a
+  pack: wetted facets on the beads (no poles) is the alternative, a redesign of
+  the contact surgery.
   Original aim (after A-E): volume-controlled, as a
   slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or
   come closer to that than to a fixed pressure): `arclength` in the liquid's volume, a

@@ -750,7 +750,7 @@ _FALL_TRY = 10          # iterations between such tries
 _FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
 _REMESH = (0.4, 2.0)    # after a merge or contact: edges kept within these many median edges
 _CHUNK = 50             # after a change: relax() runs of this many gradient steps at most
-_SAFE_STEPS = 5         # ... or, where a run went wrong, this many plain gradient steps
+_GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient steps
 
 
 def _median_edge(m) -> float:
@@ -810,16 +810,15 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         else:
             # after a change, relax() in short runs (a merged neck widening
             # takes thousands of gradient steps on a fine mesh), looking at
-            # the events between them; a run that went wrong is undone for
-            # a few plain gradient steps
+            # the events between them; a run that went wrong (relax()'s took
+            # a pack's liquid from 80.3 to 83.5) is undone for a run of plain
+            # gradient steps
             start, energy = ev.save(), ev.energy
             chunk = ev.relax(tol, max_iter=_CHUNK)
             if not _plausible(ev, energy):
                 ev.restore(start)
-                ev.command(f"g {_SAFE_STEPS}")
-                chunk = _unconverged()
-                if not _plausible(ev, energy):
-                    ev.restore(start)
+                chunk = _gradient_run(ev, tol)
+                if chunk is None:
                     return None, changes, "the descent ran away (volumes or energy)"
             guard(ev)
         moved = ev.vertices - x if len(x) == len(ev.vertices) else None
@@ -951,6 +950,29 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         ev.vertices = ev.vertices + _FALL_STEP*h*way/np.linalg.norm(u, axis=1).max()
     return None, changes, (f"no stable state within {_FALL_ITERATIONS} steps"
                            + (f" (the last change not made: {refused})" if refused else ""))
+
+
+def _gradient_run(ev, tol: float) -> Any:
+    """A run of the descent after a change where relax()'s went wrong:
+    _GRADIENT_RUN plain gradient steps (one, where those went wrong too;
+    None where that did), then relax() if the residual is under _FALL_NEAR
+    (kept if it converged and went right). relax()'s result, else an
+    unconverged one."""
+    start, energy = ev.save(), ev.energy
+    ev.command(f"g {_GRADIENT_RUN}")
+    if not _plausible(ev, energy):
+        ev.restore(start)
+        ev.command("g 1")
+        if not _plausible(ev, energy):
+            ev.restore(start)
+            return None
+    if ev.residual() < _FALL_NEAR:
+        here, energy = ev.save(), ev.energy
+        r = ev.relax(tol)
+        if r.converged and _plausible(ev, energy):
+            return r
+        ev.restore(here)
+    return _unconverged()
 
 
 def _unconverged() -> Any:
