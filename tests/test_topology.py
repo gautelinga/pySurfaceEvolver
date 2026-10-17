@@ -360,3 +360,179 @@ def test_continuation_stops_before_a_growing_drop_touches_a_solid():
     assert steps[-1].events and steps[-1].events[0].kind == "solid"
     assert ev.vertices[:, 2].max() < 1.0
     assert len(steps) < 30
+
+
+# ---- stage C: pinching off (Evolver.pinch_off, arclength(topology=True)) ---------
+
+def _sphere_bridge(volume):
+    """bridge_rupture.md's bridge: between unit spheres 0.6 apart at 40 degrees,
+    2048 facets."""
+    c, a = 1.3, 0.35
+    zb = c - np.sqrt(1 - a*a)
+    tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   constraints={1: C.sphere((0, 0, -c), 1.0, contact_angle=40.0,
+                                            wet_poles=("north",)),
+                                2: C.sphere((0, 0, c), 1.0, contact_angle=40.0,
+                                            wet_poles=("south",))},
+                   vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=volume)])
+    ev.relax(levels=2)
+    return ev
+
+
+def _cap_on_sphere(volume, theta):
+    """The pressure of a drop of this volume on a unit sphere at contact angle
+    theta (degrees): a sphere of radius r cutting it at that angle."""
+    t = np.radians(theta)
+
+    def held(r):
+        d = np.sqrt(1 + r*r - 2*r*np.cos(t))
+        lens = np.pi*(1 + r - d)**2*(d*d + 2*d*r - 3*r*r + 2*d + 6*r - 3)/(12*d)
+        return 4*np.pi*r**3/3 - lens
+    lo, hi = 1e-3, 10.0
+    for _ in range(200):
+        mid = (lo + hi)/2
+        lo, hi = (mid, hi) if held(mid) < volume else (lo, mid)
+    return 2/mid
+
+
+def test_a_shrinking_bridge_between_spheres_falls_into_two_drops():
+    # the bridge turns unstable at a branch point (0.0790 exact, under 0.0789
+    # here), its liquid moving to one sphere. With topology=True arclength
+    # falls from the first unstable point: the neck comes and is cut, and each
+    # piece relaxes to a drop on its sphere (an exact cap), the two holding
+    # what the bridge did. The run goes on draining the larger, body 1; the
+    # smaller keeps its volume
+    ev = _sphere_bridge(0.09)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        steps = list(recipes.arclength(ev, ev.body(1), -0.003, 12, topology=True))
+    k = [i for i, s in enumerate(steps) if s.fell]
+    assert len(k) == 1 and [s.index for s in steps] == list(range(len(steps)))
+    fell, lost = steps[k[0]], steps[k[0] - 1]
+    assert lost.result.negative_modes == 1 and steps[k[0] - 2].result.negative_modes == 0
+    assert 0.076 < lost.value < 0.0789
+    assert [e.kind for e in fell.changes] == ["neck"]
+    assert fell.volumes.sum() == pytest.approx(lost.value, rel=1e-8)
+    assert fell.volumes[0] > fell.volumes[1] and 0.1 < fell.volumes[1]/lost.value < 0.3
+    for v, p in zip(fell.volumes, fell.pressures):
+        assert p == pytest.approx(_cap_on_sphere(v, 40.0), rel=0.005)
+    after = steps[k[0] + 1:]
+    assert len(after) >= 2 and all(not s.fell for s in after)
+    assert after[-1].value < fell.value - 0.003
+    for s in after:
+        assert s.volumes[1] == pytest.approx(fell.volumes[1], rel=1e-8)
+        assert s.result.negative_modes == 0
+
+
+def test_a_bridge_between_disks_pinches_at_its_fold_into_two_equal_drops():
+    # pinned to the rims of disks 3 apart (slenderness 1.5): stable down to
+    # the fold, volume 0.4751 of the cylinder (disk_bridge.md), where the neck
+    # thins in the middle. Past the fold (one step past the last stable point)
+    # it falls and pinches into two equal caps on the rims; the upper keeps
+    # the top rim's content integral (Evolver's rebody, fixed)
+    H = 3.0
+    tube = shapes.tube(1.0, 0.0, H, nz=8, nt=16)
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   boundaries={1: C.circle((0, 0, 0)),
+                               2: C.circle((0, 0, H), content=(f"-{H}*y/2", f"{H}*x/2", "0"))},
+                   vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=0.55*np.pi*H)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax(levels=1)
+        steps = list(recipes.arclength(ev, ev.body(1), -0.1, 20, topology=True))
+    k = [i for i, s in enumerate(steps) if s.fell][0]
+    fell, (previous, stable, lost) = steps[k], steps[k - 3:k]
+    assert lost.value > stable.value                          # turned at the fold
+    assert stable.value/(np.pi*H) == pytest.approx(0.4751, rel=0.02)
+    total = min(stable.value, lost.value) + (stable.value - previous.value)
+    assert fell.volumes.sum() == pytest.approx(total, rel=1e-8)
+    assert abs(fell.volumes[0] - fell.volumes[1]) < 0.01*total
+    for volume, pressure in zip(fell.volumes, fell.pressures):
+        h = np.roots([np.pi/6, 0, np.pi/2, -volume]).real.max()
+        assert pressure == pytest.approx(4*h/(1 + h*h), rel=0.01)
+
+
+def test_a_catenoid_pulled_past_its_fold_falls_into_two_disks():
+    # a soap film between wires, no bodies, the run in a parameter (the
+    # wires' distance): past the fold (1.3255) it falls and pinches, and
+    # the two pieces are flat disks spanning the wires
+    tube = shapes.tube(1.0, 0.0, 0.6, nz=4, nt=16)
+    top = C.curve("cos(p1)", "sin(p1)", "ht", lambda x: np.arctan2(x[:, 1], x[:, 0]))
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces, boundaries={1: C.circle(), 2: top},
+                   vertex_boundaries={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   parameters={"ht": 0.6})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax(levels=2)
+        ev.parameters["ht"] = 1.0
+        steps = list(recipes.arclength(ev, "ht", 0.05, 12, topology=True))
+    fell = [s for s in steps if s.fell]
+    assert len(fell) == 1 and fell[0].value > 1.3255
+    assert [e.kind for e in fell[0].changes] == ["neck"]
+    assert fell[0].energy == pytest.approx(2*np.pi, rel=3e-3)
+    assert steps[-1].value > fell[0].value          # and on, the wires apart, the disks flat
+    x, ht = ev.vertices, ev.parameters["ht"]
+    assert ht == pytest.approx(steps[-1].value)
+    assert np.all(np.minimum(np.abs(x[:, 2]), np.abs(x[:, 2] - ht)) < 1e-6)
+
+
+def test_pinch_off_gives_the_body_number_to_the_larger_piece_either_way():
+    # from the sphere bridge's first unstable point, pushed down its mode
+    # either way until the neck comes: after the cut body 1 is the larger
+    # piece, each piece's volconst its sphere's, and the targets add up to the
+    # bridge's (each smaller piece also getting back what collapsing the ring
+    # took from its side); the drops relaxed, caps on their spheres
+    ev = _sphere_bridge(0.083)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for step in recipes.arclength(ev, ev.body(1), -0.003, 12):
+            if step.result.negative_modes:
+                break
+    unstable = ev.save()
+    wall = C.sphere((0, 0, -1.3), 1.0, contact_angle=40.0, wet_poles=("north",)).volconst
+    h = float(np.median(ev.mesh().edge_lengths()))
+    smaller = []
+    for sign in (1, -1):
+        ev.restore(unstable)
+        target = ev.body(1).target
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            way = None
+            for _ in range(40):
+                u = ev.modes(1).vectors[0]      # (signed by its largest part: kept the same way)
+                way = sign*u if way is None else u*np.sign((u*way).sum())
+                ev.vertices = ev.vertices + 0.3*h*way/np.linalg.norm(way, axis=1).max()
+                ev.command("g 5")
+                necks = [e for e in ev.events() if e.kind == "neck"]
+                if necks:
+                    break
+            assert necks
+            assert ev.pinch_off(necks[0]) == [2]
+        b = ev.bodies()
+        assert list(b.ids) == [1, 2] and b.volume[0] > b.volume[1]
+        assert b.target.sum() == pytest.approx(target, rel=1e-13)
+        assert [ev.body(i).volconst for i in (1, 2)] == pytest.approx([wall, wall])
+        assert len(_pieces(ev)) == 2
+        smaller.append(ev.vertices[np.asarray(ev.mesh().facets)[
+            (np.asarray(ev.mesh().facet_bodies) == 2).any(axis=1)].ravel(), 2].mean())
+        assert ev.residual() < 1e-8                 # relaxed (and to the targets:)
+        assert b.volume == pytest.approx(b.target, rel=1e-8)
+        for i in (1, 2):
+            assert ev.body(i).pressure == pytest.approx(
+                _cap_on_sphere(ev.body(i).volume, 40.0), rel=0.01)
+    assert smaller[0]*smaller[1] < 0          # one way the small drop is on top, the other below
+
+
+def test_pinch_off_needs_a_neck_and_the_linear_model():
+    ev = _two_spheres(0.5)
+    with pytest.raises(ValueError, match="no neck"):
+        ev.pinch_off()
+    ev.command("quadratic")
+    with pytest.raises(ValueError, match="linear model"):
+        ev.pinch_off()

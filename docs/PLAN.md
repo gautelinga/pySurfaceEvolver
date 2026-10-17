@@ -245,17 +245,51 @@ Stages:
   liquid); the rest goes on under the run's control. Optional, later: `Body(pressure=p)`
   (Evolver's body pressure) and relaxing through a lost equilibrium at fixed pressure,
   only to compare directly with pressure-controlled pore-network curves.
-* **C. Pinch-off surgery** (1-2 weeks): Evolver's own commands do it (tried
-  2026-10-16, tests/test_topology.py): on a bridge between disks losing liquid, the
-  tiny-edge deletion of `remesh()` shrinks the neck to a vertex, `pop vertex` splits
-  it, `rebody` makes the pieces bodies with their volumes (after a fix: it left a
-  wire's content integral with the old body), and the drops relax and continue with
-  `arclength`. Left to do: detect it (more edge-connected pieces than bodies), drive
-  the neck to the vertex inside `arclength`, and check the other content and
-  `volconst` bookkeeping (constraints' content integrals, merges) the same way. Tests: a bridge between spheres pulled past
-  its rupture distance against Lian/Willett and the exact bridge (liquid_bridge.ipynb),
-  Rayleigh-Plateau column breakup into drops (stress case 1), the trimer bursting into
-  bridges (packing.md); volumes conserved to round-off.
+* **C. Pinch-off surgery** (done 2026-10-17, the bridge between spheres as the case;
+  design agreed: fall at the instability, `pinch_off` plus an arclength option, the
+  run going on with the largest piece). `Evolver.pinch_off(event)` (`_surgery.py`):
+  the two rows of vertices at the ends of the edges crossing the plane through the
+  neck, across its axis (the direction the waist's normals are all across), collapse
+  to their centroid; Evolver deletes the collapsed edges (`delete edge where length <
+  tiny`), `pop vertex[v]` splits the point, `rebody`; the largest piece gets the
+  body's number (facets swapped, `rebody` again for the quantities); each piece's
+  volconst from the walls it reaches (`surface.walls`; rebody copies the old body's
+  to each, two spheres' constants each); fixed targets: the smaller pieces what they
+  hold plus what the collapse took from their side (the tetrahedra from the point to
+  the facets round the ring, by side: exact, they add up to what was lost), the
+  largest the rest. Then the edges under h/2 within 3h of the cut go (Evolver's
+  deletion; the fall squeezed the neck's ring to 64 edges of 0.005, the cones' facets
+  met at the tips), and the pieces settle: at the volumes held, `g 5` and Newton with
+  line search (relax() from the cones slid a 40-degree drop's vertices through its
+  sphere in one of four cuts: gradient steps next to a shallow contact line), then
+  Newton steps to the targets in up to 16 parts (relax() to them at once failed in
+  most). `arclength(topology=True)`: at the first point with more negative modes, the
+  fall (from that point after a branch point, where the mode is across the branch's
+  shape change, |cos| < 0.5; at a fold, where it is along it (0.99), from the value
+  one step past the last stable point): steps along the mode of 0.3 median edges at
+  most, the way five gradient steps go along it (the first step, where that is
+  round-off, modes()'s sign: else the bridge fell to either sphere from run to run),
+  until a neck event (cut, settle) or a positive lowest eigenvalue and a residual
+  under 1e-3 (Newton finishes; relax() there slid vertices through the sphere on 8192
+  facets); other events coming stop it, solids only once gone through, and vertices
+  through a solid within two edges of its contact line go back out along its normal
+  (the gradient steps took one through the top sphere in 1 of 5 page runs; 0 of 10
+  after), and a neck pinch_off refuses (reaching a contact line) is passed over
+  (1 in 12 runs stopped there before). Plain gradient steps fell too slowly (eigenvalue -0.74: 5e-7 of energy per
+  10 steps), `saddle` overshot (the neck from 0.05 to 0.001 in one line search),
+  Newton with the mode projected out diverged, global remeshing during the fall
+  wrecked the contact lines. Tests: the sphere bridge falling at its branch point
+  into two drops (exact caps to 0.3%), the disk bridge pinching at its fold
+  (0.4687 on 1024 facets, exact 0.4751) into two equal caps, a catenoid past its fold
+  into two flat disks (a parameter run, no bodies), pinch_off either way (the swap).
+  Costs: the fall 1 s on 2048 facets, 13-16 s on 8192 (modes() each step); the settle
+  1-3 s. Limits: the split depends on the way down (smaller drop 18-22% on 2048
+  facets as the steps vary, 17-19% on 8192 (with the thread count), 25% falling from
+  a step further), a model,
+  not the flow; a neck meshed 16 edges round (512 facets) cut, but the drops didn't
+  relax; necks at a constraint (a drop leaving a solid) are a contact-line event
+  (stage E); one neck at a time (Rayleigh-Plateau columns, the trimer: not tried);
+  linear model only. Not done: continuation(), relax() (still `collapsed`).
 * **D. Merge surgery** (2-3 weeks): Evolver's own commands do it too (tried
   2026-10-16, tests/test_topology.py): `facet_merge` on the closest facet pair, unset
   one body on the glued facet and `dissolve` it (and the unused edges and vertices),

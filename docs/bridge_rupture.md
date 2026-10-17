@@ -56,6 +56,8 @@ rows, first_unstable = [], None
 for step in recipes.arclength(ev, ev.body(1), -0.003, 60):
     modes = step.result.negative_modes
     rows.append((step.value, neck(ev), modes))
+    if modes == 0:
+        last_stable = ev.save()
     if modes == 1 and first_unstable is None:
         first_unstable = ev.save()
     if modes == 2:
@@ -228,6 +230,77 @@ first step the other way (`ds` of -0.01) gives the mirror image, with the neck b
 the mid-plane. Start such a run just past the crossing, as here: the off-centre
 bridges are then close by.
 
+## Through the break
+
+With `topology=True`, `arclength` goes on where the branch loses its stability, as the
+bridge would if it lost its liquid slowly. At the first point with a negative mode it
+falls, at that volume, by steps along the unstable mode, each followed by a few
+gradient steps. When the neck comes (an {class}`~pysurfaceevolver.Event` of kind
+`"neck"`), {meth}`~pysurfaceevolver.Evolver.pinch_off` cuts it: the two rows of
+vertices round the neck collapse to a point, which Evolver's `pop` splits and `rebody`
+makes two bodies. The pieces then relax: two drops, one on each sphere, holding what
+the bridge held. Each drop is a spherical cap meeting its sphere at 40 degrees, which
+gives an exact pressure for its volume. The run then goes on draining the larger drop,
+which keeps the body's number; the smaller keeps its volume.
+
+```python
+# continuing from the first block: back to the last stable bridge, and on
+# through the break
+def cap_pressure(volume, theta):
+    """The pressure of a drop on a unit sphere: a sphere of radius r cutting it
+    at contact angle theta (degrees)."""
+    t = np.radians(theta)
+    def held(r):
+        d = np.sqrt(1 + r*r - 2*r*np.cos(t))
+        lens = np.pi*(1 + r - d)**2*(d*d + 2*d*r - 3*r*r + 2*d + 6*r - 3)/(12*d)
+        return 4*np.pi*r**3/3 - lens
+    lo, hi = 1e-3, 10.0
+    for _ in range(100):
+        lo, hi = ((lo + hi)/2, hi) if held((lo + hi)/2) < volume else (lo, (lo + hi)/2)
+    return 2/lo
+
+ev.restore(last_stable)
+steps = list(recipes.arclength(ev, ev.body(1), -0.0015, 8, topology=True))
+k = [i for i, s in enumerate(steps) if s.fell][0]
+lost, fell = steps[k - 1], steps[k]
+total = fell.volumes.sum()
+print(f"from {steps[0].value:.4f}: unstable at {lost.value:.4f}, where it fell; "
+      f"the neck cut {abs(fell.changes[0].where[2]):.2f} from the mid-plane")
+for i, (V, p) in enumerate(zip(fell.volumes, fell.pressures)):
+    close = abs(p/cap_pressure(V, theta) - 1) < 0.005
+    print(f"drop {i + 1}: {V/total:.1f} of the liquid, pressure {p:.2g}, "
+          f"{'within' if close else 'NOT within'} 0.5% of the exact cap's")
+kept = abs(steps[-1].volumes[1]/fell.volumes[1] - 1) < 1e-8
+print(f"together {total:.6f}; then drop 1 drained to {steps[-1].volumes[0]:.2f}, "
+      f"drop 2 {'kept' if kept else 'NOT kept'} at its volume")
+```
+
+```text
+from 0.0792: unstable at 0.0777, where it fell; the neck cut 0.06 from the mid-plane
+drop 1: 0.8 of the liquid, pressure 4.2, within 0.5% of the exact cap's
+drop 2: 0.2 of the liquid, pressure 6.1, within 0.5% of the exact cap's
+together 0.077708; then drop 1 drained to 0.06, drop 2 kept at its volume
+```
+
+The run restarts from the last stable bridge (0.0792), and its first point, at
+0.0777, is already unstable: it falls from there. The drops' pressures are within 0.2%
+of the exact caps', and together they hold what the bridge held, to round-off. The cut
+takes the two rows of vertices round the neck to a point, which takes a few percent of
+the volume there away; each piece is given back what it lost on its side (the
+tetrahedra from the point to the collapsed facets), so no volume is lost or moved from
+one drop to the other.
+
+How the liquid splits between the drops is the one result here that depends on more
+than equilibrium: two drops hold any split, and which one forms depends on the way
+down. The fall is a descent of the energy, steepest along the unstable mode, not the
+liquid's flow, and the split moves with how the fall is taken. Here the smaller drop
+holds 17% to 19% of the liquid from run to run (the threads' round-off in the last
+step before the fall, which the fall carries a long way); falling from 0.0762 (a step
+of 0.003 from the last stable bridge) it held 25%, and on the mesh refined once less
+(2048 facets) 18% to 22% as the steps along the mode and the gradient steps between
+them were varied. Read the split as a rough figure; the drops' pressures are exact
+for the split they have.
+
 ## What it means
 
 * **The off-centre bridges are saddles.** They exist only above the branch volume,
@@ -239,9 +312,10 @@ bridges are then close by.
 * **A slowly shrinking bridge breaks at the branch point** (volume 0.0790 here), not
   at the fold (0.0731), and it breaks lopsided. No equilibrium is nearby to settle
   into, so the bridge doesn't drift to an off-centre shape first. Evolver can't follow
-  the break itself (the surface would change topology). `relax()` from the bridge pushed
-  along its mode makes slow progress, because the mode's eigenvalue is barely below
-  zero that close to the onset.
+  the break itself with gradient steps alone: `relax()` from the bridge pushed along
+  its mode makes slow progress, because the mode's eigenvalue is barely below zero
+  that close to the onset. `arclength(topology=True)` steps along the mode instead
+  (see [Through the break](#through-the-break)).
 * **Real bridges are likely to break earlier still.** With a subcritical pitchfork,
   a small asymmetry (unequal spheres or contact angles, gravity along the axis)
   typically makes the bridge break before the symmetric branch point. A supercritical

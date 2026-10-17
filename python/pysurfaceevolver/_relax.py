@@ -20,6 +20,7 @@ from ._geometry import _edge_turn, _long_spokes
 from ._results import Health, IterationResult, _Coords, _Trace
 
 if TYPE_CHECKING:
+    from ._events import Event
     from ._evolver import Evolver
 
 
@@ -858,6 +859,38 @@ class _Relaxing(_Analysis):
         if average:
             self.command("V")
         return counts
+
+    def pinch_off(self, event: Optional[Event] = None, *, relax: bool = True) -> List[int]:
+        """Cut the surface at a neck, an :class:`Event` of kind ``"neck"``
+        from :meth:`events` (default: the first one there): the two rows of
+        vertices round the neck either side of the plane across its
+        narrowest point collapse to one vertex, Evolver deletes the collapsed
+        edges, pops that vertex (``pop vertex``, so the two sides no longer
+        touch) and makes the body's pieces bodies (``rebody``); the short
+        edges round the two tips go (Evolver's edge deletion), and the two
+        sides, cones at first, relax (``relax=False`` leaves them so).
+
+        The piece holding the most liquid keeps the body's number. Each
+        piece's ``volconst`` is that of the walls it reaches (constraints from
+        :mod:`pysurfaceevolver.constraints` that close a volume); the rest of
+        the body's, if any, stays with the largest piece. If the volume was
+        fixed, the smaller pieces' targets are what they hold, plus what
+        collapsing the ring took from their side, and the largest's the rest
+        of the old target: they add up to it, to round-off. Relaxing goes in
+        two parts: at the volumes the pieces hold after the cut (a few percent
+        less, near a neck a couple of edges across), then to the targets by
+        Newton steps (going there at once, a drop on a sphere at 40 degrees
+        slid through it); a warning says if that fails. Returns the new
+        bodies' numbers (none for a surface without bodies).
+
+        The neck must be clear of fixed vertices, constraints and the
+        surface's border, and round one body (a film between two bodies
+        doesn't pinch this way); it needs a few edges round it (on a bridge
+        meshed 16 edges round, the drops failed to relax). Linear model only.
+        If the cut itself fails, the surface is put back and ValueError raised.
+        """
+        from ._surgery import pinch_off
+        return pinch_off(self, event, relax)
 
     def adapt(self, max_turn: float = _TURN, *, coarsen: bool = True) -> int:
         """Fit the mesh to the curvature: split the edges along which the

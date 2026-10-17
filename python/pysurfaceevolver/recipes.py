@@ -31,6 +31,7 @@ import numpy as np
 
 from . import _core
 from ._relax import _MERGE_UNDER, _SPLIT_ABOVE
+from ._surgery import _settle
 
 __all__ = ["Step", "arclength", "continuation", "load_steps"]
 
@@ -49,6 +50,8 @@ class Step:
     substeps: int = 1          # relaxes it took (more after halving, see continuation)
     predicted: bool = False    # relaxed from the secant prediction (see continuation)
     events: list = field(default_factory=list)  # Evolver.events() there (see events=)
+    fell: bool = False         # reached by falling from a lost equilibrium (arclength topology=)
+    changes: list = field(default_factory=list)  # the necks cut on the way (Events)
 
 
 def _setter(what: Any) -> Callable[[Any, Any], None]:
@@ -89,7 +92,7 @@ def _save(prefix: str, ev, steps: List[Step]) -> None:
     ev.dump(prefix + ".dmp.tmp")
     os.replace(prefix + ".dmp.tmp", prefix + ".dmp")
     kept = [Step(s.index, s.value, s.energy, s.volumes, s.pressures, None, s.extra, s.substeps,
-                 s.predicted, s.events) for s in steps]
+                 s.predicted, s.events, s.fell, s.changes) for s in steps]
     with open(prefix + ".steps.tmp", "wb") as f:
         pickle.dump(kept, f)
     os.replace(prefix + ".steps.tmp", prefix + ".steps")
@@ -582,7 +585,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
               tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
               remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
-              events: Union[bool, float] = True) -> Iterator[Step]:
+              events: Union[bool, float] = True, topology: bool = False) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
     target volume or ``ev.quantity(name)``'s target).
@@ -652,7 +655,229 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     closer now), the surface there: a neck about to pinch off, the surface about
     to touch itself, a solid or contact lines about to meet. A point whose
     surface has gone through a solid counts as a failed step (halved).
+
+    ``topology=True`` goes on where the branch loses its stability, as the
+    surface would under the run's control (a syringe pump draining liquid
+    slowly): at the first point with more negative modes than the last, it
+    falls from there (at a fold, where the branch turned back between the
+    points along the unstable mode, from the value one step past the last
+    stable point, past the fold), by steps
+    along the unstable mode (each moving a vertex by at most 0.3 of the median
+    edge, the way the gradient goes along it) with five gradient steps after
+    each, until the lowest eigenvalue is positive and Newton steps settle it
+    in a stable state. A neck that comes on the way
+    (:meth:`Evolver.events`) is cut (:meth:`Evolver.pinch_off`): the bodies
+    cut off keep their volume, and a body the run steps keeps its number for
+    the piece holding most of the liquid, which the run goes on with. The
+    state the fall ends in is a :class:`Step` with ``fell`` set and the necks
+    cut in ``changes``; the run goes on from there as from a new start. Other
+    events coming on the way (the surface about to touch itself, contact
+    lines about to meet, a solid gone through: next to a contact line the
+    gradient steps bring vertices close to it) end the run with a warning, as
+    do three falls in a row that cut nothing.
+    The volumes the pieces get depend on the way down, here a guided descent
+    of the energy, not the liquid's dynamics.
     """
+    if not topology:
+        yield from _branch(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
+                           halvings=halvings, along=along, remesh=remesh, events=events)
+        return
+    from ._analysis import EVENT_FACTOR
+    factor = _event_factor(events) or EVENT_FACTOR
+    set_value = _setter(what)
+    index, quiet, start = 0, 0, True
+    while index < steps:
+        last: List[Step] = []
+        seen: List[np.ndarray] = []
+        lost = False
+        for step in _branch(ev, what, ds, steps - index + (0 if start else 1), bounds=bounds,
+                            tol=tol, tidy=tidy, halvings=halvings,
+                            along=along if start else None, remesh=remesh, events=events):
+            if not start and step.index == 0:
+                continue                # where the fall ended, yielded already
+            step.index = index
+            index += 1
+            yield step
+            last, seen = (last + [step])[-3:], (seen + [ev.vertices])[-2:]
+            if len(last) > 1 and _negative(last[-1]) > _negative(last[-2]):
+                lost = True
+                break
+        if not lost or index >= steps:
+            return
+        start = False
+        if len(last) == 3 and last[-2].value != last[-3].value and _at_fold(ev, *seen):
+            # past a fold, the stable state is still there at the unstable
+            # point's value (a catenoid's at 1.3241, its fold at 1.3255): the
+            # fall at the value one step past the last stable point, the way
+            # the value went there
+            stable, previous = last[-2].value, last[-3].value
+            way = np.sign(stable - previous)
+            far = max(stable*way, last[-1].value*way)*way
+            set_value(ev, far + (stable - previous))
+            ev.command("recalc")
+        result, cut, why = _fall(ev, factor, tol)
+        if result is None:
+            warnings.warn(f"arclength(): the fall from {last[-1].value:.6g} stopped: {why}",
+                          UserWarning, stacklevel=2)
+            return
+        bodies = ev.bodies()
+        yield Step(index, _current(ev, what), ev.energy, np.array(bodies.volume),
+                   np.array(bodies.pressure), result, events=list(result.events or []),
+                   fell=True, changes=cut)
+        index += 1
+        quiet = 0 if cut else quiet + 1
+        if quiet == 3:
+            warnings.warn("arclength(): three falls in a row ended without a change of "
+                          "topology: stopping", UserWarning, stacklevel=2)
+            return
+
+
+def _at_fold(ev, before: np.ndarray, now: np.ndarray) -> bool:
+    """Whether the stability went at a fold rather than a branch point: the
+    unstable mode along the branch's shape change between the last two points
+    (at a fold the branch turns along it; where branches cross, the mode
+    leads off the branch, across it). A changed mesh counts as a fold."""
+    if before.shape != now.shape:
+        return True
+    modes = ev.modes(1)
+    if not len(modes.values):
+        return True
+    change = _normal_part(ev, now - before)
+    u = modes.vectors[0]
+    size = float(np.linalg.norm(change)*np.linalg.norm(u))
+    return size == 0 or abs(float((change*u).sum()))/size > 0.5
+
+
+def _negative(step: Step) -> int:
+    return int(getattr(step.result, "negative_modes", 0) or 0)
+
+
+_FALL_STEP = 0.3        # a fall's step along the unstable mode: at most this many median edges
+_FALL_GRADIENT = 5      # gradient steps after each
+_FALL_ITERATIONS = 200
+_FALL_NEAR = 1e-3       # the residual below which Newton steps finish a fall
+_FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
+
+
+def _fall(ev, factor: float, tol: float = 1e-8) -> "tuple[Any, list, str]":
+    """From a point that has lost its stability, down to a stable state at
+    the same value (see arclength's topology=), cutting the necks that come
+    on the way. Returns relax's result there (None if it got nowhere), the
+    neck events cut, and why it stopped if it did."""
+    cut: list = []
+    way: Optional[np.ndarray] = None
+    before: list = []
+    refused = ""
+    for _ in range(_FALL_ITERATIONS):
+        x = ev.vertices
+        ev.command(f"g {_FALL_GRADIENT}")
+        moved = ev.vertices - x if len(x) == len(ev.vertices) else None
+        found = ev.events(factor)
+        # the first neck that can be cut (not one reaching a contact line:
+        # the fall goes on, and the neck that pinches comes later)
+        neck = None
+        for e in found:
+            if e.kind == "neck":
+                try:
+                    ev.pinch_off(e, relax=False)
+                    neck = e
+                    break
+                except ValueError as error:
+                    refused = str(error)
+        if neck is not None:
+            cut.append(neck)
+            way, before = None, []
+            r = _settle(ev, tol)
+            if r is None:
+                return None, cut, "the pieces didn't relax after the cut"
+            if r.stable is not False:
+                return r, cut, ""
+            continue
+        # a solid only once gone through, and next to its contact line not
+        # even then: there the gradient steps bring vertices to it and
+        # through it (a bridge's at 40 degrees, 1 run in 5), which is the
+        # mesh, so they go back out
+        m = ev.mesh()
+        lengths = m.edge_lengths()[m.edge_valence() != 1]
+        h = float(np.median(lengths)) if len(lengths) else float(np.median(m.edge_lengths()))
+        through = _through(found)
+        if through and not _push_out(ev, through, h):
+            return None, cut, f"{through[0]} (not handled yet)"
+        coming = [e for e in _coming(found, before) if e.kind != "solid"]
+        if coming:
+            return None, cut, f"{coming[0]} (not handled yet)"
+        before = [e for e in found if not (e.kind == "solid" and e.gap < 0)]
+        modes = ev.modes(1)
+        if not len(modes.values) or not modes.values[0] < 0:
+            # no way down along a mode (yet): gradient steps, until near an
+            # equilibrium, which Newton steps then finish (relax()'s long
+            # gradient phase slid a drop's vertices through its sphere)
+            if ev.residual() > _FALL_NEAR:
+                continue
+            start = ev._coords()
+            if ev.newton(20, tol=tol).converged:
+                r = ev.relax(tol=tol)
+                if r.converged and r.stable is not False:
+                    return r, cut, ""
+            ev._put_back(start)
+            continue                    # a saddle, or not there yet: on down
+        # the way the gradient steps went along the mode; the first step,
+        # where that is round-off (at a symmetric start: a bridge fell to
+        # either sphere from run to run), by modes()'s sign, fixed by the
+        # mode itself (modes() can turn it from one step to the next, so not
+        # after that)
+        u = modes.vectors[0]
+        along = float((moved*u).sum()) if moved is not None else 0.0
+        clear = _FALL_CLEAR*float(np.linalg.norm(moved)*np.linalg.norm(u)) \
+            if moved is not None else 0.0
+        if way is None:
+            sign = float(np.sign(along)) if clear > 0 and abs(along) > clear else 1.0
+        elif along != 0.0:
+            sign = float(np.sign(along))
+        else:
+            sign = float(np.sign((way*u).sum())) if way.shape == u.shape else 1.0
+            sign = sign or 1.0
+        way = sign*u
+        ev.vertices = ev.vertices + _FALL_STEP*h*way/np.linalg.norm(u, axis=1).max()
+    return None, cut, (f"no stable state within {_FALL_ITERATIONS} steps"
+                       + (f" (the last neck not cut: {refused})" if refused else ""))
+
+
+def _push_out(ev, through: list, h: float) -> bool:
+    """Put the vertices that have gone through a solid back on the surface's
+    side of it (along its normal, a thousandth of an edge out), if each is
+    within two edges of a vertex on it (next to its contact line); whether
+    they all were (none moved if not)."""
+    nums, _, dist, names = ev._constraint_gaps()
+    x = ev.vertices
+    moved = x.copy()
+    for e in through:
+        c = names.index(e.constraint) if isinstance(e.constraint, str) \
+            else [int(n) for n in nums].index(int(e.constraint))
+        d = dist[:, c]
+        on = np.isnan(d)
+        off = ~on
+        side = 1.0 if (d[off] > 0).sum() >= (d[off] < 0).sum() else -1.0
+        rows = np.asarray(e.vertices, int)
+        rows = rows[off[rows] & (side*d[rows] < 0)]
+        if not on.any() or not len(rows):
+            return False
+        reach = np.linalg.norm(x[rows][:, None, :] - x[on][None, :, :], axis=2).min(axis=1)
+        if (reach > 2*h).any():
+            return False
+        _, grad = ev._call(_core.constraint_normals, int(nums[c]))
+        normal = np.asarray(grad.data)[rows]
+        moved[rows] += side*normal*(-side*d[rows] + 1e-3*h)[:, None]
+    ev.vertices = moved
+    return True
+
+
+def _branch(ev, what: Any, ds: float, steps: int, *,
+            bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
+            tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
+            remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
+            events: Union[bool, float] = True) -> Iterator[Step]:
+    """arclength() along one branch (see there), without falling."""
     if ds == 0 or steps < 0 or halvings < 0:
         raise ValueError("arclength() needs ds != 0, steps >= 0 and halvings >= 0")
     set_value = _setter(what)
@@ -689,7 +914,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
 
     def stop(v: float, coming: list) -> None:
         warnings.warn(f"arclength(): stopped at {v:.6g}: {coming[0]} (see Step.events)",
-                      UserWarning, stacklevel=3)
+                      UserWarning, stacklevel=4)
 
     def outside(v: float) -> bool:
         return bounds is not None and not (min(bounds) <= v <= max(bounds))
@@ -698,7 +923,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     r = ev.relax(stability=False, tol=tol)
     if not r.converged:
         warnings.warn("arclength(): the surface didn't relax at the start", UserWarning,
-                      stacklevel=2)
+                      stacklevel=3)
         return
     ok, negative, residual = _arc_settle(ev, put, float(value), tol, False)
     points = [(float(value), ev.vertices)]
@@ -738,7 +963,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         where = f"at {value + 2*first:.6g}" if along is None else "along the given mode"
         warnings.warn(f"arclength(): no equilibrium found {where} by Newton steps (even with "
                       f"steps of {abs(2*first):.3g}); the surface is back at the start",
-                      UserWarning, stacklevel=2)
+                      UserWarning, stacklevel=3)
         return
     v = float(_current(ev, what))
     points.append((v, ev.vertices))
@@ -757,7 +982,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                                     lambda: float(_current(ev, what)))
         if ev.mesh_quality().angle_min < 1.0:
             warnings.warn(f"arclength(): facets below 1 degree at {points[-1][0]:.6g}: refine "
-                          "and start again from here", UserWarning, stacklevel=2)
+                          "and start again from here", UserWarning, stacklevel=3)
             return
         (v0, x0), (v1, x1) = points[-2], points[-1]
         if len(x0) != len(x1) or len(x1) != len(ev.vertices):
@@ -805,7 +1030,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                                   "settles again after tidying its mesh (too coarse there? "
                                   "refine), nor back at it: stopping, with the last point's "
                                   "vertices on the tidied mesh (out of equilibrium)",
-                                  UserWarning, stacklevel=2)
+                                  UserWarning, stacklevel=3)
                     return
             put(v1)
             if h/2 < smallest*(1 - 1e-9):
@@ -837,7 +1062,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                    if corrected else "")
             warnings.warn(f"arclength(): no equilibrium found past {v1:.6g}{why} (even with "
                           f"steps of {h:.3g}); the surface is back at the last point",
-                          UserWarning, stacklevel=2)
+                          UserWarning, stacklevel=3)
             return
         v = float(_current(ev, what))       # (settling back can move it a little)
         points = [points[-1], (v, ev.vertices)]

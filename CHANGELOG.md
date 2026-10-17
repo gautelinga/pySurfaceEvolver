@@ -18,6 +18,26 @@
   sets the gap's factor, `False` turns it off); a point whose surface has gone through
   a solid is a failed step. `relax()` puts them on its result (`result.events`).
 
+- `Evolver.pinch_off(event)`: cut the surface at a neck (an `Event` of kind
+  `"neck"`): the two rows of vertices round it collapse to a point, which Evolver's
+  `pop` splits, `rebody` makes the pieces bodies, and the two sides relax. The largest
+  piece keeps the body's number; each piece gets the `volconst` of the walls it
+  reaches; with a fixed volume the targets add up to the old one, each smaller piece
+  given back what the collapse took from its side.
+
+- `recipes.arclength(..., topology=True)` goes on where the branch loses its
+  stability: it falls from the first unstable point (past a fold, one step past the
+  last stable point) by steps along the unstable mode, cuts the necks that come
+  (`pinch_off`), and relaxes into a stable state, yielded as a `Step` with `fell`
+  set and the necks cut in `Step.changes`; the run goes on with the largest piece,
+  the others keeping their volumes. Other events coming on the way (a solid only
+  once gone through) end the run.
+  Tested on a bridge between spheres breaking at its branch point into two drops
+  (exact caps to 0.5%), a bridge between disks pinching at its fold and a catenoid
+  falling into two disks. How the liquid splits depends on the way down (a descent
+  of the energy, not the flow): 17-25% for the smaller drop of the bridge between
+  spheres as the fall's start, steps and thread count change.
+
 ### Speed
 
 - Newton steps on a surface free to move as a whole reuse the last step's null
