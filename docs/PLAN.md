@@ -372,15 +372,28 @@ Stages:
   undone for 10 plain gradient steps (one, where those go wrong too), relax() once
   near equilibrium; the dry patch on a sphere inside a draining drop now goes the
   whole run (from 53.5 to 6.3 through 9 changes; plain gradient runs alone took it
-  to 2.6 but were too slow for merges and the pack). Open, the pack: a contact
-  line's step across a bead's singular north pole (its winding round the axis
-  changed: the integrals jump by the whole sphere, 4 pi cos 20 = 11.8, and the
-  volume constraint then drives the surface off) ends it in 1-12 changes. Tried:
-  one-sided balls round the poles on the contact-line vertices (0.15 R: chords
-  still crossed; 0.25-0.5 R with near-pole edges split: lines stalled at the balls,
-  arclength couldn't step). The line integrals on spheres may be the limit for a
-  pack: wetted facets on the beads (no poles) is the alternative, a redesign of
-  the contact surgery.
+  to 2.6 but were too slow for merges and the pack). The pack: a contact line's
+  step across a bead's singular north pole (the integrals jump by the whole
+  sphere, 4 pi cos 20 = 11.8, and the volume constraint then drives the surface
+  off) ended it in 1-12 changes. Tried: one-sided balls round the poles (0.15 R:
+  chords still crossed; 0.25-0.5 R: lines stalled at the balls); wetted facets on
+  the beads (probe: free bead vertices degenerate under pressure, fixed ones break
+  the rotational symmetry, negative sliding modes). Done: moving poles
+  (`_surgery.move_poles`): a pole within 0.5 R of a line goes to the point
+  farthest from the lines, a new runtime constraint (the old one retired:
+  `_SurfaceMemory.retired`, kept out of `_constraint_gaps`; a contact made on a
+  retired one drifted the energy), the volumes and energy shifted by the whole
+  spheres between the poles' integrals as the lines' solid angles from the
+  antipodes count them (`_fans`; the integrals' own difference was off by half a
+  sphere for a line 0.05 R from the old pole or with 1.6-long edges); runs of the
+  descent that bring a line within 0.25 R or across (solid angle jumps by 2 pi;
+  one relax() run swept a line from 0.83 to 0.32 beyond) are redone with the pole
+  moved; contact-line edges stored against their facet are turned round
+  (`orient_lines`; two of 35 seen once, the energy below what the beads can give).
+  Pack runs now end at 64-69 (2 threads, run to run): three falls in a row without a
+  change at ~69, or no stable state, after falls left contact-line edges 1-1.9 long
+  (no remeshing in falls; their chord integrals off by up to 3.5) and facets
+  degenerate. Next: line edges kept in range in falls, then the fall loop at ~69.
   Original aim (after A-E): volume-controlled, as a
   slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or
   come closer to that than to a fixed pressure): `arclength` in the liquid's volume, a

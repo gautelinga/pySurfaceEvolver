@@ -706,7 +706,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     factor = _event_factor(events) or EVENT_FACTOR
     set_value = _setter(what)
     from ._views import BodyView
-    from ._surgery import _resting
+    from ._surgery import _resting, move_poles, orient_lines
     keep = what.number if isinstance(what, BodyView) else None
     index, quiet, start = 0, 0, True
     run_remesh = remesh
@@ -724,6 +724,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             step.index = index
             index += 1
             yield step
+            orient_lines(ev)
+            move_poles(ev)      # (sphere(axis=): its pole kept off its contact lines)
             last, seen = (last + [step])[-3:], (seen + [ev.vertices])[-2:]
             if len(last) > 1 and _negative(last[-1]) > _negative(last[-2]):
                 lost = True

@@ -15,6 +15,8 @@ from ._errors import _num
 _SEAM = 3.0     # the cut's tips are tidied within this many median edges
 _TOUCH = 0.05   # a solid this close (in its event's edges): the surface resting on it
 _GUARD_REACH = 5.0  # free vertices are guarded from the walls within this many median edges
+_POLE_MARGIN = 0.5  # a sphere(axis=)'s pole moved when a contact line comes this near (radii)
+_POLE_TRIES = 3     # a run that came within half that done again this often, the poles moved
 
 
 def guard(ev) -> None:
@@ -69,6 +71,146 @@ def guard(ev) -> None:
     for j, key in enumerate(walls):
         if chosen[:, j].any():
             ev.set_constraint("vertex", f"{GUARD_PREFIX}{key}", where=chosen[:, j])
+
+
+def _pole_lines(ev):
+    """For each sphere(axis=) with a contact line: (key, wall, the
+    constraint's name or number, centre, radius, the line's vertices on the
+    unit sphere about the centre, the least distance of its edges from the
+    pole, the solid angle its edges span from the antipode, the way the
+    facets go round them, and its edges: their ends on the unit sphere and
+    their facets' bodies). (The edges' distance, not the vertices': Evolver
+    integrates along the chords, and a pack's line whose vertices were 0.47
+    from a pole had a vertex at 0.08 once its edges were split. The solid
+    angle, the sum of the triangles from the antipode to the edges, jumps by
+    4 pi where the line crosses the pole, as the integrals do.)"""
+    nums, _, dist, names = ev._constraint_gaps()
+    x = ev.vertices
+    f = np.asarray(ev.mesh().facets)
+    turns = np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]
+    _, inverse, counts = np.unique(np.sort(turns, axis=1), axis=0, return_inverse=True,
+                                   return_counts=True)
+    border = counts[inverse.ravel()] == 1
+    edges = turns[border]                               # the border, as its facets go
+    bodies = np.asarray(ev.mesh().facet_bodies)[np.flatnonzero(border) % len(f)]
+    out = []
+    for key, wall in surface.walls.items():
+        shape = getattr(wall, "shape", None)
+        if not getattr(wall, "south_regular", False) or shape is None or shape[0] != "sphere":
+            continue
+        try:
+            col = _column(nums, names, key)
+        except ValueError:
+            continue
+        on = np.isnan(dist[:, col])
+        if not on.any():
+            continue                # no contact line: no integral to keep off the pole
+        centre, R = np.asarray(shape[1], float), float(shape[2])
+        line = (x[on] - centre)/R
+        mine = on[edges[:, 0]] & on[edges[:, 1]]
+        e = edges[mine]
+        a, b = (x[e[:, 0]] - centre)/R, (x[e[:, 1]] - centre)/R
+        pole = np.asarray(getattr(wall, "pole_axis"), float)
+        t = np.clip(np.einsum("ij,ij->i", pole - a, b - a)
+                    / np.maximum(np.einsum("ij,ij->i", b - a, b - a), 1e-300), 0.0, 1.0)
+        near = float(np.linalg.norm(a + t[:, None]*(b - a) - pole, axis=1).min(initial=np.inf))
+        out.append((key, wall, names[col] or int(nums[col]), centre, R, line, near,
+                    float(_fans(a, b, pole).sum()), a, b, bodies[mine]))
+    return out
+
+
+def _fans(a, b, pole) -> np.ndarray:
+    """The solid angles of the triangles from the pole's antipode to the
+    edges a->b on the unit sphere: summed round a line, they jump by 4 pi
+    where it crosses the pole, as the integrals of a sphere(axis=) do (and
+    from a point, not its antipode, where it crosses the antipode)."""
+    return 2*np.arctan2(-np.cross(a, b) @ pole,
+                        1 - a @ pole - b @ pole + np.einsum("ij,ij->i", a, b))
+
+
+def _near_poles(ev, margin: float) -> list:
+    """The sphere(axis=)s with a contact line nearer than margin (radii) to
+    the pole."""
+    return [p[0] for p in _pole_lines(ev) if p[6] < margin]
+
+
+def move_poles(ev, force=()) -> list:
+    """For each sphere(axis=) with a contact line nearer than _POLE_MARGIN of
+    its radius to its north pole (where its integrals are singular), and
+    those whose keys are in force, the pole
+    moved to the point of the sphere farthest from its contact lines: a new
+    constraint with that axis (Evolver doesn't redefine one), the sphere's
+    vertices and edges moved onto it, and the volumes (volconst) and the
+    energy (_SurfaceMemory.energy_shift) shifted by the whole spheres the
+    integrals about the two poles differ by. A contact line stepping across
+    the pole moved the wetted area by the whole sphere (4 pi cos theta), and
+    the volume constraint then drove the surface off. Returns the walls
+    moved."""
+    from . import constraints as C
+    moved = []
+    n = 400
+    k = np.arange(n) + 0.5
+    polar, turn = np.arccos(1 - 2*k/n), np.pi*(1 + 5**0.5)*k
+    cand = np.c_[np.cos(turn)*np.sin(polar), np.sin(turn)*np.sin(polar), np.cos(polar)]
+    for key, wall, old, centre, R, line, near, _, a, b, sides in _pole_lines(ev):
+        if near >= _POLE_MARGIN and key not in force:
+            continue
+        reach = np.linalg.norm(cand[:, None, :] - line[None, :, :], axis=2).min(axis=1)
+        axis = cand[int(np.argmax(reach))]
+        new = C.sphere(tuple(centre), R, contact_angle=getattr(wall, "contact_angle"),
+                       axis=tuple(axis))
+        base = str(key).split("_pole")[0] if isinstance(key, str) else f"c{key}"
+        count = 1 + max([int(str(k2).rsplit("_pole", 1)[1]) for k2 in surface.walls
+                         if str(k2).startswith(f"{base}_pole")] or [0])
+        name = f"{base}_pole{count}"
+        ev.command('exec "define constraint ' + name + " " + " ".join(new.text().split()) + '"')
+        ev.command(f"set vertex constraint {name} where on_constraint {old}; "
+                   f"set edge constraint {name} where on_constraint {old}; "
+                   f"unset vertex constraint {old} where on_constraint {name}; "
+                   f"unset edge constraint {old} where on_constraint {name}")
+        del surface.walls[key]
+        surface.walls[name] = new
+        surface.retired.add(old)
+        # the integrals about the two poles differ by whole spheres (the
+        # area's 4 pi R^2 cos theta, the volume's 4 pi R^3/3) where the line
+        # goes round one pole and not the other: that much is kept, as the
+        # lines' solid angles from the antipodes give it. (Not what the
+        # integrals give: off by their error, more than half a sphere for a
+        # line near the old pole, 0.05 of a radius, or with edges 1.6 long)
+        spheres = (_fans(a, b, axis) - _fans(a, b, getattr(wall, "pole_axis")))/(4*np.pi)
+        for i in [int(i) for i in ev.bodies().ids]:
+            side = np.where(sides[:, 0] == i, 1, np.where(sides[:, 1] == i, -1, 0))
+            if side.any():
+                body = ev.body(i)
+                body.volconst = body.volconst + 4*np.pi*R**3/3*round(float(side @ spheres))
+        cos = np.cos(np.radians(getattr(wall, "contact_angle")))
+        surface.energy_shift.append((1, repr(4*np.pi*R*R*cos*round(float(spheres.sum())))))
+        moved.append(name)
+    return moved
+
+
+def _away_from_poles(ev, run) -> tuple:
+    """run() from here; where that brought a contact line within half
+    _POLE_MARGIN of a sphere(axis=)'s pole, or took it across (its solid
+    angle (_fans) jumped by over 2 pi: a pack's line swept across in
+    one relax() run, from 0.83 to 0.32 beyond), run again from here with
+    those poles moved (up to _POLE_TRIES times: a line draining toward a pole
+    was refused run after run). Returns run's result, and the state it
+    started from with the energy there."""
+    start, energy = ev.save(), ev.energy
+    fans = {p[0]: p[7] for p in _pole_lines(ev)}
+    result = run()
+    for _ in range(_POLE_TRIES):
+        bad = [p[0] for p in _pole_lines(ev) if p[6] < _POLE_MARGIN/2
+               or (p[0] in fans and abs(p[7] - fans[p[0]]) > 2*np.pi)]
+        if not bad:
+            break
+        ev.restore(start)
+        move_poles(ev, force=bad)
+        start, energy = ev.save(), ev.energy
+        fans = {p[0]: p[7] for p in _pole_lines(ev)}
+        result = run()
+    return result, start, energy
 
 
 def _guarded(ev) -> bool:
@@ -599,6 +741,38 @@ def _onto(ev, num: int, was_border: set) -> np.ndarray:
     return np.asarray(m.edge_ids)[border]
 
 
+def orient_lines(ev) -> int:
+    """Every contact line's edges (border edges on a wall) stored the way
+    their facet goes round them, with orientation 1, as make_datafile and
+    _onto put them: where an edge isn't, its integrals come out with the
+    wrong sign (a pack's line with 2 of its 35 edges turned had its energy
+    integral at -1.26 for 0.40, and the energy drifted below what the beads
+    can give). Returns how many edges were turned."""
+    m = ev.mesh()
+    if not surface.walls or not len(m.edges):
+        return 0
+    f, edges = np.asarray(m.facets), np.asarray(m.edges)
+    n = len(m.vertices)
+    turns = np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]
+    along = np.isin(edges[:, 0]*n + edges[:, 1], turns[:, 0]*n + turns[:, 1])
+    lines = np.zeros(len(edges), dtype=bool)
+    names = {n or int(k) for k, n in zip(*ev._constraint_gaps()[::3])}
+    for key in surface.walls:
+        if key in names:
+            lines |= ev.on_constraint(key, "edge")
+    lines &= m.edge_valence() == 1
+    wrong = np.flatnonzero(lines & (~along | (ev.values("edge", "orientation") < 0)))
+    commands = []
+    for i in wrong:
+        e = int(m.edge_ids[i])
+        if not along[i]:
+            commands.append(f"reverse_orientation edge[{e}]")
+        commands.append(f"set edge[{e}] orientation 1")
+    if commands:
+        ev.command("; ".join(commands))
+    return len(wrong)
+
+
 def _poles(ev, key, added) -> None:
     """If the new contact line (edge ids added, each with the wet side to
     its left seen from outside the solid) winds round a sphere's axis, the
@@ -819,6 +993,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     if not falling:
         guard(ev)
     for _ in range(_FALL_ITERATIONS):
+        orient_lines(ev)
+        move_poles(ev)
         x = ev.vertices
         chunk = None
         if falling:
@@ -829,8 +1005,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # the events between them; a run that went wrong (relax()'s took
             # a pack's liquid from 80.3 to 83.5) is undone for a run of plain
             # gradient steps
-            start, energy = ev.save(), ev.energy
-            chunk = ev.relax(tol, max_iter=_CHUNK)
+            chunk, start, energy = _away_from_poles(ev, lambda: ev.relax(tol, max_iter=_CHUNK))
             if not _plausible(ev, energy):
                 ev.restore(start)
                 chunk = _gradient_run(ev, tol)
@@ -974,17 +1149,15 @@ def _gradient_run(ev, tol: float) -> Any:
     None where that did), then relax() if the residual is under _FALL_NEAR
     (kept if it converged and went right). relax()'s result, else an
     unconverged one."""
-    start, energy = ev.save(), ev.energy
-    ev.command(f"g {_GRADIENT_RUN}")
+    _, start, energy = _away_from_poles(ev, lambda: ev.command(f"g {_GRADIENT_RUN}"))
     if not _plausible(ev, energy):
         ev.restore(start)
-        ev.command("g 1")
+        _, start, energy = _away_from_poles(ev, lambda: ev.command("g 1"))
         if not _plausible(ev, energy):
             ev.restore(start)
             return None
     if ev.residual() < _FALL_NEAR:
-        here, energy = ev.save(), ev.energy
-        r = ev.relax(tol)
+        r, here, energy = _away_from_poles(ev, lambda: ev.relax(tol))
         if r.converged and _plausible(ev, energy):
             return r
         ev.restore(here)
@@ -999,11 +1172,14 @@ def _unconverged() -> Any:
 
 def _plausible(ev, energy: float) -> bool:
     """Whether a run of the descent kept its volumes (within 1e-3 of their
-    targets) and lowered the energy by less than a quarter of the area: a
-    run past that is one the integrals got wrong (relax() runs after a
-    contact took a pack's liquid from 80.3 to 83.5, conjugate gradients a
-    drop's from 31.5 to 44.5 and its energy to -12136)."""
-    if ev._target_gap()[0] > 1e-3:
+    targets), lowered the energy by less than a quarter of the area, and
+    kept the contact lines half _POLE_MARGIN from the poles of sphere(axis=)s
+    (moved at the next iteration): a run past that is one the integrals got
+    wrong (relax() runs after a contact took a pack's liquid from 80.3 to
+    83.5, conjugate gradients a drop's from 31.5 to 44.5 and its energy to
+    -12136; a pack's contact line came from half a radius to 0.07 of a pole
+    in one run, the integrals off by up to 4 pi cos theta)."""
+    if ev._target_gap()[0] > 1e-3 or _near_poles(ev, _POLE_MARGIN/2):
         return False
     return energy - ev.energy < 0.25*_core.total_area()
 

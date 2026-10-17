@@ -517,3 +517,48 @@ def test_sphere_axis_gives_the_same_bridge_turned(angles):
     rot = Rotation.from_euler("xyz", angles, degrees=True).as_matrix()
     p, e = bridge(rot, axis=rot @ [0, 0, 1.0])
     assert p == pytest.approx(p1, rel=1e-4) and e == pytest.approx(e1, rel=1e-4)
+
+
+@pytest.mark.parametrize("tilt", [10.0, 40.0])
+def test_moving_a_sphere_axis_pole_off_a_contact_line_keeps_the_bridge(tilt):
+    # the lower sphere's pole tilted near the contact line (20 degrees round
+    # its top): inside the wetted patch, 0.18 from the line, or outside it,
+    # 0.34 from it. Moved to the point farthest from the line, the sphere's
+    # bottom (from inside the patch, the integrals differ by the whole
+    # sphere: kept), the energy and volume carried over (from 0.18, to the
+    # old integrals' error), and relaxed, the same bridge as with the pole at
+    # the bottom from the start
+    from pysurfaceevolver import _surgery, shapes
+    from pysurfaceevolver._engine import surface
+    c, a = 1.3, 0.35
+    zb = c - np.sqrt(1 - a*a)
+    tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
+
+    def bridge(axis, wet):
+        ev = pyse.Evolver()
+        ev.load_arrays(tube.vertices, tube.faces,
+                       constraints={1: C.sphere((0, 0, -c), 1.0, 40.0, wet_poles=wet, axis=axis),
+                                    2: C.sphere((0, 0, c), 1.0, 40.0, axis=(0, 0, 1))},
+                       vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                       bodies=[pyse.Body(volume=0.09)])
+        return ev
+    ev = bridge((0, 0, -1), ())
+    ev.refine(1)
+    assert ev.relax().converged and _surgery.move_poles(ev) == []
+    far = ev.energy, ev.body(1).pressure
+    t = np.radians(tilt)
+    ev = bridge((np.sin(t), 0, np.cos(t)), ("north",) if tilt < 20 else ())
+    ev.refine(1)
+    energy, volume = ev.energy, ev.body(1).volume
+    assert _surgery.move_poles(ev) == ["c1_pole1"]
+    assert np.allclose(surface.walls["c1_pole1"].pole_axis, (0, 0, -1), atol=0.1)
+    # the old constraint (Evolver keeps it) out of sight, of events and
+    # contacts too, and so after a snapshot
+    ev.restore(ev.save())
+    nums, _, _, names = ev._constraint_gaps()
+    assert 1 not in [int(n) for n in nums] and "c1_pole1" in names
+    assert ev.energy == pytest.approx(energy, abs=0.02 if tilt < 20 else 1e-3)
+    assert ev.body(1).volume == pytest.approx(volume, abs=0.01 if tilt < 20 else 1e-3)
+    assert ev.relax().converged
+    assert ev.energy == pytest.approx(far[0], rel=2e-3)
+    assert ev.body(1).pressure == pytest.approx(far[1], rel=3e-3)

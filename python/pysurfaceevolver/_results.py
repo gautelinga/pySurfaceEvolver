@@ -178,6 +178,8 @@ class Snapshot:
     generation: int = field(default=-1, compare=False, repr=False)
     # the wet poles contact() changed (see _SurfaceMemory.energy_shift)
     energy_shift: list = field(default_factory=list, compare=False, repr=False)
+    # the constraints move_poles() moved off (_SurfaceMemory.retired)
+    retired: frozenset = field(default=frozenset(), compare=False, repr=False)
 
     def write(self, path: Union[str, os.PathLike]) -> None:
         """Write the snapshot as a ``.fe`` datafile."""

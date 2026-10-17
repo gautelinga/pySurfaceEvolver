@@ -76,6 +76,20 @@
   its target, the energy fallen by more than a quarter of the area) is undone for
   plain gradient steps. `Evolver.events()` and the rest leave the guards out.
 
+- A `sphere(axis=...)`'s pole moves off its contact lines. In `arclength(topology=True)`
+  and the descent after a change, a sphere whose line comes within half its radius of
+  the pole is given a new pole at the point farthest from its lines (a new constraint;
+  the old one, which Evolver keeps, is left out of `events()` and the rest). The
+  volumes and energy shift by the whole spheres the two poles' integrals differ by,
+  counted from the lines' solid angles, not from the integrals (which a line near the
+  old pole, or with long edges, puts off by up to half a sphere). A run of the
+  descent that takes a line within a quarter radius of a pole, or across it, is done
+  again with that pole moved first. Contact-line edges stored against their facet
+  (seen once in a pack, its integral of the wrong sign) are turned round. In a
+  16-bead pack the beads' integrals now stay with their lines' geometry (a line
+  crossing a pole had put them a whole sphere off), but for lines a fall leaves with
+  long edges.
+
 ### Speed
 
 - Newton steps on a surface free to move as a whole reuse the last step's null

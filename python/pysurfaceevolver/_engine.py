@@ -100,6 +100,9 @@ class _SurfaceMemory:
         # contact(): wet poles gained (+1) or lost (-1), as (sign, the wall's
         # pole_energy): the energy the walls' integrals leave out changes
         self.energy_shift: List[Tuple[int, str]] = []
+        # move_poles(): the constraints moved off (names, or numbers where
+        # unnamed; Evolver keeps them defined), left out of _constraint_gaps
+        self.retired: set = set()
         self.unrelaxed_refines = 0          # refine() calls since relax() last converged
 
 
@@ -399,7 +402,7 @@ class _Engine:
             self.dump(path)
             with open(path) as f:
                 return Snapshot(f.read(), name, dict(surface.walls), surface.generation,
-                                list(surface.energy_shift))
+                                list(surface.energy_shift), frozenset(surface.retired))
 
     def restore(self, snapshot: Snapshot) -> None:
         """Replace the surface with a snapshot from :meth:`save`."""
@@ -421,6 +424,7 @@ class _Engine:
             vars(surface).update(kept)
         surface.walls = dict(snapshot.walls)
         surface.energy_shift = list(getattr(snapshot, "energy_shift", []))   # (older pickles)
+        surface.retired = set(getattr(snapshot, "retired", ()))
         surface.name = snapshot.datafile
         self._generation, self._name = surface.generation, surface.name
 
@@ -537,12 +541,15 @@ class _Engine:
         to each (NaN where on it), and their names ("" if unnamed). Without
         ``guards``, not the one-sided copies of walls that changes of
         topology keep free vertices out of solids with (named
-        GUARD_PREFIX...: see _surgery.guard)."""
+        GUARD_PREFIX...: see _surgery.guard). Never the constraints
+        _surgery.move_poles moved off (_SurfaceMemory.retired)."""
         _, gaps = self._call(_core.constraint_gaps)
         nums, attrs, dist, names = gaps.data
-        if guards or not any(str(n).startswith(GUARD_PREFIX) for n in names):
+        keep = [i for i, n in enumerate(names)
+                if (guards or not str(n).startswith(GUARD_PREFIX))
+                and (n or int(nums[i])) not in surface.retired]
+        if len(keep) == len(names):
             return gaps.data
-        keep = [i for i, n in enumerate(names) if not str(n).startswith(GUARD_PREFIX)]
         return (np.asarray(nums)[keep], np.asarray(attrs)[keep],
                 np.asarray(dist)[:, keep] if np.asarray(dist).ndim == 2 else np.asarray(dist),
                 [names[i] for i in keep])
