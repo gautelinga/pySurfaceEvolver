@@ -290,33 +290,65 @@ Stages:
   relax; necks at a constraint (a drop leaving a solid) are a contact-line event
   (stage E); one neck at a time (Rayleigh-Plateau columns, the trimer: not tried);
   linear model only. Not done: continuation(), relax() (still `collapsed`).
-* **D. Merge surgery** (2-3 weeks): Evolver's own commands do it too (tried
-  2026-10-16, tests/test_topology.py): `facet_merge` on the closest facet pair, unset
-  one body on the glued facet and `dissolve` it (and the unused edges and vertices),
-  then move the second body's facets to the first (`set facet frontbody/backbody`;
-  `rebody`'s own `merge_bodies` only joins bodies on the two sides of a facet, not drops
-  with the outside behind them), `rebody`, `dissolve` the empty body, and the target is
-  the sum of the volumes before (`facet_merge` adds the glued gap's). Two spheres merge
-  into the sphere (area and pressure 0.1% off at 1496 facets) and `arclength` goes
-  on. On a solid a merge brings stage E at once: two 120-degree drops on a plane merge
-  0.44 above it, and some 15 gradient steps later the neck's underside goes through the
-  plane (the contact lines must meet). Tests: two drops on a plane coalescing (volume and
-  final cap exact), two menisci meeting in the symmetric pore (packing.md), the clam
-  shell closing into a barrel (fibres.md).
-* **E. Contact-line events** (2-3 weeks): also Evolver's own commands (tried
-  2026-10-16, tests/test_topology.py): when the merged 120-degree drops' neck reaches
-  the plane, `dissolve` the facets under it (those near the plane between the patches,
-  facing down) and put their border on the plane's constraint (`set vertex/edge ...
-  constraint 1`); the two contact lines become one in that step, the volume is right
-  at once, and the drop relaxes to the cap (energy 0.04% off, contact radius 0.906
-  against 0.905) and goes on with `arclength`. The catch: the wetting energy is a line
-  integral that Evolver takes along each edge as stored, with the sign its orientation
-  has when the edge goes on the constraint, so an edge stored against its facet needs
-  `set edge[e] orientation -1` before `constraint 1` (after, or `reverse_orientation`,
-  leaves the energy wrong, and gradient steps then run off through the plane). A pySE
-  helper for "put this border on constraint k" should do it. Which facets go (the
-  selection rule) is the real work, with stage A's detection. Tests: a meniscus advancing onto a bead
-  (throat to pore), contact lines meeting on a fibre (crossed fibres, past volume 75).
+* **D. Merge surgery** (done 2026-10-17; design agreed: as C, `Evolver.merge` plus
+  arclength's topology=; the merged body the run's number, else the lower; cases: two
+  free drops, drops on a plane). `_surgery.merge`/`_glue`: `facet_merge` on the facet
+  nearest the touch and the nearest one facing it, unset bodies, dissolve, the other
+  body's facets moved, `rebody`, dissolve body; volconst and targets added. The
+  descent after a change (`_surgery.descend`, which C's fall became): `relax()` in
+  runs of 50 gradient steps (gradient steps alone took >1000 to widen a merged neck at
+  5704 facets), edges kept within 0.4-2 h0 (`_keep_edges`: Evolver's deletion only
+  where the link condition holds, its ends sharing no neighbour but the facets'
+  corners, else a doubled edge and a facet with a corner twice; never a chord between
+  two contact-line vertices, which pinched two lines together; splitting with
+  `protect`, whose mask `remesh()` applied after the deletion had renumbered the rows,
+  fixed), events between the runs: coming necks cut (a merge's own neck widens: not
+  cut), coming touches merged, contacts made, a change refused (ValueError) passed
+  over; a converged state with a squashed facet tidied and relaxed once more; Newton
+  or relax() finishes; an unstable end falls. arclength after a change: the next
+  points remesh the same way unless `remesh=` was given, and a branch that stalls
+  after a change goes on from a relaxed state (quiet; three such in a row stop).
+  Two free drops at 1368 facets: the sphere to 0.11% (0.03% at 6842). Two 120-degree
+  drops on a plane: merge, then the contact lines meet twice (D brings E), one cap
+  to 0.2%.
+* **E. Contact-line events** (done 2026-10-17 as far as below; design agreed: wetting,
+  drying and contact lines meeting; cases: drops on a plane, a drop growing onto a
+  sphere, the pilot pore). `_surgery.contact`: a solid event's vertices (off
+  other constraints) put on the solid (`x -= d n`), the facets among them go, their
+  border on the constraint (`_onto`: each new edge stored the way its facet goes
+  round it, orientation 1: `reverse_orientation` then `orientation 1` for one stored
+  the other way; `orientation -1` alone gave the right energy integral but not the
+  content, on a sphere a dry patch's volume 0.03 off and the pressure -0.8 for -4.45);
+  a contact next to an existing contact line grows that patch (the strip between
+  goes; a patch opened a facet's width beside one broke the mesh later); the
+  volumes continuous by volconst (it also takes the poles' content constants); a new
+  loop winding round a sphere's axis turns its pole wet or dry, and the wall's
+  `pole_energy` (new Constraint field) goes on `_SurfaceMemory.energy_shift`, added by
+  `Evolver.energy` and kept in snapshots. Contact lines meeting: wet between (the
+  facet along a line has the wet side to its left, seen from outside the solid) cut
+  as a dry strip; dry between: the facets lying on the solid there (a dry channel
+  roofed over) taken away, else the facing contact-line edges glued (`vertex_merge`
+  twice, `edge_merge`, off the constraint; refused where the vertices share
+  neighbours, which doubled edges with facets going round them the same way, and
+  where the lines meet at an angle). On a solid beside its contact line, a "solid"
+  event in a descent is the gradient steps' (vertices put back out if through).
+  Results: a drop growing onto a sphere at 60 degrees, then relaxed at volume 2.5:
+  the exact plane-sphere bridge's pressure 0.15%, energy 0.35% (with the pole's
+  share: without it 2 pi off); 60-degree drops whose contact lines meet: one cap to
+  0.11%; a dry patch on a sphere's side inside a draining drop. The pilot pore 1 at
+  20 degrees (661 facets) drained from 0.69 to 0.05: bead 4 dried in eight steps as
+  the meniscus slid along it, the meniscus left it at 0.433 (the pressure jumping
+  from -4.5 to -3.1), beads 2 and 4 dried again at 0.169; one level finer it got to
+  0.41. Limits: drying at a sphere's pole fails (the integrals take the azimuth about
+  its axis: two spurious negative modes, the fall drags the line across the axis):
+  keep contact lines and contacts off the poles, as the pilot pores are turned to;
+  long runs after drying are fragile (the descent's gradient steps take the surface
+  through the solid in new places, contact after contact, until Evolver's pop fails,
+  ERROR 1303 cone_analyze: the side-drying case after its second patch, the finer pore
+  at 0.41; free vertices aren't kept out of a solid); the split at a pinch and which
+  dry patches form depend on the way down. Not done: a contact line leaving a solid
+  altogether (a drop detaching), merges across a body (films, foams), quadratic and
+  Lagrange models.
 * **F. Drainage through a bead pack in full** (after A-E): volume-controlled, as a
   slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or
   come closer to that than to a fixed pressure): `arclength` in the liquid's volume, a

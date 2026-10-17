@@ -100,6 +100,10 @@ class Constraint:
     shape: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
     # the contact angle as given (degrees or a datafile expression)
     contact_angle: Any = field(default=None, compare=False, repr=False)
+    # a sphere's: the wetting energy of one pole's share of the integrals'
+    # constant (a contact line that comes to wind round a pole adds or takes
+    # it: Evolver.contact), as a datafile expression
+    pole_energy: Optional[str] = field(default=None, compare=False, repr=False)
 
     @property
     def floored(self) -> bool:
@@ -336,7 +340,8 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     return Constraint(formula, energy, content, volconst, k.energy(area), nonnegative, area,
                       shape=("sphere", c if moving else tuple(float(x) for x in c), R),
                       energy_constant_text=(f"-{k.expr}*{_n(area)}" if k.expr and area else None),
-                      parameters=tuple(sorted(set(names))), contact_angle=contact_angle)
+                      parameters=tuple(sorted(set(names))), contact_angle=contact_angle,
+                      pole_energy=f"-({k.times(R*R*span)})" if k else None)
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,

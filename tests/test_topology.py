@@ -536,3 +536,169 @@ def test_pinch_off_needs_a_neck_and_the_linear_model():
     ev.command("quadratic")
     with pytest.raises(ValueError, match="linear model"):
         ev.pinch_off()
+
+
+# ---- stages D and E: merges and contacts (Evolver.merge, Evolver.contact) -----------
+
+def _cap_pressure(volume, theta):
+    """The pressure of a cap of this volume on a plane at contact angle theta."""
+    t = np.radians(theta)
+    R = (volume/(np.pi*(2 - 3*np.cos(t) + np.cos(t)**3)/3))**(1/3)
+    return 2/R
+
+
+def test_two_free_drops_merge_into_one_sphere():
+    # one drop grows until it is about to touch the other: the run glues them
+    # (Evolver.merge), the merged drop (body 1, the one the run steps) relaxes
+    # to the sphere holding both volumes, and the run goes on growing it
+    ev = _two_spheres(0.3)
+    ev.refine(1)
+    for i in (1, 2):
+        ev.body(i).target = ev.body(i).volume
+    other = ev.body(2).volume
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        steps = list(recipes.arclength(ev, ev.body(1), 0.3, 16, topology=True))
+    # (one change; a step that didn't settle after it goes on from a relaxed
+    # state there, a Step with fell set and no changes)
+    k = [i for i, s in enumerate(steps) if s.changes]
+    assert len(k) == 1
+    fell, before = steps[k[0]], steps[k[0] - 1]
+    assert fell.fell and [e.kind for e in fell.changes] == ["touch"]
+    assert len(fell.volumes) == 1 and list(ev.bodies().ids) == [1]
+    assert fell.volumes[0] == pytest.approx(before.value + other, rel=1e-8)
+    R = (3*fell.volumes[0]/(4*np.pi))**(1/3)
+    assert fell.energy == pytest.approx(4*np.pi*R*R, rel=0.003)
+    assert fell.pressures[0] == pytest.approx(2/R, rel=0.003)
+    assert steps[-1].value > fell.value
+
+
+def test_drops_on_a_plane_merge_and_their_contact_lines_join_into_one_cap():
+    # two 120-degree drops on a plane, one growing: they touch above the
+    # plane (a merge), the neck sinks, and the two contact lines meet on
+    # either side of the dry ground between the drops (contact lines joined,
+    # roofed over there: the facets lying on the plane go), leaving one cap
+    ev = _two_drops(120.0, 0.3)
+    for i in (1, 2):
+        ev.body(i).target = ev.body(i).volume
+    other = ev.body(2).volume
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax()
+        steps = list(recipes.arclength(ev, ev.body(1), 0.2, 12, topology=True))
+    fell = [s for s in steps if s.fell]
+    assert len(fell) == 1
+    kinds = [e.kind for e in fell[0].changes]
+    assert kinds[0] == "touch" and "contact lines" in kinds
+    k = steps.index(fell[0])
+    assert fell[0].volumes == pytest.approx([steps[k - 1].value + other], rel=1e-8)
+    assert _loops(_border(ev)) == 1 and len(_pieces(ev)) == 1
+    for s in steps[k:]:
+        assert s.pressures[0] == pytest.approx(_cap_pressure(s.volumes[0], 120.0), rel=0.005)
+
+
+def test_contact_lines_of_two_drops_meet_and_join():
+    # 60-degree drops: their surfaces don't touch before their contact lines
+    # meet; the lines are joined (their facing edges glued) and the drops are
+    # one cap
+    ev = _two_drops(60.0, 0.3)
+    for i in (1, 2):
+        ev.body(i).target = ev.body(i).volume
+    other = ev.body(2).volume
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax()
+        steps = list(recipes.arclength(ev, ev.body(1), 0.1, 10, topology=True))
+    fell = [s for s in steps if s.fell]
+    assert len(fell) == 1 and [e.kind for e in fell[0].changes] == ["contact lines"]
+    k = steps.index(fell[0])
+    assert fell[0].volumes == pytest.approx([steps[k - 1].value + other], rel=1e-8)
+    assert _loops(_border(ev)) == 1
+    for s in steps[k:]:
+        assert s.pressures[0] == pytest.approx(_cap_pressure(s.volumes[0], 60.0), rel=0.003)
+
+
+def test_a_drop_growing_onto_a_sphere_wets_it_into_a_bridge():
+    # stage A's drop under a sphere, the sphere at 60 degrees: grown until it
+    # is about to touch it, the run puts the surface there on the sphere (a
+    # wetted patch round its south pole, whose share of the wetting energy
+    # Evolver.energy keeps), and it is a bridge between the plane (at 90
+    # degrees: half the bridge between the sphere and its mirror image) and
+    # the sphere. Relaxed at volume 2.5 against the exact bridge
+    # (docs/stress_helpers.py: pressure 1.396298, energy 5.812735, contact
+    # radius 0.69503)
+    drop = shapes.cap(0.7, 0.7, nr=6, nt=24)
+    ev = pyse.Evolver()
+    ev.load_arrays(drop.vertices, drop.faces,
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                                2: C.sphere((0, 0, 2.0), 1.0, contact_angle=60.0)},
+                   vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.refine(1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax()
+        for step in recipes.arclength(ev, ev.body(1), 0.1, 20, topology=True):
+            if step.fell:
+                break
+        assert step.fell and [e.kind for e in step.changes] == ["solid"]
+        assert step.changes[0].between == "outside" and step.changes[0].constraint == 2
+        assert step.volumes[0] == pytest.approx(step.value, rel=1e-8)
+        ev.body(1).target = 2.5
+        assert ev.relax().converged
+    assert ev.body(1).pressure == pytest.approx(1.396298, rel=0.003)
+    assert ev.energy == pytest.approx(5.812735, rel=0.005)
+    x = ev.vertices[ev.on_constraint(2)]
+    assert np.hypot(x[:, 0], x[:, 1]).mean() == pytest.approx(0.69503, rel=0.01)
+
+
+def test_a_drop_drained_onto_a_sphere_in_it_dries_a_patch_there():
+    # a solid sphere inside a drop, off the axis (its poles clear of the
+    # patch: the sphere's integrals take the azimuth round its axis): the drop
+    # drains until the liquid over the sphere's side thins away, and a dry
+    # patch opens there (a contact line on the sphere, the liquid round it);
+    # the volume is the run's, and it settles in a stable state
+    drop = shapes.cap(3.0, 3.0, nr=8, nt=32)
+    ev = pyse.Evolver()
+    ev.load_arrays(drop.vertices, drop.faces,
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                                2: C.sphere((1.3, 0, 1.0), 0.8, contact_angle=30.0,
+                                            wet_poles=("north", "south"))},
+                   vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.refine(1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax()
+        steps = []
+        for step in recipes.arclength(ev, ev.body(1), -1.0, 40, topology=True):
+            steps.append(step)
+            if step.fell:
+                break
+    fell, before = steps[-1], steps[-2]
+    assert fell.fell and [e.kind for e in fell.changes] == ["solid"]
+    assert fell.changes[0].between == "body" and fell.changes[0].constraint == 2
+    assert fell.volumes[0] == pytest.approx(before.value, rel=1e-8)
+    assert fell.result.stable and fell.result.health.ok
+    edges = np.asarray(ev.mesh().edges)
+    assert _loops(edges[ev.on_constraint(2, "edge")]) == 1
+    # drying lowered the energy, but not by a pole's share (2 pi 0.64 cos 30)
+    assert before.energy - 1.0 < fell.energy < before.energy
+
+
+def test_merge_and_contact_need_their_events():
+    ev = _two_spheres(0.5)
+    with pytest.raises(ValueError, match="touch"):
+        ev.merge()
+    with pytest.raises(ValueError, match="solid"):
+        ev.contact()
+
+
+def test_remesh_protect_with_deletions():
+    # the protected edges are carried by id across the deletion that renumbers
+    # the rows (the mask was aligned with the rows before it)
+    ev = _two_spheres(0.5)
+    m = ev.mesh()
+    short = m.edge_lengths() < np.median(m.edge_lengths())
+    counts = ev.remesh(min_edge=0.3, max_edge=0.6, protect=short)
+    assert counts["deleted"] > 0 and counts["split"] >= 0

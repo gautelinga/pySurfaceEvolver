@@ -10,7 +10,7 @@ import sys
 import tempfile
 import threading
 import warnings
-from typing import Callable, Dict, Iterator, Generator, List, Optional, Union
+from typing import Callable, Dict, Iterator, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -92,6 +92,9 @@ class _SurfaceMemory:
         self.collapse_failures = 0          # relax(): failed last-resort attempts in a row
         self.collapse_skip = 0              # relax(): calls still to skip before the next attempt
         self.walls: Dict[object, object] = {}   # load_arrays(): constraints with a shape
+        # contact(): wet poles gained (+1) or lost (-1), as (sign, the wall's
+        # pole_energy): the energy the walls' integrals leave out changes
+        self.energy_shift: List[Tuple[int, str]] = []
         self.unrelaxed_refines = 0          # refine() calls since relax() last converged
 
 
@@ -390,7 +393,8 @@ class _Engine:
             path = os.path.join(tmp, "snapshot.fe")
             self.dump(path)
             with open(path) as f:
-                return Snapshot(f.read(), name, dict(surface.walls), surface.generation)
+                return Snapshot(f.read(), name, dict(surface.walls), surface.generation,
+                                list(surface.energy_shift))
 
     def restore(self, snapshot: Snapshot) -> None:
         """Replace the surface with a snapshot from :meth:`save`."""
@@ -411,6 +415,7 @@ class _Engine:
         if same:
             vars(surface).update(kept)
         surface.walls = dict(snapshot.walls)
+        surface.energy_shift = list(getattr(snapshot, "energy_shift", []))   # (older pickles)
         surface.name = snapshot.datafile
         self._generation, self._name = surface.generation, surface.name
 
@@ -597,9 +602,12 @@ class _Engine:
         added by :func:`make_datafile`; Evolver can't add a constant):
         :attr:`total_energy` plus that constant."""
         from ._build import ENERGY_CONSTANT
-        if self.eval(f'is_defined("{ENERGY_CONSTANT}")') == 0:
-            return _core.total_energy()
-        return _core.total_energy() + self.eval(f"{ENERGY_CONSTANT}()")
+        energy = _core.total_energy()
+        if self.eval(f'is_defined("{ENERGY_CONSTANT}")') != 0:
+            energy += self.eval(f"{ENERGY_CONSTANT}()")
+        for sign, text in surface.energy_shift:
+            energy += sign*self.eval(text)
+        return energy
 
     @property
     def total_area(self) -> float:

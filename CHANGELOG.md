@@ -25,7 +25,23 @@
   reaches; with a fixed volume the targets add up to the old one, each smaller piece
   given back what the collapse took from its side.
 
-- `recipes.arclength(..., topology=True)` goes on where the branch loses its
+- `Evolver.merge(event)`: glue the surface where it is about to touch itself
+  across the outside (a `"touch"` event): the nearest facets merged (Evolver's
+  `facet_merge`) and opened, the bodies either side made one (its volconst and
+  target theirs added), then relaxed down to a stable state (`relax()` in short
+  runs, the edges kept in range, the changes on the way made).
+
+- `Evolver.contact(event)`: make a contact a `"solid"` or `"contact lines"` event
+  announces: where the surface reaches a solid, its facets there go and their
+  border becomes a new contact line (a wetted patch where the gas was between, a
+  dry patch where the liquid was); contact lines meeting across dry ground are
+  joined (their facing edges glued, or the facets roofing a dry channel over
+  taken away), a wet strip between them cut. The volumes don't change in the
+  surgery (volconst); a new contact line round a sphere's pole changes the
+  wetting energy the integrals leave out, which `Evolver.energy` keeps.
+
+- `recipes.arclength(..., topology=True)` goes on through coming events (cuts,
+  merges, contacts made instead of stopping) and where the branch loses its
   stability: it falls from the first unstable point (past a fold, one step past the
   last stable point) by steps along the unstable mode, cuts the necks that come
   (`pinch_off`), and relaxes into a stable state, yielded as a `Step` with `fell`
@@ -36,7 +52,12 @@
   (exact caps to 0.5%), a bridge between disks pinching at its fold and a catenoid
   falling into two disks. How the liquid splits depends on the way down (a descent
   of the energy, not the flow): 17-25% for the smaller drop of the bridge between
-  spheres as the fall's start, steps and thread count change.
+  spheres as the fall's start, steps and thread count change. Also tested: two free
+  drops merging into the sphere, two drops on a plane merging into one cap (their
+  contact lines joined), a drop growing onto a sphere into the exact plane-sphere
+  bridge, a dry patch opening on a sphere inside a draining drop; a pilot bead-pack
+  pore drained from volume 0.69 to 0.05 through ten drying changes (a coarse mesh;
+  one level finer it got to 0.41).
 
 ### Speed
 
@@ -66,6 +87,12 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- `Evolver.remesh(protect=...)` with `min_edge`: the mask was applied after the
+  deletion had renumbered the edges (now carried by id).
+
+- `recipes.arclength`: settling back after tidying takes up to 12 Newton steps where
+  8 left the residual within 10 tol (a free drop's rigid motions slow them).
 
 - packing.md's 5-degree dimer ran on into bead 3 (from volume 0.203 to 0.196, where
   `arclength` stalled): it now stops at 0.206, where its meniscus comes down onto the

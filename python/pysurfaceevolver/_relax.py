@@ -828,6 +828,11 @@ class _Relaxing(_Analysis):
             raise ValueError("max_edge must be at least 2*min_edge: split halves "
                              "shorter than min_edge would be deleted again")
         counts = {"deleted": 0, "split": 0, "switched": 0}
+        # the protected edges by id: the deletion below renumbers the rows
+        protected = None
+        if protect is not None:
+            protected = self.mesh().edge_ids[
+                self._mask(_core.EDGE, protect, _core.count(_core.EDGE))]
 
         def number(text: str) -> int:
             found = re.findall(r"(\d+)\s*$", text.strip())
@@ -842,8 +847,8 @@ class _Relaxing(_Analysis):
             counts["deleted"] = number(self.command(f"t {_num(min_edge, 'min_edge')}"))
         if max_edge is not None:
             clause = ""
-            if protect is not None:
-                mask = self._mask(_core.EDGE, protect, _core.count(_core.EDGE))
+            if protected is not None:
+                mask = np.isin(self.mesh().edge_ids, protected)
                 newly = mask & (self.values("edge", "no_refine") == 0)
                 if newly.any():
                     clause = self._mark(_core.EDGE, newly)
@@ -891,6 +896,76 @@ class _Relaxing(_Analysis):
         """
         from ._surgery import pinch_off
         return pinch_off(self, event, relax)
+
+    def merge(self, event: Optional[Event] = None, *, keep: Optional[int] = None,
+              relax: bool = True) -> int:
+        """Glue the surface where it is about to touch itself across the
+        outside, an :class:`Event` of kind ``"touch"`` from :meth:`events`
+        (default: the first one there): Evolver's ``facet_merge`` on the facet
+        nearest the touch and the nearest one facing it, the merged facet
+        opened, and the bodies on either side made one (two drops; a surface
+        touching itself, a clam shell closing round its fibre, keeps its
+        body). The merged body has the number ``keep`` if it is one of them,
+        else the lower; its ``volconst`` is theirs added and its target their
+        targets added (free if either was).
+
+        Then, with ``relax`` (default), the surface relaxes down to a stable
+        state: :meth:`relax` in short runs, the edges kept within 0.4 and 2
+        median edges (the neck widens), the changes that come on the way made
+        (a merged neck coming down onto a solid wets it: see :meth:`contact`),
+        and down along an unstable mode if it ends at a saddle; a warning says
+        if it doesn't get there. Returns the merged body's number (0 without
+        bodies). Linear model only.
+        """
+        from ._surgery import merge, relax_after
+        if self.model != "linear":
+            raise ValueError("merge() needs the linear model")
+        if event is None:
+            event = self._first_event("touch")
+        body = merge(self, event, keep)
+        if relax:
+            relax_after(self, keep=body or None)
+        return body
+
+    def contact(self, event: Optional[Event] = None, *, keep: Optional[int] = None,
+                relax: bool = True) -> None:
+        """Make the contact an :class:`Event` of kind ``"solid"`` or
+        ``"contact lines"`` announces (default: the first such event).
+
+        A ``"solid"`` event: where the surface reaches the solid, its
+        vertices are put on it, those facets go, and their border becomes a
+        new contact line on that constraint: a wetted patch where the gas
+        was between (a meniscus reaching a bead, a merged neck sinking onto a
+        plane), a dry patch where the liquid was (a film thinning away). A
+        ``"contact lines"`` event: two wetted patches about to meet across a
+        dry gap are joined (a facet along each line glued, as :meth:`merge`
+        does, ``keep`` as there), and a wet strip between dry ground about to
+        split is cut as a dry patch.
+
+        The volumes don't change in the surgery: each body's ``volconst``
+        takes what the solid's content integrals change by. A new contact
+        line that winds round the pole of a sphere from
+        :mod:`pysurfaceevolver.constraints` changes the wetting energy the
+        integrals leave out, which :attr:`energy` keeps track of. The new
+        contact-line edges are stored the way their facets go round them,
+        with orientation 1, as the ones from :func:`make_datafile` are.
+        Then it relaxes as :meth:`merge` does. Linear model only.
+        """
+        from ._surgery import contact, relax_after
+        if self.model != "linear":
+            raise ValueError("contact() needs the linear model")
+        if event is None:
+            event = self._first_event("solid", "contact lines")
+        contact(self, event, keep)
+        if relax:
+            relax_after(self, keep=keep)
+
+    def _first_event(self, *kinds: str) -> Event:
+        found = [e for e in self.events() if e.kind in kinds]
+        if not found:
+            raise ValueError(f"no event of kind {' or '.join(map(repr, kinds))} "
+                             "(Evolver.events() finds none)")
+        return found[0]
 
     def adapt(self, max_turn: float = _TURN, *, coarsen: bool = True) -> int:
         """Fit the mesh to the curvature: split the edges along which the

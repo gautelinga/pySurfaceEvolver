@@ -176,6 +176,8 @@ class Snapshot:
     # memory of failed attempts and doesn't count as a new surface)
     walls: Dict[object, object] = field(default_factory=dict, compare=False, repr=False)
     generation: int = field(default=-1, compare=False, repr=False)
+    # the wet poles contact() changed (see _SurfaceMemory.energy_shift)
+    energy_shift: list = field(default_factory=list, compare=False, repr=False)
 
     def write(self, path: Union[str, os.PathLike]) -> None:
         """Write the snapshot as a ``.fe`` datafile."""
