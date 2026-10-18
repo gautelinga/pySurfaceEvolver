@@ -662,7 +662,8 @@ NB_MODULE(_core, m) {
     if (params.size() != 10) throw std::invalid_argument("edit: ten parameters");
     if (walls.size() != sides.size()) throw std::invalid_argument("edit: one side per wall");
     bool pairs = op == PYSE_OP_SNAP || op == PYSE_OP_MERGE || op == PYSE_OP_BRIDGE;
-    size_t count = op == PYSE_OP_REMESH ? 4 : pairs ? ids.size() / 2 : ids.size();
+    size_t count = op == PYSE_OP_REMESH ? 4 : op == PYSE_OP_PATCH ? 1
+                   : pairs ? ids.size() / 2 : ids.size();
     std::vector<int> results(count ? count : 1);
     CallResult r = run_guarded([&] {
       return pyse_edit(op, ids.data(), int(ids.size()), params.data(), walls.data(),

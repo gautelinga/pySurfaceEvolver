@@ -138,6 +138,29 @@ static int common_wall(vertex_id a, vertex_id b)
 static int constraint_count(vertex_id v)
 { return (get_vattr(v) & CONSTRAINT) ? (int)get_v_constraint_map(v)[0] : 0; }
 
+/* whether v, put onto wall too, would be on two constraints whose normals
+   there are within 10 degrees of each other (a bead touching a side wall:
+   a vertex on both at the touching point left Evolver's constraint
+   projection singular, ERROR 3005) */
+static int tangent_walls(vertex_id v, int wall)
+{ conmap_t *map;
+  unsigned int m;
+  REAL *x = get_coord(v), f, a[MAXCOORD], b[MAXCOORD], aa = 0, bb = 0, ab = 0;
+  int i;
+  if ( !(get_vattr(v) & CONSTRAINT) ) return 0;
+  eval_all(get_constraint(wall)->formula,x,SDIM,&f,a,v);
+  map = get_v_constraint_map(v);
+  for ( m = 1 ; m <= map[0] ; m++ )
+  { int o = (int)(map[m] & CONMASK);
+    if ( o == wall ) continue;
+    eval_all(get_constraint(o)->formula,x,SDIM,&f,b,v);
+    aa = bb = ab = 0;
+    for ( i = 0 ; i < SDIM ; i++ ) { aa += a[i]*a[i]; bb += b[i]*b[i]; ab += a[i]*b[i]; }
+    if ( aa > 0 && bb > 0 && fabs(ab) > 0.985*sqrt(aa*bb) ) return 1;
+  }
+  return 0;
+}
+
 static void neighbours(vertex_id v, struct ids *out)
 { edge_id e, e0;
   int guard;
@@ -1254,6 +1277,97 @@ static int bridge(struct ctx *c, edge_id e1, edge_id e2)
   return why ? -why : PYSE_EDIT_DONE;
 }
 
+/* a wet or dry patch on wall c: the facets taken away, their vertices put
+   on c first (projected; one on another wall too becomes a corner, on
+   both: the gas reaching the floor along a side wall), the edges and
+   vertices left bare gone, the new border edges on c as contact lines
+   stored the way their facet goes (orientation 1), a vertex the new line
+   goes through twice separated. The caller keeps the volumes. */
+static int patch_on(struct ctx *c, int wall, element_id *fs, int nf)
+{ struct ids verts = {0,0,0}, edges = {0,0,0}, ring = {0,0,0};
+  struct counts was;
+  int i, k, w, why, known = 0;
+  facetedge_id fe;
+
+  for ( w = 0 ; w < c->nwalls ; w++ ) if ( c->walls[w] == wall ) known = 1;
+  if ( !known ) return PYSE_EDIT_CONSTRAINTS;
+  if ( nf < 1 ) return PYSE_EDIT_NOT_APPLICABLE;
+  c->stamp_now++;
+  for ( i = 0 ; i < nf ; i++ )
+  { facet_id f = positive_id(fs[i]);
+    if ( !valid_element(f) ) return PYSE_EDIT_GONE;
+    fe = get_facet_fe(f);
+    for ( k = 0 ; k < 3 ; k++, fe = get_next_edge(fe) )
+    { vertex_id v = get_fe_tailv(fe);
+      edge_id e = positive_id(get_fe_edge(fe));
+      if ( mark(c,v) )
+      { if ( get_vattr(v) & (FIXED|BOUNDARY) ) return PYSE_EDIT_FIXED;
+        if ( !v_on_constraint(v,wall) && constraint_count(v) > 1 ) return PYSE_EDIT_CONSTRAINTS;
+        if ( !v_on_constraint(v,wall) && tangent_walls(v,wall) ) return PYSE_EDIT_CONSTRAINTS;
+        push(&verts,v);
+      }
+      if ( mark(c,e) ) push(&edges,e);
+    }
+  }
+  for ( i = 0 ; i < verts.n ; i++ ) star(verts.a[i],&ring);
+  patch(c,&ring,&was,NULL,NULL);
+  /* onto the wall (with the others it is on: a corner) */
+  for ( i = 0 ; i < verts.n ; i++ )
+    if ( !v_on_constraint(verts.a[i],wall) )
+    { set_v_constraint_map(verts.a[i],wall);
+      project_v_constr(verts.a[i],ACTUAL_MOVE,RESET_ONESIDEDNESS);
+    }
+  for ( i = 0 ; i < nf ; i++ )
+  { facet_id f = positive_id(fs[i]);
+    set_facet_body(f,NULLID); set_facet_body(inverse_id(f),NULLID);
+    if ( !dissolve_facet(f) ) { why = PYSE_EDIT_EVOLVER; goto undo; }
+  }
+  for ( i = 0 ; i < edges.n ; i++ )
+  { edge_id e = edges.a[i];
+    if ( !valid_element(e) ) continue;
+    if ( !valid_id(get_edge_fe(e)) ) { dissolve_edge(e); continue; }
+    if ( valence(e) == 1 && !e_on_constraint(e,wall) )
+    { /* stored the way its facet goes, orientation 1, then on the wall */
+      if ( inverted(get_fe_facet(get_edge_fe(e))) ) reverse_orientation_edge(e);
+      unset_attr(e,NEGBOUNDARY);
+      set_e_constraint_map(e,wall);
+    }
+  }
+  for ( i = 0 ; i < verts.n ; i++ )
+    if ( valid_element(verts.a[i]) && !valid_id(get_vertex_edge(verts.a[i])) )
+      dissolve_vertex(verts.a[i]);
+  /* a vertex the new line goes through twice: one per fan */
+  for ( i = 0 ; i < verts.n ; i++ )
+  { vertex_id v = verts.a[i];
+    edge_id e, e0;
+    int guard, borders = 0;
+    if ( !valid_element(v) ) continue;
+    EACH_EDGE_AT(v,e,e0,guard) if ( valence(e) == 1 ) borders++;
+    if ( borders >= 4 )
+    { int r = separate(c,v);
+      if ( r < 0 ) { why = -r; goto undo; }       /* (worse: the whole patch undone) */
+      if ( r != PYSE_EDIT_DONE && r != PYSE_EDIT_NOT_APPLICABLE ) { why = PYSE_EDIT_PINCH; goto undo; }
+    }
+  }
+  top_timestamp = ++global_timestamp;
+  { struct ids keep = {0,0,0};
+    for ( i = 0 ; i < ring.n ; i++ ) if ( valid_element(ring.a[i]) ) push(&keep,ring.a[i]);
+    why = after(c,&keep,&was,0);
+    if ( keep.a ) temp_free((char *)keep.a);
+  }
+  if ( !why )
+  { if ( verts.a ) temp_free((char *)verts.a);
+    if ( edges.a ) temp_free((char *)edges.a);
+    if ( ring.a ) temp_free((char *)ring.a);
+    return PYSE_EDIT_DONE;
+  }
+undo:
+  if ( verts.a ) temp_free((char *)verts.a);
+  if ( edges.a ) temp_free((char *)edges.a);
+  if ( ring.a ) temp_free((char *)ring.a);
+  return -why;
+}
+
 /* ---- batches ------------------------------------------------------------ */
 
 struct edit_args
@@ -1272,7 +1386,7 @@ static int op_type(int op)
 { switch ( op )
   { case PYSE_OP_COLLAPSE: case PYSE_OP_FLIP: case PYSE_OP_SPLIT: case PYSE_OP_BRIDGE:
       return EDGE;
-    case PYSE_OP_DEGENERATE: case PYSE_OP_MERGE: return FACET;
+    case PYSE_OP_DEGENERATE: case PYSE_OP_MERGE: case PYSE_OP_PATCH: return FACET;
   }
   return VERTEX;
 }
@@ -1306,6 +1420,18 @@ static long key(element_id id)
 static int one(struct ctx *c, struct edit_args *a, int k)
 { element_id id, id2;
   int op = a->op;
+  if ( op == PYSE_OP_PATCH )
+  { /* ids: the wall, then the facets (one edit) */
+    element_id *fs = (element_id *)temp_calloc(a->n ? a->n : 1,sizeof(element_id));
+    int i, r;
+    for ( i = 1 ; i < a->n ; i++ )
+    { fs[i-1] = item(op,a->ids[i]);
+      if ( !valid_id(fs[i-1]) || key(fs[i-1]) != a->keys[i] ) { temp_free((char *)fs); return PYSE_EDIT_GONE; }
+    }
+    r = patch_on(c,(int)a->ids[0],fs,a->n - 1);
+    temp_free((char *)fs);
+    return r;
+  }
   if ( paired(op) )
   { id = item(op,a->ids[2*k]);
     id2 = item(op,a->ids[2*k+1]);
@@ -1334,9 +1460,9 @@ static int one(struct ctx *c, struct edit_args *a, int k)
    snapshot back, the edits made before it made again */
 static void run_batch(struct ctx *c, struct edit_args *a)
 { struct snapshot *s = NULL;
-  int k, j, count = paired(a->op) ? a->n/2 : a->n;
+  int k, j, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
   a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
-  for ( k = 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
+  for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
   grids_build(c);
   for ( k = 0 ; k < count ; k++ )
   { int r;
@@ -1487,7 +1613,7 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
               const int *sides, int nwalls, int manifold, int *results)
 { struct edit_args *a;
   int status, k;
-  if ( op < PYSE_OP_COLLAPSE || op > PYSE_OP_REMESH )
+  if ( op < PYSE_OP_COLLAPSE || op > PYSE_OP_PATCH )
     return PYSE_ERROR;
   a = (struct edit_args *)calloc(1,sizeof(*a));
   if ( !a ) return PYSE_FATAL;
@@ -1496,7 +1622,8 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
   if ( op == PYSE_OP_REMESH )
     status = pyse_surface_call(remesh_body,a);
   else
-  { for ( k = 0 ; k < (paired(op) ? n/2 : n) ; k++ ) results[k] = PYSE_EDIT_NOT_APPLICABLE;
+  { for ( k = 0 ; k < (op == PYSE_OP_PATCH ? 1 : paired(op) ? n/2 : n) ; k++ )
+      results[k] = PYSE_EDIT_NOT_APPLICABLE;
     status = pyse_surface_call(edit_body,a);
   }
   pyse_surface_changed();

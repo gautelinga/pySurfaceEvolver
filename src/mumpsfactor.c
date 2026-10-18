@@ -16,7 +16,8 @@
  * frees the factors but keeps the analysis. The factors belong to one system
  * at a time (owner); a solve for another system refactors it first.
  * The ordering is AMD, the fastest analysis; a pattern factored PORD_AFTER
- * times is analysed again with PORD, slower to analyse but with less fill
+ * times (of PORD_MIN_N rows or more) is analysed again with PORD, slower to
+ * analyse but with less fill
  * (4 threads: Newton steps 10-15% faster for Lagrange 2 and 4 and linear at
  * 1.6M facets, the same at 98k; the extra analysis is worth a step or two at
  * most). Many steps on one pattern are arclength()'s (6-9 per point; relax()
@@ -91,6 +92,11 @@ static void blas_threads(void)
 #define ORDERING_AMD 0
 #define ORDERING_PORD 4
 #define PORD_AFTER 6
+/* PORD only for systems this large (where it pays); on a small one its
+   multisector can have more stages than its compressed graph has vertices,
+   and PORD then exits the process (knotty.fe's string, from the sixth Newton
+   step of relax()) */
+#define PORD_MIN_N 10000
 
 static void mumps_controls(struct mumps_sys *m)
 { blas_threads(); m->id.ICNTL(1) = -1;    /* no error messages */
@@ -161,7 +167,8 @@ void mumps_factor(struct linsys *S, int mtype)
   m->id.jcn = m->jcn;
   m->id.a = m->a;
   if ( !same ) m->ordering = ORDERING_AMD;
-  else if ( m->ordering == ORDERING_AMD && m->factored + 1 >= PORD_AFTER )
+  else if ( m->ordering == ORDERING_AMD && m->factored + 1 >= PORD_AFTER
+            && S->N >= PORD_MIN_N )
   { m->ordering = ORDERING_PORD;
     same = 0;
   }

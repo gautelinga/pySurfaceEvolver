@@ -161,6 +161,43 @@
   `facet_merge`, `vertex_merge` and `pop` stay as the fallbacks where an edit is
   refused (`fallback:` records on the `pysurfaceevolver.topology` logger).
 
+- Topology runs to breakthrough (bench/topology/corpus.py: a pack's floor a wall
+  at 90 degrees, the run done when the gas reaches it; sets `small`, 4 beads, and
+  `wide`, 16 beads, six seeds at 15, 20 and 25 degrees each; `--h` for another
+  edge length; a run's traceback in its log). Wet and dry patches on a wall are a
+  checked edit in C (`patch`: the place's vertices onto the wall, a vertex on one
+  other wall a corner of both, none on three nor where two walls touch, pinches
+  separated), dissolving facets by hand the fallback; where a pinch can't be
+  separated, the patch is grown over it. The descents (`arclength(...,
+  topology=True)`):
+  - where the surface would pass through itself (a run, a fall's steps, a step
+    along the mode held back), the nearest change coming is made instead;
+  - a change, and the tidying (patches closed, poles moved), is undone unless
+    Evolver can take a gradient step from it; where Evolver fails later on, the
+    last change is undone and not made again there; a change made three times at
+    one place is not made there again (a join was made 160 times);
+  - a branch that stops short at a fold of the volume sets the volume a typical
+    step past it (twice that each time it comes back);
+  - facets crushed flat in a fall are taken away (they had held a fall at 1e-4 a
+    step); a descent that goes nowhere for its 200 steps is remeshed once and
+    goes on; one whose runs and gradient steps all go wrong makes the nearest
+    change, or is remeshed and tried once more; a relaxed state not yet sound is
+    descended further instead of ending the run;
+  - a run is undone for its volumes only where it ends farther off its targets
+    than it began, and for its energy only where it also jumped by a tenth of the
+    area in one step (menisci merging give up area step by step);
+  - a dry patch is not opened again in a descent where one closed (a pack's run
+    opened and closed patches on the top beads 37 times);
+  - a pole moved because a run swept a line across it goes clear of where the run
+    took the line too (a bead's pole had moved 39 times to one place), and runs
+    that keep sweeping lines across poles are shortened;
+  - a Newton step that finds a body with no vertex free to move lets go of its
+    volume's target (the solids hold it).
+  `Evolver.events()`: vertices on two other constraints make no solid events (a
+  box's corner vertex lay through the third wall by round-off at every step).
+  4-bead runs reaching breakthrough: 10 of 18 before, 12 to 16 of 18 now (paths
+  differ run to run with any change); 16-bead runs: see the PLAN.
+
 ### Speed
 
 - pySE's own saves and restores inside `relax()` and the topology runs keep the
@@ -201,6 +238,23 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- Evolver's Hessian setup with constraints kept apart (bk.c,
+  `bk_constraint_setup`) counted each constraint's entries from each row's end,
+  never looking at a row's first entry: a row without its diagonal, its
+  constraint entry first, went uncounted, and the entries were then written one
+  past the end of the arrays (heap corruption; a 4-bead topology run ended in
+  "double free or corruption" at the next error). All entries are counted, as they
+  are placed.
+
+- `Evolver.body(n)` goes by the body's id: after a body was deleted (two merged
+  into one) the others keep their numbers, and `body()` refused the highest
+  ones.
+
+- MUMPS analysed a much-used pattern again with PORD on small systems too, where
+  PORD can find more multisector stages than its compressed graph has vertices and
+  exits the process (knotty.fe's string relaxed with `relax(levels=0)`). PORD only
+  from 10000 rows.
 
 - `Evolver.contact()` on contact lines that already meet at a vertex (the border
   through it twice, after a pore's liquid rearranged): Evolver's `pop` splits the

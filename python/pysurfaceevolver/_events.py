@@ -304,10 +304,15 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
     from ._engine import surface
     events: List[Event] = []
     edges, valence = np.asarray(m.edges), m.edge_valence()
+    walls_on = np.isnan(dist).sum(axis=1)
     for c in range(len(nums)):
         d = dist[:, c]
         on = np.isnan(d) & moving
-        off = ~np.isnan(d) & moving
+        # (not vertices on two other constraints: where they meet, and no
+        # contact can take them; a box's corner vertex on two walls lies on
+        # the third to round-off, 1e-10 through it, and was a solid event
+        # at every step of a pack's run)
+        off = ~np.isnan(d) & moving & (walls_on < 2)
         if not off.any():
             continue
         # constraints only fixed vertices are on just place them (a pad's rim)

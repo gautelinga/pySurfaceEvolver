@@ -410,14 +410,15 @@ void bk_constraint_setup(
     /* Have to strip constraint gradients from A and put in CA */
     int k,kk;
 
-    /* First, count entries for each constraint */
+    /* First, count entries for each constraint (every entry, as placed
+       below: a scan from each row's end stopping at its first non-constraint
+       entry never looked at the row's first entry, and a row without its
+       diagonal, its constraint entry first, went uncounted; the placing then
+       wrote past CJA and CA -- pySE) */
     S->CIA = (int *)temp_calloc(concount+1,sizeof(int));
-    for ( i = S->A_rows ; i > 0 ; i-- )
-    { for ( j = S->IA[i]-A_OFF - 1 ; j > S->IA[i-1]-A_OFF ; j-- )
-        if ( S->JA[j]-A_OFF >= S->A_rows )
-          S->CIA[S->JA[j]-A_OFF - S->A_rows]++;
-        else break;
-    }
+    for ( j = 0 ; j < S->IA[S->A_rows]-A_OFF ; j++ )
+      if ( S->JA[j]-A_OFF >= S->A_rows )
+        S->CIA[S->JA[j]-A_OFF - S->A_rows]++;
     /* Running totals to S->CIA */
     for ( i = 0, j = 0 ; i < concount ; i++ )
     { int tmp = S->CIA[i];

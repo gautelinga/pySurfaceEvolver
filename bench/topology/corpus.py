@@ -9,8 +9,9 @@ descent undone and every stop is logged (the ``pysurfaceevolver.topology``
 logger) with its class. The measure: changes per failure (a failure: a run
 that stopped short, crashed or timed out) and how far the runs drained.
 
-usage: python bench/topology/corpus.py [--set quick|full] [--jobs 4] [--out DIR]
-                                       [--only NAME ...]
+usage: python bench/topology/corpus.py [--set quick|small|wide|wide-half|full]
+                                       [--jobs 4] [--out DIR] [--only NAME ...]
+                                       [--h H]
        python bench/topology/corpus.py --summary DIR
        python bench/topology/corpus.py --compare DIR_A DIR_B
 
@@ -19,8 +20,12 @@ after every step of the descents: a run stops at the first structural
 problem, its class naming the problem and the step.
 
 The quick set is 4- and 16-bead packs (18 runs, under an hour at 4 jobs);
-wide is 16-bead packs over six seeds (18 runs: to tell two policies apart);
-full adds mesh sizes and 64-bead packs to quick. Results go to DIR (default
+wide is 16-bead packs over six seeds, drained to breakthrough (the floor a
+wall at 90 degrees, the run done when the gas reaches it: a "solid" event
+on it with liquid between, or a dry patch there; wide-half: the
+same runs to half the liquid); small is the same with 4-bead packs (fast);
+full adds mesh sizes and 64-bead packs to quick; --h runs a set at another
+edge length. Results go to DIR (default
 bench/topology/out/<set>): NAME.json per run, NAME.log (the records),
 summary.json. Run with another package (an overlay on PYTHONPATH, another
 venv's python via --python) to compare code.
@@ -34,15 +39,31 @@ FRACTION = 0.5      # a run succeeds when the liquid is down to this share of it
 STEPS = 2000        # arclength steps at most (a run needs about 150 at ds -0.5)
 
 
-def configs(which):
-    """(name, beads, box side, seed, contact angle, h, ds, timeout in s)."""
+def configs(which, h=None):
+    """(name, beads, box side, seed, contact angle, h, ds, timeout in s,
+    goal): goal "half" (the liquid down to FRACTION of its start) or
+    "breakthrough" (the floor a wall, the gas reaching it). h: the set's
+    runs at that edge length instead."""
     out = []
     for n, L, timeout in ((4, 4.2, 1800), (16, 5.0, 3600)):
         for seed in (0, 1, 2):
             for theta in (15.0, 20.0, 25.0):
                 out.append((n, L, seed, theta, 0.2, -0.5, timeout))
+    goal = "half"
     if which == "wide":
-        # (16 beads only, six seeds: for telling two policies apart)
+        # (16 beads only, six seeds, drained to breakthrough: the gas
+        # reaching the floor)
+        out = [(16, 5.0, seed, theta, 0.2, -0.5, 3*3600) for seed in range(6)
+               for theta in (15.0, 20.0, 25.0)]
+        goal = "breakthrough"
+    if which == "small":
+        # (4 beads, six seeds, to breakthrough: the wide set's mechanisms,
+        # minutes a run)
+        out = [(4, 4.2, seed, theta, 0.2, -0.5, 1800) for seed in range(6)
+               for theta in (15.0, 20.0, 25.0)]
+        goal = "breakthrough"
+    if which == "wide-half":
+        # (the wide set as it was before breakthrough was the goal)
         out = [(16, 5.0, seed, theta, 0.2, -0.5, 3600) for seed in range(6)
                for theta in (15.0, 20.0, 25.0)]
     if which == "full":
@@ -51,8 +72,11 @@ def configs(which):
                 out.append((16, 5.0, seed, 20.0, h, -0.5, 3600))
         for seed in (0, 1):
             out.append((64, 10.0, seed, 20.0, 0.2, -0.5, 4*3600))
-    return [(f"n{n}_s{seed}_t{theta:g}_h{h:g}_ds{ds:g}", n, L, seed, theta, h, ds, timeout)
-            for n, L, seed, theta, h, ds, timeout in out]
+    if h is not None:
+        out = [(n, L, seed, theta, h, ds, timeout) for n, L, seed, theta, _, ds, timeout in out]
+    tag = "_bt" if goal == "breakthrough" else ""
+    return [(f"n{n}_s{seed}_t{theta:g}_h{h_:g}_ds{ds:g}{tag}", n, L, seed, theta, h_, ds, timeout,
+             goal) for n, L, seed, theta, h_, ds, timeout in out]
 
 
 def _shape(text):
@@ -84,7 +108,7 @@ def stop_class(message):
     return _shape(message)[:80]
 
 
-def one(name, n, L, seed, theta, h, ds, out):
+def one(name, n, L, seed, theta, h, ds, out, goal="half"):
     """One run, in this process: NAME.json and NAME.log in out."""
     import logging, warnings
     import numpy as np
@@ -102,6 +126,10 @@ def one(name, n, L, seed, theta, h, ds, out):
         def emit(self, record):
             text = record.getMessage()
             records.append((state["step"], text))
+            # (the gas at the floor in a descent: its event made or refused)
+            if goal == "breakthrough" and "constraint bottom" in text \
+                    and "the liquid between thinning" in text and not state.get("floor"):
+                state["floor"] = text
             log.write(f"{time.time() - t0:8.1f}s step {state['step']:4d}  {text}\n")
             log.flush()
 
@@ -109,11 +137,11 @@ def one(name, n, L, seed, theta, h, ds, out):
     logger.addHandler(Handler())
     logger.setLevel(logging.DEBUG)
     x, _, _ = settle(n, L, L, seed=seed)
-    ev, _ = load(x, L, L, theta=theta, h=h)
+    ev, _ = load(x, L, L, theta=theta, h=h, floor=goal == "breakthrough")
     ev.relax()
     v0 = float(ev.body(1).volume)
     target = FRACTION*v0
-    result = dict(name=name, beads=n, box=L, seed=seed, theta=theta, h=h, ds=ds,
+    result = dict(name=name, beads=n, box=L, seed=seed, theta=theta, h=h, ds=ds, goal=goal,
                   start=v0, target=target, end=v0, steps=0, reached=False, stop="",
                   stop_class="", changes=0, kinds={}, falls=0, facets=ev.counts["facets"],
                   python=sys.executable, pyse=os.path.dirname(pyse.__file__))
@@ -133,10 +161,24 @@ def one(name, n, L, seed, theta, h, ds, out):
                           f"{' fell' if step.fell else ''}"
                           f"{''.join(f'; made {e}' for e in step.changes)}\n")
                 log.flush()
-                if step.value <= target:
+                if goal == "half" and step.value <= target:
                     result["reached"] = True
                     break
+                # (breakthrough: the gas at the floor, its film of liquid
+                # thinner than a change takes, or a dry patch made there;
+                # at the box's vertical edges the patch can't be made, a
+                # vertex would be on three walls)
+                if goal == "breakthrough" and (state.get("floor") or ev.on_constraint("bottom").any()
+                                               or any(e.kind == "solid"
+                                                      and str(e.constraint) == "bottom"
+                                                      and e.between == "body"
+                                                      for e in step.events)):
+                    result["reached"] = True
+                    result["breakthrough"] = float(step.value)
+                    break
         except Exception as error:
+            import traceback
+            log.write(traceback.format_exc())
             result.update(stop=f"{type(error).__name__}: {error}",
                           stop_class=f"exception {type(error).__name__}")
             if type(error).__name__ == "TopologyCheckError":
@@ -145,6 +187,11 @@ def one(name, n, L, seed, theta, h, ds, out):
                 what = re.sub(r":.*", "", error.what)
                 first = re.sub(r" \(\w+ \d+\)$", "", error.problems[0][1])
                 result["stop_class"] = f"check: {first}, after {what}"
+    if goal == "breakthrough" and state.get("floor") and not result["reached"]:
+        # (reached in the descent the run then stopped in)
+        result["reached"] = True
+        result["breakthrough"] = result["end"]
+        result["stop"], result["stop_class"] = "", ""
     stops = [str(w.message) for w in caught
              if issubclass(w.category, UserWarning) and "arclength()" in str(w.message)]
     if not result["reached"] and not result["stop"]:
@@ -160,14 +207,16 @@ def one(name, n, L, seed, theta, h, ds, out):
                         ("flat_dropped", "flat facets dropped")):
         result[key] = sum(t.startswith(prefix) for _, t in records)
     result["seconds"] = time.time() - t0
-    result["drained"] = (v0 - result["end"])/(v0 - target)
+    # (breakthrough: the share of the liquid drained; half: how far toward it)
+    result["drained"] = ((v0 - result["end"])/v0 if goal == "breakthrough"
+                         else (v0 - result["end"])/(v0 - target))
     log.write(f"end: {'reached' if result['reached'] else result['stop']}\n")
     log.close()
     json.dump(result, open(os.path.join(out, f"{name}.json"), "w"), indent=1)
 
 
 def launch(cfg, out, python):
-    name, n, L, seed, theta, h, ds, timeout = cfg
+    name, n, L, seed, theta, h, ds, timeout, goal = cfg
     env = dict(os.environ, OMP_NUM_THREADS="1")
     path = os.path.join(out, f"{name}.json")
     if os.path.exists(path):
@@ -175,7 +224,7 @@ def launch(cfg, out, python):
     t = time.time()
     try:
         p = subprocess.run([python, os.path.abspath(__file__), "--one", name, str(n), str(L),
-                            str(seed), str(theta), str(h), str(ds), out],
+                            str(seed), str(theta), str(h), str(ds), out, goal],
                            env=env, capture_output=True, text=True, timeout=timeout)
         code, err = p.returncode, p.stderr
     except subprocess.TimeoutExpired as e:
@@ -227,7 +276,9 @@ def summary(results):
                  changes_per_failure=changes/failures if failures else None,
                  median_drained=drained[len(drained)//2] if drained else None,
                  stops=dict(stops), refused=dict(refused.most_common()))
-    print(f"\n{total['runs']} runs, {total['reached']} reached {FRACTION:g} of the start; "
+    goal = "breakthrough" if any(r.get("goal") == "breakthrough" for r in rows) \
+        else f"{FRACTION:g} of the start"
+    print(f"\n{total['runs']} runs, {total['reached']} reached {goal}; "
           f"{changes} changes, {failures} failures: "
           f"{'no failure' if not failures else f'{changes/failures:.1f} changes per failure'}; "
           f"median drained {total['median_drained']}")
@@ -260,13 +311,15 @@ def compare(a, b):
 def main(argv):
     if argv[:1] == ["--one"]:
         name, n, L, seed, theta, h, ds, out = argv[1:9]
-        one(name, int(n), float(L), int(seed), float(theta), float(h), float(ds), out)
+        one(name, int(n), float(L), int(seed), float(theta), float(h), float(ds), out,
+            argv[9] if len(argv) > 9 else "half")
         return
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--set", default="quick", choices=("quick", "wide", "full"))
+    ap.add_argument("--set", default="quick", choices=("quick", "small", "wide", "wide-half", "full"))
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--out")
     ap.add_argument("--only", nargs="*")
+    ap.add_argument("--h", type=float, help="the set's runs at this edge length")
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--summary")
     ap.add_argument("--compare", nargs=2)
@@ -279,7 +332,7 @@ def main(argv):
         return
     out = os.path.abspath(args.out or os.path.join(HERE, "out", args.set))
     os.makedirs(out, exist_ok=True)
-    todo = [c for c in configs(args.set) if not args.only or c[0] in args.only]
+    todo = [c for c in configs(args.set, args.h) if not args.only or c[0] in args.only]
     # the longest first, so the pool ends together
     todo.sort(key=lambda c: -c[1])
     print(f"{len(todo)} runs, {args.jobs} at a time, into {out}", flush=True)

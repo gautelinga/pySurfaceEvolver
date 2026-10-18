@@ -14,7 +14,7 @@ from . import _core
 from ._engine import surface
 
 OPS = {"collapse": 1, "flip": 2, "split": 3, "smooth": 4, "snap": 5, "separate": 6,
-       "degenerate": 7, "merge": 8, "bridge": 9, "remesh": 10}
+       "degenerate": 7, "merge": 8, "bridge": 9, "remesh": 10, "patch": 11}
 # why an edit wasn't made (0: it was)
 REASONS = {0: "done", 1: "gone (an earlier edit took it)", 2: "not applicable",
            3: "no better", 4: "fixed", 5: "constraints", 6: "a contact line's",
@@ -57,7 +57,9 @@ def edit(ev, op: str, ids: Iterable, **params) -> np.ndarray:
     """One batch of edits of a kind (OPS) on the elements numbered ids
     (Evolver's numbers, as Mesh.edge_ids and the like give; pairs for
     "snap" (vertices), "merge" (facing facets) and "bridge" (facing border
-    edges on one wall)): per edit, DONE (0) or why not (REASONS). Parameters
+    edges on one wall); for "patch", the wall's constraint number then the
+    facets of a wet or dry patch, one edit): per edit, DONE (0) or why not
+    (REASONS). Parameters
     (DEFAULTS): max_turn (degrees a facet's normal may turn), max_volume
     (the volume an edit may sweep, in h^3), max_len (longest edge a collapse
     may make, in h; 0: any), tol (depth into a wall allowed, in h), mode

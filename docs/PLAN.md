@@ -597,6 +597,40 @@ clones and paper texts in the session scratchpad, repos/):
   half the liquid. Fallbacks used twice in 688 changes (contact-line joins).
   Stops: descent ran away 7, three falls 5, relaxed but unsound 3.
 
+- Robustness to breakthrough (2026-10-18; the user: all wide runs to
+  breakthrough, h 0.2, the floor a wall at 90 degrees, the C patch edit with the
+  Python patch as fallback; speed: analyse and propose only). Breakthrough:
+  the floor's "liquid between thinning" event in a step or a descent, or a dry
+  patch on it. Fixed on the way: Evolver's bk_constraint_setup counted
+  constraint entries from each row's end and missed a row's first entry (a row
+  without its diagonal), writing one past CJA/CA (the "double free" crashes of
+  4-bead runs; found by printing the counts in the deterministic build, which
+  ASan's and Valgrind's allocators didn't reproduce: their heap addresses take
+  other paths); MUMPS's PORD exited the process on small systems (knotty.fe);
+  Evolver.body() by id. The policy additions are listed in the CHANGELOG
+  (nearest change when held back, step-checked changes and tidying, undo after
+  Evolver errors, cycle breaker, fold push, crushed facets in falls, remesh
+  when stuck, relative volume and per-step energy plausibility, dry-patch
+  hysteresis, poles clear of the swept path and shortened runs, no tangent-wall
+  corners, corner vertices out of solid events). 4-bead set: 10 of 18 to
+  breakthrough at the start, 12-16 of 18 since (paths differ with any change).
+  16-bead set: runs got from 0.1-0.25 of the way (stops in the first minutes)
+  to 0.2-0.6, none to breakthrough yet. What stops them: (1) narrow contacts
+  (beads 0.03 apart, 0.015 from the walls and floor, under a tenth of an edge):
+  the gas front reaching a bead-wall or bead-bead contact needs the pendular
+  ring there pinched off from the bulk, contact lines on both solids joined at
+  once, which no change does (pinch_off refuses necks reaching a contact line);
+  (2) pole churn on heavily wetted top beads (bead 13: 79 forced pole moves in
+  one descent; lines all over the bead, no point clear of them): one pole per
+  sphere can't serve many lines; a pole per contact-line loop (a copy of the
+  sphere constraint per loop) would, but then lines on two copies of one bead
+  must still meet as one solid's. Both are design questions for the user.
+  Speed (profiles of a 4-bead run, 190 s, and a 16-bead run's first 775 s):
+  Evolver's gradient and Newton steps 41-51%, the wall-gap table rebuilt per
+  wall 7-19%, checked edits 13-17% (the remesher's extra lists scanned per
+  query: quadratic in a batch), _unguard 6%, crossings 4-5%; in slow steps the
+  volume projection iterating (77%) over interpreted wall integrands (22%).
+
 **Risks.** Every edit must keep all the bookkeeping (facetedge loops, body
 facet lists, vertex edge loops, method and quantity instances, content
 orientation); state outside the element blocks escapes a block snapshot

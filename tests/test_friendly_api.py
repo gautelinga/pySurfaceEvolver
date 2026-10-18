@@ -66,6 +66,23 @@ def test_body_handle_checks(cube):
     assert "body 1" in repr(cube.body(1))
 
 
+def test_body_handles_go_by_id_after_a_body_is_gone():
+    # a body dissolved leaves its number unused, the others keep theirs (two
+    # merged into one in a topology run left bodies 1-7 and 9)
+    from pysurfaceevolver import shapes
+    b = shapes.box(n=2)
+    v, f = np.asarray(b.vertices), np.asarray(b.faces)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[v, v + [2, 0, 0], v + [4, 0, 0]], np.r_[f, f + len(v), f + 2*len(v)],
+                   bodies=[pyse.Body(faces=range(k*len(f), (k + 1)*len(f))) for k in range(3)])
+    ev.command("set facet frontbody 3 where frontbody == 2")
+    ev.command("dissolve body[2]")
+    assert list(ev.bodies().ids) == [1, 3]
+    assert ev.body(3).volume == pytest.approx(2.0)
+    with pytest.raises(IndexError, match="bodies"):
+        ev.body(2)
+
+
 # ---- F3: selections ------------------------------------------------------------
 
 def _square_on_constraints():

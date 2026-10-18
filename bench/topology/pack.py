@@ -100,10 +100,13 @@ def square(Lx, Ly, z, h):
     return v, tri, sides
 
 
-def load(x, Lx, Ly, theta=20.0, h=0.2, above=0.005):
+def load(x, Lx, Ly, theta=20.0, h=0.2, above=0.005, floor=False):
     """The liquid filling the box to a flat meniscus `above` over the top
     bead: an Evolver with the beads as constraints "bead<i>" and the side
-    walls "x0", "x1", "y0", "y1"."""
+    walls "wallxlo", "wallxhi", "wallylo", "wallyhi" (planes at 90 degrees);
+    with floor, the floor z = 0 a wall "bottom" too (at 90 degrees: the gas
+    reaching it is breakthrough; "floor" is an Evolver word), else only the
+    volume's lower bound."""
     import pysurfaceevolver as pyse
     from pysurfaceevolver import constraints as C
     H = float(x[:, 2].max() + 1 + above)
@@ -113,6 +116,8 @@ def load(x, Lx, Ly, theta=20.0, h=0.2, above=0.005):
             "wallxhi": C.plane((-1, 0, 0), -Lx, contact_angle=90.0),
             "wallylo": C.plane((0, 1, 0), 0.0, contact_angle=90.0),
             "wallyhi": C.plane((0, -1, 0), -Ly, contact_angle=90.0)}
+    if floor:
+        cons["bottom"] = C.plane((0, 0, 1), 0.0, contact_angle=90.0)
     for i, c in enumerate(x):
         cons[f"bead{i + 1}"] = C.sphere(tuple(c), 1.0, contact_angle=theta, axis=tuple(ax[i]),
                                         wet_poles=("north",))

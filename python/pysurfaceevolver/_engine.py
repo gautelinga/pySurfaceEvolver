@@ -775,9 +775,11 @@ class _Engine:
         once, as arrays, use :meth:`bodies`.
         """
         number = int(number)
-        if not 1 <= number <= _core.count(_core.BODY):
-            raise IndexError(f"no body {number}: the surface has "
-                             f"{_core.count(_core.BODY)} bodies")
+        # (by id: a body deleted, as two merged into one, leaves its number
+        # unused, and the others keep theirs)
+        ids = [int(i) for i in self.bodies().ids]
+        if number not in ids:
+            raise IndexError(f"no body {number}: the surface has bodies {ids}")
         return BodyView(self, number)
 
     def bodies(self) -> Bodies:

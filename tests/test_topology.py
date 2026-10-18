@@ -778,3 +778,30 @@ def test_the_topology_check_stops_a_run_at_a_broken_change(monkeypatch):
     ev.command(f"reverse_orientation edge[{int(m.edge_ids[np.flatnonzero(m.edge_valence() == 1)[0]])}]")
     with pytest.raises(_surgery.TopologyCheckError, match="after a test edit: a contact-line edge"):
         _surgery._checked(ev, "a test edit")
+
+
+def test_the_nearest_change_is_made_where_a_descent_would_cross_itself():
+    # (_surgery._change_nearest, for a descent held back by crossings) two
+    # drops' contact lines 0.05 apart: joined into one; 0.6 apart: none
+    from pysurfaceevolver._surgery import _change_nearest, check_topology
+    ev = _two_drops(60.0, 0.05)
+    assert _loops(_border(ev)) == 2
+    assert _change_nearest(ev, 2.0, None).kind == "contact lines"
+    assert _loops(_border(ev)) == 1 and check_topology(ev) == []
+    ev = _two_drops(60.0, 0.6)
+    assert _change_nearest(ev, 2.0, None) is None and _loops(_border(ev)) == 2
+
+
+def test_a_vertex_held_where_two_walls_meet_makes_no_solid_event():
+    # a vertex on two walls lies on a third to round-off, 1e-12 through it (a
+    # box's corner): no event "gone through" it (no contact can take it); the
+    # film's other vertices coming near the third wall still make theirs
+    v = np.array([[0, 0, -1e-12], [0.6, 0, 0.3], [0, 0.6, 0.3], [0.5, 0.5, 0.6]])
+    ev = pyse.Evolver()
+    ev.load_arrays(v, [[0, 1, 3], [0, 3, 2]],
+                   constraints={"xw": C.plane((1, 0, 0), 0.0, contact_angle=90.0),
+                                "yw": C.plane((0, 1, 0), 0.0, contact_angle=90.0),
+                                "zw": C.plane((0, 0, 1), 0.0, contact_angle=90.0)},
+                   vertex_constraints={"xw": [0, 2], "yw": [0, 1]})
+    found = [e for e in ev.events(2.0) if e.constraint == "zw"]
+    assert found and all(e.gap > 0.1 and 0 not in e.vertices for e in found)

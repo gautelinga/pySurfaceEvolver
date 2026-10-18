@@ -7,7 +7,7 @@ import pytest
 
 import pysurfaceevolver as pyse
 from pysurfaceevolver import constraints as C, shapes
-from pysurfaceevolver._edits import REASONS, crossings, edit, remesh
+from pysurfaceevolver._edits import REASONS, crossings, edit, remesh, walls
 from pysurfaceevolver._surgery import check_topology
 
 warnings.simplefilter("ignore")
@@ -205,5 +205,32 @@ def test_bridge_joins_two_contact_lines_across_dry_ground():
     j = right[np.argmin(mid[mid[:, 0] > 0][:, 0])]
     assert T._loops(T._border(ev)) == 2
     assert list(edit(ev, "bridge", [m.edge_ids[i], m.edge_ids[j]])) == [0]
+    assert T._loops(T._border(ev)) == 1
+    assert _problems(ev) == set() and ev.check() == []
+
+
+def test_patch_wets_the_facets_lying_on_a_wall():
+    # a 60-degree cap on a plane, its first ring of vertices in from the
+    # contact line pressed down onto the plane: the facets between the line
+    # and the ring wetted, the line moves in to the ring
+    import test_topology as T
+    cap = shapes.cap(0.5, 0.25, nr=6, nt=24)
+    v, f = np.asarray(cap.vertices, float), np.asarray(cap.faces)
+    rim = np.asarray(cap.rims["rim"])
+    ring = sorted({int(b) for t in f for a, b in zip(t, np.roll(t, 1))
+                   if a in rim and b not in rim})
+    v[ring, 2] = 1e-3
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints={"plane": C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
+                   vertex_constraints={"plane": rim}, bodies=[pyse.Body()])
+    m = ev.mesh()
+    x = np.asarray(m.vertices)
+    low = np.flatnonzero((x[np.asarray(m.facets), 2] < 2e-3).all(axis=1))
+    assert len(low) == 48
+    wall = walls(ev)[0][0]
+    assert list(edit(ev, "patch", [wall] + list(np.asarray(m.facet_ids)[low]))) == [0]
+    assert ev.counts["facets"] == 264 - 48 and ev.counts["vertices"] == len(v) - len(rim)
+    on = ev.on_constraint("plane")
+    assert on.sum() == len(ring) and np.abs(ev.vertices[on, 2]).max() < 1e-12
     assert T._loops(T._border(ev)) == 1
     assert _problems(ev) == set() and ev.check() == []

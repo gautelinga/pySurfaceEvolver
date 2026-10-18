@@ -221,10 +221,12 @@ int pyse_check_topology(const int *walls, const int *sides, int nwalls, double t
    [4] flip mode (0 any, 1 more equiangular, 2 valences nearer 6),
    [5] smoothing factor, [6] separation offset (in h), [7] a degenerate
    facet's area (in h^2), [8] h (0: the mean edge length), [9] remesh sweeps.
-   merge: facet pairs; bridge: border-edge pairs on one wall; remesh: no ids,
+   merge: facet pairs; bridge: border-edge pairs on one wall; patch: the wall's
+   number then the facets of a wet or dry patch (one edit); remesh: no ids,
    results the splits, collapses, flips and moves made (four). */
 enum { PYSE_OP_COLLAPSE = 1, PYSE_OP_FLIP, PYSE_OP_SPLIT, PYSE_OP_SMOOTH, PYSE_OP_SNAP,
-       PYSE_OP_SEPARATE, PYSE_OP_DEGENERATE, PYSE_OP_MERGE, PYSE_OP_BRIDGE, PYSE_OP_REMESH };
+       PYSE_OP_SEPARATE, PYSE_OP_DEGENERATE, PYSE_OP_MERGE, PYSE_OP_BRIDGE, PYSE_OP_REMESH,
+       PYSE_OP_PATCH };
 enum { PYSE_EDIT_DONE = 0, PYSE_EDIT_GONE, PYSE_EDIT_NOT_APPLICABLE, PYSE_EDIT_NOT_BETTER,
        PYSE_EDIT_FIXED, PYSE_EDIT_CONSTRAINTS, PYSE_EDIT_LINE, PYSE_EDIT_LINK,
        PYSE_EDIT_ORIENTATION, PYSE_EDIT_TURN, PYSE_EDIT_LONG, PYSE_EDIT_VOLUME,

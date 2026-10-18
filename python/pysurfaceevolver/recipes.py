@@ -24,6 +24,7 @@ from __future__ import annotations
 import functools
 import os
 import pickle
+import re
 import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator, List, Optional, Union
@@ -353,17 +354,26 @@ def _hessian(ev) -> None:
     the Hessian isn't positive definite: on an unstable branch it isn't.
     (Evolver needs pressures from a gradient step first: one is taken if
     none was, as for a flat meniscus that relax() found in equilibrium
-    without iterating.)"""
+    without iterating. A body none of whose vertices can move, held all
+    round by solids, as a sliver a pack's patches left in a corner: its
+    volume's target let go, which the solids hold anyway, and again.)"""
     from ._errors import EvolverError, EvolverWarning
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
-        try:
-            ev.command("hessian")
-        except EvolverError as e:
-            if e.errnum != 1606:            # "Pressures invalid": not iterated yet
-                raise
-            ev.command("g 1")
-            ev.command("hessian")
+        for _ in range(4):
+            try:
+                ev.command("hessian")
+                return
+            except EvolverError as e:
+                held = re.search(r"(?:body_|[Bb]ody )(\d+)(?:_vol)? is not connected to any "
+                                 r"mobile", str(e))
+                if e.errnum == 1606:        # "Pressures invalid": not iterated yet
+                    ev.command("g 1")
+                elif e.errnum == 3362 and held:
+                    ev.body(int(held.group(1))).target = None
+                else:
+                    raise
+        ev.command("hessian")
 
 
 def _newton_target(ev, put: Callable[[Any], None],
@@ -711,6 +721,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     index, quiet, start = 0, 0, True
     run_remesh = remesh
     last: List[Step] = []
+    moves: List[float] = []             # (the value's steps along the branch)
     while index < steps:
         last = last[-1:]                # (the state a change ended in: events coming from it)
         seen: List[np.ndarray] = []
@@ -722,6 +733,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             if not start and step.index == 0:
                 continue                # where the fall ended, yielded already
             moved = True
+            if last and not step.fell:
+                moves.append(step.value - last[-1].value)
             step.index = index
             index += 1
             yield step
@@ -766,6 +779,16 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             # tidying: a pore's contact line receding over dry patches): from
             # a relaxed state there, as after a change
             from ._surgery import descend
+            if quiet and moves:
+                # (and it came back to the same state last time: past a fold
+                # where the value has its least, as a pack's liquid ran out
+                # of room above the floor, the branch steps on less and
+                # less; the value set past it, a typical step on, twice
+                # that the next time, and the liquid falls from there)
+                typical = float(np.median(np.abs(moves)))
+                way = float(np.sign(sum(moves))) or -1.0
+                set_value(ev, value + way*typical*2**(quiet - 1))
+                ev.command("recalc")
             result, cut, why = descend(ev, factor, tol, falling=False, keep=keep)
         elif event is not None:
             result, cut, why = _change(ev, event, factor, tol, keep)
