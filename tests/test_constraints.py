@@ -562,3 +562,48 @@ def test_moving_a_sphere_axis_pole_off_a_contact_line_keeps_the_bridge(tilt):
     assert ev.relax().converged
     assert ev.energy == pytest.approx(far[0], rel=2e-3)
     assert ev.body(1).pressure == pytest.approx(far[1], rel=3e-3)
+
+
+def test_a_pole_near_one_of_two_contact_lines_moves_for_that_line_alone():
+    # two drops on one sphere, on its top and its side; the sphere's pole
+    # tilted to 3 degrees outside the top drop's line. move_poles gives that
+    # line a copy of the sphere's constraint with its own pole, the side
+    # drop's line staying (one pole can't serve lines all round a bead):
+    # relaxed at the same volumes, the drops are as with the pole far from
+    # both from the start
+    from pysurfaceevolver import _surgery, shapes
+    from pysurfaceevolver._engine import surface
+    cap = shapes.cap(0.5, 0.25, nr=6, nt=24)
+    v = np.asarray(cap.vertices, float) + [0, 0, 1.0]
+    rim = np.asarray(cap.rims["rim"])
+    v[rim] /= np.linalg.norm(v[rim], axis=1)[:, None]
+    f = np.asarray(cap.faces)
+    turn = np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0.0]])        # the top to the side
+
+    def drops(axis):
+        ev = pyse.Evolver()
+        ev.load_arrays(np.r_[v, v @ turn.T], np.r_[f, f + len(v)],
+                       constraints={"ball": C.sphere((0, 0, 0), 1.0, 60.0, axis=axis)},
+                       vertex_constraints={"ball": np.r_[rim, rim + len(v)]},
+                       bodies=[pyse.Body(faces=range(len(f))),
+                               pyse.Body(faces=range(len(f), 2*len(f)))])
+        return ev
+    ev = drops((0, 0, -1))
+    for i in (1, 2):
+        ev.body(i).target = ev.body(i).volume
+    targets = [ev.body(i).target for i in (1, 2)]
+    assert _surgery.move_poles(ev) == [] and ev.relax().converged
+    far = ev.energy
+    t = np.radians(27)
+    ev = drops((-np.sin(t), 0, np.cos(t)))
+    assert [round(p[6], 2) for p in _surgery._pole_lines(ev)] == [0.06]
+    assert _surgery.move_poles(ev) == ["ball_pole1"]
+    assert "ball" in surface.walls and ev.on_constraint("ball").sum() == len(rim)
+    assert ev.on_constraint("ball_pole1").sum() == len(rim)
+    # (the top drop's volume as its integrals about the far pole give it)
+    assert ev.body(1).volume == pytest.approx(targets[0], rel=1e-3)
+    assert ev.events() == []
+    for i, target in zip((1, 2), targets):
+        ev.body(i).target = target
+    assert ev.relax().converged
+    assert ev.energy == pytest.approx(far, rel=1e-4)

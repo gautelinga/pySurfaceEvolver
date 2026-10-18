@@ -198,7 +198,29 @@
   4-bead runs reaching breakthrough: 10 of 18 before, 12 to 16 of 18 now (paths
   differ run to run with any change); 16-bead runs: see the PLAN.
 
+- Topology runs: one pole per contact-line loop. A sphere's loop near its pole
+  moves alone onto a copy of the sphere's constraint with its own pole (volumes and
+  energy shifted by the whole spheres its integrals differ by), the others stay;
+  the copies are one solid to `Evolver.events()` (a vertex on any is on it, lines on
+  different copies meet, an event names the copy whose pole is farthest from it)
+  and to contacts (the lines a contact touches moved onto its copy first). A
+  heavily wetted bead's single pole had moved 96 times in 12 steps.
+
+- Topology runs: necks against a wall are cut (`pinch_off`): a ring from a wall's
+  contact line round to it again collapses onto its vertex on the wall nearest its
+  middle, the line then split one per side; a cut that leaves the liquid joined
+  elsewhere takes a handle off it. Half the necks a round of 16-bead runs refused
+  were against a side wall, most of the rest against a bead. A cut whose pieces
+  don't settle at once goes on down in the descent's runs.
+
 ### Speed
+
+- Topology runs: the remesher's and edits' checks find a crossing's candidates in
+  the grid's cells, changed elements included (a list of those scanned whole by
+  every query), with cells an edge across and a box test before the determinants,
+  and keep each vertex's wall gaps while it stays put: a 16-bead pack's remesh
+  3.4 -> 1.6 s, its checked smoothing 1.0 -> 0.5 s (instructions 4.0e9 -> 2.5e9).
+  `on_constraint()`, unguarding and crossing counts quicker (see the guard fix).
 
 - pySE's own saves and restores inside `relax()` and the topology runs keep the
   surface in memory once it is converted to quantities (Evolver converts it at the

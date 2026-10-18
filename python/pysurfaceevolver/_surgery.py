@@ -102,8 +102,14 @@ def guard(ev) -> None:
     stayed on the solid, and the drops a bridge fell into came out on a
     squashed mesh, 0.9% from exact caps; there a vertex through a solid is
     a failed step, or put back out)."""
-    walls = {k: w for k, w in surface.walls.items()
-             if getattr(w, "contact_angle", None) is not None and getattr(w, "formula", None)}
+    walls = {}
+    seen = set()
+    for k, w in surface.walls.items():
+        # (one per solid: move_poles' copies of a sphere are one surface)
+        if getattr(w, "contact_angle", None) is not None and getattr(w, "formula", None) \
+                and _base(k) not in seen:
+            walls[k] = w
+            seen.add(_base(k))
     if not walls:
         return
     nums, _, dist, names = ev._constraint_gaps(guards=True)
@@ -159,7 +165,8 @@ def _pole_lines(ev):
     unit sphere about the centre, the least distance of its edges from the
     pole, the solid angle its edges span from the antipode, the way the
     facets go round them, and its edges: their ends on the unit sphere and
-    their facets' bodies; and which vertices are on it). (The edges'
+    their facets' bodies; which vertices are on it; and the edges as rows of
+    vertices, as the facets go). (The edges'
     distance, not the vertices': Evolver integrates along the chords, and a
     pack's line whose vertices were 0.47
     from a pole had a vertex at 0.08 once its edges were split. The solid
@@ -196,7 +203,7 @@ def _pole_lines(ev):
                     / np.maximum(np.einsum("ij,ij->i", b - a, b - a), 1e-300), 0.0, 1.0)
         near = float(np.linalg.norm(a + t[:, None]*(b - a) - pole, axis=1).min(initial=np.inf))
         out.append((key, wall, names[col] or int(nums[col]), centre, R, line, near,
-                    float(_fans(a, b, pole).sum()), a, b, bodies[mine], on))
+                    float(_fans(a, b, pole).sum()), a, b, bodies[mine], on, e))
     return out
 
 
@@ -218,75 +225,211 @@ def _near_poles(ev, margin: float) -> list:
 def move_poles(ev, force=(), ahead=None) -> list:
     """For each sphere(axis=) with a contact line nearer than _POLE_MARGIN of
     its radius to its north pole (where its integrals are singular), and
-    those whose keys are in force, the pole
-    moved to the point of the sphere farthest from its contact lines (and,
-    for those in force, from the way their vertices go to ``ahead``, the
-    vertices where a run took them: a pack's line swept across a bead in
-    one relax() run, and the pole moved to the point farthest from the line
-    where it began was the same point each time the run was redone, the
-    line swept across it again, three times; a bead's pole moved 39 times
-    in a run): a new
-    constraint with that axis (Evolver doesn't redefine one), the sphere's
-    vertices and edges moved onto it, and the volumes (volconst) and the
-    energy (_SurfaceMemory.energy_shift) shifted by the whole spheres the
-    integrals about the two poles differ by. A contact line stepping across
-    the pole moved the wetted area by the whole sphere (4 pi cos theta), and
-    the volume constraint then drove the surface off. Returns the walls
-    moved."""
-    from . import constraints as C
+    those whose keys are in force, the pole moved away: to the point of the
+    sphere farthest from the line (and, for those in force, from the way its
+    vertices go to ``ahead``, the vertices where a run took them: a pack's
+    line swept across a bead in one relax() run, and the pole moved to the
+    point farthest from the line where it began was the same point each time
+    the run was redone). A new constraint with that axis (Evolver doesn't
+    redefine one), and the volumes (volconst) and the energy
+    (_SurfaceMemory.energy_shift) shifted by the whole spheres the integrals
+    about the two poles differ by (a contact line stepping across the pole
+    moved the wetted area by the whole sphere, 4 pi cos theta, and the
+    volume constraint then drove the surface off). Per contact-line loop: a
+    sphere's loop that needs it moves alone onto a copy of the sphere's
+    constraint with its own pole (_pole_copy), the others stay; where all
+    of them do, the sphere's constraint is replaced (a heavily wetted bead,
+    lines all over it, had no point clear of them all, and its one pole
+    moved 96 times in 12 steps). Returns the walls made."""
     moved = []
+    x = ev.vertices
+    for key, wall, old, centre, R, line, near, _, a, b, sides, on, e in _pole_lines(ev):
+        if near >= _POLE_MARGIN and key not in force:
+            continue
+        pole = np.asarray(getattr(wall, "pole_axis"), float)
+        unit = lambda p: (p - centre)/R     # noqa: E731
+        swept = key in force and ahead is not None and len(ahead) == len(x)
+        loops = []
+        for rows in _loop_rows(e):
+            vs = np.unique(e[rows])
+            points = unit(x[vs])
+            if swept:
+                there = unit(ahead[vs])
+                way = [(1 - t)*points + t*there for t in (0.25, 0.5, 0.75, 1.0)]
+                points = np.concatenate([points] + [w/np.linalg.norm(w, axis=1)[:, None]
+                                                    for w in way])
+            reach = float(np.linalg.norm(points - pole, axis=1).min())
+            loops.append((rows, vs, points, _chord_reach(a[rows], b[rows], pole), reach))
+        needs = [lp for lp in loops if lp[3] < _POLE_MARGIN or (swept and lp[4] < _POLE_MARGIN)]
+        if not needs:
+            needs = loops if key in force else []
+        if not needs:
+            continue
+        if len(needs) == len(loops):
+            # all of them: the sphere's constraint replaced, as one
+            points = np.concatenate([lp[2] for lp in loops])
+            axis, clear = _farthest(points)
+            if key not in force and clear < 1.5*near:
+                continue        # (no farther place: a bead's pole moved 19 times)
+            name = _pole_copy(ev, key, wall, centre, R, axis)
+            ev.command(f"set vertex constraint {name} where on_constraint {old}; "
+                       f"set edge constraint {name} where on_constraint {old}; "
+                       f"unset vertex constraint {old} where on_constraint {name}; "
+                       f"unset edge constraint {old} where on_constraint {name}")
+            del surface.walls[key]
+            surface.retired.add(old)
+            _shift_spheres(ev, wall, R, a, b, sides, pole, axis)
+            moved.append(name)
+            _log.debug("pole moved: %s to %s (line %.3g radii from the pole%s)", old, name, near,
+                       ", forced" if key in force else "")
+            continue
+        m = ev.mesh()
+        index = {tuple(sorted(map(int, pair))): k for k, pair in enumerate(np.asarray(m.edges))}
+        for rows, vs, points, chord, _ in needs:
+            axis, clear = _farthest(points)
+            if key not in force and clear < 1.5*chord:
+                continue
+            name = _pole_copy(ev, key, wall, centre, R, axis)
+            _move_loop(ev, m, index, old, name, vs, e[rows])
+            _shift_spheres(ev, wall, R, a[rows], b[rows], sides[rows], pole, axis)
+            moved.append(name)
+            _log.debug("pole of a loop moved: %s to %s (line %.3g radii from the pole%s)", old,
+                       name, chord, ", forced" if key in force else "")
+    return moved
+
+
+def _move_loop(ev, m, index, src, dst, vs, pairs) -> None:
+    """A contact line's vertices (rows vs of m) and edges (pairs of vertex
+    rows; index: m's edge rows by their ends) from constraint src onto dst."""
+    v_mask = np.zeros(len(m.vertices), dtype=bool)
+    v_mask[vs] = True
+    e_mask = np.zeros(len(m.edges), dtype=bool)
+    e_mask[[index[tuple(sorted(map(int, pair)))] for pair in pairs]] = True
+    ev.set_constraint("vertex", dst, where=v_mask)
+    ev.set_constraint("edge", dst, where=e_mask)
+    ev.set_constraint("vertex", src, where=v_mask, on=False)
+    ev.set_constraint("edge", src, where=e_mask, on=False)
+
+
+def _onto_copy(ev, event) -> None:
+    """Before a contact on a copy of a solid (move_poles' per-loop poles):
+    the contact lines on its other copies near the event (within three
+    edges, or among its vertices) moved onto its copy, so the change makes
+    its lines on one constraint (lines on two copies of a bead meeting are
+    one solid's); a copy left without any taken out of sight (retired)."""
+    key = event.constraint
+    sibs = [k for k in surface.walls if k != key and _base(k) == _base(key)]
+    if not sibs or key not in surface.walls:
+        return
+    lines = {p[0]: p for p in _pole_lines(ev)}
+    x = ev.vertices
+    where = np.asarray(event.where, float)
+    radius = 3*max(float(event.scale), float(event.gap))
+    mine = set(int(v) for v in np.asarray(event.vertices, int))
+    target = surface.walls[key]
+    m, index = None, None
+    for k in sibs:
+        if k not in lines:
+            continue
+        _, wall, old, centre, R, _, _, _, a, b, sides, on, e = lines[k]
+        for rows in _loop_rows(e):
+            vs = np.unique(e[rows])
+            if not ((np.linalg.norm(x[vs] - where, axis=1) < radius).any()
+                    or mine & set(int(v) for v in vs)):
+                continue
+            if m is None:
+                m = ev.mesh()
+                index = {tuple(sorted(map(int, pair))): j
+                         for j, pair in enumerate(np.asarray(m.edges))}
+            _move_loop(ev, m, index, old, key, vs, e[rows])
+            _shift_spheres(ev, wall, R, a[rows], b[rows], sides[rows],
+                           np.asarray(getattr(wall, "pole_axis"), float),
+                           np.asarray(getattr(target, "pole_axis"), float))
+            _log.debug("contact line moved onto %s from %s (one solid)", key, k)
+        if m is not None and not ev.on_constraint(k).any():
+            del surface.walls[k]
+            surface.retired.add(old)
+
+
+def _loop_rows(e) -> list:
+    """The edges (rows of e, pairs of vertex rows) of each contact-line loop
+    (each connected stretch of line)."""
+    if not len(e):
+        return []
+    parent: dict = {}
+
+    def root(v):
+        while parent.setdefault(v, v) != v:
+            parent[v] = parent[parent[v]]
+            v = parent[v]
+        return v
+    for i, j in e:
+        parent[root(int(i))] = root(int(j))
+    groups: dict = {}
+    for k, (i, _) in enumerate(e):
+        groups.setdefault(root(int(i)), []).append(k)
+    return [np.asarray(g) for g in groups.values()]
+
+
+def _chord_reach(a, b, pole) -> float:
+    """The least distance of the chords a->b (on the unit sphere) from the
+    pole."""
+    if not len(a):
+        return float("inf")
+    t = np.clip(np.einsum("ij,ij->i", pole - a, b - a)
+                / np.maximum(np.einsum("ij,ij->i", b - a, b - a), 1e-300), 0.0, 1.0)
+    return float(np.linalg.norm(a + t[:, None]*(b - a) - pole, axis=1).min())
+
+
+def _farthest(points) -> "tuple[np.ndarray, float]":
+    """The point of the unit sphere farthest from the points, and how far."""
     n = 400
     k = np.arange(n) + 0.5
     polar, turn = np.arccos(1 - 2*k/n), np.pi*(1 + 5**0.5)*k
     cand = np.c_[np.cos(turn)*np.sin(polar), np.sin(turn)*np.sin(polar), np.cos(polar)]
-    x = ev.vertices
-    for key, wall, old, centre, R, line, near, _, a, b, sides, on in _pole_lines(ev):
-        if near >= _POLE_MARGIN and key not in force:
-            continue
-        points = line
-        if key in force and ahead is not None and len(ahead) == len(x):
-            there = (ahead[on] - centre)/R
-            way = [(1 - t)*line + t*there for t in (0.25, 0.5, 0.75, 1.0)]
-            points = np.concatenate([line] + [w/np.linalg.norm(w, axis=1)[:, None] for w in way])
-        reach = np.linalg.norm(cand[:, None, :] - points[None, :, :], axis=2).min(axis=1)
-        if key not in force and reach.max() < 1.5*near:
-            continue            # (no farther place: a bead's pole moved 19 times)
-        axis = cand[int(np.argmax(reach))]
-        new = C.sphere(tuple(centre), R, contact_angle=getattr(wall, "contact_angle"),
-                       axis=tuple(axis))
-        base = str(key).split("_pole")[0] if isinstance(key, str) else f"c{key}"
-        count = 1 + max([int(str(k2).rsplit("_pole", 1)[1]) for k2 in surface.walls
-                         if str(k2).startswith(f"{base}_pole")] or [0])
-        # (past names Evolver still defines too: those of moves undone since)
-        while ev.eval(f'is_defined("{base}_pole{count}")') != 0:
-            count += 1
-        name = f"{base}_pole{count}"
-        ev.command('exec "define constraint ' + name + " " + " ".join(new.text().split()) + '"')
-        ev.command(f"set vertex constraint {name} where on_constraint {old}; "
-                   f"set edge constraint {name} where on_constraint {old}; "
-                   f"unset vertex constraint {old} where on_constraint {name}; "
-                   f"unset edge constraint {old} where on_constraint {name}")
-        del surface.walls[key]
-        surface.walls[name] = new
-        surface.retired.add(old)
-        # the integrals about the two poles differ by whole spheres (the
-        # area's 4 pi R^2 cos theta, the volume's 4 pi R^3/3) where the line
-        # goes round one pole and not the other: that much is kept, as the
-        # lines' solid angles from the antipodes give it. (Not what the
-        # integrals give: off by their error, more than half a sphere for a
-        # line near the old pole, 0.05 of a radius, or with edges 1.6 long)
-        spheres = (_fans(a, b, axis) - _fans(a, b, getattr(wall, "pole_axis")))/(4*np.pi)
-        for i in [int(i) for i in ev.bodies().ids]:
-            side = np.where(sides[:, 0] == i, 1, np.where(sides[:, 1] == i, -1, 0))
-            if side.any():
-                body = ev.body(i)
-                body.volconst = body.volconst + 4*np.pi*R**3/3*round(float(side @ spheres))
-        cos = np.cos(np.radians(getattr(wall, "contact_angle")))
-        surface.energy_shift.append((1, _num(4*np.pi*R*R*cos*round(float(spheres.sum())))))
-        moved.append(name)
-        _log.debug("pole moved: %s to %s (line %.3g radii from the pole%s)", old, name, near,
-                   ", forced" if key in force else "")
-    return moved
+    reach = np.linalg.norm(cand[:, None, :] - points[None, :, :], axis=2).min(axis=1)
+    best = int(np.argmax(reach))
+    return cand[best], float(reach[best])
+
+
+def _pole_copy(ev, key, wall, centre, R, axis) -> str:
+    """A new constraint, the sphere of wall key with its pole along axis
+    (named <base>_pole<n>), defined and made a wall (its old one stays)."""
+    from . import constraints as C
+    new = C.sphere(tuple(centre), R, contact_angle=getattr(wall, "contact_angle"),
+                   axis=tuple(axis))
+    base = _base(key)
+    count = 1 + max([int(str(k2).rsplit("_pole", 1)[1]) for k2 in surface.walls
+                     if str(k2).startswith(f"{base}_pole")] or [0])
+    # (past names Evolver still defines too: those of moves undone since)
+    while ev.eval(f'is_defined("{base}_pole{count}")') != 0:
+        count += 1
+    name = f"{base}_pole{count}"
+    ev.command('exec "define constraint ' + name + " " + " ".join(new.text().split()) + '"')
+    surface.walls[name] = new
+    return name
+
+
+def _base(key) -> str:
+    """The solid a wall is a copy of (copies differ only in their poles)."""
+    return str(key).split("_pole")[0] if isinstance(key, str) else f"c{key}"
+
+
+def _shift_spheres(ev, wall, R, a, b, sides, old_axis, new_axis) -> None:
+    """The volumes (volconst) and energy (energy_shift) shifted by the whole
+    spheres the integrals of the edges a->b about the two poles differ by
+    (where a loop goes round one pole and not the other), as the edges'
+    solid angles from the antipodes count them. (Not what the integrals
+    give: off by their error, more than half a sphere for a line near the
+    old pole, 0.05 of a radius, or with edges 1.6 long.)"""
+    spheres = (_fans(a, b, new_axis) - _fans(a, b, old_axis))/(4*np.pi)
+    for i in [int(i) for i in ev.bodies().ids]:
+        side = np.where(sides[:, 0] == i, 1, np.where(sides[:, 1] == i, -1, 0))
+        if side.any():
+            body = ev.body(i)
+            body.volconst = body.volconst + 4*np.pi*R**3/3*round(float(side @ spheres))
+    cos = np.cos(np.radians(getattr(wall, "contact_angle")))
+    surface.energy_shift.append((1, _num(4*np.pi*R*R*cos*round(float(spheres.sum())))))
 
 
 def _away_from_poles(ev, run, n: int) -> tuple:
@@ -364,10 +507,24 @@ def pinch_off(ev, event, relax: bool = True) -> List[int]:
     border = np.zeros(len(x), dtype=bool)
     border[edges[m.edge_valence() == 1].ravel()] = True
     _, _, gaps, _ = ev._constraint_gaps()
-    held = m.fixed | border | (np.isnan(gaps).any(axis=1) if gaps.size else False)
+    on = np.isnan(gaps) if gaps.size else np.zeros((len(x), 0), dtype=bool)
+    held = m.fixed | border | on.any(axis=1)
     if held[ring].any():
-        raise ValueError("pinch_off(): the neck reaches a fixed vertex, a constraint or the "
-                         "surface's border (a contact line meeting itself, not a neck)")
+        # a neck against one wall (half a neck, its ring from the wall's
+        # contact line round to it again: liquid against a side wall or a
+        # bead, 86 and 75 of the 161 necks a round of 16-bead runs refused):
+        # the ring collapses to its vertex on the wall nearest its middle, the
+        # contact line then goes through that vertex twice, and the
+        # separation splits it, a line per side
+        walls = np.flatnonzero(on[ring].any(axis=0))
+        lone = (len(walls) == 1 and not m.fixed[ring].any()
+                and (on[ring].sum(axis=1) <= 1).all()
+                and not (border[ring] & ~on[ring].any(axis=1)).any())
+        if not lone:
+            raise ValueError("pinch_off(): the neck reaches a fixed vertex, two constraints "
+                             "or the surface's free border")
+        at_wall = ring[on[ring, walls[0]]]
+        centre = x[at_wall[np.argmin(np.linalg.norm(x[at_wall] - centre, axis=1))]]
     touching = np.isin(f, ring).any(axis=1)
     bodies = np.unique(np.asarray(m.facet_bodies)[touching])
     bodies = bodies[bodies > 0]
@@ -467,18 +624,33 @@ def _cut(ev, x, ring, centre, scale) -> None:
         count = now
     m = ev.mesh()
     at = np.flatnonzero(np.linalg.norm(np.asarray(m.vertices) - centre, axis=1) < 1e3*tiny)
-    if len(at) != 1:
-        raise ValueError(f"pinch_off(): the ring didn't collapse to one vertex ({len(at)} left)")
-    v = int(np.asarray(m.vertex_ids)[at[0]])
     f = np.asarray(m.facets)
-    if _sides_at(f, int(at[0])) < 2:
+    # (a neck against a wall: its ring's two ends on the wall's contact line
+    # stay two vertices, Evolver deleting no edge between two of a border's
+    # vertices that would pinch it; each is then where the sides meet)
+    border = np.zeros(len(m.vertices), dtype=bool)
+    border[np.asarray(m.edges)[m.edge_valence() == 1].ravel()] = True
+    if len(at) != 1 and not (len(at) == 2 and border[at].all()):
+        raise ValueError(f"pinch_off(): the ring didn't collapse to one vertex ({len(at)} left)")
+    sides = [_sides_at(f, int(k)) for k in at]
+    if len(at) == 1 and sides[0] < 2:
         raise ValueError("pinch_off(): collapsing the ring didn't pinch the surface")
     # one vertex per cone (the checked separation, _edits); else Evolver's pop
+    # (a wall's two vertices: those with two cones; one with one is already
+    # its piece's alone)
     from ._edits import REASONS, edit
-    r = edit(ev, "separate", [v])
-    if r[0] != 0:
-        _log.debug("fallback: pinch split by pop (the separation refused: %s)", REASONS[int(r[0])])
-        ev.command(f"pop vertex[{v}]")
+    ids = [int(i) for i, n in zip(np.asarray(m.vertex_ids)[at], sides) if n >= 2]
+    if not ids:
+        return
+    r = edit(ev, "separate", ids)
+    for v, why in zip(ids, r):
+        if why != 0:
+            if len(ids) > 1:
+                raise ValueError("pinch_off(): the neck's ends on the wall can't be separated "
+                                 f"({REASONS[int(why)]})")
+            _log.debug("fallback: pinch split by pop (the separation refused: %s)",
+                       REASONS[int(why)])
+            ev.command(f"pop vertex[{v}]")
 
 
 def _tidy_seam(ev, centre, h: float) -> None:
@@ -540,8 +712,8 @@ def _walls_touched(ev, body: int) -> list:
 
 
 def _split_body(ev, body: int, before: dict, near: dict, lost: dict) -> List[int]:
-    """After the cut: the body's pieces made bodies (Evolver's ``rebody``),
-    the largest keeping its number; each piece's volconst from the walls it
+    """After the cut: the body's pieces made bodies (Evolver's ``rebody``;
+    none where the cut took a handle off it), the largest keeping its number; each piece's volconst from the walls it
     reaches; and their targets, if the volume was fixed: each smaller piece
     what it holds plus what the collapse took from its side, the largest the
     rest of the old target, so they add up to it."""
@@ -549,7 +721,11 @@ def _split_body(ev, body: int, before: dict, near: dict, lost: dict) -> List[int
     _rebody(ev)
     new = sorted(set(int(i) for i in ev.bodies().ids) - old)
     if not new:
-        raise ValueError("pinch_off(): the body didn't split (the pieces are still joined)")
+        # (the liquid joined elsewhere, round a bead or along a wall: the cut
+        # took a handle off it, one body still; the volume constraint takes
+        # back what the collapse moved)
+        _log.debug("neck cut, the body one piece still (a handle taken off)")
+        return []
     pieces = [body] + new
     walls = {k: float(getattr(surface.walls[k], "volconst", 0.0)) for k in before["walls"]}
     extra = before["volconst"] - sum(walls.values())
@@ -782,6 +958,7 @@ def contact(ev, event, keep=None) -> None:
     one: 116 refusals in a round of the corpus's runs), and where that can't
     be either, the contact is refused."""
     start = ev._save()
+    _onto_copy(ev, event)
     _contact(ev, event, keep)
     nums, _, _, names = ev._constraint_gaps()
     num = int(nums[_column(nums, names, event.constraint)])
@@ -793,6 +970,7 @@ def contact(ev, event, keep=None) -> None:
         ev.restore(start)
         if not len(pinched):
             raise
+        _onto_copy(ev, event)
         _contact(ev, event, keep, grow=[int(i) for i in pinched])
         _separate_pinches(ev, num)
         _log.debug("patch grown over the vertices its line went through twice")
@@ -1552,7 +1730,12 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 way, before, since = None, [], 0
                 r = _settle(ev, tol)
                 if r is None:
-                    return None, changes, "the pieces didn't relax after the cut"
+                    # (a 16-bead pack's pieces, other changes coming: down
+                    # from the cut in the descent's short runs instead)
+                    _log.debug("the pieces didn't relax after the cut: on down from it")
+                    falling, remeshing = False, True
+                    guard(ev)
+                    continue
                 if r.stable is not False:
                     return r, changes, ""
                 falling, remeshing = True, False

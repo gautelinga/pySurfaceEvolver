@@ -4,7 +4,7 @@ lines on one solid are about to meet (see :meth:`Evolver.events`)."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import product
 from typing import List, Optional, Union
 
@@ -110,11 +110,58 @@ def find(ev, factor: float) -> List[Event]:
     moving = used & ~np.asarray(m.fixed, bool)
     events = _self(x, f, e, h, normal, behind, ahead, with_bodies, moving & ~folded,
                    folded, factor, NECK/max(int(m.order), 1))
-    nums, attrs, dist, names = ev._constraint_gaps()
-    events += _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
-                     nums, attrs, dist, names)
-    events += _contact_lines(m, x, e, h, used, factor, nums, dist, names)
+    nums, attrs, dist, names, copies = _one_per_solid(*ev._constraint_gaps())
+    found = _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
+                   nums, attrs, dist, names)
+    found += _contact_lines(m, x, e, h, used, factor, nums, dist, names)
+    events += [_on_copy(event, copies) for event in found]
     return sorted(events, key=lambda ev_: ev_.gap/ev_.scale)
+
+
+def _base(key) -> str:
+    """The solid a wall is a copy of (_surgery.move_poles' copies of a
+    sphere differ only in their poles: <base>_pole<n>)."""
+    return str(key).split("_pole")[0] if isinstance(key, str) else f"c{key}"
+
+
+def _one_per_solid(nums, attrs, dist, names):
+    """The constraints' table with the copies of one solid as one: a vertex
+    on any copy on it, the others' gaps the same (one sphere). And the
+    copies of each kept column's solid, by its key."""
+    keys = [n or int(k) for k, n in zip(nums, names)]
+    groups: dict = {}
+    for c, key in enumerate(keys):
+        groups.setdefault(_base(key), []).append(c)
+    if all(len(g) == 1 for g in groups.values()):
+        return nums, attrs, dist, names, {}
+    first = [g[0] for g in groups.values()]
+    dist = np.asarray(dist, float)
+    merged = dist[:, first].copy()
+    for j, g in enumerate(groups.values()):
+        if len(g) > 1:
+            merged[np.isnan(dist[:, g]).any(axis=1), j] = np.nan
+    copies = {keys[g[0]]: [keys[c] for c in g] for g in groups.values() if len(g) > 1}
+    return (np.asarray(nums)[first], np.asarray(attrs)[first], merged,
+            [names[c] for c in first], copies)
+
+
+def _on_copy(event: Event, copies: dict) -> Event:
+    """An event on a solid with copies named by the copy whose pole is
+    farthest from it (a contact made there leaves its new line clear of
+    the integrals' singular pole)."""
+    from ._engine import surface
+    keys = copies.get(event.constraint)
+    if not keys:
+        return event
+    def clearance(key):
+        wall = surface.walls.get(key)
+        shape, pole = getattr(wall, "shape", None), getattr(wall, "pole_axis", None)
+        if shape is None or pole is None or shape[0] != "sphere":
+            return -1.0
+        u = np.asarray(event.where, float) - np.asarray(shape[1], float)
+        u = u/max(float(np.linalg.norm(u)), 1e-300)
+        return float(np.linalg.norm(u - np.asarray(pole, float)))
+    return replace(event, constraint=max(keys, key=clearance))
 
 
 # ---- the surface close to itself ---------------------------------------------------
