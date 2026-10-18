@@ -1588,6 +1588,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     if not falling:
         guard(ev)
     since, stuck = 0, False
+    closing, fresh = True, None         # whether the tidying closes patches; the iteration's start
     shut: list = []                     # patches closed in this descent: (wall, middle)
     made_at: list = []                  # changes made in it: (kind, solid, place)
     pre: list = []                      # the state before the change _try_change made
@@ -1631,7 +1632,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 _remesh_now(ev, h0)
                 _checked(ev, "remeshing a descent that got nowhere")
                 way, before = None, []
-            _tidy(ev, h0, shut)
+            fresh = ev._save()          # (where this iteration began)
+            _tidy(ev, h0, shut, close=closing)
             _checked(ev, "tidying (lines, patches, poles)")
             x = ev.vertices
             chunk = None
@@ -1887,10 +1889,24 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # matrix singular in the remeshing after it) the change undone
             # and not made again here; once per change
             if not undo:
-                raise
+                # (none to undo: after a patch closed in the tidying, a
+                # pack's constraint matrix went singular a few steps on)
+                # back to where this iteration began, closing no more
+                # patches in this descent; once
+                if not closing or fresh is None:
+                    raise
+                ev.restore(fresh)
+                closing, fresh = False, None
+                _log.debug("iteration undone: Evolver failed (%s); no more patches closed",
+                           str(error).splitlines()[0])
+                way, before, since = None, [], 0
+                continue
             saved, e = undo.pop()
             ev.restore(saved)
-            changes.remove(e)
+            for k, c in enumerate(changes):
+                if c is e:
+                    del changes[k]
+                    break
             made_at.extend([(e.kind, str(e.constraint), np.asarray(e.where, float))]*_AGAIN)
             refused = f"{e}: Evolver failed after it ({str(error).splitlines()[0]})"
             _log.debug("change undone: %s", refused)
@@ -2161,14 +2177,14 @@ def _resting(e) -> bool:
     return e.kind in ("solid", "contact lines") and e.gap < _TOUCH*float(e.scale)
 
 
-def _tidy(ev, h0: float, shut: list) -> None:
+def _tidy(ev, h0: float, shut: list, close: bool = True) -> None:
     """A descent's tidying: contact lines oriented, shrunk patches closed
     (close_patches), poles moved off the lines (move_poles); where that
     leaves a surface Evolver can't take a gradient step from (a pack's patch
     closed, then a pole moved, and the constraint matrix was singular at the
     next step), undone and done without the patches closed, else not done."""
     good = ev._save()
-    for close in (True, False):
+    for close in ((True, False) if close else (False,)):
         orient_lines(ev)
         closed = close_patches(ev, h0, shut) if close else 0
         moved = move_poles(ev)
