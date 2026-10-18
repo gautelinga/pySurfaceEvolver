@@ -756,7 +756,11 @@ void project_all(
         break;
       }
       old_diff = diff;
-      diff = calc_content_and_energy(); /* with the energy for move_vertices() */
+      /* with the energy for move_vertices() where this is likely the last
+         pass, after the first restore; else the content alone (each pass
+         evaluated the energy too, of which only the last was used: on a
+         16-bead pack's slow steps, ten passes) -- pySE */
+      diff = calc_count <= 2 ? calc_content_and_energy() : calc_content(Q_FIXED);
       if ( itdebug ) printf("Next diff: %g\n",(double)diff);
     } while ( mode && (diff > 1) ); 
 

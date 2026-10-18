@@ -1805,9 +1805,16 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     # the surface lying on a solid: tidied, and once more)
                     drop_flat(ev, h0)
                     close_patches(ev, h0, shut)
+                    # (facets crushed flat anywhere: a pack's relaxed state had
+                    # three of 0 degrees, and the descent went on 1300 s round it)
+                    _drop_crushed(ev)
                     _even_out(ev, smooth=False)
                     _keep_edges(ev, h0)
                     chunk = ev.relax(tol)
+                    if chunk.health is not None and any(
+                            i.startswith("degenerate facets") for i in chunk.health.issues):
+                        _remesh_now(ev, h0)
+                        chunk = ev.relax(tol)
                     _checked(ev, "tidying a relaxed state")
                 if chunk.converged and chunk.stable is not False and _sound(chunk.health):
                     return chunk, changes, ""

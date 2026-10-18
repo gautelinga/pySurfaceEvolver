@@ -215,6 +215,12 @@
 
 ### Speed
 
+- Evolver's volume projection (project_all) evaluates the energy with the content
+  only in its first pass after a restore, where that is likely the last; each pass
+  did, and only the last one's was used: 16% fewer instructions in the projection
+  of a 16-bead pack's slow gradient steps (ten passes), the same results bit for
+  bit.
+
 - The contact-line integrands of `constraints.sphere(..., axis=)` walls are
   evaluated in C (bindings/pyse_native.c, with their first and second derivatives
   as dual numbers) instead of through Evolver's expression interpreter, in the

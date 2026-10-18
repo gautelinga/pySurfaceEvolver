@@ -876,7 +876,10 @@ def _change(ev, event, factor: float, tol: float, keep) -> "tuple[Any, list, str
     if event.kind == "neck":
         r = _settle(ev, tol)
         if r is None:
-            return None, [event], "the pieces didn't relax after the cut"
+            # (down from the cut in the descent's runs instead, as the
+            # descent does: a 16-bead pack's pieces, other changes coming)
+            result, more, why = descend(ev, factor, tol, falling=False, keep=keep)
+            return result, [event] + more, why
         if r.stable is not False:
             return r, [event], ""
         result, more, why = descend(ev, factor, tol, falling=True, keep=keep)
