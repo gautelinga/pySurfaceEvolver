@@ -62,9 +62,9 @@ print(f"at volume {steps[-1].value:.0f} the contact angle along the ball's line 
 ```
 
 ```text
-first dry patch at volume 31.5 (the drop full at 53.5), the last change at 11
+first dry patch at volume 31.5 (the drop full at 53.5), the last change at 14
 the volume held at every point to round-off
-at volume 10 the contact angle along the ball's line is 26 to 30 degrees (set: 30)
+at volume 10 the contact angle along the ball's line is 25 to 30 degrees (set: 30)
 ```
 
 The first patch opens where the drop's surface comes within half an edge of the

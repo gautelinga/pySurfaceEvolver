@@ -25,8 +25,7 @@
 
 #include "include.h"
 #include "pyse_api.h"
-
-int pyse_surface_call(void (*body)(void *), void *arg);
+#include "pyse_internal.h"
 
 struct check_args
 { const int *walls;          /* constraint numbers of solid walls */
@@ -66,7 +65,7 @@ static void unite(long *parent, long i, long j)
   if ( i != j ) parent[i < j ? j : i] = i < j ? i : j;
 }
 
-static int corner(facet_id f_id, vertex_id v_id)
+int pyse_corner(facet_id f_id, vertex_id v_id)
 { facetedge_id fe = get_facet_fe(positive_id(f_id));   /* (corners as FOR_ALL_FACETS numbers them) */
   int k;
   for ( k = 0 ; k < FACET_VERTS ; k++, fe = get_next_edge(fe) )
@@ -74,7 +73,7 @@ static int corner(facet_id f_id, vertex_id v_id)
   return -1;
 }
 
-static void facet_normal(facet_id f_id, REAL *n, REAL *area)
+void pyse_facet_normal(facet_id f_id, REAL *n, REAL *area)
 { facetedge_id fe = get_facet_fe(f_id);
   REAL *x0 = get_coord(get_fe_tailv(fe));
   REAL *x1 = get_coord(get_fe_headv(fe));
@@ -88,7 +87,7 @@ static void facet_normal(facet_id f_id, REAL *n, REAL *area)
   *area = 0.5*sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
 }
 
-static double gap(int c, REAL *x)
+double pyse_wall_gap(int c, REAL *x)
 { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
   int i;
   eval_all(get_constraint(c)->formula,x,SDIM,&f,grad,NULLID);
@@ -96,7 +95,7 @@ static double gap(int c, REAL *x)
   return g > 0.0 ? (double)(f/sqrt(g)) : 0.0;
 }
 
-static REAL det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d)
+REAL pyse_det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d)
 { REAL u[3], v[3], w[3];
   int i;
   for ( i = 0 ; i < 3 ; i++ ) { u[i] = b[i] - a[i]; v[i] = c[i] - a[i]; w[i] = d[i] - a[i]; }
@@ -108,14 +107,26 @@ static REAL det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d)
    its plane, each beyond eps (an edge lying in the plane is left out), and
    the line through the triangle or its edges and corners (within eps: the
    two triangles beside an edge it crosses at both see it on their border). */
-static int crosses(const REAL *p, const REAL *q, const REAL *a, const REAL *b, const REAL *c,
-                   REAL eps)
-{ REAL sp = det3(a,b,c,p), sq = det3(a,b,c,q), s1, s2, s3;
+int pyse_crosses(const REAL *p, const REAL *q, const REAL *a, const REAL *b, const REAL *c,
+                 REAL eps)
+{ REAL sp = pyse_det3(a,b,c,p), sq = pyse_det3(a,b,c,q), s1, s2, s3;
   if ( !((sp > eps && sq < -eps) || (sp < -eps && sq > eps)) ) return 0;
-  s1 = det3(p,q,a,b);
-  s2 = det3(p,q,b,c);
-  s3 = det3(p,q,c,a);
+  s1 = pyse_det3(p,q,a,b);
+  s2 = pyse_det3(p,q,b,c);
+  s3 = pyse_det3(p,q,c,a);
   return (s1 > -eps && s2 > -eps && s3 > -eps) || (s1 < eps && s2 < eps && s3 < eps);
+}
+
+double pyse_mean_edge(void)
+{ edge_id e_id;
+  double h = 0.0;
+  long n = 0;
+  FOR_ALL_EDGES(e_id)
+  { REAL *p = get_coord(get_edge_tailv(e_id)), *q = get_coord(get_edge_headv(e_id));
+    h += sqrt((p[0]-q[0])*(p[0]-q[0]) + (p[1]-q[1])*(p[1]-q[1]) + (p[2]-q[2])*(p[2]-q[2]));
+    n++;
+  }
+  return n ? h/n : 1.0;
 }
 
 struct grid { REAL lo[3], cell; int n[3]; long *start, *items; };
@@ -227,7 +238,7 @@ static void intersections(struct check_args *a, REAL h)
               x[m] = get_coord(w);
             }
             if ( shared ) continue;
-            if ( crosses(p,q,x[0],x[1],x[2],1e-12*h*h*h) )
+            if ( pyse_crosses(p,q,x[0],x[1],x[2],1e-12*h*h*h) )
               add(a,PYSE_PROBLEM_INTERSECTION,PYSE_EDGE,e_id,fo + 1,0.0);
           }
         }
@@ -245,8 +256,7 @@ static void check_body(void *arg)
   edge_id e_id;
   facet_id f_id;
   vertex_id v_id;
-  REAL h = 0.0;
-  long nh = 0;
+  REAL h;
   int w;
 
   if ( web.representation != SOAPFILM || web.modeltype != LINEAR || SDIM != 3 )
@@ -261,12 +271,7 @@ static void check_body(void *arg)
       kb_error(PYSE_ERR_BAD_ARGUMENT,"No such constraint for the topology check.\n",
                RECOVERABLE);
 
-  FOR_ALL_EDGES(e_id)
-  { REAL *p = get_coord(get_edge_tailv(e_id)), *q = get_coord(get_edge_headv(e_id));
-    h += sqrt((p[0]-q[0])*(p[0]-q[0]) + (p[1]-q[1])*(p[1]-q[1]) + (p[2]-q[2])*(p[2]-q[2]));
-    nh++;
-  }
-  h = nh ? h/nh : 1.0;
+  h = pyse_mean_edge();
 
   parent = (long *)temp_calloc(3*nf,sizeof(long));
   for ( i = 0 ; i < 3*nf ; i++ ) parent[i] = i;
@@ -307,17 +312,17 @@ static void check_body(void *arg)
       else if ( alike || swapped )
       { /* a fold: the facets' normals, as the surface goes, nearly opposite */
         REAL n1[3], n2[3], a1, a2, dot;
-        facet_normal(positive_id(f[0]),n1,&a1);
-        facet_normal(positive_id(f[1]),n2,&a2);
+        pyse_facet_normal(positive_id(f[0]),n1,&a1);
+        pyse_facet_normal(positive_id(f[1]),n2,&a2);
         dot = (n1[0]*n2[0] + n1[1]*n2[1] + n1[2]*n2[2])/(4*a1*a2 + 1e-300);
         if ( swapped && !alike ) dot = -dot;
         if ( a1 > 0 && a2 > 0 && dot < -0.95 )
           add(a,PYSE_PROBLEM_FOLD,PYSE_EDGE,e_id,(long)ordinal(f[1]) + 1,dot);
       }
       /* the two facets' corners at each end belong to one fan */
-      k1 = corner(f[0],t); k2 = corner(f[1],t);
+      k1 = pyse_corner(f[0],t); k2 = pyse_corner(f[1],t);
       if ( k1 >= 0 && k2 >= 0 ) unite(parent,c1 + k1,c2 + k2);
-      k1 = corner(f[0],hv); k2 = corner(f[1],hv);
+      k1 = pyse_corner(f[0],hv); k2 = pyse_corner(f[1],hv);
       if ( k1 >= 0 && k2 >= 0 ) unite(parent,c1 + k1,c2 + k2);
       continue;
     }
@@ -349,7 +354,7 @@ static void check_body(void *arg)
   { facetedge_id fe = get_facet_fe(f_id);
     int k;
     REAL n[3], area;
-    facet_normal(f_id,n,&area);
+    pyse_facet_normal(f_id,n,&area);
     if ( area < 1e-10*h*h )
       add(a,PYSE_PROBLEM_DEGENERATE,PYSE_FACET,f_id,0,area/(h*h));
     for ( k = 0 ; k < FACET_VERTS ; k++, fe = get_next_edge(fe) )
@@ -378,7 +383,7 @@ static void check_body(void *arg)
     double side = a->sides[w] < 0 ? -1.0 : 1.0, depth;
     FOR_ALL_VERTICES(v_id)
     { if ( v_on_constraint(v_id,c) ) continue;
-      depth = -side*gap(c,get_coord(v_id));
+      depth = -side*pyse_wall_gap(c,get_coord(v_id));
       if ( depth > a->tol*h )
         add(a,PYSE_PROBLEM_VERTEX_IN_SOLID,PYSE_VERTEX,v_id,c,depth);
     }
@@ -388,7 +393,7 @@ static void check_body(void *arg)
       int d;
       if ( v_on_constraint(t,c) && v_on_constraint(hv,c) ) continue;
       for ( d = 0 ; d < SDIM ; d++ ) mid[d] = (p[d] + q[d])/2;
-      depth = -side*gap(c,mid);
+      depth = -side*pyse_wall_gap(c,mid);
       if ( depth > a->tol*h )
         add(a,PYSE_PROBLEM_EDGE_IN_SOLID,PYSE_EDGE,e_id,c,depth);
     }

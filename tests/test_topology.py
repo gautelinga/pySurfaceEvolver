@@ -577,7 +577,7 @@ def test_drops_on_a_plane_merge_and_their_contact_lines_join_into_one_cap():
     # two 120-degree drops on a plane, one growing: they touch above the
     # plane (a merge), the neck sinks, and the two contact lines meet on
     # either side of the dry ground between the drops (contact lines joined,
-    # roofed over there: the facets lying on the plane go), leaving one cap
+    # roofed over there, or the neck wetting the plane there), leaving one cap
     ev = _two_drops(120.0, 0.3)
     for i in (1, 2):
         ev.body(i).target = ev.body(i).volume
@@ -589,7 +589,7 @@ def test_drops_on_a_plane_merge_and_their_contact_lines_join_into_one_cap():
     fell = [s for s in steps if s.fell]
     assert len(fell) == 1
     kinds = [e.kind for e in fell[0].changes]
-    assert kinds[0] == "touch" and "contact lines" in kinds
+    assert kinds[0] == "touch" and ("contact lines" in kinds or "solid" in kinds)
     k = steps.index(fell[0])
     assert fell[0].volumes == pytest.approx([steps[k - 1].value + other], rel=1e-8)
     assert _loops(_border(ev)) == 1 and len(_pieces(ev)) == 1

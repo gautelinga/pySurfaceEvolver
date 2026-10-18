@@ -804,16 +804,21 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
 
 
 def _smooth(ev, factor: float, tol: float) -> None:
-    """The mesh evened where a change or fall ended: vertex averaging and edge
-    flips, Newton steps back to the equilibrium after each, five times.
+    """The mesh evened where a change or fall ended: Evolver's vertex
+    averaging (it keeps the volumes; the checked smoothing of _edits here
+    changed which dry patch a pore opened before its jump, and the run went
+    on past the jump's fold onto another branch) and edges flipped by the
+    checked edits, Newton steps back to the equilibrium after each, five
+    times.
     Newton's steps from there converged only linearly (a pack's contact line
     beside facets of 7 degrees: x0.7 a step, and the run's first step
     failed), x20 once evened (18 degrees). Undone where Newton doesn't get
     back, or the surface went through a solid."""
+    from ._surgery import _even_out
     start = ev._save()
     for _ in range(5):
         ev.vertex_average()
-        ev.equiangulate()
+        _even_out(ev, smooth=False)
         ev.newton(3, tol=tol)
     if not ev.newton(20, tol=tol).converged or _through(ev.events(factor)):
         ev.restore(start)

@@ -135,6 +135,22 @@
   degenerate facets, folds, vertices or edges inside a wall and edges through
   facets are logged (`bench/topology/corpus.py` sorts the runs by them).
 
+- Checked local mesh edits in C (bindings/pyse_edit.c, used inside pySE):
+  collapse, flip, split, smooth (along the surface; a contact line's vertex along
+  the line), snap, separate (one vertex per fan of facets) and degenerate-facet
+  removal, each refused by its rules (a contact line's vertex never collapses
+  inward, constraints kept, no facet turned too far, no edge made too long, a
+  bounded volume) or undone where the surface round it comes out worse (the
+  topology check's problems counted before and after); a batch keeps the edits
+  made before one undone. The topology runs use them: edges kept in range after a
+  change and the mesh evened there before it relaxes, flips instead of Evolver's
+  equiangulation, `contact()` separating a vertex its new contact line goes
+  through twice (refused where it can't), the mesh evened at the end of a change
+  or fall. Descents don't pass the surface through itself: a run, a fall's
+  gradient steps, a step along the mode or a change that adds edges through
+  facets is undone (a run evened out and tried again; a step halved; gradient
+  steps taken one at a time).
+
 ### Speed
 
 - pySE's own saves and restores inside `relax()` and the topology runs keep the
@@ -175,9 +191,6 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
-
-- The pinched contact line's new vertex was written with numpy's repr into
-  Evolver's command (`np.float64(...)` under NumPy 2: a syntax error).
 
 - `Evolver.contact()` on contact lines that already meet at a vertex (the border
   through it twice, after a pore's liquid rearranged): Evolver's `pop` splits the

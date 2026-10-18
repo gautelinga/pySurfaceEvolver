@@ -52,21 +52,8 @@ def check_topology(ev, tol: float = 0.01) -> list:
     (_STRUCTURAL), 8-12 geometric (_GEOMETRIC). The solids are the walls
     (their solid side as events() takes it), a depth over tol mean edges
     counting; edges on three or more facets count with one body or none."""
-    nums, attrs, dist, names = ev._constraint_gaps()
-    walls, sides = [], []
-    for c in range(len(nums)):
-        if (names[c] or int(nums[c])) not in surface.walls:
-            continue
-        d = np.asarray(dist)[:, c]
-        off = d[~np.isnan(d)]
-        if attrs[c] & 2:
-            side = 1
-        elif attrs[c] & 1:
-            side = -1
-        else:
-            side = 1 if (off > 0).sum() >= (off < 0).sum() else -1
-        walls.append(int(nums[c]))
-        sides.append(side)
+    from ._edits import walls as _walls
+    walls, sides = _walls(ev)
     manifold = _core.count(_core.BODY) <= 1
     _, result = ev._call(_core.check_topology, walls, sides, float(tol), manifold)
     count, rows = result.data
@@ -280,8 +267,9 @@ def _away_from_poles(ev, run) -> tuple:
     one relax() run, from 0.83 to 0.32 beyond), run again from here with
     those poles moved (up to _POLE_TRIES times: a line draining toward a pole
     was refused run after run). Returns run's result, and the state it
-    started from with the energy there."""
-    start, energy = ev._save(), ev.energy
+    started from with the energy and the surface's crossings of itself
+    there (for _plausible)."""
+    start, energy = ev._save(), (ev.energy, _crossings(ev))
     fans = {p[0]: p[7] for p in _pole_lines(ev)}
     result = run()
     for _ in range(_POLE_TRIES):
@@ -292,7 +280,7 @@ def _away_from_poles(ev, run) -> tuple:
         _log.debug("run undone: a contact line came near or across a pole (%s)", bad)
         ev.restore(start)
         move_poles(ev, force=bad)
-        start, energy = ev._save(), ev.energy
+        start, energy = ev._save(), (ev.energy, _crossings(ev))
         fans = {p[0]: p[7] for p in _pole_lines(ev)}
         result = run()
     return result, start, energy
@@ -695,7 +683,34 @@ def _facing_facets(x, f, p):
 
 def contact(ev, event, keep=None) -> None:
     """Make the contact a "solid" or "contact lines" event announces: see
-    :meth:`Evolver.contact`."""
+    :meth:`Evolver.contact`. A vertex the new contact line goes through
+    twice (two fans of facets there: a dry patch's border touching a
+    contact line, 11 of the 12 pinches the topology check found in the
+    corpus) is separated, one vertex per fan (_edits); one that can't be,
+    and the contact is refused."""
+    _contact(ev, event, keep)
+    nums, _, _, names = ev._constraint_gaps()
+    _separate_pinches(ev, int(nums[_column(nums, names, event.constraint)]))
+
+
+def _separate_pinches(ev, num: int) -> None:
+    """Vertices on constraint num where four or more border edges meet (a
+    contact line through them twice) separated, one per fan of facets."""
+    from ._edits import REASONS, edit
+    m = ev.mesh()
+    border = np.asarray(m.edges)[m.edge_valence() == 1]
+    on = ev.on_constraint(num)
+    count = np.bincount(border.ravel(), minlength=len(m.vertices))
+    rows = np.flatnonzero((count >= 4) & on)
+    if not len(rows):
+        return
+    r = edit(ev, "separate", np.asarray(m.vertex_ids)[rows])
+    if (r != 0).any():
+        raise ValueError("contact(): a vertex the contact line goes through twice can't be "
+                         f"separated ({REASONS[int(r[r != 0][0])]})")
+
+
+def _contact(ev, event, keep=None) -> None:
     kind = getattr(event, "kind", None)
     if kind not in ("solid", "contact lines"):
         raise ValueError("contact() makes a contact: an Event of kind 'solid' or "
@@ -712,9 +727,9 @@ def contact(ev, event, keep=None) -> None:
         pinched = _pinched(m, edges, rows[on[rows]])
         if pinched is not None:
             # the lines already meet at a vertex (the border through it
-            # twice): split there, and the lines are then two (a pore's
-            # contact lines on one bead after its liquid jumped)
-            _split_pinch(ev, m, pinched, num)
+            # twice): separated there (contact() does that), and the lines
+            # are then two (a pore's contact lines on one bead after its
+            # liquid jumped)
             return
         a, b = _closest_pair(x, rows, on)
         if _wet_between(ev, m, x, f, on, num, a, b):
@@ -819,69 +834,6 @@ def drop_flat(ev, h: float) -> int:
             _log.debug("flat facets dropped on %s (%d)", key, int(gone.sum()))
             return int(gone.sum())
     return 0
-
-
-def _split_pinch(ev, m, v: int, num: int) -> None:
-    """Split vertex row v, where two fans of facets meet (a contact line
-    through it twice): the smaller fan's facets made again on a new vertex
-    at the same place, on constraint num with its two border edges as
-    contact lines. (Evolver's pop, made for films, turned it into a junction
-    of three facets on an edge, one facet turned over.)"""
-    f = np.asarray(m.facets)
-    edges = np.asarray(m.edges)
-    mine = np.flatnonzero((f == v).any(axis=1))
-    # the fans: facets at v joined across their edges from v
-    fan = {int(i): int(i) for i in mine}
-
-    def root(i):
-        while fan[i] != i:
-            i = fan[i]
-        return i
-    for i in mine:
-        for j in mine:
-            if i < j and len(set(f[i]) & set(f[j])) == 2:
-                fan[root(int(j))] = root(int(i))
-    groups: dict = {}
-    for i in mine:
-        groups.setdefault(root(int(i)), []).append(int(i))
-    if len(groups) != 2:
-        raise ValueError("contact(): the contact lines meet at a vertex the facets "
-                         "don't split into two fans there")
-    moving = min(groups.values(), key=len)
-    eid = {(int(a), int(b)): int(e) for (a, b), e in zip(edges, m.edge_ids)}
-
-    def oriented(a, b):
-        return eid[(a, b)] if (a, b) in eid else -eid[(b, a)]
-    x = np.asarray(m.vertices, float)[v]
-    vids, fids = np.asarray(m.vertex_ids), np.asarray(m.facet_ids)
-    fb = np.asarray(m.facet_bodies)
-    ring = sorted({int(u) for i in moving for u in f[i] if u != v})
-    was_border = set(np.asarray(m.edge_ids)[m.edge_valence() == 1].tolist())
-    bodies = [int(i) for i in ev.bodies().ids]
-    volume = {i: ev.body(i).volume for i in bodies}
-    snapshot = ev._save()
-    try:
-        commands = [f"pyse_split := new_vertex({_num(x[0])}, {_num(x[1])}, {_num(x[2])})",
-                    "set vertex[pyse_split] constraint " + str(num)]
-        commands += [f"pyse_split_{u} := new_edge(pyse_split, {int(vids[u])})" for u in ring]
-        for i in moving:
-            k = list(f[i]).index(v)
-            a, b = int(f[i][(k + 1) % 3]), int(f[i][(k + 2) % 3])
-            commands.append(f"pyse_splitf := new_facet(pyse_split_{a}, {oriented(a, b)}, "
-                            f"-pyse_split_{b})")
-            for side, body in (("frontbody", fb[i, 0]), ("backbody", fb[i, 1])):
-                if body:
-                    commands.append(f"set facet[pyse_splitf] {side} {int(body)}")
-        commands += [f"dissolve facet[{int(fids[i])}]" for i in moving]
-        ev.command("; ".join(commands))
-        ev.command("dissolve edges")
-        _onto(ev, num, was_border)
-    except Exception:
-        ev.restore(snapshot)
-        raise
-    for i in bodies:
-        b = ev.body(i)
-        b.volconst = b.volconst + volume[i] - b.volume
 
 
 def _pinched(m, edges, rows) -> "int | None":
@@ -1272,7 +1224,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         x = ev.vertices
         chunk = None
         if falling:
-            ev.command(f"g {_FALL_GRADIENT}")
+            _steps_uncrossed(ev, _FALL_GRADIENT)
             # (a fall doesn't remesh, but its contact lines are kept fine: a
             # pack's stretched to edges 1.6 long, and their integrals along
             # the chords went 1.5 off; the facets the splits halve flipped,
@@ -1280,7 +1232,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # in 15 steps. Not otherwise: flipping in a catenoid's fall kept
             # it from ever settling)
             if _split_lines(ev, h0):
-                ev.equiangulate()
+                _even_out(ev, smooth=False)
             _checked(ev, "a fall's gradient steps")
         else:
             # after a change, relax() in short runs (a merged neck widening
@@ -1289,8 +1241,17 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # a pack's liquid from 80.3 to 83.5) is undone for a run of plain
             # gradient steps
             chunk, start, energy = _away_from_poles(ev, lambda: ev.relax(tol, max_iter=_CHUNK))
+            if _implausible(ev, energy) == "crossings":
+                # (the surface folded through itself near a change, its mesh
+                # tangled there: a pack's drying contact left an edge twice
+                # the others' and the next run crossed edges two apart):
+                # evened out and run again
+                ev.restore(start)
+                _keep_edges(ev, h0)
+                _even_out(ev)
+                chunk, start, energy = _away_from_poles(ev, lambda: ev.relax(tol, max_iter=_CHUNK))
             if not _plausible(ev, energy):
-                _log.debug("run undone: implausible (volumes, energy or poles)")
+                _log.debug("run undone: implausible (volumes, energy, poles or crossings)")
                 ev.restore(start)
                 chunk = _gradient_run(ev, tol)
                 if chunk is None:
@@ -1358,17 +1319,27 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                                  or (e.kind == "solid" and not any(e is b for b in beside)))]
         made = None
         for e in coming:
+            crossed, start = _crossings(ev), ev._save()
             try:
                 apply(ev, e, keep)
+                if _crossings(ev) > crossed:
+                    raise ValueError("the change passed the surface through itself")
                 made = e
                 break
             except ValueError as error:
+                ev.restore(start)
                 refused = f"{e}: {error}"       # (passed over: it may come again, or go)
                 _log.debug("change refused: %s", refused)
         if made is not None:
             e = made
             _log.debug("change made: %s", e)
             _checked(ev, f"the change: {e}")
+            # the mesh round the change evened out before it relaxes (a
+            # contact's patch leaves edges twice the others', and the next
+            # run folded the surface through itself there)
+            _keep_edges(ev, h0)
+            _even_out(ev)
+            _checked(ev, "evening out after the change")
             changes.append(e)
             guard(ev)
             way, before, tried, since = None, [], 0, 0
@@ -1390,7 +1361,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 # the surface lying on a solid: tidied, and once more)
                 drop_flat(ev, h0)
                 close_patches(ev, h0)
-                ev.command("u")
+                _even_out(ev, smooth=False)
                 _keep_edges(ev, h0)
                 chunk = ev.relax(tol)
                 _checked(ev, "tidying a relaxed state")
@@ -1438,7 +1409,18 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         else:
             sign = float(np.sign(_common(way, u))) or 1.0
         way = sign*u
-        ev.vertices = ev.vertices + _FALL_STEP*h*way/np.linalg.norm(u, axis=1).max()
+        # (halved where it passes the surface through itself, up to three
+        # times, then not taken: the touch comes as an event instead)
+        x, crossed = ev.vertices, _crossings(ev)
+        step = _FALL_STEP*h*way/np.linalg.norm(u, axis=1).max()
+        for _ in range(4):
+            ev.vertices = x + step
+            if _crossings(ev) <= crossed:
+                break
+            step = step/2
+        else:
+            ev.vertices = x
+            _log.debug("step along the mode not taken: the surface through itself")
         _checked(ev, "a step along the unstable mode")
     return None, changes, (f"no stable state within {_FALL_ITERATIONS} steps of the last "
                            f"change" if since > _FALL_ITERATIONS else
@@ -1496,18 +1478,81 @@ def _unconverged() -> Any:
     return IterationResult(none, none, none, "", converged=False)
 
 
-def _plausible(ev, energy: float) -> bool:
+def _plausible(ev, before: tuple) -> bool:
     """Whether a run of the descent kept its volumes (within 1e-3 of their
-    targets), lowered the energy by less than a quarter of the area, and
-    kept the contact lines half _POLE_MARGIN from the poles of sphere(axis=)s
-    (moved at the next iteration): a run past that is one the integrals got
-    wrong (relax() runs after a contact took a pack's liquid from 80.3 to
-    83.5, conjugate gradients a drop's from 31.5 to 44.5 and its energy to
-    -12136; a pack's contact line came from half a radius to 0.07 of a pole
-    in one run, the integrals off by up to 4 pi cos theta)."""
-    if ev._target_gap()[0] > 1e-3 or _near_poles(ev, _POLE_MARGIN/2):
-        return False
-    return energy - ev.energy < 0.25*_core.total_area()
+    targets), lowered the energy by less than a quarter of the area, kept
+    the contact lines half _POLE_MARGIN from the poles of sphere(axis=)s
+    (moved at the next iteration), and didn't pass the surface through
+    itself: a run past that is one the integrals got wrong (relax() runs
+    after a contact took a pack's liquid from 80.3 to 83.5, conjugate
+    gradients a drop's from 31.5 to 44.5 and its energy to -12136; a pack's
+    contact line came from half a radius to 0.07 of a pole in one run, the
+    integrals off by up to 4 pi cos theta), or one that stepped past a
+    merge (the surface through itself: 4 of the 18 runs of the corpus with
+    the topology check, first after a relax() run). ``before``: the energy
+    and the crossings where the run began (_away_from_poles)."""
+    return not _implausible(ev, before)
+
+
+def _implausible(ev, before: tuple) -> str:
+    """Why a run isn't plausible (see _plausible), "" if it is."""
+    energy, crossed = before
+    why = ("volumes" if ev._target_gap()[0] > 1e-3 else
+           "poles" if _near_poles(ev, _POLE_MARGIN/2) else
+           "energy" if energy - ev.energy >= 0.25*_core.total_area() else
+           "crossings" if _crossings(ev) > crossed else "")
+    if why:
+        _log.debug("implausible run: %s", why)
+    return why
+
+
+def _crossings(ev) -> int:
+    """Edges through facets more than a ring of edges apart: the surface
+    through itself (see _edits). (Not folds one ring across, beside contact
+    lines at small angles: those the corpus's 16-bead runs met run after run
+    after a contact, even evened out, and the runs got past them before;
+    folds are the mesh's to mend.)"""
+    from ._edits import crossings
+    return crossings(ev, far=True)
+
+
+def _steps_uncrossed(ev, n: int) -> None:
+    """n gradient steps, or as many as don't pass the surface through itself:
+    where n do, the mesh evened out (smoothed, flipped) and n again (the
+    crossings in the corpus's falls were folds an edge or two across, beside
+    a contact line), then one at a time (a touch then comes as an event)."""
+    crossed, start = _crossings(ev), ev._save()
+    ev.command(f"g {n}")
+    if _crossings(ev) <= crossed:
+        return
+    ev.restore(start)
+    _even_out(ev)
+    crossed, start = _crossings(ev), ev._save()
+    ev.command(f"g {n}")
+    if _crossings(ev) <= crossed:
+        return
+    ev.restore(start)
+    for _ in range(n):
+        here = ev._save()
+        ev.command("g 1")
+        if _crossings(ev) > crossed:
+            ev.restore(here)
+            _log.debug("gradient steps stopped: the surface through itself")
+            return
+
+
+def _even_out(ev, smooth: bool = True, edges=None) -> None:
+    """The mesh evened by the checked edits (_edits): edges flipped where
+    that makes the facets more equiangular, and with smooth, vertices moved
+    toward their neighbours along the surface first."""
+    from ._edits import edit
+    if smooth:
+        edit(ev, "smooth", ev.mesh().vertex_ids)
+    m = ev.mesh()
+    ids = np.asarray(m.edge_ids)[m.edge_valence() == 2] if edges is None else edges
+    for _ in range(3):
+        if not (edit(ev, "flip", ids, mode=1) == 0).any():
+            break
 
 
 def _sound(health) -> bool:
@@ -1531,14 +1576,14 @@ def _coming(found: list, before: list) -> list:
 
 
 def _keep_edges(ev, h0: float) -> None:
-    """Edges back in range after a change: those shorter than 0.4 h0 deleted
-    (Evolver's edge deletion), contact-line edges too (a joined contact line
-    kept its short ones, and its facets degenerated as it moved), but not
-    chords between two contact-line vertices (deleting one pinched two
-    contact lines together at a vertex: they meet by contact() instead);
-    those longer than 2 h0 split, but not edges into the surface from a
-    contact line on a constraint (their midpoints can land inside a solid);
-    then equiangulated."""
+    """Edges back in range after a change, by the checked edits (_edits):
+    those shorter than 0.4 h0 collapsed, contact-line edges too (a joined
+    contact line kept its short ones, and its facets degenerated as it
+    moved), never a contact line's vertex inward (that pinched two contact
+    lines together at a vertex: they meet by contact() instead), no edge
+    made longer than 2 h0; those longer than 2 h0 split (not where the
+    midpoint lands inside a solid: an edge into the surface from a contact
+    line); then flipped where that makes the facets more equiangular."""
     lo, hi = _REMESH
     m = ev.mesh()
     lengths = m.edge_lengths()
@@ -1554,58 +1599,27 @@ def _keep_edges(ev, h0: float) -> None:
 
 
 def _keep_edges_unguarded(ev, h0: float, m) -> None:
+    from ._edits import edit
     lo, hi = _REMESH
-    _, _, dist, _ = ev._constraint_gaps()
-    on = np.isnan(dist).any(axis=1) if dist.size else np.zeros(len(m.vertices), dtype=bool)
     for _ in range(5):
-        edges = np.asarray(m.edges)
-        short = _collapsible(m, edges, on, m.edge_lengths() < lo*h0)
-        if not short.any():
+        lengths = m.edge_lengths()
+        short = np.flatnonzero(lengths < lo*h0)
+        if not len(short):
             break
-        ev.command(f"delete edge{ev._mark(_core.EDGE, short)}")
+        order = short[np.argsort(lengths[short])]
+        if not (edit(ev, "collapse", np.asarray(m.edge_ids)[order], max_len=hi, h=h0) == 0).any():
+            break
         m = ev.mesh()
-        _, _, dist, _ = ev._constraint_gaps()
-        on = np.isnan(dist).any(axis=1) if dist.size else np.zeros(len(m.vertices), dtype=bool)
-    edges = np.asarray(m.edges)
-    _, _, dist, _ = ev._constraint_gaps()
-    on = np.isnan(dist).any(axis=1) if dist.size else np.zeros(len(m.vertices), dtype=bool)
-    protect = on[edges].any(axis=1) & ~on[edges].all(axis=1)
-    ev.remesh(max_edge=hi*h0, min_edge=None, protect=protect)
-
-
-def _collapsible(m, edges, on, short) -> np.ndarray:
-    """Of the short edges, those that can be collapsed (Evolver's edge
-    deletion) without making the mesh non-manifold, no two at one vertex:
-    not fixed, not a chord between two contact-line vertices, and their ends
-    with no neighbour in common but the facets' third corners (the link
-    condition; Evolver doesn't check it, and a contact line's edge whose ends
-    had another neighbour in common came out as a doubled edge and a facet
-    with a corner twice)."""
-    valence = m.edge_valence()
-    f = np.asarray(m.facets)
-    nbrs: list = [set() for _ in range(len(m.vertices))]
-    for a, b in edges.tolist():
-        nbrs[a].add(b)
-        nbrs[b].add(a)
-    third: dict = {}
-    for r in f.tolist():
-        for i in range(3):
-            key = (min(r[i], r[(i + 1) % 3]), max(r[i], r[(i + 1) % 3]))
-            third.setdefault(key, set()).add(r[(i + 2) % 3])
-    out = np.zeros(len(edges), dtype=bool)
-    used: set = set()
-    lengths = np.linalg.norm(m.vertices[edges[:, 0]] - m.vertices[edges[:, 1]], axis=1)
-    for k in np.flatnonzero(short)[np.argsort(lengths[short])]:
-        a, b = int(edges[k, 0]), int(edges[k, 1])
-        if a in used or b in used or m.fixed[a] or m.fixed[b]:
-            continue
-        if on[a] and on[b] and valence[k] != 1:
-            continue                    # a chord across: the lines would pinch together
-        if nbrs[a] & nbrs[b] != third.get((min(a, b), max(a, b)), set()):
-            continue
-        out[k] = True
-        used |= {a, b} | nbrs[a] | nbrs[b]
-    return out
+    for _ in range(5):
+        lengths = m.edge_lengths()
+        long = np.flatnonzero(lengths > hi*h0)
+        if not len(long):
+            break
+        order = long[np.argsort(-lengths[long])]
+        if not (edit(ev, "split", np.asarray(m.edge_ids)[order], h=h0) == 0).any():
+            break
+        m = ev.mesh()
+    _even_out(ev, smooth=False)
 
 
 def _beside_line(ev, event, h: float) -> bool:

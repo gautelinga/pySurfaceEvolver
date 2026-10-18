@@ -213,6 +213,27 @@ struct pyse_problem { int code; int type; long id; long other; double value; };
 int pyse_check_topology(const int *walls, const int *sides, int nwalls, double tol,
                         int manifold, struct pyse_problem *out, int max, int *count);
 
+/* Mesh edits (pyse_edit.c), a batch of one kind: ids are element numbers
+   (edges, vertices, facets; snap: vertex pairs, n = 2 per pair); results
+   one per edit, PYSE_EDIT_DONE or why it was refused. params: [0] largest
+   turn of a facet's normal (degrees), [1] largest volume swept (in h^3),
+   [2] longest new edge (in h, 0: any), [3] depth into a wall allowed (in h),
+   [4] flip mode (0 any, 1 more equiangular, 2 valences nearer 6),
+   [5] smoothing factor, [6] separation offset (in h), [7] a degenerate
+   facet's area (in h^2), [8] h (0: the mean edge length). */
+enum { PYSE_OP_COLLAPSE = 1, PYSE_OP_FLIP, PYSE_OP_SPLIT, PYSE_OP_SMOOTH, PYSE_OP_SNAP,
+       PYSE_OP_SEPARATE, PYSE_OP_DEGENERATE };
+enum { PYSE_EDIT_DONE = 0, PYSE_EDIT_GONE, PYSE_EDIT_NOT_APPLICABLE, PYSE_EDIT_NOT_BETTER,
+       PYSE_EDIT_FIXED, PYSE_EDIT_CONSTRAINTS, PYSE_EDIT_LINE, PYSE_EDIT_LINK,
+       PYSE_EDIT_ORIENTATION, PYSE_EDIT_TURN, PYSE_EDIT_LONG, PYSE_EDIT_VOLUME,
+       PYSE_EDIT_EVOLVER, PYSE_EDIT_STRUCTURE, PYSE_EDIT_PINCH, PYSE_EDIT_DEGENERATE,
+       PYSE_EDIT_FOLD, PYSE_EDIT_SOLID, PYSE_EDIT_CROSSING, PYSE_EDIT_REPLAY };
+int pyse_edit(int op, const long *ids, int n, const double *params, const int *walls,
+              const int *sides, int nwalls, int manifold, int *results);
+/* Edges through facets on the whole surface (for descent steps); far: only
+   those more than a ring of edges from the facet (not folds). */
+int pyse_crossings(int far, long *count);
+
 /* Whether the surface is converted to quantities (everything_quantities;
    the first Hessian converts it): a snapshot restores only into the mode
    it was taken in. */

@@ -14,6 +14,7 @@
 #include "pyse_hooks.h"
 #include "pyse_api.h"
 #include "fastloops.h"
+#include "pyse_internal.h"
 
 #include <signal.h>
 #include <pthread.h>
@@ -375,9 +376,9 @@ static int surface_call(body_fn body, void *arg)
   return protected_call(body,arg);
 }
 
-/* for the glue's other files (pyse_check.c) */
-int pyse_surface_call(body_fn body, void *arg);
+/* for the glue's other files (pyse_internal.h) */
 int pyse_surface_call(body_fn body, void *arg) { return surface_call(body,arg); }
+void pyse_surface_changed(void) { surface_version++; }
 
 /**************************************************************************
  * Starting up and loading.
@@ -1929,6 +1930,16 @@ static void snapshot_take_body(void *arg)
     s->params[i] = is_datafile_parameter(i) ? globals(i)->value.real : NAN;
 }
 
+/* inside a guarded call (pyse_internal.h): edits that undo themselves */
+struct snapshot *pyse_snapshot_hold(void)
+{ struct snapshot_take_args a;
+  a.s = NULL;
+  snapshot_take_body(&a);
+  return a.s;
+}
+
+void pyse_snapshot_drop(struct snapshot *s) { snapshot_release(s); }
+
 int pyse_everything_quantities(void) { return everything_quantities_flag; }
 
 int pyse_snapshot_take(long *handle)
@@ -2113,6 +2124,8 @@ static void snapshot_restore_body(void *arg)
   FL_ATTR_CHANGED();
   recalc();
 }
+
+void pyse_snapshot_put_back(struct snapshot *s) { snapshot_restore_body(s); }
 
 int pyse_snapshot_restore(long handle)
 { struct snapshot *s = NULL;

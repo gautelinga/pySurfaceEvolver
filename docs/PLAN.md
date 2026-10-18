@@ -555,6 +555,33 @@ clones and paper texts in the session scratchpad, repos/):
   vertex as it is made), and descent steps that can't pass the surface
   through itself.
 
+- Phase 2 (2026-10-18; the user: undo by snapshot, all edits first then
+  wired in, self-crossing in phase 2): bindings/pyse_edit.c and _edits.py.
+  Seven edits (collapse, flip, split, smooth, snap, separate, degenerate),
+  each with rules first and the patch's problems counted before and after
+  (a grid of facets and edges made once per batch); a batch takes one
+  snapshot and an edit that comes out worse puts it back and makes the
+  batch's earlier edits again. Wired in: _keep_edges, the tidy and fall
+  flips, recipes._smooth, contact()'s pinch separation (in place of the
+  Python _split_pinch), and a crossing guard on runs, fall steps, mode steps
+  and changes. The crossings the guard met in the 16-bead runs were folds an
+  edge or two across beside a change or a contact line, not two sheets: the
+  mesh is now evened out after each change, and before a run refused for
+  crossings is tried again; the guard counts only crossings more than a ring
+  of edges apart (folds one ring across, beside contact lines at small
+  angles, came back run after run and the runs had got past them before:
+  the mesh's to mend). recipes._smooth keeps Evolver's vertex averaging (the
+  checked smoothing there changed which dry patch the docs' pore opened, and
+  its run went past the jump's fold onto another branch), with checked flips.
+  Corpus (quick set, final code): 16-bead runs drain further (median 0.83 of
+  the way to half the liquid, mean 0.71; baseline 0.54 and 0.48), 46 changes
+  per failure on 16 beads (baseline 28); 4-bead runs 6 of 9 reach half (2
+  run away early, 1 stops at 0.998; baseline 9 of 9); all: 6 of 18, 46.5
+  changes per failure (baseline 9, 55). Stops: descent ran away 8, three
+  falls 3, relaxed but unsound 1. With the check on, one structural problem
+  in 558 changes: a merge (Python merge(), Evolver's facet_merge) left border
+  edges on a constraint their vertices aren't on: phase 4's.
+
 **Risks.** Every edit must keep all the bookkeeping (facetedge loops, body
 facet lists, vertex edge loops, method and quantity instances, content
 orientation); state outside the element blocks escapes a block snapshot
