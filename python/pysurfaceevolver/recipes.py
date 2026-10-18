@@ -787,7 +787,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 # that the next time, and the liquid falls from there)
                 typical = float(np.median(np.abs(moves)))
                 way = float(np.sign(sum(moves))) or -1.0
-                set_value(ev, value + way*typical*2**(quiet - 1))
+                # (at most eight typical steps, nor a tenth of the value:
+                # doubled without end, a pack's liquid was set to -56)
+                push = min(typical*2**min(quiet - 1, 3), 0.1*abs(value) or typical)
+                set_value(ev, value + way*push)
                 ev.command("recalc")
             result, cut, why = descend(ev, factor, tol, falling=False, keep=keep)
         elif event is not None:
