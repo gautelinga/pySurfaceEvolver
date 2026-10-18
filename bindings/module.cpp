@@ -626,4 +626,42 @@ NB_MODULE(_core, m) {
     Lock lock;
     pyse_set_datafilename(name.c_str());
   }, "name"_a);
+
+  // ---- snapshots in memory ---------------------------------------------------
+  m.def("snapshot_take", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long handle = -1;
+    CallResult r = run_guarded([&] { return pyse_snapshot_take(&handle); });
+    if (r.status == PYSE_OK) r.data = nb::cast(handle);
+    return r;
+  }, CALLBACK_NAMES, "data: the snapshot's handle");
+  m.def("check_topology", [](std::vector<int> walls, std::vector<int> sides, double tol,
+                             bool manifold, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    if (walls.size() != sides.size())
+      throw std::invalid_argument("check_topology: one side per wall");
+    std::vector<pyse_problem> found(256);
+    int count = 0;
+    CallResult r = run_guarded([&] {
+      return pyse_check_topology(walls.data(), sides.data(), int(walls.size()), tol,
+                                 manifold, found.data(), int(found.size()), &count);
+    });
+    if (r.status == PYSE_OK) {
+      std::vector<std::tuple<int, int, long, long, double>> rows;
+      for (int i = 0; i < std::min<int>(count, int(found.size())); i++)
+        rows.emplace_back(found[i].code, found[i].type, found[i].id, found[i].other,
+                          found[i].value);
+      r.data = nb::make_tuple(count, rows);
+    }
+    return r;
+  }, "walls"_a, "sides"_a, "tol"_a, "manifold"_a, CALLBACK_NAMES,
+     "data: (problems found, the first 256 as (code, type, id, other, value))");
+  m.def("everything_quantities", []() { Lock lock; return bool(pyse_everything_quantities()); });
+  m.def("snapshot_restore", [](long handle, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    return run_guarded([&] { return pyse_snapshot_restore(handle); });
+  }, "handle"_a, CALLBACK_NAMES);
+  // (no Evolver lock: a snapshot's memory is its own, and this runs from
+  // __del__, maybe inside a callback of a running call)
+  m.def("snapshot_free", [](long handle) { pyse_snapshot_free(handle); }, "handle"_a);
 }

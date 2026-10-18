@@ -124,7 +124,25 @@
   are covered only within a fifth of an edge (within half, a contact's one-facet
   hole on a wall was opened and covered again over and over).
 
+- The topology runs log what they do to the `pysurfaceevolver.topology` logger
+  (debug records: each change made or refused, each run undone, poles moved,
+  patches closed, why a descent stopped). With `PYSE_CHECK_TOPOLOGY=1` in the
+  environment a check runs after every step of their descents and a run stops,
+  naming the step, at the first problem no change may leave: an edge on no facet
+  or (one body or none) on more than two, facets turned against each other across
+  an edge, a pinched vertex (two fans of facets), a border edge on no constraint
+  or on one its vertex isn't on, a contact-line edge stored against its facet;
+  degenerate facets, folds, vertices or edges inside a wall and edges through
+  facets are logged (`bench/topology/corpus.py` sorts the runs by them).
+
 ### Speed
+
+- pySE's own saves and restores inside `relax()` and the topology runs keep the
+  surface in memory once it is converted to quantities (Evolver converts it at the
+  first Hessian of a contact angle's integrals): a copy of Evolver's element blocks,
+  restored bit for bit, instead of a dump and a reload; 43 ms against 1.1 s for a
+  save and restore at 98k facets, 0.3 against 10 ms at a 16-bead pack's 1.5k.
+  `Evolver.save()` is still the dump.
 
 - Newton steps on a surface free to move as a whole reuse the last step's null
   directions while the topology is the same (checked by a product with the matrix)
@@ -157,6 +175,9 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- The pinched contact line's new vertex was written with numpy's repr into
+  Evolver's command (`np.float64(...)` under NumPy 2: a syntax error).
 
 - `Evolver.contact()` on contact lines that already meet at a vertex (the border
   through it twice, after a pore's liquid rearranged): Evolver's `pop` splits the

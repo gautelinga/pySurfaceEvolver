@@ -324,7 +324,7 @@ class _Relaxing(_Analysis):
                 steps, residual = first
             else:
                 small = None if keep_mesh else self._small_angle()
-                start = self.save() if (levels or small is not None) and not keep_mesh else None
+                start = self._save() if (levels or small is not None) and not keep_mesh else None
                 for lev in range(levels + 1):
                     if lev:
                         self.refine()
@@ -1099,7 +1099,7 @@ class _Run:
         # undone either way: a surface it doesn't fold goes on as without it.
         # Its coordinates undo it (a restored dump isn't the same path: a
         # constraint with a parameter then relaxes differently)
-        coords, start, mark = ev._coords(), ev.save(), self.trace.mark()
+        coords, start, mark = ev._coords(), ev._save(), self.trace.mark()
         scale = ev.eval("scale")            # (the step size the next step starts from)
         self.rounds(0, 1, 0)
         folded = ev._degenerate()
@@ -1255,7 +1255,7 @@ class _Run:
             mark = _long_spokes(ev.mesh(), _SPOKE_RATIO)
             if not mark.any():
                 break
-            before = ev.save()
+            before = ev._save()
             ev._split_marked(mark)
             steps, converged = 0, False
             for _ in range(_CONTACT_PASSES):
@@ -1281,7 +1281,7 @@ class _Run:
         converges; else the surface and the trace go back (None). Returns
         the Newton steps and the residual."""
         ev, trace = self.ev, self.trace
-        failed, mark = ev.save(), trace.mark()
+        failed, mark = ev._save(), trace.mark()
         lev = self.next_level(levels)
         floors = [ANGLE_FLOOR_TOP]
         while floors[-1]*_ANGLE_STEP > max(low, 1.0):
@@ -1321,7 +1321,7 @@ class _Run:
         the surface and the trace go back (None). Returns the Newton steps
         and the residual."""
         ev, trace = self.ev, self.trace
-        failed, mark = ev.save(), trace.mark()
+        failed, mark = ev._save(), trace.mark()
         first = self.next_level(levels)
         residual = float("inf")
         try:
@@ -1355,7 +1355,7 @@ class _Run:
         if memory.collapse_skip:
             memory.collapse_skip -= 1
             return None
-        snapshot = ev.save()
+        snapshot = ev._save()
         energy = _core.total_energy()
         residual0 = ev.residual()
         mark = trace.mark()

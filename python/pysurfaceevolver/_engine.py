@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import warnings
+import weakref
 from typing import Callable, Dict, Iterator, Generator, List, Optional, Tuple, Union
 
 import numpy as np
@@ -107,6 +108,42 @@ class _SurfaceMemory:
 
 
 surface = _SurfaceMemory()
+
+
+class _Saved:
+    """A surface saved in memory (_Engine._save), for restore() into the same
+    load: a copy of Evolver's elements, freed with this object. pySE's own
+    save and restore inside its runs; Snapshot is the portable one. A
+    restore() of a Snapshot reloads the surface, which the copy can't be
+    restored into: it is turned into a Snapshot first (``dump``)."""
+
+    __slots__ = ("handle", "walls", "generation", "energy_shift", "retired",
+                 "dump", "__weakref__")
+
+    def __init__(self, handle: int) -> None:
+        self.handle = handle
+        self.walls = dict(surface.walls)
+        self.generation = surface.generation
+        self.energy_shift = list(surface.energy_shift)
+        self.retired = frozenset(surface.retired)
+        self.dump: Optional[Snapshot] = None
+        _live.add(self)
+
+    def free(self) -> None:
+        free = getattr(_core, "snapshot_free", None)   # (None at interpreter exit)
+        if free is not None and self.handle >= 0:
+            free(self.handle)
+        self.handle = -1
+
+    def __del__(self) -> None:
+        self.free()
+
+    def __reduce__(self):
+        raise TypeError("a snapshot in memory belongs to the process that took it: "
+                        "use Evolver.save() for one to keep or send")
+
+
+_live: "weakref.WeakSet[_Saved]" = weakref.WeakSet()
 
 
 
@@ -404,8 +441,39 @@ class _Engine:
                 return Snapshot(f.read(), name, dict(surface.walls), surface.generation,
                                 list(surface.energy_shift), frozenset(surface.retired))
 
-    def restore(self, snapshot: Snapshot) -> None:
+    def _save(self) -> "_Saved | Snapshot":
+        """save() in memory, for restore() into this load (see _Saved): no
+        dump and reload, the elements' memory kept. A surface not yet
+        converted to quantities (Evolver converts it at the first Hessian,
+        and can't go back) is saved as a dump: a restore after the
+        conversion would mix the two."""
+        if not _core.everything_quantities():
+            return self.save()
+        _, result = self._call(_core.snapshot_take)
+        return _Saved(result.data)
+
+    def restore(self, snapshot: "Snapshot | _Saved") -> None:
         """Replace the surface with a snapshot from :meth:`save`."""
+        if isinstance(snapshot, _Saved):
+            if snapshot.dump is not None:
+                self.restore(snapshot.dump)
+                return
+            if snapshot.generation != surface.generation:
+                raise ValueError("restore(): that snapshot was taken in memory from a "
+                                 "surface loaded before this one")
+            self._call(_core.snapshot_restore, snapshot.handle)
+            surface.walls = dict(snapshot.walls)
+            surface.energy_shift = list(snapshot.energy_shift)
+            surface.retired = set(snapshot.retired)
+            return
+        # (the reload below ends the copies in memory of this surface: dumped
+        # first. As relax() keeps a failed attempt in memory, goes back to its
+        # start, saved before the first Hessian, and then maybe to the attempt)
+        for saved in [k for k in _live if k.dump is None and k.handle >= 0
+                      and k.generation == surface.generation]:
+            self.restore(saved)
+            saved.dump = self.save()
+            saved.free()
         # back into the load it came from: the same surface, whose memory
         # (relax()'s failed attempts, the load count) stays; otherwise it is
         # a new surface to the other handles

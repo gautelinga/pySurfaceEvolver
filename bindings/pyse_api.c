@@ -32,6 +32,9 @@ static int surface_valid = 1;
 static int datafile_global_limit = 0;
 /* See pyse_surface_version(). */
 static long surface_version = 0;
+/* Datafiles loaded (pyse_load() or the "load" command): snapshots restore
+   only into the load they came from. */
+static long load_serial = 0;
 
 /* Map from vertex ordinal to row in the pyse_get_vertices() arrays. */
 struct vertex_map { long *rows; long size; };
@@ -319,6 +322,7 @@ static int protected_call(body_fn body, void *arg)
   { /* the "load" command jumps here to start a new datafile */
     if ( list && (list != permlist) )
     { myfree((char*)list); list = NULL; }
+    load_serial++;
     load_datafile(loadfilename);
     goto done;
   }
@@ -370,6 +374,10 @@ static int surface_call(body_fn body, void *arg)
   if ( !initialized || !surface_valid ) return invalid_surface();
   return protected_call(body,arg);
 }
+
+/* for the glue's other files (pyse_check.c) */
+int pyse_surface_call(body_fn body, void *arg);
+int pyse_surface_call(body_fn body, void *arg) { return surface_call(body,arg); }
 
 /**************************************************************************
  * Starting up and loading.
@@ -451,6 +459,7 @@ int pyse_load(const char *path)
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,"Datafile path is too long.");
   strcpy(name,path);
   surface_version++;
+  load_serial++;
   return protected_call(load_body,name);
 }
 
@@ -1810,4 +1819,322 @@ const char *pyse_datafilename(void) { return datafilename; }
 void pyse_set_datafilename(const char *name)
 { strncpy(datafilename,name,PATHSIZE-1);
   datafilename[PATHSIZE-1] = 0;
+}
+
+/**************************************************************************
+ * Snapshots in memory: a copy of the element blocks and of what goes with
+ * them (the free and in-use chains, attribute layouts, body count, scale,
+ * quantities' targets and multipliers, the datafile's parameters), restored
+ * into the same load. pySE's own save and restore inside its runs: a dump
+ * and reload parses the whole surface and moves every element. Elements
+ * refer to each other by id, never by pointer, so their bytes copy as they
+ * are. Not restored: whatever was defined since (constraints, attributes,
+ * quantities, procedures stay; attributes defined since come back zero).
+ */
+
+struct snap_type
+{ int size;                        /* web.sizes[] */
+  struct skeleton skel;
+  int extra_count;
+  struct extra *extras;            /* their layout then */
+  int nblocks;
+  struct blocklist_struct *blocks; /* blockptr: a copy of the block */
+};
+
+struct snapshot
+{ long load;
+  int quantities;                  /* everything_quantities_flag */
+  int sdim, representation, modeltype, lagrange_order;
+  struct snap_type t[NUMELEMENTS];
+  int bodycount;
+  body_id outside_body;
+  REAL scale;
+  int quant_count;
+  struct gen_quant *quants;
+  int global_count;
+  REAL *params;                    /* NAN where not a datafile parameter */
+};
+
+static struct snapshot **snapshots = NULL;
+static long snapshot_slots = 0;
+static pthread_mutex_t snapshot_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void snapshot_release(struct snapshot *s)
+{ int type, b;
+  if ( !s ) return;
+  for ( type = 0 ; type < NUMELEMENTS ; type++ )
+  { struct snap_type *t = s->t + type;
+    for ( b = 0 ; b < t->nblocks ; b++ )
+      free(t->blocks[b].blockptr);
+    free(t->blocks);
+    free(t->extras);
+  }
+  free(s->quants);
+  free(s->params);
+  free(s);
+}
+
+static void *snap_alloc(size_t n, size_t size)
+{ void *p = calloc(n ? n : 1,size ? size : 1);
+  if ( !p ) kb_error(PYSE_ERR_BAD_ARGUMENT,"Out of memory for a snapshot.\n",RECOVERABLE);
+  return p;
+}
+
+struct snapshot_take_args { struct snapshot *s; };
+
+static void snapshot_take_body(void *arg)
+{ struct snapshot_take_args *a = (struct snapshot_take_args *)arg;
+  struct snapshot *s;
+  int type, b, i;
+
+  free_discards(DISCARDS_ALL);  /* (freed elements onto the free list) */
+  s = (struct snapshot *)snap_alloc(1,sizeof(*s));
+  a->s = s;
+  s->load = load_serial;
+  s->quantities = everything_quantities_flag;
+  s->sdim = SDIM;
+  s->representation = web.representation;
+  s->modeltype = web.modeltype;
+  s->lagrange_order = web.lagrange_order;
+  for ( type = 0 ; type < NUMELEMENTS ; type++ )
+  { struct snap_type *t = s->t + type;
+    t->size = web.sizes[type];
+    t->skel = web.skel[type];
+    t->extra_count = web.skel[type].extra_count;
+    t->extras = (struct extra *)snap_alloc(t->extra_count,sizeof(struct extra));
+    if ( t->extra_count )
+      memcpy(t->extras,EXTRAS(type),t->extra_count*sizeof(struct extra));
+    t->blocks = (struct blocklist_struct *)snap_alloc(blockcount[type],
+                                                      sizeof(struct blocklist_struct));
+    for ( b = 0 ; b < blockcount[type] ; b++ )
+    { struct blocklist_struct *src = blocklist[type] + b;
+      size_t bytes = (size_t)src->count*t->size;
+      t->blocks[b].start_ord = src->start_ord;
+      t->blocks[b].count = src->count;
+      t->blocks[b].blockptr = (struct element *)snap_alloc(bytes,1);
+      t->nblocks = b + 1;
+      memcpy(t->blocks[b].blockptr,src->blockptr,bytes);
+    }
+  }
+  s->bodycount = web.bodycount;
+  s->outside_body = web.outside_body;
+  s->scale = web.scale;
+  s->quant_count = gen_quant_count;
+  s->quants = (struct gen_quant *)snap_alloc(gen_quant_count,sizeof(struct gen_quant));
+  if ( gen_quant_count )
+    memcpy(s->quants,GEN_QUANT(0),gen_quant_count*sizeof(struct gen_quant));
+  s->global_count = web.global_count;
+  s->params = (REAL *)snap_alloc(web.global_count,sizeof(REAL));
+  for ( i = 0 ; i < web.global_count ; i++ )
+    s->params[i] = is_datafile_parameter(i) ? globals(i)->value.real : NAN;
+}
+
+int pyse_everything_quantities(void) { return everything_quantities_flag; }
+
+int pyse_snapshot_take(long *handle)
+{ struct snapshot_take_args a;
+  int status;
+  long h;
+  a.s = NULL;
+  status = surface_call(snapshot_take_body,&a);
+  if ( status != PYSE_OK )
+  { snapshot_release(a.s);
+    return status;
+  }
+  pthread_mutex_lock(&snapshot_mutex);
+  for ( h = 0 ; h < snapshot_slots && snapshots[h] ; h++ ) ;
+  if ( h == snapshot_slots )
+  { long more = snapshot_slots ? 2*snapshot_slots : 16;
+    struct snapshot **grown = (struct snapshot **)realloc(snapshots,more*sizeof(*grown));
+    if ( !grown )
+    { pthread_mutex_unlock(&snapshot_mutex);
+      snapshot_release(a.s);
+      return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,"Out of memory for a snapshot.");
+    }
+    memset(grown + snapshot_slots,0,(more - snapshot_slots)*sizeof(*grown));
+    snapshots = grown;
+    snapshot_slots = more;
+  }
+  snapshots[h] = a.s;
+  pthread_mutex_unlock(&snapshot_mutex);
+  *handle = h;
+  return PYSE_OK;
+}
+
+void pyse_snapshot_free(long handle)
+{ struct snapshot *s = NULL;
+  pthread_mutex_lock(&snapshot_mutex);
+  if ( handle >= 0 && handle < snapshot_slots )
+  { s = snapshots[handle];
+    snapshots[handle] = NULL;
+  }
+  pthread_mutex_unlock(&snapshot_mutex);
+  snapshot_release(s);
+}
+
+/* One element from a snapshot into today's layout (the shapes as they were,
+   offsets maybe not: alignment padding round an attribute that grew and
+   shrank back): the fixed fields, then attribute by attribute; attributes
+   defined since stay zero, as when defined. */
+static void snapshot_copy_element(char *to, const char *from, int type, struct snap_type *t)
+{ int k;
+  int now_count = web.skel[type].extra_count;
+  size_t head = t->extra_count ? (size_t)t->extras[0].offset : (size_t)t->size;
+  if ( now_count && (size_t)EXTRAS(type)[0].offset < head )
+    head = (size_t)EXTRAS(type)[0].offset;
+  memcpy(to,from,head);
+  for ( k = 0 ; k < t->extra_count ; k++ )
+  { size_t was_end = k + 1 < t->extra_count ? (size_t)t->extras[k+1].offset : (size_t)t->size;
+    size_t now_end = k + 1 < now_count ? (size_t)EXTRAS(type)[k+1].offset
+                                       : (size_t)web.sizes[type];
+    size_t was_span = was_end - (size_t)t->extras[k].offset;
+    size_t now_span = now_end - (size_t)EXTRAS(type)[k].offset;
+    memcpy(to + EXTRAS(type)[k].offset,from + t->extras[k].offset,
+           was_span < now_span ? was_span : now_span);
+  }
+}
+
+static void snapshot_restore_body(void *arg)
+{ struct snapshot *s = (struct snapshot *)arg;
+  int type, b, i, k;
+
+  /* the attributes' layout as it was (a constraint list grown since moved
+     the attributes after it), by Evolver's own reshaping; all types before
+     any is replaced, so a refusal leaves the surface as it was */
+  for ( type = 0 ; type < NUMELEMENTS ; type++ )
+  { struct snap_type *t = s->t + type;
+    struct extra *now;
+    for ( k = 0 ; k < t->extra_count ; k++ )
+    { struct extra *was = t->extras + k;
+      int sizes[MAXARRAYDIMS];
+      now = EXTRAS(type) + k;
+      if ( now->array_spec.datacount == was->array_spec.datacount
+           && now->array_spec.dim == was->array_spec.dim
+           && !memcmp(now->array_spec.sizes,was->array_spec.sizes,sizeof(sizes)) )
+        continue;
+      memcpy(sizes,was->array_spec.sizes,sizeof(sizes));
+      if ( was->array_spec.dim == 0 ) sizes[0] = was->array_spec.datacount;
+      expand_attribute(type,k,sizes);
+    }
+  }
+  for ( type = 0 ; type < NUMELEMENTS ; type++ )
+  { struct snap_type *t = s->t + type;
+    INDIRECT_TYPE *ibase;
+    char *spot;
+    /* the same layout (the usual case: nothing defined or grown since):
+       the blocks copy whole */
+    int same = web.sizes[type] == t->size && web.skel[type].extra_count == t->extra_count;
+    for ( k = 0 ; same && k < t->extra_count ; k++ )
+      same = EXTRAS(type)[k].offset == t->extras[k].offset;
+
+    /* the blocks as they were, at today's size (attributes defined since:
+       zero) */
+    for ( b = 0 ; b < blockcount[type] ; b++ )
+      myfree((char*)blocklist[type][b].blockptr);
+    blockcount[type] = 0;
+    if ( blockmax[type] < t->nblocks )
+    { blocklist[type] = (struct blocklist_struct *)kb_realloc((char*)blocklist[type],
+                          (t->nblocks + BATCHSIZE)*sizeof(struct blocklist_struct));
+      blockmax[type] = t->nblocks + BATCHSIZE;
+    }
+    if ( web.skel[type].ibase ) myfree((char*)web.skel[type].ibase);
+    ibase = (INDIRECT_TYPE *)mycalloc(t->skel.ialloc ? t->skel.ialloc : 1,
+                                      sizeof(INDIRECT_TYPE));
+    for ( b = 0 ; b < t->nblocks ; b++ )
+    { struct blocklist_struct *was = t->blocks + b;
+      char *block = (char*)mycalloc(was->count,web.sizes[type]);
+      if ( same )
+        memcpy(block,was->blockptr,(size_t)was->count*t->size);
+      else
+        for ( i = 0 ; i < was->count ; i++ )
+          snapshot_copy_element(block + (size_t)i*web.sizes[type],
+                                (char*)was->blockptr + (size_t)i*t->size,type,t);
+      for ( i = 0, spot = block ; i < was->count ; i++, spot += web.sizes[type] )
+      { struct element *e = (struct element *)spot;
+        ORDTYPE ord = ordinal(e->self_id);
+        if ( ord < 0 || ord >= t->skel.ialloc )
+          kb_error(PYSE_ERR_BAD_ARGUMENT,"Internal error: a snapshot element's id is out of "
+                   "range.\n",RECOVERABLE);
+        ibase[ord] = e;
+      }
+      blocklist[type][b].blockptr = (struct element *)block;
+      blocklist[type][b].start_ord = was->start_ord;
+      blocklist[type][b].count = was->count;
+      blockcount[type] = b + 1;
+    }
+    { struct skeleton keep = web.skel[type];
+      web.skel[type] = t->skel;
+      web.skel[type].ibase = ibase;
+      web.skel[type].dy_extras = keep.dy_extras;
+      web.skel[type].maxextra = keep.maxextra;
+      web.skel[type].extra_count = keep.extra_count;
+    }
+    switch ( type )
+    { case VERTEX: vibase = ibase; break;
+      case EDGE: eibase = ibase; break;
+      case FACET: fibase = ibase; break;
+      case BODY: bibase = ibase; break;
+      case FACETEDGE: feibase = ibase; break;
+    }
+    parallel_update_flag[type] = 1;
+  }
+  web.bodycount = s->bodycount;
+  web.outside_body = s->outside_body;
+  web.scale = s->scale;
+  for ( i = 0 ; i < gen_quant_count ; i++ )
+  { struct gen_quant *q = GEN_QUANT(i);
+    if ( i < s->quant_count )
+    { struct gen_quant *was = s->quants + i;
+      q->flags = was->flags;
+      q->target = was->target;
+      q->value = was->value;
+      q->modulus = was->modulus;
+      q->pressure = was->pressure;
+      q->oldpressure = was->oldpressure;
+      q->volconst = was->volconst;
+      q->b_id = was->b_id;
+      q->vol_number = was->vol_number;
+      q->fixnum = was->fixnum;
+    }
+    else if ( valid_id(q->b_id) && !(q->flags & Q_DELETED) )
+    { /* the volume of a body made since: gone with it (as free_element() leaves
+         a deleted body's) */
+      q->modulus = 1;
+      q->flags &= ~(Q_ENERGY|Q_FIXED|Q_CONSERVED);
+      q->flags |= Q_INFO;
+    }
+    q->timestamp = 0;
+  }
+  for ( i = 0 ; i < s->global_count && i < web.global_count ; i++ )
+    if ( !isnan(s->params[i]) && is_datafile_parameter(i) )
+      globals(i)->value.real = s->params[i];
+  web_timestamp = top_timestamp = ++global_timestamp;
+  fl_body_stamp++;
+  FL_ATTR_CHANGED();
+  recalc();
+}
+
+int pyse_snapshot_restore(long handle)
+{ struct snapshot *s = NULL;
+  int status;
+  pthread_mutex_lock(&snapshot_mutex);
+  if ( handle >= 0 && handle < snapshot_slots ) s = snapshots[handle];
+  pthread_mutex_unlock(&snapshot_mutex);
+  if ( !s )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,"No such snapshot.");
+  if ( s->load != load_serial )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "The snapshot is of a surface loaded before the current one.");
+  if ( s->quantities != everything_quantities_flag )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "The surface was converted to quantities since the snapshot (as the "
+                      "first Hessian does): it can't be restored in memory.");
+  if ( s->sdim != SDIM || s->representation != web.representation
+       || s->modeltype != web.modeltype || s->lagrange_order != web.lagrange_order )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "The model changed since the snapshot (dimension, representation or "
+                      "element order): it can't be restored in memory.");
+  status = surface_call(snapshot_restore_body,s);
+  surface_version++;
+  return status;
 }

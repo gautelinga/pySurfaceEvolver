@@ -512,12 +512,48 @@ clones and paper texts in the session scratchpad, repos/):
    snap, separate), pinch (collapse the ring, separate), contact-line join and
    split (snap or separate border vertices), dry patch (remove facets, new
    line with constraint and methods), sheet onto solid.
-5. The event detection and descent pipeline in C (the user's "all in C"),
-   last: its policy changed every session so far, and it is cheap next to
-   Evolver's own work; ported once phases 1-4 make it settle, with its
-   parameters exposed.
+5. The event detection and descent pipeline stays in Python (the user,
+   2026-10-18, after the baseline: its 16-bead stops are decisions and
+   meshes going wrong, not speed), rebuilt on phases 1-4's C edits and
+   checks: each failure the checker names, fixed in the policy; ported to C
+   only if profiling ever shows it costs time.
 6. If the corpus still shows them: intersection-safe descent steps (a line
    search filtered by static intersection and solid checks, IPC-style).
+
+**Progress.**
+- Phase 0 (2026-10-18): bench/topology/corpus.py (and pack.py), the quick set
+  of 18 runs (4- and 16-bead packs, seeds 0-2, 15/20/25 degrees, h 0.2) and a
+  full set (mesh sizes, 64 beads); the `pysurfaceevolver.topology` logger.
+  Baseline (d0e51c2): all nine 4-bead runs reach half the liquid, none of the
+  nine 16-bead runs; 495 changes, 9 failures (55 changes per failure); stops:
+  no stable state 3, ran away 3, relaxed but unsound 2, three falls 1; the
+  refusals mostly "the place is on other constraints or fixed" (64) and "the
+  contact lines run the same way" (28).
+- Phase 1 (2026-10-18): the snapshot in memory (bindings/pyse_api.c,
+  Evolver._save/_Saved): element blocks copied whole, attribute layouts put
+  back (Evolver's expand_attribute, then attribute by attribute where padding
+  moved them), quantities, parameters; bit for bit; only once the surface is
+  in quantities (Evolver can't convert back), dumped before a text restore's
+  reload. 26x faster at 98k facets. The check (bindings/pyse_check.c,
+  _surgery.check_topology, PYSE_CHECK_TOPOLOGY=1). It found at once that
+  contact() on a plane can leave a pinched vertex (the new patch's border
+  touching a contact line at a vertex), in two plane-drop tests.
+  The corpus with the snapshot: the outcomes of single runs moved (element
+  order no longer renumbered by reloads: the runs are chaotic), and a
+  wet-and-close churn loop with no bound but the 2000-step cap appeared in
+  two 16-bead runs: a corpus of 18 runs can't judge a change by its runs, only
+  by its classes of failure.
+  The corpus with the check on (PYSE_CHECK_TOPOLOGY=1): 12 of the 18 runs
+  stop at a pinched vertex right after a change (226 changes: one in 19 at
+  least), 11 of them drying contacts ("the liquid between thinning": the dry
+  patch's border touching a contact line at a vertex), one wetting; the
+  4-bead runs, which reach half the liquid without the check, pinch too (the
+  descent gets over it there). Logged on the way (records summed over the
+  checks, not distinct): edges through a solid 905, folds 291, edges through
+  a facet 127 (the surface through itself in descents: nothing stops that
+  now). First targets for phase 2: contact() leaving no pinch (separate the
+  vertex as it is made), and descent steps that can't pass the surface
+  through itself.
 
 **Risks.** Every edit must keep all the bookkeeping (facetedge loops, body
 facet lists, vertex edge loops, method and quantity instances, content
@@ -525,7 +561,7 @@ orientation); state outside the element blocks escapes a block snapshot
 (runtime constraints, quantities, facet and fast-loop caches, the Hessian
 pattern keyed on top_timestamp); delete_edge and edge_refine are linear model
 only; refusals need fallbacks to reach the target; size about 3-5k lines of C
-for phases 1-4 (estimate), more for 5.
+for phases 1-4 (estimate).
 
 ## Decisions (agreed with the user)
 

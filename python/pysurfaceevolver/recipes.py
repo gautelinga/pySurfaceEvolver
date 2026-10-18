@@ -810,13 +810,15 @@ def _smooth(ev, factor: float, tol: float) -> None:
     beside facets of 7 degrees: x0.7 a step, and the run's first step
     failed), x20 once evened (18 degrees). Undone where Newton doesn't get
     back, or the surface went through a solid."""
-    start = ev.save()
+    start = ev._save()
     for _ in range(5):
         ev.vertex_average()
         ev.equiangulate()
         ev.newton(3, tol=tol)
     if not ev.newton(20, tol=tol).converged or _through(ev.events(factor)):
         ev.restore(start)
+    from ._surgery import _checked
+    _checked(ev, "evening the mesh")
 
 
 def _nearest(found: list) -> Any:
@@ -1127,7 +1129,7 @@ def _arc_remesh(ev, put, points: list, remesh_now: Callable[[Callable[[], None]]
     before: dict = {}
 
     def ready() -> None:
-        before.update(ids=ev.mesh().vertex_ids, copy=ev.save())
+        before.update(ids=ev.mesh().vertex_ids, copy=ev._save())
     if not remesh_now(ready):
         return points, True
     ids, copy = before["ids"], before["copy"]

@@ -705,3 +705,76 @@ def test_remesh_protect_with_deletions():
     short = m.edge_lengths() < np.median(m.edge_lengths())
     counts = ev.remesh(min_edge=0.3, max_edge=0.6, protect=short)
     assert counts["deleted"] > 0 and counts["split"] >= 0
+
+
+# ---- the topology check -------------------------------------------------------------
+
+def _drop_on_ball():
+    # a 60-degree drop on a unit sphere (a wall from constraints)
+    cap = shapes.cap(0.5, 0.25, nr=5, nt=18)
+    v = cap.vertices + [0, 0, 1.0]
+    rim = np.asarray(cap.rims["rim"])
+    v[rim] /= np.linalg.norm(v[rim], axis=1)[:, None]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, cap.faces, constraints={"ball": C.sphere((0, 0, 0), 1.0, contact_angle=60.0)},
+                   vertex_constraints={"ball": rim}, bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.relax()
+    return ev
+
+
+def _found(ev):
+    from pysurfaceevolver._surgery import check_topology
+    return {p[1].split(" (")[0] for p in check_topology(ev)}
+
+
+def test_the_topology_check_passes_sound_surfaces():
+    assert _found(_drop_on_ball()) == set()
+    assert _found(pyse.Evolver(pyse.examples.path("cube.fe"))) == set()
+
+
+def test_the_topology_check_finds_contact_line_problems():
+    ev = _drop_on_ball()
+    m = ev.mesh()
+    border = int(m.edge_ids[np.flatnonzero(m.edge_valence() == 1)[0]])
+    ev.command(f"reverse_orientation edge[{border}]")
+    assert _found(ev) == {"a contact-line edge stored against its facet"}
+    ev = _drop_on_ball()
+    ev.command("dissolve facet[5]")            # (a hole)
+    assert "a border edge on no constraint" in _found(ev)
+
+
+def test_the_topology_check_finds_solids_pinches_and_crossings():
+    ev = _drop_on_ball()
+    x = ev.vertices.copy()
+    top = int(np.argmax(x[:, 2]))
+    x[top, 2] -= 0.6                            # through the ball
+    ev.vertices = x
+    assert {"a vertex inside a solid", "an edge through a solid"} <= _found(ev)
+    # two tetrahedra sharing a vertex
+    tv = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1.0]])
+    tf = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[tv, -tv[1:]], np.r_[tf, np.where(tf == 0, 0, tf + 3)[:, ::-1]],
+                   bodies=[pyse.Body(faces=range(4)), pyse.Body(faces=range(4, 8))])
+    assert _found(ev) == {"a pinched vertex"}
+    # two boxes overlapping
+    box = shapes.box(n=4)
+    v, f = np.asarray(box.vertices), np.asarray(box.faces)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[v, v + [0.51, 0.33, 0.27]], np.r_[f, f + len(v)],
+                   bodies=[pyse.Body(faces=range(len(f))), pyse.Body(faces=range(len(f), 2*len(f)))])
+    assert _found(ev) == {"an edge through a facet"}
+
+
+def test_the_topology_check_stops_a_run_at_a_broken_change(monkeypatch):
+    # PYSE_CHECK_TOPOLOGY=1: a step that leaves a structural problem raises,
+    # naming the step
+    from pysurfaceevolver import _surgery
+    ev = _drop_on_ball()
+    monkeypatch.setenv("PYSE_CHECK_TOPOLOGY", "1")
+    _surgery._checked(ev, "nothing")
+    m = ev.mesh()
+    ev.command(f"reverse_orientation edge[{int(m.edge_ids[np.flatnonzero(m.edge_valence() == 1)[0]])}]")
+    with pytest.raises(_surgery.TopologyCheckError, match="after a test edit: a contact-line edge"):
+        _surgery._checked(ev, "a test edit")

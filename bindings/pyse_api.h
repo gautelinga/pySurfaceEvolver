@@ -195,6 +195,30 @@ int pyse_constraint_normals(int num, double *out, long n);
 int pyse_facet_corners(double *out, long n);
 double pyse_total_area(void);
 const char *pyse_datafilename(void);
+
+/* In-memory snapshots of the surface (pySE's own save/restore inside its
+   runs; see pyse_api.c). take() fills handle; restore() puts the surface
+   back as it was, into the same load only; free() may be called anytime. */
+int pyse_snapshot_take(long *handle);
+/* The topology check (pyse_check.c): problems found, as records.
+   walls/sides: solid constraints and which side of each is solid (+1:
+   where its formula is negative); tol: depth allowed, in mean edge lengths;
+   manifold: edges on more than two facets are problems too. out gets up to
+   max records; count: how many were found. */
+enum { PYSE_PROBLEM_BARE_EDGE = 1, PYSE_PROBLEM_MANY_FACETS, PYSE_PROBLEM_ORIENTATION,
+       PYSE_PROBLEM_PINCHED, PYSE_PROBLEM_OPEN_BORDER, PYSE_PROBLEM_BORDER_VERTEX,
+       PYSE_PROBLEM_BORDER_REVERSED, PYSE_PROBLEM_DEGENERATE, PYSE_PROBLEM_FOLD,
+       PYSE_PROBLEM_VERTEX_IN_SOLID, PYSE_PROBLEM_EDGE_IN_SOLID, PYSE_PROBLEM_INTERSECTION };
+struct pyse_problem { int code; int type; long id; long other; double value; };
+int pyse_check_topology(const int *walls, const int *sides, int nwalls, double tol,
+                        int manifold, struct pyse_problem *out, int max, int *count);
+
+/* Whether the surface is converted to quantities (everything_quantities;
+   the first Hessian converts it): a snapshot restores only into the mode
+   it was taken in. */
+int pyse_everything_quantities(void);
+int pyse_snapshot_restore(long handle);
+void pyse_snapshot_free(long handle);
 /* Set the name reported as the current datafile (e.g. after restoring a
    snapshot from a temporary file). */
 void pyse_set_datafilename(const char *name);

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import warnings
 from typing import Any, List
 
@@ -17,6 +19,81 @@ _TOUCH = 0.05   # a solid this close (in its event's edges): the surface resting
 _GUARD_REACH = 5.0  # free vertices are guarded from the walls within this many median edges
 _POLE_MARGIN = 0.5  # a sphere(axis=)'s pole moved when a contact line comes this near (radii)
 _POLE_TRIES = 3     # a run that came within half that done again this often, the poles moved
+
+# what the topology runs do, change by change (debug records: changes made and
+# refused, descents undone, poles moved, patches closed, why a descent stopped)
+_log = logging.getLogger("pysurfaceevolver.topology")
+
+# the topology check (pyse_check.c): problems no change may leave (the first
+# group), and shapes a descent can pass through (the second)
+_STRUCTURAL = {1: "an edge on no facet", 2: "an edge on more than two facets",
+               3: "facets turned against each other across an edge", 4: "a pinched vertex",
+               5: "a border edge on no constraint",
+               6: "a border edge on a constraint its vertex isn't on",
+               7: "a contact-line edge stored against its facet"}
+_GEOMETRIC = {8: "a degenerate facet", 9: "a fold", 10: "a vertex inside a solid",
+              11: "an edge through a solid", 12: "an edge through a facet"}
+_TYPES = {0: "vertex", 1: "edge", 2: "facet"}
+
+
+class TopologyCheckError(RuntimeError):
+    """A change left the surface broken (PYSE_CHECK_TOPOLOGY=1): ``what``
+    the change was, ``problems`` what check_topology() found."""
+
+    def __init__(self, what: str, problems: list):
+        self.what, self.problems = what, problems
+        super().__init__(f"after {what}: " + "; ".join(p[1] for p in problems[:5])
+                         + (f" (and {len(problems) - 5} more)" if len(problems) > 5 else ""))
+
+
+def check_topology(ev, tol: float = 0.01) -> list:
+    """What's wrong with the surface beyond Evolver's own check: a list of
+    (code, text, element type, number, other, value); codes 1-7 structural
+    (_STRUCTURAL), 8-12 geometric (_GEOMETRIC). The solids are the walls
+    (their solid side as events() takes it), a depth over tol mean edges
+    counting; edges on three or more facets count with one body or none."""
+    nums, attrs, dist, names = ev._constraint_gaps()
+    walls, sides = [], []
+    for c in range(len(nums)):
+        if (names[c] or int(nums[c])) not in surface.walls:
+            continue
+        d = np.asarray(dist)[:, c]
+        off = d[~np.isnan(d)]
+        if attrs[c] & 2:
+            side = 1
+        elif attrs[c] & 1:
+            side = -1
+        else:
+            side = 1 if (off > 0).sum() >= (off < 0).sum() else -1
+        walls.append(int(nums[c]))
+        sides.append(side)
+    manifold = _core.count(_core.BODY) <= 1
+    _, result = ev._call(_core.check_topology, walls, sides, float(tol), manifold)
+    count, rows = result.data
+    found = []
+    for code, kind, number, other, value in rows:
+        text = _STRUCTURAL.get(code) or _GEOMETRIC.get(code, f"problem {code}")
+        found.append((code, f"{text} ({_TYPES.get(kind, kind)} {number})", kind, number,
+                      other, value))
+    if count > len(rows):
+        found.append((0, f"... {count - len(rows)} more", -1, 0, 0, 0.0))
+    return found
+
+
+def _checked(ev, what: str) -> None:
+    """With PYSE_CHECK_TOPOLOGY=1 (tests, the corpus): the topology check
+    after ``what``, raising TopologyCheckError on a structural problem,
+    logging geometric ones."""
+    if os.environ.get("PYSE_CHECK_TOPOLOGY", "") in ("", "0"):
+        return
+    found = check_topology(ev)
+    structural = [p for p in found if p[0] in _STRUCTURAL]
+    geometric = [p for p in found if p[0] in _GEOMETRIC]
+    if geometric:
+        _log.debug("check after %s: %s", what, "; ".join(p[1] for p in geometric[:5]))
+    if structural:
+        _log.debug("check failed after %s: %s", what, "; ".join(p[1] for p in structural[:5]))
+        raise TopologyCheckError(what, structural)
 
 
 def guard(ev) -> None:
@@ -164,6 +241,9 @@ def move_poles(ev, force=()) -> list:
         base = str(key).split("_pole")[0] if isinstance(key, str) else f"c{key}"
         count = 1 + max([int(str(k2).rsplit("_pole", 1)[1]) for k2 in surface.walls
                          if str(k2).startswith(f"{base}_pole")] or [0])
+        # (past names Evolver still defines too: those of moves undone since)
+        while ev.eval(f'is_defined("{base}_pole{count}")') != 0:
+            count += 1
         name = f"{base}_pole{count}"
         ev.command('exec "define constraint ' + name + " " + " ".join(new.text().split()) + '"')
         ev.command(f"set vertex constraint {name} where on_constraint {old}; "
@@ -188,6 +268,8 @@ def move_poles(ev, force=()) -> list:
         cos = np.cos(np.radians(getattr(wall, "contact_angle")))
         surface.energy_shift.append((1, _num(4*np.pi*R*R*cos*round(float(spheres.sum())))))
         moved.append(name)
+        _log.debug("pole moved: %s to %s (line %.3g radii from the pole%s)", old, name, near,
+                   ", forced" if key in force else "")
     return moved
 
 
@@ -199,7 +281,7 @@ def _away_from_poles(ev, run) -> tuple:
     those poles moved (up to _POLE_TRIES times: a line draining toward a pole
     was refused run after run). Returns run's result, and the state it
     started from with the energy there."""
-    start, energy = ev.save(), ev.energy
+    start, energy = ev._save(), ev.energy
     fans = {p[0]: p[7] for p in _pole_lines(ev)}
     result = run()
     for _ in range(_POLE_TRIES):
@@ -207,9 +289,10 @@ def _away_from_poles(ev, run) -> tuple:
                or (p[0] in fans and abs(p[7] - fans[p[0]]) > 2*np.pi)]
         if not bad:
             break
+        _log.debug("run undone: a contact line came near or across a pole (%s)", bad)
         ev.restore(start)
         move_poles(ev, force=bad)
-        start, energy = ev.save(), ev.energy
+        start, energy = ev._save(), ev.energy
         fans = {p[0]: p[7] for p in _pole_lines(ev)}
         result = run()
     return result, start, energy
@@ -282,7 +365,7 @@ def pinch_off(ev, event, relax: bool = True) -> List[int]:
     near = {s: facet_ids[touching][facet_side == s] for s in (-1.0, 1.0)}
     lengths = m.edge_lengths()[m.edge_valence() != 1]
     h = float(np.median(lengths)) if len(lengths) else float(event.scale)
-    snapshot = ev.save()
+    snapshot = ev._save()
     try:
         _cut(ev, x, ring, centre, event.scale)
         made = _split_body(ev, body, before, near, lost) if body else []
@@ -565,7 +648,7 @@ def _glue(ev, m, a: int, b: int, keep) -> int:
     target = keep if keep in bodies else (bodies[0] if bodies else 0)
     other = [i for i in bodies if i != target]
     fa, fbid = int(m.facet_ids[a]), int(m.facet_ids[b])
-    snapshot = ev.save()
+    snapshot = ev._save()
     try:
         ev.command(f"facet_merge({fa},{fbid})")
         ev.command(f"unset facet[{fa}] frontbody; unset facet[{fa}] backbody")
@@ -692,7 +775,7 @@ def _dissolve_onto(ev, m, gone, key) -> None:
     ev.vertices = moved
     bodies = [int(i) for i in ev.bodies().ids]
     volume = {i: ev.body(i).volume for i in bodies}
-    snapshot = ev.save()
+    snapshot = ev._save()
     try:
         was_border = set(np.asarray(m.edge_ids)[m.edge_valence() == 1].tolist())
         ids = np.asarray(m.facet_ids)[gone]
@@ -733,6 +816,7 @@ def drop_flat(ev, h: float) -> int:
         gone = small & np.isnan(dist[:, c])[f].all(axis=1)
         if gone.any():
             _dissolve_onto(ev, m, gone, key)
+            _log.debug("flat facets dropped on %s (%d)", key, int(gone.sum()))
             return int(gone.sum())
     return 0
 
@@ -775,9 +859,9 @@ def _split_pinch(ev, m, v: int, num: int) -> None:
     was_border = set(np.asarray(m.edge_ids)[m.edge_valence() == 1].tolist())
     bodies = [int(i) for i in ev.bodies().ids]
     volume = {i: ev.body(i).volume for i in bodies}
-    snapshot = ev.save()
+    snapshot = ev._save()
     try:
-        commands = [f"pyse_split := new_vertex({x[0]!r}, {x[1]!r}, {x[2]!r})",
+        commands = [f"pyse_split := new_vertex({_num(x[0])}, {_num(x[1])}, {_num(x[2])})",
                     "set vertex[pyse_split] constraint " + str(num)]
         commands += [f"pyse_split_{u} := new_edge(pyse_split, {int(vids[u])})" for u in ring]
         for i in moving:
@@ -924,7 +1008,7 @@ def close_patches(ev, h: float) -> int:
                 continue
             front, back = (int(i) for i in np.asarray(m.facet_bodies)[beside[0]])
             ids = [int(m.edge_ids[i]) for i in loop]
-            energy, saved = ev.energy, ev.save()
+            energy, saved = ev.energy, ev._save()
             body = "" if len(ids) == 3 else " where original == pyse_patch"
             commands = [f"pyse_patch := new_facet({', '.join(str(-e) for e in reversed(ids))})"]
             for side, b_id in (("frontbody", front), ("backbody", back)):
@@ -938,6 +1022,7 @@ def close_patches(ev, h: float) -> int:
                 ev.restore(saved)
                 continue
             closed += 1
+            _log.debug("patch closed on %s (%d edges)", key, len(loop))
             m = ev.mesh()
             f, edges, x = np.asarray(m.facets), np.asarray(m.edges), np.asarray(m.vertices)
             valence = m.edge_valence()
@@ -1081,7 +1166,7 @@ def _join_lines(ev, m, x, f, a, b, keep) -> None:
     volume = {i: ev.body(i).volume for i in bodies}
     ids = np.asarray(m.vertex_ids)
     eids = np.asarray(m.edge_ids)
-    snapshot = ev.save()
+    snapshot = ev._save()
     try:
         ev.command(f"vertex_merge({int(ids[a])},{int(ids[b])})")
         ev.command(f"vertex_merge({int(ids[a2])},{int(ids[b2])})")
@@ -1146,8 +1231,12 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     from ._errors import EvolverError
     changes: list = []
     try:
-        return _descend(ev, factor, tol, falling=falling, keep=keep, h0=h0, changes=changes)
+        result = _descend(ev, factor, tol, falling=falling, keep=keep, h0=h0, changes=changes)
+        if result[2]:
+            _log.debug("descent stopped: %s", result[2])
+        return result
     except EvolverError as error:
+        _log.debug("descent stopped: Evolver: %s", error)
         return None, changes, f"Evolver: {error}"
     finally:
         _unguard(ev)
@@ -1179,6 +1268,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         orient_lines(ev)
         close_patches(ev, h0)
         move_poles(ev)
+        _checked(ev, "tidying (lines, patches, poles)")
         x = ev.vertices
         chunk = None
         if falling:
@@ -1191,6 +1281,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # it from ever settling)
             if _split_lines(ev, h0):
                 ev.equiangulate()
+            _checked(ev, "a fall's gradient steps")
         else:
             # after a change, relax() in short runs (a merged neck widening
             # takes thousands of gradient steps on a fine mesh), looking at
@@ -1199,15 +1290,18 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # gradient steps
             chunk, start, energy = _away_from_poles(ev, lambda: ev.relax(tol, max_iter=_CHUNK))
             if not _plausible(ev, energy):
+                _log.debug("run undone: implausible (volumes, energy or poles)")
                 ev.restore(start)
                 chunk = _gradient_run(ev, tol)
                 if chunk is None:
                     return None, changes, "the descent ran away (volumes or energy)"
             guard(ev)
+            _checked(ev, "a relax run")
         # (vertices a split added come last: the rows before are the same)
         moved = ev.vertices[:len(x)] - x if len(x) <= len(ev.vertices) else None
         if remeshing and not (chunk is not None and chunk.converged):
             _keep_edges(ev, h0)
+            _checked(ev, "keeping the edges in range")
             moved = None if moved is None or len(moved) != len(ev.vertices) else moved
         found = ev.events(factor)
         m = ev.mesh()
@@ -1224,7 +1318,10 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     break
                 except ValueError as error:
                     refused = f"{e}: {error}"
+                    _log.debug("change refused: %s", refused)
         if neck is not None:
+            _log.debug("change made: %s", neck)
+            _checked(ev, f"pinch_off: {neck}")
             changes.append(neck)
             way, before, since = None, [], 0
             r = _settle(ev, tol)
@@ -1251,6 +1348,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             held = [e for e in resting if _beside_line(ev, e, h)]
             resting = [e for e in resting if not any(e is r for r in held)]
             _push_out(ev, held, h)
+            if held:
+                _checked(ev, "pushing the surface out of a solid")
         beside = [e for e in found if e.kind == "solid" and (falling or not _resting(e))
                   and _beside_line(ev, e, h)]
         coming = resting + [e for e in _coming(found, before)
@@ -1265,8 +1364,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 break
             except ValueError as error:
                 refused = f"{e}: {error}"       # (passed over: it may come again, or go)
+                _log.debug("change refused: %s", refused)
         if made is not None:
             e = made
+            _log.debug("change made: %s", e)
+            _checked(ev, f"the change: {e}")
             changes.append(e)
             guard(ev)
             way, before, tried, since = None, [], 0, 0
@@ -1276,6 +1378,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                    and _beside_line(ev, e, h)]
         if through:
             _push_out(ev, through, h)
+            _checked(ev, "pushing the surface out of a solid")
         before = [e for e in found if not (e.kind == "solid" and e.gap < 0)]
         residual = ev.residual()
         tried += 1
@@ -1290,6 +1393,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 ev.command("u")
                 _keep_edges(ev, h0)
                 chunk = ev.relax(tol)
+                _checked(ev, "tidying a relaxed state")
             if chunk.converged and chunk.stable is not False and _sound(chunk.health):
                 return chunk, changes, ""
             if chunk.stable is not False:
@@ -1306,7 +1410,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # (or relax(), where Newton steps alone don't get there: a drop
             # free to move as a whole, which relax() deflates)
             tried = 0
-            start = ev.save()
+            start = ev._save()
             for finish in ("newton", "relax"):
                 if finish == "newton" and not ev.newton(20, tol=tol).converged:
                     continue
@@ -1335,6 +1439,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             sign = float(np.sign(_common(way, u))) or 1.0
         way = sign*u
         ev.vertices = ev.vertices + _FALL_STEP*h*way/np.linalg.norm(u, axis=1).max()
+        _checked(ev, "a step along the unstable mode")
     return None, changes, (f"no stable state within {_FALL_ITERATIONS} steps of the last "
                            f"change" if since > _FALL_ITERATIONS else
                            f"no stable state within {_FALL_TOTAL*_FALL_ITERATIONS} steps") \

@@ -489,6 +489,71 @@ def test_snapshot_keeps_lagrange_model_and_parameters(load, tmp_path):
     assert Evolver(str(tmp_path / "saved.fe")).model == "lagrange"
 
 
+def _state(ev):
+    m = ev.mesh()
+    return (m.vertices.copy(), m.facets.copy(), ev.eval("total_energy"),
+            list(ev.bodies().volume), ev.counts)
+
+
+def _assert_same(a, b):
+    np.testing.assert_array_equal(a[0], b[0])
+    np.testing.assert_array_equal(a[1], b[1])
+    assert a[2:] == b[2:]
+
+
+@pytest.mark.parametrize("change", [
+    "r", "r; g 5", "u; delete edge where length < 0.3", "o",
+    "define vertex attribute pyse_test real; set vertex pyse_test x",
+    # a vertex on two constraints more grows its constraint list, moving the
+    # attributes after it
+    ("; ".join(f'exec "define constraint pyse_c{k} nonnegative formula 5 - x - {k}*y"' for k in range(4)),
+     "; ".join(f"set vertex[1] constraint pyse_c{k}" for k in range(4))),
+    # (the constraints defined since stay defined)
+])
+def test_memory_snapshot_restores_exactly(load, change):
+    # pySE's own saves in memory (Evolver._save), once the surface is in
+    # quantities (Evolver converts it for a Hessian of constraint integrals,
+    # as a contact angle's): elements put back as they were, and the run
+    # goes on bit for bit as from the original
+    ev = load("mound.fe")
+    ev.command("g 5; convert_to_quantities; hessian")
+    saved = ev._save()
+    assert type(saved).__name__ == "_Saved"
+    before = _state(ev)
+    ev.command("g 5; hessian")
+    after = _state(ev)
+    ev.restore(saved)
+    _assert_same(_state(ev), before)
+    for command in (change,) if isinstance(change, str) else change:
+        ev.command(command)
+    ev.restore(saved)
+    _assert_same(_state(ev), before)
+    assert ev.check() == []
+    ev.command("g 5; hessian")
+    # (bit for bit on one thread; threads sum in their own order)
+    now = _state(ev)
+    np.testing.assert_allclose(now[0], after[0], rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(now[1], after[1])
+    assert now[2] == pytest.approx(after[2], abs=1e-12)
+
+
+def test_memory_snapshot_survives_a_reload_and_not_another_surface(load):
+    ev = load("cube.fe")
+    assert isinstance(ev._save(), pyse.Snapshot)    # (not in quantities yet: a dump)
+    text = ev.save()
+    ev.command("g 5; convert_to_quantities; hessian")
+    saved = ev._save()
+    state = _state(ev)
+    ev.restore(text)            # (a reload: the copy in memory is dumped first)
+    ev.restore(saved)
+    np.testing.assert_allclose(_state(ev)[0], state[0], rtol=0, atol=1e-15)
+    ev.command("convert_to_quantities; hessian")
+    saved = ev._save()
+    ev.load("mound.fe")
+    with pytest.raises(ValueError, match="loaded before"):
+        ev.restore(saved)
+
+
 def test_sigint_interrupts_long_run(run_python):
     result = run_python("""
         import os, signal, threading
