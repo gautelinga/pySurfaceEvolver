@@ -591,9 +591,17 @@ class _Engine:
         :meth:`mesh` row of that element type."""
         if isinstance(constraint, str) and not re.fullmatch(r"[A-Za-z_]\w*", constraint):
             raise ValueError(f"not a constraint name: {constraint!r}")
-        nums, _, _, names = self._constraint_gaps()
-        known = [int(c) for c in nums] + [n for n in names if n]
-        if (constraint if isinstance(constraint, str) else int(constraint)) not in known:
+        key = constraint if isinstance(constraint, str) else int(constraint)
+        # (the names and numbers known from before, taken again only for one
+        # not among them: the whole table of gaps took 3 ms a call, the
+        # topology runs' tidying called this per wall, 19% of a run)
+        cached = getattr(self, "_known_constraints", None)
+        if cached is None or cached[0] != surface.generation or key not in cached[1]:
+            nums, _, _, names = self._constraint_gaps()
+            self._known_constraints = (surface.generation,
+                                       {int(c) for c in nums} | {n for n in names if n})
+        known = sorted(self._known_constraints[1], key=str)
+        if key not in self._known_constraints[1]:
             close = difflib.get_close_matches(str(constraint), [str(k) for k in known], 2)
             raise KeyError(f"no constraint {constraint!r}"
                            + (f"; did you mean {' or '.join(map(repr, close))}?" if close else

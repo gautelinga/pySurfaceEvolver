@@ -132,6 +132,22 @@ def guard(ev) -> None:
     chosen = np.zeros_like(gap, dtype=bool)
     rows = np.arange(len(gap))[:, None]
     chosen[rows, order] = np.isfinite(gap[rows, order])
+    # (not two whose normals there are within 10 degrees of each other: a
+    # free vertex in the 0.015 gap where a bead touches a side wall, on both
+    # guards, left Evolver's constraint projection singular, ERROR 3005; the
+    # nearer one only)
+    both = np.flatnonzero(chosen.sum(axis=1) == 2)
+    if len(both):
+        normals = {}
+        for j in np.unique(order[both]):
+            _, grad = ev._call(_core.constraint_normals, int(nums[cols[j]]))
+            normals[int(j)] = np.asarray(grad.data)
+        a = np.array([normals[int(j)][i] for i, j in zip(both, order[both, 0])])
+        b = np.array([normals[int(j)][i] for i, j in zip(both, order[both, 1])])
+        cos = np.abs(np.einsum("ij,ij->i", a, b)) / np.maximum(
+            np.linalg.norm(a, axis=1)*np.linalg.norm(b, axis=1), 1e-300)
+        tangent = both[cos > 0.985]
+        chosen[tangent, order[tangent, 1]] = False
     for j, key in enumerate(walls):
         if chosen[:, j].any():
             ev.set_constraint("vertex", f"{GUARD_PREFIX}{key}", where=chosen[:, j])
@@ -319,12 +335,14 @@ def _unguard(ev, names=None) -> None:
     deletes an edge only if one end's constraints are among the other's or
     the edge's, and a guarded vertex next to a contact line's (a guard, a
     wall) is neither, so the edges there didn't go and their facets
-    degenerated (0.3 degrees)."""
-    if names is None:
-        _, _, _, names = ev._constraint_gaps(guards=True)
-    for name in names:
-        if str(name).startswith(GUARD_PREFIX):
-            ev.command(f"unset vertex constraint {name}")
+    degenerated (0.3 degrees). (Only the guards some vertex is on, in one
+    command: a command per guard, 21 a call, took 6% of a 16-bead run.)"""
+    _, _, dist, all_names = ev._constraint_gaps(guards=True)
+    used = [str(n) for c, n in enumerate(all_names)
+            if str(n).startswith(GUARD_PREFIX) and np.isnan(dist[:, c]).any()
+            and (names is None or n in names)]
+    if used:
+        ev.command("; ".join(f"unset vertex constraint {n}" for n in used))
 
 
 def pinch_off(ev, event, relax: bool = True) -> List[int]:
@@ -1793,9 +1811,18 @@ def _crossings(ev) -> int:
     through itself (see _edits). (Not folds one ring across, beside contact
     lines at small angles: those the corpus's 16-bead runs met run after run
     after a contact, even evened out, and the runs got past them before;
-    folds are the mesh's to mend.)"""
+    folds are the mesh's to mend.) (Kept for the same vertices and facets:
+    the descents ask again of a state they asked of, 16 ms each on a 16-bead
+    pack.)"""
     from ._edits import crossings
-    return crossings(ev, far=True)
+    m = ev.mesh()
+    key = (hash(np.asarray(m.vertices).tobytes()), hash(np.asarray(m.facets).tobytes()))
+    if _CROSSINGS[0] != key:
+        _CROSSINGS[:] = [key, crossings(ev, far=True)]
+    return int(_CROSSINGS[1])
+
+
+_CROSSINGS: list = [None, 0]       # (the state's key, its crossings)
 
 
 def _change_nearest(ev, factor: float, keep, skip=None, saved=None) -> Any:
