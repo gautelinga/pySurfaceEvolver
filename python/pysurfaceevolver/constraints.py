@@ -109,6 +109,10 @@ class Constraint:
     pole_axis: Optional[Tuple[float, float, float]] = field(default=None, compare=False,
                                                             repr=False)
     south_regular: bool = field(default=False, compare=False, repr=False)
+    # a sphere(axis=)'s integrands' data, for evaluating them in C (centre,
+    # radius, frame e1 e2 e3, the energy's coefficient or NaN where it isn't
+    # a number): Evolver's interpreter took 22% of a pack's gradient steps
+    native: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
 
     @property
     def floored(self) -> bool:
@@ -416,7 +420,11 @@ def _axis_sphere(c: Tuple[float, ...], R: float, contact_angle: Optional[float],
                                             else None),
                       parameters=k.names, contact_angle=contact_angle,
                       pole_energy=f"-({k.times(span*r_a)})" if k else None,
-                      pole_axis=(float(e3[0]), float(e3[1]), float(e3[2])), south_regular=True)
+                      pole_axis=(float(e3[0]), float(e3[1]), float(e3[2])), south_regular=True,
+                      native=(tuple(float(v) for v in C), float(R), tuple(map(float, e1)),
+                              tuple(map(float, e2)), tuple(map(float, e3)),
+                              float(k.value) if k.expr is None and k.value is not None
+                              else float("nan")))
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,

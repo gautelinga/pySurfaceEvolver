@@ -215,6 +215,14 @@
 
 ### Speed
 
+- The contact-line integrands of `constraints.sphere(..., axis=)` walls are
+  evaluated in C (bindings/pyse_native.c, with their first and second derivatives
+  as dual numbers) instead of through Evolver's expression interpreter, in the
+  linear model's edge integrals once the surface is in quantities: the same values
+  to round-off (1e-15 in a Newton step), a 16-bead pack's gradient step 8.6 -> 5.5
+  ms and its Newton step 17.8 -> 13.9 ms. `_core.native_enable(False)` goes back
+  to the expressions.
+
 - Topology runs: the remesher's and edits' checks find a crossing's candidates in
   the grid's cells, changed elements included (a list of those scanned whole by
   every query), with cells an edge across and a box test before the determinants,

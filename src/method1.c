@@ -12,6 +12,16 @@
 
 #include "include.h"
 
+/* pySE: its sphere walls' contact-line integrands evaluated in C where
+   registered (bindings/pyse_native.c; absent from the stock program) */
+#if defined(__GNUC__)
+extern int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
+                            REAL (*d)[MAXCOORD], REAL ***s) __attribute__((weak));
+#define PYSE_NATIVE(k,x,o,v,d,s) (pyse_native_eval && pyse_native_eval(k,x,o,v,d,s))
+#else
+#define PYSE_NATIVE(k,x,o,v,d,s) 0
+#endif
+
 
 /***********************************************************************
    null_length - just sets edge length and returns 0 for everything.
@@ -822,7 +832,13 @@ REAL edge_vector_integral(struct qinfo *e_info)
   if ( web.modeltype == QUADRATIC ) return edge_vector_integral_q(e_info);
   if ( web.modeltype == LAGRANGE ) return edge_vector_integral_lagrange(e_info);
   for (  m = 0 ; m < gauss1D_num ; m++ )
-  { e_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
+  { REAL native[MAXCOORD];
+    e_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
+    if ( PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],0,native,NULL,NULL) )
+    { for ( j = 0 ; j < SDIM ; j++ )
+        value += e_info->sides[0][0][j]*gauss1Dwt[m]*native[j];
+      continue;
+    }
     for ( j = 0 ; j < SDIM ; j++ )
     { REAL green;
       green = gauss1Dwt[m]*eval(mi->expr[j],e_info->gauss_pt[m],e_info->id,NULL);
@@ -858,9 +874,10 @@ REAL edge_vector_integral_grad(struct qinfo *e_info)
   for ( m = 0 ; m < gauss1D_num ; m++ )
   { REAL weight = sign*gauss1Dwt[m];
     e_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-    for ( j = 0 ; j < SDIM ; j++ ) 
-      eval_all(mi->expr[j],e_info->gauss_pt[m],SDIM,
-        val+j, derivs[j],e_info->id);
+    if ( !PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],1,val,derivs,NULL) )
+      for ( j = 0 ; j < SDIM ; j++ ) 
+        eval_all(mi->expr[j],e_info->gauss_pt[m],SDIM,
+          val+j, derivs[j],e_info->id);
     value += gauss1Dwt[m]*SDIM_dot(val,e_info->sides[0][0]);
     for ( k = 0 ; k < SDIM ; k++ )
     { for ( sum = 0.0, j = 0 ; j < SDIM ; j++ )
@@ -897,9 +914,10 @@ REAL edge_vector_integral_hess(struct qinfo *e_info)
   for ( m = 0 ; m < gauss1D_num ; m++ )
   { REAL weight = sign*gauss1Dwt[m];
     e_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-    for ( j = 0 ; j < SDIM ; j++ ) 
-      eval_second(mi->expr[j],e_info->gauss_pt[m],SDIM,val+j,
-                                              derivs[j],second[j],e_info->id);
+    if ( !PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],2,val,derivs,second) )
+      for ( j = 0 ; j < SDIM ; j++ ) 
+        eval_second(mi->expr[j],e_info->gauss_pt[m],SDIM,val+j,
+                                                derivs[j],second[j],e_info->id);
     value += weight*SDIM_dot(val,e_info->sides[0][0]);
     for ( k = 0 ; k < SDIM ; k++ )
     { for ( sum = 0.0, j = 0 ; j < SDIM ; j++ )

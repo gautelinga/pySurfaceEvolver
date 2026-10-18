@@ -36,6 +36,7 @@ static long surface_version = 0;
 /* Datafiles loaded (pyse_load() or the "load" command): snapshots restore
    only into the load they came from. */
 static long load_serial = 0;
+long pyse_load_serial(void) { return load_serial; }
 
 /* Map from vertex ordinal to row in the pyse_get_vertices() arrays. */
 struct vertex_map { long *rows; long size; };

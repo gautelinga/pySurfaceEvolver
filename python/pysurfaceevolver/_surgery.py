@@ -407,6 +407,7 @@ def _pole_copy(ev, key, wall, centre, R, axis) -> str:
     name = f"{base}_pole{count}"
     ev.command('exec "define constraint ' + name + " " + " ".join(new.text().split()) + '"')
     surface.walls[name] = new
+    ev._register_native()
     return name
 
 

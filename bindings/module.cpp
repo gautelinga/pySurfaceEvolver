@@ -590,6 +590,15 @@ NB_MODULE(_core, m) {
     return pyse_set_solver(name.c_str()) != 0;
   }, "name"_a);
   m.def("solver", []() { Lock lock; return std::string(pyse_solver()); });
+  m.def("native_sphere", [](int con, std::vector<double> c, double R, std::vector<double> e1,
+                            std::vector<double> e2, std::vector<double> e3, double k) {
+    if ( c.size() != 3 || e1.size() != 3 || e2.size() != 3 || e3.size() != 3 )
+      throw std::invalid_argument("native_sphere(): centre and frame are 3-vectors");
+    Lock lock;
+    return bool(pyse_native_sphere(con, c.data(), R, e1.data(), e2.data(), e3.data(), k));
+  }, "con"_a, "centre"_a, "radius"_a, "e1"_a, "e2"_a, "e3"_a, "k"_a,
+     "a sphere wall's contact-line integrands evaluated in C (constraints.sphere(axis=))");
+  m.def("native_enable", [](bool on) { Lock lock; pyse_native_enable(on); }, "on"_a);
   m.def("set_follow", [](bool on) { Lock lock; return bool(pyse_set_follow(on)); }, "on"_a,
         "whether Newton steps carry the mesh along a line they move past the edges "
         "beside it (default on); returns the previous setting");

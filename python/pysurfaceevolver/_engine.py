@@ -495,6 +495,7 @@ class _Engine:
         surface.retired = set(getattr(snapshot, "retired", ()))
         surface.name = snapshot.datafile
         self._generation, self._name = surface.generation, surface.name
+        self._register_native()
 
     @staticmethod
     def _mask(element_type: int, where, n: int) -> np.ndarray:
@@ -774,6 +775,21 @@ class _Engine:
                    edge_nodes, edge_index, facet_nodes, facet_index)
         return Mesh(xyz, edges, faces, vids, eids, fids, fbodies, fixed,
                     order, bezier, edge_nodes, edge_index, facet_nodes, facet_index)
+
+    def _register_native(self) -> None:
+        """The sphere(axis=) walls' contact-line integrands evaluated in C
+        (bindings/pyse_native.c), registered by constraint number: after a
+        load and as move_poles makes copies."""
+        native = {k: getattr(w, "native", None) for k, w in surface.walls.items()}
+        native = {k: n for k, n in native.items() if n is not None}
+        if not native or not hasattr(_core, "native_sphere"):
+            return
+        nums, _, _, names = self._constraint_gaps()
+        for c, name in zip(nums, names):
+            data = native.get(name or int(c))
+            if data is not None:
+                centre, R, e1, e2, e3, k = data
+                _core.native_sphere(int(c), list(centre), R, list(e1), list(e2), list(e3), k)
 
     def body(self, number: int) -> "BodyView":
         """A live handle on one body (1-based, as in the datafile).

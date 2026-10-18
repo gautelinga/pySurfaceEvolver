@@ -607,3 +607,48 @@ def test_a_pole_near_one_of_two_contact_lines_moves_for_that_line_alone():
         ev.body(i).target = target
     assert ev.relax().converged
     assert ev.energy == pytest.approx(far, rel=1e-4)
+
+
+def test_sphere_axis_integrands_in_c_match_evolvers_expressions():
+    # (bindings/pyse_native.c) the bridge's energy, volume and a Newton
+    # step the same to round-off with the integrands in C and through
+    # Evolver's expressions
+    from pysurfaceevolver import _core, shapes
+    c, a = 1.3, 0.35
+    zb = c - np.sqrt(1 - a*a)
+    tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   constraints={1: C.sphere((0, 0, -c), 1.0, 40.0, axis=(0.3, 0, -0.95)),
+                                2: C.sphere((0, 0, c), 1.0, 40.0, axis=(0, 0.2, 1))},
+                   vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=0.09)])
+    ev.refine(1)
+    ev.command("convert_to_quantities")
+    ev.command("g 5")
+    start = ev._save()
+    out = []
+    try:
+        for on in (True, False):
+            _core.native_enable(on)
+            ev.restore(start)
+            ev.command("recalc")
+            e, v = ev.energy, ev.body(1).volume
+            ev.command("hessian")
+            out.append((e, v, ev.vertices.copy()))
+    finally:
+        _core.native_enable(True)
+    assert out[0][0] == pytest.approx(out[1][0], rel=1e-12)
+    assert out[0][1] == pytest.approx(out[1][1], rel=1e-12)
+    assert np.abs(out[0][2] - out[1][2]).max() < 1e-12
+    # (and the C path is the one taken: registered with another energy
+    # coefficient, the energy changes)
+    from pysurfaceevolver._engine import surface
+    centre, R, e1, e2, e3, k = surface.walls[1].native
+    ev.restore(start)
+    assert _core.native_sphere(1, list(centre), R, list(e1), list(e2), list(e3), 0.0)
+    ev.command("recalc")
+    assert abs(ev.energy - out[0][0]) > 1e-3
+    ev._register_native()
+    ev.command("recalc")
+    assert ev.energy == pytest.approx(out[0][0], rel=1e-12)

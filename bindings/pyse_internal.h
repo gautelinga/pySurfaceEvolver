@@ -9,6 +9,9 @@ int pyse_surface_call(void (*body)(void *), void *arg);
 /* after a call that changed the surface: Python's cached mesh is old */
 void pyse_surface_changed(void);
 
+/* which load the surface is (pyse_api.c): pySE's state keyed to it */
+long pyse_load_serial(void);
+
 /* geometry (pyse_check.c) */
 REAL pyse_det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d);
 int pyse_crosses(const REAL *p, const REAL *q, const REAL *a, const REAL *b, const REAL *c,

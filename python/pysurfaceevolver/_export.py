@@ -109,6 +109,7 @@ class _Export(_Engine):
         output = self.load_string(make_datafile(vertices, faces, **kwargs))
         _surface.walls = {k: c for k, c in (kwargs.get("constraints") or {}).items()
                          if getattr(c, "shape", None) is not None}
+        self._register_native()
         return output
 
     def load_mesh_file(self, path: Union[str, os.PathLike], *,

@@ -127,6 +127,14 @@ int pyse_thread_setting(void);   /* 0: the default */
 /* Factoring for Newton steps: "mumps" (default when built with MUMPS) or
    "evolver" (Evolver's own minimal degree). Returns 0 if unknown/unavailable. */
 int pyse_set_solver(const char *name);
+/* pySE's sphere walls' contact-line integrands evaluated in C (pyse_native.c):
+   constraint con registered with its centre c, radius R, frame e1 e2 e3 (e3
+   its axis) and energy coefficient k (cos(angle)*tension; NaN: the content
+   only); 0 if it can't be. pyse_native_enable(0) goes back to Evolver's
+   expressions (for comparison). */
+int pyse_native_sphere(int con, const double *c, double R, const double *e1,
+                       const double *e2, const double *e3, double k);
+void pyse_native_enable(int on);
 const char *pyse_solver(void);
 /* Whether Newton steps carry the mesh along a line they move past the edges
    beside it (on by default); returns the previous setting. */
