@@ -402,7 +402,20 @@ Stages:
   run to run, medians 64-71 between batches of the same code: six runs don't
   resolve a variant. Remaining stops: no stable state within 200 steps, the
   descent running away, Evolver internal errors (1303 cone_analyze, 1374 detach
-  edge) in the surgery. Next: reproduce single failures at 1 thread.
+  edge) in the surgery. Then, from single failures at 1 thread (deterministic
+  there; six configurations: theta 15/20/25, h 0.18/0.2/0.22, ds -0.4/-0.5):
+  joins of lines running the same way refused (a facet turned over: the later
+  ERROR 1303); flat facets on a solid dropped (`drop_flat`; also the flaky
+  merge test); Evolver's use-after-free in set_e/v_constraint_map fixed (ASan;
+  a segfault at h 0.18); a NumPy 2 repr in move_poles' shift; refused changes
+  passed over; descent budget per change; the pinch split by hand
+  (`_split_pinch`; Evolver's pop made a three-facet junction); close_patches
+  within 0.2 h (0.5 h churned on walls); equiangulation in falls only after
+  line splits (in every fall step a catenoid never settled). Tools: overlays
+  of the package with trace patches (scratchpad mp/build_traced.py), dumps
+  before each change, asan_venv/dbg_venv builds. Remaining stops: descents
+  that don't settle on a degenerate mesh (coincident vertices), the descent
+  running away, falls without a change.
   Original aim (after A-E): volume-controlled, as a
   slow syringe-pump drainage (the experiments of Berg et al. 2013 and Moebius and Or
   come closer to that than to a fixed pressure): `arclength` in the liquid's volume, a
@@ -429,6 +442,90 @@ topology changes on explicit meshes: El Topo (Brochu and Bridson, SIAM J. Sci. C
 2009). Risks: merges and contact-line events are the hard part; under volume control
 the events happen on a branch `arclength` follows, so the surgery must leave a state
 it can go on from (a point near equilibrium on the new mesh).
+
+## Proposal: robust surgery and remeshing in C (2026-10-18, agreed; phases 0-1 started)
+
+**Why.** Stage F's 16-bead pack runs end at 60-73 of 87.5 (six deterministic
+1-thread configurations on d0e51c2). Each change of topology is a Python-driven
+surgery plus a descent, failing about 1 in 30; a 64+ bead pack needs thousands
+of changes, so under 1 in 10,000. The user chose (2026-10-18): research first,
+everything in C inside Evolver's element structures, a failure-rate corpus as
+the measure, and an invariant checker plus in-memory snapshot first.
+
+**What the research found** (El Topo, LosTopos/MultiTracker, PMP, DSC, IPC;
+clones and paper texts in the session scratchpad, repos/):
+- El Topo (BSD-2 since 2018, predicates public domain) and LosTopos (BSD-2)
+  are unmaintained C++ on their own arrays; El Topo leaves border (contact-line)
+  edges out of every operation; neither knows level-set constraints, line
+  integrals or fixed volumes. Adopting either means rebuilding Evolver's
+  elements at each call (today's reload problem in C++). DSC is GPL-3 and
+  needs a tet mesh of the pore space. Nothing published tracks moving contact
+  lines on curved solids with topology changes robustly: that part is ours.
+- What to take: LosTopos's design (every edit atomic: checked, then completed
+  or cancelled; topology changes from snap, degenerate-facet removal and
+  vertex separation; the mesh valid between edits); El Topo's collapse checks
+  (link condition, no normal turned over, volume-change bound, no new
+  duplicate facet, intersection checks); PMP/Botsch-Kobbelt remeshing (split
+  above 4/3 h, collapse below 4/5 h, flip toward valence 6/4 on the boundary,
+  tangential smoothing, projection) with its boundary and feature rules, which
+  are contact lines' rules; Jiao's null-space smoothing (restricted to a
+  constraint's tangent plane, or a contact line's tangent); exact predicates
+  (Shewchuk's predicates.c or Bridson's tunicate, public domain, vendored).
+- What Evolver has: radial-edge facetedges (non-manifold native), element
+  blocks addressed by ids (a block copy snapshot is workable), edge_refine
+  with projection, delete_edge (with our link condition), edgeswap without
+  geometric checks and never on border edges, merge/dissolve/rebody, film pops,
+  run_checks (list, facetedge, body orientation, duplicates). Missing: vertex
+  star and contact-line invariants, geometric checks (turned-over facets,
+  intersections, chords through solids), an in-memory topology snapshot, vertex
+  separation, snap merging, constrained smoothing.
+
+**Plan, phase by phase** (each measured on the corpus before the next):
+0. Failure-rate corpus: deterministic 1-thread drainage runs over pack seeds,
+   sizes (4, 16, 64 beads), contact angles (15-25) and h; a runner that logs
+   every change, every refusal and every stop with its class; the measure is
+   changes per failure and the volume reached. Today's code is the baseline.
+1. C invariant checker (global, and local around an edit): run_checks plus
+   single-fan vertex stars, 1-2 facets per edge, consistent orientation,
+   contact-line invariants (each border edge on one solid with both ends,
+   oriented with its facet, methods present), no degenerate or turned-over
+   facet, no vertex or chord inside a solid, exact edge-facet intersection
+   in the patch, body volumes continuous. A debug flag runs it after every
+   edit (tests and the corpus); errors carry the edit that broke it.
+   C snapshot: block copy of elements, skel, bodies, quantities and the
+   pySE-side constraint state, for ev.save()/restore() inside the descent
+   (the text dump and reparse go; a reload also changed memory layout).
+2. C local edits, each atomic with a local undo journal and checks before
+   and after: collapse (delete_edge plus no turnover, a volume bound,
+   PMP boundary rules as "same constraint set"), flip (edgeswap plus normal
+   agreement, a volume bound, no new edge through a solid; contact-line-aware),
+   split (exists), constrained tangential smoothing (2D on free surface, 1D
+   along contact lines, projected), vertex snap, vertex separation (one copy
+   per fan: the pinch split, now by hand in Python), degenerate facet-pair
+   removal.
+3. C remesher from those edits: PMP-style isotropic sweeps with contact lines
+   as features, sizes adapted near thin films and lines, run locally after
+   every change and in sweeps during descents (in the topology pipeline only:
+   relax()'s default stays as decided, see remeshing-in-relax).
+4. Events rebuilt in C from the edits, each all-or-nothing with fallbacks
+   (refine and retry, another pair, a smaller step): meniscus merge (split,
+   snap, separate), pinch (collapse the ring, separate), contact-line join and
+   split (snap or separate border vertices), dry patch (remove facets, new
+   line with constraint and methods), sheet onto solid.
+5. The event detection and descent pipeline in C (the user's "all in C"),
+   last: its policy changed every session so far, and it is cheap next to
+   Evolver's own work; ported once phases 1-4 make it settle, with its
+   parameters exposed.
+6. If the corpus still shows them: intersection-safe descent steps (a line
+   search filtered by static intersection and solid checks, IPC-style).
+
+**Risks.** Every edit must keep all the bookkeeping (facetedge loops, body
+facet lists, vertex edge loops, method and quantity instances, content
+orientation); state outside the element blocks escapes a block snapshot
+(runtime constraints, quantities, facet and fast-loop caches, the Hessian
+pattern keyed on top_timestamp); delete_edge and edge_refine are linear model
+only; refusals need fallbacks to reach the target; size about 3-5k lines of C
+for phases 1-4 (estimate), more for 5.
 
 ## Decisions (agreed with the user)
 
