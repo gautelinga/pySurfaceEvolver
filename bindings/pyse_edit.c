@@ -1012,6 +1012,248 @@ static int degenerate(struct ctx *c, facet_id f)
   return flip(c,positive_id(es[longest]),0);
 }
 
+/* ---- events: merge and bridge -------------------------------------------- */
+
+/* a facet on three oriented edges (the new_facet command's way), with its
+   bodies and its tension as like's */
+static facet_id make_facet(edge_id *e, body_id front, body_id back, facet_id like)
+{ facet_id f = new_facet();
+  facetedge_id fe = NULLID, old = NULLID, first = NULLID;
+  int i;
+  for ( i = 0 ; i < 3 ; i++ )
+  { facetedge_id edge_fe;
+    fe = new_facetedge(f,e[i]);
+    if ( !valid_id(first) ) { set_facet_fe(f,fe); first = fe; }
+    else { set_next_edge(old,fe); set_prev_edge(fe,old); }
+    old = fe;
+    edge_fe = get_edge_fe(e[i]);
+    if ( valid_id(edge_fe) && !equal_id(edge_fe,fe) )
+    { set_next_facet(fe,get_next_facet(edge_fe));
+      set_prev_facet(fe,edge_fe);
+      set_prev_facet(get_next_facet(fe),fe);
+      set_next_facet(edge_fe,fe);
+    }
+    else
+    { set_next_facet(fe,fe);
+      set_prev_facet(fe,fe);
+      set_edge_fe(e[i],fe);
+    }
+  }
+  set_next_edge(old,first);
+  set_prev_edge(first,old);
+  if ( valid_id(like) )
+  { set_facet_density(f,get_facet_density(like));
+    if ( get_fattr(like) & DENSITY ) set_attr(f,DENSITY);
+  }
+  for ( i = 0 ; i < 3 ; i++ ) fe_reorder(positive_id(e[i]));
+  recalc_facet_area(f);
+  need_fe_reorder_flag = 1;
+  if ( web.skel[BODY].count )
+  { set_facet_body(f,front);
+    set_facet_body(inverse_id(f),back);
+  }
+  top_timestamp = ++global_timestamp;
+  return f;
+}
+
+/* an oriented edge from a to b: an existing one, or a new one */
+static edge_id edge_between(vertex_id a, vertex_id b)
+{ edge_id e, e0;
+  int guard;
+  EACH_EDGE_AT(a,e,e0,guard)
+    if ( equal_id(get_edge_headv(e),b) ) return e;
+  return new_edge(a,b,NULLID);
+}
+
+/* the side of facet f (as its loop goes) toward point p: 1 front, 0 back */
+static int faces(facet_id f, const REAL *p)
+{ vertex_id v[3];
+  REAL n[3], d[3];
+  int k;
+  facet_verts(f,v);
+  tri_normal(get_coord(v[0]),get_coord(v[1]),get_coord(v[2]),n);
+  for ( k = 0 ; k < 3 ; k++ )
+    d[k] = p[k] - (get_coord(v[0])[k] + get_coord(v[1])[k] + get_coord(v[2])[k])/3;
+  return dot3(n,d) > 0;
+}
+
+/* merge two facing facets: both taken out, a short tube of six facets
+   joins their edges (each matched to the nearest of the other's, round the
+   way that keeps the surface oriented); the bodies inside the two sheets
+   now meet through the tube (one body: the caller's). The facets' edges
+   must be on two facets each, not on a constraint or fixed, and the sheets
+   must face each other across one body (or none). */
+static int merge_facets(struct ctx *c, facet_id f1, facet_id f2)
+{ vertex_id a[3], b[3];
+  edge_id ea[3], eb[3];
+  facetedge_id fe;
+  REAL ca[3] = {0,0,0}, cb[3] = {0,0,0};
+  body_id front, back, front2, back2;
+  struct ids verts = {0,0,0};
+  struct counts was;
+  int i, k, best = 0, side1, side2, why;
+  REAL bestd = 1e300;
+
+  f1 = positive_id(f1); f2 = positive_id(f2);
+  if ( equal_id(f1,f2) ) return PYSE_EDIT_NOT_APPLICABLE;
+  fe = get_facet_fe(f1);
+  for ( i = 0 ; i < 3 ; i++, fe = get_next_edge(fe) ) { a[i] = get_fe_tailv(fe); ea[i] = get_fe_edge(fe); }
+  fe = get_facet_fe(f2);
+  for ( i = 0 ; i < 3 ; i++, fe = get_next_edge(fe) ) { b[i] = get_fe_tailv(fe); eb[i] = get_fe_edge(fe); }
+  for ( i = 0 ; i < 3 ; i++ ) for ( k = 0 ; k < 3 ; k++ )
+    if ( equal_id(a[i],b[k]) || joined(a[i],b[k]) ) return PYSE_EDIT_LINK;
+  for ( i = 0 ; i < 3 ; i++ )
+  { if ( valence(ea[i]) != 2 || valence(eb[i]) != 2 ) return PYSE_EDIT_LINE;
+    if ( (get_eattr(ea[i]) | get_eattr(eb[i])) & (FIXED|CONSTRAINT|BOUNDARY) )
+      return PYSE_EDIT_CONSTRAINTS;
+  }
+  for ( i = 0 ; i < 3 ; i++ ) for ( k = 0 ; k < 3 ; k++ )
+  { ca[k] += get_coord(a[i])[k]/3; cb[k] += get_coord(b[i])[k]/3; }
+  side1 = faces(f1,cb); side2 = faces(f2,ca);
+  if ( side1 != side2 ) return PYSE_EDIT_ORIENTATION;
+  front = get_facet_body(f1); back = get_facet_body(inverse_id(f1));
+  front2 = get_facet_body(f2); back2 = get_facet_body(inverse_id(f2));
+  /* across the gap (where the normals point: out of the front body), the
+     same body or none */
+  if ( !equal_id(side1 ? back : front, side2 ? back2 : front2) ) return PYSE_EDIT_ORIENTATION;
+  /* a[i] with b[(k - i) % 3]: the tube's facets go round both edges as the
+     facets did */
+  for ( k = 0 ; k < 3 ; k++ )
+  { REAL d = 0;
+    for ( i = 0 ; i < 3 ; i++ ) d += dist3(get_coord(a[i]),get_coord(b[((k - i) % 3 + 3) % 3]));
+    if ( d < bestd ) { bestd = d; best = k; }
+  }
+  for ( i = 0 ; i < 3 ; i++ ) { star(a[i],&verts); star(b[i],&verts); }
+  patch(c,&verts,&was,NULL,NULL);
+  /* out with the two facets (their bodies first: dissolve_facet keeps a
+     facet between two bodies) */
+  set_facet_body(f1,NULLID); set_facet_body(inverse_id(f1),NULLID);
+  set_facet_body(f2,NULLID); set_facet_body(inverse_id(f2),NULLID);
+  if ( !dissolve_facet(f1) || !dissolve_facet(f2) )
+  { if ( verts.a ) temp_free((char *)verts.a);
+    return -PYSE_EDIT_EVOLVER;
+  }
+  for ( i = 0 ; i < 3 ; i++ )
+  { int i1 = (i + 1) % 3;
+    int j = ((best - i - 1) % 3 + 3) % 3, j1 = (j + 1) % 3;   /* a[i1] ~ b[j], a[i] ~ b[j1] */
+    edge_id t1[3], t2[3];
+    edge_id rung_i = edge_between(a[i],b[j1]), rung_i1 = edge_between(a[i1],b[j]);
+    edge_id diag = edge_between(b[j],a[i]);
+    edge_id eaa = equal_id(get_edge_tailv(ea[i]),a[i]) ? ea[i] : inverse_id(ea[i]);
+    edge_id ebb = NULLID;
+    for ( k = 0 ; k < 3 ; k++ )
+      if ( equal_id(get_edge_tailv(eb[k]),b[j]) && equal_id(get_edge_headv(eb[k]),b[j1]) ) ebb = eb[k];
+      else if ( equal_id(get_edge_tailv(eb[k]),b[j1]) && equal_id(get_edge_headv(eb[k]),b[j]) )
+        ebb = inverse_id(eb[k]);
+    if ( !valid_id(ebb) ) { if ( verts.a ) temp_free((char *)verts.a); return -PYSE_EDIT_EVOLVER; }
+    t1[0] = eaa; t1[1] = rung_i1; t1[2] = diag;                       /* a_i a_i1 b_j */
+    t2[0] = inverse_id(diag); t2[1] = ebb; t2[2] = inverse_id(rung_i); /* a_i b_j b_j1 */
+    make_facet(t1,front,back,f1);
+    make_facet(t2,front,back,f1);
+  }
+  why = after(c,&verts,&was,0);
+  if ( verts.a ) temp_free((char *)verts.a);
+  return why ? -why : PYSE_EDIT_DONE;
+}
+
+/* the oriented way a border edge's facet goes along it */
+static edge_id along_facet(edge_id e)
+{ facet_id f = get_fe_facet(get_edge_fe(e));
+  return inverted(f) ? inverse_id(e) : e;
+}
+
+/* two contact lines joined across the dry ground between them on one
+   wall: facing border edges a1->a2 and b1->b2 (as their facets go) bridged
+   by two facets (one where the lines already share a vertex), whose outer
+   edges are the contact line now; the two edges inside, off the wall. The
+   lines must run opposite ways (a1 across from b2). */
+static int bridge(struct ctx *c, edge_id e1, edge_id e2)
+{ vertex_id a1, a2, b1, b2;
+  edge_id g1, g2, outer[2] = {NULLID,NULLID};
+  facet_id fa, fb;
+  body_id front, back;
+  conmap_t *map;
+  unsigned int m;
+  int wall = -1, w, why, shared = 0;
+  struct ids verts = {0,0,0};
+  struct counts was;
+
+  if ( valence(e1) != 1 || valence(e2) != 1 ) return PYSE_EDIT_NOT_APPLICABLE;
+  if ( equal_id(positive_id(e1),positive_id(e2)) ) return PYSE_EDIT_NOT_APPLICABLE;
+  g1 = along_facet(e1); g2 = along_facet(e2);
+  a1 = get_edge_tailv(g1); a2 = get_edge_headv(g1);
+  b1 = get_edge_tailv(g2); b2 = get_edge_headv(g2);
+  /* a wall both edges are on */
+  if ( get_eattr(g1) & CONSTRAINT )
+  { map = get_e_constraint_map(g1);
+    for ( m = 1 ; m <= map[0] && wall < 0 ; m++ )
+      for ( w = 0 ; w < c->nwalls ; w++ )
+        if ( (int)(map[m] & CONMASK) == c->walls[w] && e_on_constraint(g2,c->walls[w]) )
+          wall = c->walls[w];
+  }
+  if ( wall < 0 ) return PYSE_EDIT_CONSTRAINTS;
+  fa = get_fe_facet(get_edge_fe(g1)); fb = get_fe_facet(get_edge_fe(g2));
+  front = get_facet_body(positive_id(fa)); back = get_facet_body(inverse_id(positive_id(fa)));
+  /* the same body on one side (the gas, say); on the other the same, or two
+     bodies the caller makes one (two drops' liquids) */
+  { body_id front2 = get_facet_body(positive_id(fb)), back2 = get_facet_body(inverse_id(positive_id(fb)));
+    if ( !equal_id(front,front2) && !equal_id(back,back2) ) return PYSE_EDIT_ORIENTATION;
+    if ( !equal_id(front,front2) && !(valid_id(front) && valid_id(front2)) ) return PYSE_EDIT_ORIENTATION;
+    if ( !equal_id(back,back2) && !(valid_id(back) && valid_id(back2)) ) return PYSE_EDIT_ORIENTATION;
+  }
+  if ( equal_id(a1,b2) || equal_id(a2,b1) ) shared = 1;
+  else if ( equal_id(a1,b1) || equal_id(a2,b2) ) return PYSE_EDIT_ORIENTATION;
+  else
+  { /* running opposite ways: a1 across from b2 */
+    if ( dist3(get_coord(a1),get_coord(b2)) + dist3(get_coord(a2),get_coord(b1))
+         >= dist3(get_coord(a1),get_coord(b1)) + dist3(get_coord(a2),get_coord(b2)) )
+      return PYSE_EDIT_ORIENTATION;
+    if ( joined(a1,b2) || joined(a2,b1) ) return PYSE_EDIT_LINK;
+  }
+  star(a1,&verts); star(a2,&verts); star(b1,&verts); star(b2,&verts);
+  patch(c,&verts,&was,NULL,NULL);
+  if ( shared )
+  { /* one facet: (a2, a1, b1) where a1 = b2, or (a2, a1, b2) where a2 = b1 */
+    edge_id t[3];
+    if ( equal_id(a1,b2) )
+    { outer[0] = edge_between(b1,a2);
+      t[0] = inverse_id(g1); t[1] = inverse_id(g2); t[2] = outer[0];
+    }
+    else
+    { outer[0] = edge_between(a1,b2);
+      t[0] = inverse_id(g1); t[1] = outer[0]; t[2] = inverse_id(g2);
+    }
+    make_facet(t,front,back,positive_id(fa));
+  }
+  else
+  { edge_id t1[3], t2[3], diag;
+    outer[0] = edge_between(a1,b2);
+    outer[1] = edge_between(b1,a2);
+    if ( dist3(get_coord(a2),get_coord(b2)) <= dist3(get_coord(a1),get_coord(b1)) )
+    { diag = edge_between(b2,a2);                                     /* a2 a1 b2 | a2 b2 b1 */
+      t1[0] = inverse_id(g1); t1[1] = outer[0]; t1[2] = diag;
+      t2[0] = inverse_id(diag); t2[1] = inverse_id(g2); t2[2] = outer[1];
+    }
+    else
+    { diag = edge_between(a1,b1);                                     /* a2 a1 b1 | a1 b2 b1 */
+      t1[0] = inverse_id(g1); t1[1] = diag; t1[2] = outer[1];
+      t2[0] = outer[0]; t2[1] = inverse_id(g2); t2[2] = inverse_id(diag);
+    }
+    make_facet(t1,front,back,positive_id(fa));
+    make_facet(t2,front,back,positive_id(fa));
+  }
+  /* the new contact line on the wall (after the facets: its content
+     integrals go by their bodies), the old one off it */
+  set_e_constraint_map(outer[0],wall);
+  if ( valid_id(outer[1]) ) set_e_constraint_map(outer[1],wall);
+  unset_e_constraint_map(g1,wall);
+  unset_e_constraint_map(g2,wall);
+  top_timestamp = ++global_timestamp;
+  why = after(c,&verts,&was,0);
+  if ( verts.a ) temp_free((char *)verts.a);
+  return why ? -why : PYSE_EDIT_DONE;
+}
+
 /* ---- batches ------------------------------------------------------------ */
 
 struct edit_args
@@ -1023,14 +1265,24 @@ struct edit_args
   int nwalls;
   int manifold;
   int *results;
-  long keys[2*4096];
+  long *keys;
 };
 
-static element_id item(int op, long num, int k)
-{ int type = (op == PYSE_OP_COLLAPSE || op == PYSE_OP_FLIP || op == PYSE_OP_SPLIT) ? EDGE
-           : op == PYSE_OP_DEGENERATE ? FACET : VERTEX;
+static int op_type(int op)
+{ switch ( op )
+  { case PYSE_OP_COLLAPSE: case PYSE_OP_FLIP: case PYSE_OP_SPLIT: case PYSE_OP_BRIDGE:
+      return EDGE;
+    case PYSE_OP_DEGENERATE: case PYSE_OP_MERGE: return FACET;
+  }
+  return VERTEX;
+}
+
+static int paired(int op)
+{ return op == PYSE_OP_SNAP || op == PYSE_OP_MERGE || op == PYSE_OP_BRIDGE; }
+
+static element_id item(int op, long num)
+{ int type = op_type(op);
   element_id id;
-  (void)k;
   if ( num < 1 || num > web.skel[type].max_ord + 1 ) return NULLID;
   id = get_ordinal_id(type,num - 1);
   return valid_element(id) ? id : NULLID;
@@ -1052,16 +1304,21 @@ static long key(element_id id)
 }
 
 static int one(struct ctx *c, struct edit_args *a, int k)
-{ element_id id, id2 = NULLID;
+{ element_id id, id2;
   int op = a->op;
-  if ( op == PYSE_OP_SNAP )
-  { id = item(op,a->ids[2*k],0);
-    id2 = item(op,a->ids[2*k+1],0);
-    if ( !valid_id(id) || !valid_id(id2) ) return PYSE_EDIT_GONE;
-    return snap(c,id,id2);
+  if ( paired(op) )
+  { id = item(op,a->ids[2*k]);
+    id2 = item(op,a->ids[2*k+1]);
+    if ( !valid_id(id) || !valid_id(id2) || key(id) != a->keys[2*k]
+         || key(id2) != a->keys[2*k+1] ) return PYSE_EDIT_GONE;
+    switch ( op )
+    { case PYSE_OP_SNAP: return snap(c,id,id2);
+      case PYSE_OP_MERGE: return merge_facets(c,id,id2);
+      case PYSE_OP_BRIDGE: return bridge(c,id,id2);
+    }
   }
-  id = item(op,a->ids[k],0);
-  if ( !valid_id(id) || (k < 4096 && key(id) != a->keys[k]) ) return PYSE_EDIT_GONE;
+  id = item(op,a->ids[k]);
+  if ( !valid_id(id) || key(id) != a->keys[k] ) return PYSE_EDIT_GONE;
   switch ( op )
   { case PYSE_OP_COLLAPSE: return collapse(c,id,0);
     case PYSE_OP_FLIP: return flip(c,id,c->mode);
@@ -1073,45 +1330,27 @@ static int one(struct ctx *c, struct edit_args *a, int k)
   return PYSE_EDIT_NOT_APPLICABLE;
 }
 
-static void edit_body(void *arg)
-{ struct edit_args *a = (struct edit_args *)arg;
-  struct ctx c;
-  struct snapshot *s = NULL;
-  int k, j, count = a->op == PYSE_OP_SNAP ? a->n/2 : a->n;
-
-  if ( web.representation != SOAPFILM || web.modeltype != LINEAR || SDIM != 3
-       || web.torus_flag || web.symmetry_flag )
-    kb_error(PYSE_ERR_BAD_ARGUMENT,"The mesh edits are for linear soap films in 3D, not in "
-             "torus or symmetry spaces.\n",RECOVERABLE);
-  memset(&c,0,sizeof(c));
-  c.walls = a->walls; c.sides = a->sides; c.nwalls = a->nwalls; c.manifold = a->manifold;
-  c.h = a->params[8] > 0 ? a->params[8] : pyse_mean_edge();
-  c.cos_turn = cos(a->params[0]*M_PI/180);
-  c.max_volume = a->params[1];
-  c.max_len = a->params[2];
-  c.tol = a->params[3];
-  c.mode = (int)a->params[4];
-  c.lambda = a->params[5];
-  c.offset = a->params[6];
-  c.flat = a->params[7];
-  for ( k = 0 ; k < count && k < 4096 ; k++ )
-    a->keys[k] = a->op == PYSE_OP_SNAP ? 0 : key(item(a->op,a->ids[k],0));
-  grids_build(&c);
+/* one batch: each edit in turn; one that comes out worse puts the batch's
+   snapshot back, the edits made before it made again */
+static void run_batch(struct ctx *c, struct edit_args *a)
+{ struct snapshot *s = NULL;
+  int k, j, count = paired(a->op) ? a->n/2 : a->n;
+  a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
+  for ( k = 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
+  grids_build(c);
   for ( k = 0 ; k < count ; k++ )
   { int r;
     if ( !s && a->op != PYSE_OP_SMOOTH ) s = pyse_snapshot_hold();
-    r = one(&c,a,k);
+    r = one(c,a,k);
     if ( r >= 0 ) { a->results[k] = r; continue; }
-    /* worse after the edit: back to the batch's start, the edits made before
-       made again, this one refused */
     a->results[k] = -r;
     for ( ;; )
     { int again = 0;
       pyse_snapshot_put_back(s);
-      grids_build(&c);
+      grids_build(c);
       for ( j = 0 ; j < k && !again ; j++ )
         if ( a->results[j] == PYSE_EDIT_DONE )
-        { int rr = one(&c,a,j);
+        { int rr = one(c,a,j);
           if ( rr != PYSE_EDIT_DONE )
           { /* (not the same again: refused, and the replay starts over
                without it where it changed something) */
@@ -1123,6 +1362,123 @@ static void edit_body(void *arg)
     }
   }
   if ( s ) pyse_snapshot_drop(s);
+  temp_free((char *)a->keys);
+  a->keys = NULL;
+}
+
+static void setup(struct ctx *c, struct edit_args *a)
+{ if ( web.representation != SOAPFILM || web.modeltype != LINEAR || SDIM != 3
+       || web.torus_flag || web.symmetry_flag )
+    kb_error(PYSE_ERR_BAD_ARGUMENT,"The mesh edits are for linear soap films in 3D, not in "
+             "torus or symmetry spaces.\n",RECOVERABLE);
+  memset(c,0,sizeof(*c));
+  c->walls = a->walls; c->sides = a->sides; c->nwalls = a->nwalls; c->manifold = a->manifold;
+  c->h = a->params[8] > 0 ? a->params[8] : pyse_mean_edge();
+  c->cos_turn = cos(a->params[0]*M_PI/180);
+  c->max_volume = a->params[1];
+  c->max_len = a->params[2];
+  c->tol = a->params[3];
+  c->mode = (int)a->params[4];
+  c->lambda = a->params[5];
+  c->offset = a->params[6];
+  c->flat = a->params[7];
+}
+
+static void edit_body(void *arg)
+{ struct edit_args *a = (struct edit_args *)arg;
+  struct ctx c;
+  setup(&c,a);
+  run_batch(&c,a);
+  web_timestamp = top_timestamp = ++global_timestamp;
+  recalc();
+}
+
+/* ---- the remesher ------------------------------------------------------- */
+
+static REAL edge_length(edge_id e)
+{ return dist3(get_coord(get_edge_tailv(e)),get_coord(get_edge_headv(e))); }
+
+static int by_length_up(const void *x, const void *y)
+{ const REAL *p = (const REAL *)x, *q = (const REAL *)y;
+  return p[0] < q[0] ? -1 : p[0] > q[0];
+}
+
+/* edges as element numbers: longer than above (longest first), or shorter
+   than below (shortest first), or (both 0) those on two facets */
+static long *edges_by(double above, double below, int *n)
+{ edge_id e;
+  long count = 0, k = 0;
+  REAL *pairs;
+  long *out;
+  FOR_ALL_EDGES(e) count++;
+  pairs = (REAL *)temp_calloc(2*(count ? count : 1),sizeof(REAL));
+  FOR_ALL_EDGES(e)
+  { REAL l = edge_length(e);
+    int keep = above > 0 ? l > above : below > 0 ? l < below : valence(e) == 2;
+    if ( !keep ) continue;
+    pairs[2*k] = above > 0 ? -l : l;
+    pairs[2*k+1] = (REAL)(ordinal(e) + 1);
+    k++;
+  }
+  qsort(pairs,(size_t)k,2*sizeof(REAL),by_length_up);
+  out = (long *)temp_calloc(k ? k : 1,sizeof(long));
+  for ( count = 0 ; count < k ; count++ ) out[count] = (long)pairs[2*count+1];
+  temp_free((char *)pairs);
+  *n = (int)k;
+  return out;
+}
+
+static long *all_vertices(int *n)
+{ vertex_id v;
+  long count = 0, k = 0, *out;
+  FOR_ALL_VERTICES(v) count++;
+  out = (long *)temp_calloc(count ? count : 1,sizeof(long));
+  FOR_ALL_VERTICES(v) out[k++] = ordinal(v) + 1;
+  *n = (int)k;
+  return out;
+}
+
+static int count_done(int *r, int n)
+{ int k, d = 0;
+  for ( k = 0 ; k < n ; k++ ) d += r[k] == PYSE_EDIT_DONE;
+  return d;
+}
+
+/* isotropic remeshing toward edges of h (Botsch and Kobbelt's): per sweep,
+   edges over 4/3 h split, under 4/5 h collapsed (none made over 4/3 h),
+   flips toward valence 6 (4 on a border), vertices smoothed along the
+   surface; every edit checked as in a batch, contact lines kept (they
+   are the edits' features). results: splits, collapses, flips, moves. */
+static void remesh_body(void *arg)
+{ struct edit_args *a = (struct edit_args *)arg;
+  struct ctx c;
+  int sweep, sweeps = (int)a->params[9], n, pass;
+  double h, keep_len, keep_mode;
+  setup(&c,a);
+  h = c.h;
+  keep_len = c.max_len; keep_mode = c.mode;
+  for ( pass = 0 ; pass < 4 ; pass++ ) a->results[pass] = 0;
+  for ( sweep = 0 ; sweep < (sweeps > 0 ? sweeps : 3) ; sweep++ )
+  { struct edit_args b = *a;
+    int moved = 0;
+    for ( pass = 0 ; pass < 4 ; pass++ )
+    { long *ids;
+      int *res;
+      if ( pass == 0 ) { ids = edges_by(4.0/3*h,0,&n); b.op = PYSE_OP_SPLIT; }
+      else if ( pass == 1 ) { ids = edges_by(0,0.8*h,&n); b.op = PYSE_OP_COLLAPSE; c.max_len = 4.0/3; }
+      else if ( pass == 2 ) { ids = edges_by(0,0,&n); b.op = PYSE_OP_FLIP; c.mode = 2; }
+      else { ids = all_vertices(&n); b.op = PYSE_OP_SMOOTH; }
+      res = (int *)temp_calloc(n ? n : 1,sizeof(int));
+      b.ids = ids; b.n = n; b.results = res;
+      if ( n ) run_batch(&c,&b);
+      a->results[pass] += count_done(res,n);
+      if ( pass < 3 ) moved += count_done(res,n);
+      c.max_len = keep_len; c.mode = (int)keep_mode;
+      temp_free((char *)res);
+      temp_free((char *)ids);
+    }
+    if ( !moved ) break;            /* (topology settled: smoothing alone doesn't repeat) */
+  }
   web_timestamp = top_timestamp = ++global_timestamp;
   recalc();
 }
@@ -1131,14 +1487,18 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
               const int *sides, int nwalls, int manifold, int *results)
 { struct edit_args *a;
   int status, k;
-  if ( op < PYSE_OP_COLLAPSE || op > PYSE_OP_DEGENERATE )
+  if ( op < PYSE_OP_COLLAPSE || op > PYSE_OP_REMESH )
     return PYSE_ERROR;
   a = (struct edit_args *)calloc(1,sizeof(*a));
   if ( !a ) return PYSE_FATAL;
   a->op = op; a->ids = ids; a->n = n; a->params = params; a->walls = walls;
   a->sides = sides; a->nwalls = nwalls; a->manifold = manifold; a->results = results;
-  for ( k = 0 ; k < (op == PYSE_OP_SNAP ? n/2 : n) ; k++ ) results[k] = PYSE_EDIT_NOT_APPLICABLE;
-  status = pyse_surface_call(edit_body,a);
+  if ( op == PYSE_OP_REMESH )
+    status = pyse_surface_call(remesh_body,a);
+  else
+  { for ( k = 0 ; k < (paired(op) ? n/2 : n) ; k++ ) results[k] = PYSE_EDIT_NOT_APPLICABLE;
+    status = pyse_surface_call(edit_body,a);
+  }
   pyse_surface_changed();
   free(a);
   return status;

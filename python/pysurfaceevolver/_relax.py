@@ -870,8 +870,9 @@ class _Relaxing(_Analysis):
         from :meth:`events` (default: the first one there): the two rows of
         vertices round the neck either side of the plane across its
         narrowest point collapse to one vertex, Evolver deletes the collapsed
-        edges, pops that vertex (``pop vertex``, so the two sides no longer
-        touch) and makes the body's pieces bodies (``rebody``); the short
+        edges, the vertex is split into one per side (a checked edit; Evolver's
+        ``pop vertex`` where that is refused), so the two sides no longer
+        touch, and Evolver makes the body's pieces bodies (``rebody``); the short
         edges round the two tips go (Evolver's edge deletion), and the two
         sides, cones at first, relax (``relax=False`` leaves them so).
 
@@ -901,17 +902,18 @@ class _Relaxing(_Analysis):
               relax: bool = True) -> int:
         """Glue the surface where it is about to touch itself across the
         outside, an :class:`Event` of kind ``"touch"`` from :meth:`events`
-        (default: the first one there): Evolver's ``facet_merge`` on the facet
-        nearest the touch and the nearest one facing it, the merged facet
-        opened, and the bodies on either side made one (two drops; a surface
+        (default: the first one there): the facet nearest the touch and the
+        nearest one facing it taken out and joined by a short tube of facets
+        (a checked edit; Evolver's ``facet_merge`` with the merged facet
+        opened where that is refused), and the bodies on either side made one (two drops; a surface
         touching itself, a clam shell closing round its fibre, keeps its
         body). The merged body has the number ``keep`` if it is one of them,
         else the lower; its ``volconst`` is theirs added and its target their
         targets added (free if either was).
 
         Then, with ``relax`` (default), the surface relaxes down to a stable
-        state: :meth:`relax` in short runs, the edges kept within 0.4 and 2
-        median edges (the neck widens), the changes that come on the way made
+        state: :meth:`relax` in short runs, the mesh remeshed toward the
+        median edge after each change (the neck widens), the changes that come on the way made
         (a merged neck coming down onto a solid wets it: see :meth:`contact`),
         and down along an unstable mode if it ends at a saddle; a warning says
         if it doesn't get there. Returns the merged body's number (0 without

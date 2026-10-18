@@ -809,7 +809,10 @@ def _smooth(ev, factor: float, tol: float) -> None:
     changed which dry patch a pore opened before its jump, and the run went
     on past the jump's fold onto another branch) and edges flipped by the
     checked edits, Newton steps back to the equilibrium after each, five
-    times.
+    times. (Not remeshed here: remeshing at the end of falls toward the
+    median edge coarsened a pinched-off drop, its pressure 2% off the exact
+    cap's, and in 18 16-bead runs drained less far, 1 of them to half the
+    liquid against 3 without it.)
     Newton's steps from there converged only linearly (a pack's contact line
     beside facets of 7 degrees: x0.7 a step, and the run's first step
     failed), x20 once evened (18 degrees). Undone where Newton doesn't get

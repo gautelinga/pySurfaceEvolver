@@ -19,7 +19,8 @@ after every step of the descents: a run stops at the first structural
 problem, its class naming the problem and the step.
 
 The quick set is 4- and 16-bead packs (18 runs, under an hour at 4 jobs);
-full adds mesh sizes and 64-bead packs. Results go to DIR (default
+wide is 16-bead packs over six seeds (18 runs: to tell two policies apart);
+full adds mesh sizes and 64-bead packs to quick. Results go to DIR (default
 bench/topology/out/<set>): NAME.json per run, NAME.log (the records),
 summary.json. Run with another package (an overlay on PYTHONPATH, another
 venv's python via --python) to compare code.
@@ -40,6 +41,10 @@ def configs(which):
         for seed in (0, 1, 2):
             for theta in (15.0, 20.0, 25.0):
                 out.append((n, L, seed, theta, 0.2, -0.5, timeout))
+    if which == "wide":
+        # (16 beads only, six seeds: for telling two policies apart)
+        out = [(16, 5.0, seed, theta, 0.2, -0.5, 3600) for seed in range(6)
+               for theta in (15.0, 20.0, 25.0)]
     if which == "full":
         for seed in (0, 1, 2):
             for h in (0.17, 0.23):
@@ -258,7 +263,7 @@ def main(argv):
         one(name, int(n), float(L), int(seed), float(theta), float(h), float(ds), out)
         return
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--set", default="quick", choices=("quick", "full"))
+    ap.add_argument("--set", default="quick", choices=("quick", "wide", "full"))
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--out")
     ap.add_argument("--only", nargs="*")

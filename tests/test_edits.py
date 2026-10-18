@@ -7,7 +7,7 @@ import pytest
 
 import pysurfaceevolver as pyse
 from pysurfaceevolver import constraints as C, shapes
-from pysurfaceevolver._edits import REASONS, crossings, edit
+from pysurfaceevolver._edits import REASONS, crossings, edit, remesh
 from pysurfaceevolver._surgery import check_topology
 
 warnings.simplefilter("ignore")
@@ -152,3 +152,58 @@ def test_edit_refuses_unknown_parameters():
     ev = _drop()
     with pytest.raises(TypeError):
         edit(ev, "flip", [1], turn=3)
+
+
+def test_remesh_evens_the_mesh_toward_its_length():
+    ev = _drop()
+    h = float(np.median(ev.mesh().edge_lengths()))
+    before = ev.mesh_quality()
+    done = remesh(ev, 0.7*h)
+    after = ev.mesh_quality()
+    assert done["splits"] > 0 and done["collapses"] > 0
+    # (the smallest angle varies with the start's round-off, 18 to 27
+    # degrees from 14.6; no facet skinny any more does not)
+    assert after.angle_min > before.angle_min and before.skinny > 0 and after.skinny == 0
+    # (the last sweep's collapses and smoothing lengthen a few edges)
+    assert abs(after.edge_median/(0.7*h) - 1) < 0.1 and after.edge_max < 2*0.7*h
+    assert _problems(ev) == set() and ev.check() == []
+    assert ev.relax().converged
+
+
+def test_merge_joins_two_facing_sheets_by_a_tube():
+    box = shapes.box(n=3)
+    v, f = np.asarray(box.vertices), np.asarray(box.faces)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[v, v + [1.1, 0.05, 0.03]], np.r_[f, f + len(v)],
+                   bodies=[pyse.Body(faces=range(len(f))), pyse.Body(faces=range(len(f), 2*len(f)))])
+    m = ev.mesh()
+    c = np.asarray(m.vertices)[np.asarray(m.facets)].mean(axis=1)
+    first = np.arange(len(c)) < len(f)
+    a = int(np.argmin(np.where(first, np.linalg.norm(c - [1.0, 0.5, 0.5], axis=1), 9)))
+    b = int(np.argmin(np.where(~first, np.linalg.norm(c - c[a], axis=1), 9)))
+    facets = ev.counts["facets"]
+    assert list(edit(ev, "merge", [m.facet_ids[a], m.facet_ids[b]])) == [0]
+    assert ev.counts["facets"] == facets + 4
+    assert _problems(ev) == set() and ev.check() == []
+    # facets facing away from each other aren't merged
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[v, v + [1.1, 0.05, 0.03]], np.r_[f, f + len(v)],
+                   bodies=[pyse.Body(faces=range(len(f))), pyse.Body(faces=range(len(f), 2*len(f)))])
+    far = int(np.argmin(np.where(~first, np.linalg.norm(c - [2.1, 0.5, 0.5], axis=1), 9)))
+    assert list(edit(ev, "merge", [m.facet_ids[a], m.facet_ids[far]])) != [0]
+
+
+def test_bridge_joins_two_contact_lines_across_dry_ground():
+    import test_topology as T
+    ev = T._two_drops(60.0, 0.05)
+    m = ev.mesh()
+    x, e = np.asarray(m.vertices), np.asarray(m.edges)
+    border = np.flatnonzero(m.edge_valence() == 1)
+    mid = x[e[border]].mean(axis=1)
+    left, right = border[mid[:, 0] < 0], border[mid[:, 0] > 0]
+    i = left[np.argmax(mid[mid[:, 0] < 0][:, 0])]
+    j = right[np.argmin(mid[mid[:, 0] > 0][:, 0])]
+    assert T._loops(T._border(ev)) == 2
+    assert list(edit(ev, "bridge", [m.edge_ids[i], m.edge_ids[j]])) == [0]
+    assert T._loops(T._border(ev)) == 1
+    assert _problems(ev) == set() and ev.check() == []

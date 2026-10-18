@@ -434,7 +434,12 @@ def _cut(ev, x, ring, centre, scale) -> None:
     f = np.asarray(m.facets)
     if _sides_at(f, int(at[0])) < 2:
         raise ValueError("pinch_off(): collapsing the ring didn't pinch the surface")
-    ev.command(f"pop vertex[{v}]")
+    # one vertex per cone (the checked separation, _edits); else Evolver's pop
+    from ._edits import REASONS, edit
+    r = edit(ev, "separate", [v])
+    if r[0] != 0:
+        _log.debug("fallback: pinch split by pop (the separation refused: %s)", REASONS[int(r[0])])
+        ev.command(f"pop vertex[{v}]")
 
 
 def _tidy_seam(ev, centre, h: float) -> None:
@@ -620,7 +625,54 @@ def merge(ev, event, keep=None) -> int:
     m = ev.mesh()
     x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
     a, b = _facing_facets(x, f, np.asarray(event.where, float))
+    made = _tube(ev, m, a, b, keep)
+    if made is not None:
+        return made
     return _glue(ev, m, a, b, keep)
+
+
+def _tube(ev, m, a: int, b: int, keep) -> "int | None":
+    """merge() by the checked edits (_edits): facet rows a and b taken out
+    and a short tube of facets joining their edges; the bodies either side
+    made one as _glue makes them. None where the edit is refused (then
+    _glue's Evolver facet_merge is tried)."""
+    from ._edits import REASONS, edit
+    fb = np.asarray(m.facet_bodies)
+    bodies = sorted({int(v) for v in fb[[a, b]].ravel() if v > 0})
+    if len(bodies) > 2:
+        return None
+    states = {i: _body_state(ev, i) for i in bodies}
+    r = edit(ev, "merge", [int(m.facet_ids[a]), int(m.facet_ids[b])])
+    if r[0] != 0:
+        _log.debug("fallback: merge by facet_merge (the tube refused: %s)", REASONS[int(r[0])])
+        return None
+    return _make_one(ev, bodies, keep, states)
+
+
+def _make_one(ev, bodies: list, keep, states: dict, volume=None) -> int:
+    """The bodies made one: the one numbered keep if it is one of them, else
+    the lower; its volconst theirs added (and with volume, the volumes before
+    a change kept), its target their targets added (free if either was).
+    The merged body's number (0 without bodies)."""
+    target = keep if keep in bodies else (bodies[0] if bodies else 0)
+    other = [i for i in bodies if i != target]
+    for i in other:
+        for side in ("frontbody", "backbody"):
+            ev.command(f"set facet {side} {target} where {side} == {i}")
+    if bodies:
+        _rebody(ev)
+    for i in other:
+        ev.command(f"dissolve body[{i}]")
+    if bodies:
+        body = ev.body(target)
+        body.volconst = sum(s["volconst"] for s in states.values())
+        if volume is not None:
+            body.volconst = body.volconst + sum(volume.values()) - body.volume
+        if all(s["fixed"] for s in states.values()):
+            body.target = sum(s["target"] for s in states.values())
+        else:
+            body.target = None
+    return target
 
 
 def _glue(ev, m, a: int, b: int, keep) -> int:
@@ -741,7 +793,8 @@ def _contact(ev, event, keep=None) -> None:
                 < 2*float(event.scale)
             flat = on[f].all(axis=1) & near
             if not flat.any():
-                _join_lines(ev, m, x, f, a, b, keep)
+                if not _bridge_lines(ev, m, num, a, b, keep):
+                    _join_lines(ev, m, x, f, a, b, keep)
                 return
             core = np.zeros(0, dtype=int)
     else:
@@ -1058,6 +1111,36 @@ def _strip(x, a, b, on, h):
     return np.flatnonzero(near & ~on)
 
 
+def _bridge_lines(ev, m, num: int, a: int, b: int, keep) -> bool:
+    """Two contact lines about to meet across dry ground on constraint num
+    (vertex rows a and b on them) joined by the checked edits (_edits): a
+    facing pair of their edges bridged by two facets, whose outer edges are
+    the contact line now; the bodies either side made one, the volumes kept
+    (volconst). Whether it was made (else _join_lines is tried)."""
+    from ._edits import REASONS, edit
+    edges, valence = np.asarray(m.edges), m.edge_valence()
+    on = ev.on_constraint(num)
+    line = (valence == 1) & on[edges[:, 0]] & on[edges[:, 1]]
+    at_a = np.flatnonzero(line & (edges == a).any(axis=1))
+    at_b = np.flatnonzero(line & (edges == b).any(axis=1))
+    near = np.isin(np.asarray(m.facets), np.r_[edges[at_a].ravel(), edges[at_b].ravel()]).any(axis=1)
+    fb = np.asarray(m.facet_bodies)
+    bodies = sorted({int(v) for v in fb[near].ravel() if v > 0})
+    states = {i: _body_state(ev, i) for i in bodies}
+    volume = {i: ev.body(i).volume for i in bodies}
+    ids = np.asarray(m.edge_ids)
+    why = "no facing edges"
+    for ra in at_a:
+        for rb in at_b:
+            r = edit(ev, "bridge", [int(ids[ra]), int(ids[rb])])
+            if r[0] == 0:
+                _make_one(ev, bodies, keep, states, volume)
+                return True
+            why = REASONS[int(r[0])]
+    _log.debug("fallback: contact lines joined by vertex_merge (the bridge refused: %s)", why)
+    return False
+
+
 def _join_lines(ev, m, x, f, a, b, keep) -> None:
     """Two contact lines about to meet across dry ground (vertex rows a and b
     on them): a's and b's contact-line edges that face each other glued into
@@ -1247,8 +1330,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 # the others' and the next run crossed edges two apart):
                 # evened out and run again
                 ev.restore(start)
-                _keep_edges(ev, h0)
-                _even_out(ev)
+                _remesh_now(ev, h0)
                 chunk, start, energy = _away_from_poles(ev, lambda: ev.relax(tol, max_iter=_CHUNK))
             if not _plausible(ev, energy):
                 _log.debug("run undone: implausible (volumes, energy, poles or crossings)")
@@ -1334,12 +1416,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             e = made
             _log.debug("change made: %s", e)
             _checked(ev, f"the change: {e}")
-            # the mesh round the change evened out before it relaxes (a
-            # contact's patch leaves edges twice the others', and the next
-            # run folded the surface through itself there)
-            _keep_edges(ev, h0)
-            _even_out(ev)
-            _checked(ev, "evening out after the change")
+            # the mesh remeshed toward h0 before it relaxes (a contact's
+            # patch leaves edges twice the others', and the next run folded
+            # the surface through itself there)
+            _remesh_now(ev, h0)
+            _checked(ev, "remeshing after the change")
             changes.append(e)
             guard(ev)
             way, before, tried, since = None, [], 0, 0
@@ -1539,6 +1620,22 @@ def _steps_uncrossed(ev, n: int) -> None:
             ev.restore(here)
             _log.debug("gradient steps stopped: the surface through itself")
             return
+
+
+def _remesh_now(ev, h0: float) -> None:
+    """The surface remeshed toward edges of h0 (_edits.remesh: splits,
+    collapses, flips toward valence 6, smoothing along the surface, each
+    checked), the guards off meanwhile (a guarded vertex is on one more
+    constraint, which the edits keep)."""
+    from ._edits import remesh
+    guarded = _guarded(ev)
+    _unguard(ev)
+    try:
+        done = remesh(ev, h0)
+        _log.debug("remeshed: %s", done)
+    finally:
+        if guarded:
+            guard(ev)
 
 
 def _even_out(ev, smooth: bool = True, edges=None) -> None:

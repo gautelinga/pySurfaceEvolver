@@ -659,9 +659,10 @@ NB_MODULE(_core, m) {
   m.def("edit", [](int op, std::vector<long> ids, std::vector<double> params,
                    std::vector<int> walls, std::vector<int> sides, bool manifold, CALLBACK_ARGS) {
     CALL_SCOPE;
-    if (params.size() != 9) throw std::invalid_argument("edit: nine parameters");
+    if (params.size() != 10) throw std::invalid_argument("edit: ten parameters");
     if (walls.size() != sides.size()) throw std::invalid_argument("edit: one side per wall");
-    size_t count = op == PYSE_OP_SNAP ? ids.size() / 2 : ids.size();
+    bool pairs = op == PYSE_OP_SNAP || op == PYSE_OP_MERGE || op == PYSE_OP_BRIDGE;
+    size_t count = op == PYSE_OP_REMESH ? 4 : pairs ? ids.size() / 2 : ids.size();
     std::vector<int> results(count ? count : 1);
     CallResult r = run_guarded([&] {
       return pyse_edit(op, ids.data(), int(ids.size()), params.data(), walls.data(),

@@ -237,8 +237,8 @@ bridge would if it lost its liquid slowly. At the first point with a negative mo
 falls, at that volume, by steps along the unstable mode, each followed by a few
 gradient steps. When the neck comes (an {class}`~pysurfaceevolver.Event` of kind
 `"neck"`), {meth}`~pysurfaceevolver.Evolver.pinch_off` cuts it: the two rows of
-vertices round the neck collapse to a point, which Evolver's `pop` splits and `rebody`
-makes two bodies. The pieces then relax: two drops, one on each sphere, holding what
+vertices round the neck collapse to a point, which is split into one vertex per side,
+and `rebody` makes two bodies. The pieces then relax: two drops, one on each sphere, holding what
 the bridge held. Each drop is a spherical cap meeting its sphere at 40 degrees, which
 gives an exact pressure for its volume. The run then goes on draining the larger drop,
 which keeps the body's number; the smaller keeps its volume.

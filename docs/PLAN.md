@@ -582,6 +582,21 @@ clones and paper texts in the session scratchpad, repos/):
   in 558 changes: a merge (Python merge(), Evolver's facet_merge) left border
   edges on a constraint their vertices aren't on: phase 4's.
 
+- Phases 3 and 4 (2026-10-19; the user: uniform h0, remesh after changes and
+  falls, new events first with the old ones as fallbacks): the remesher
+  (PYSE_OP_REMESH, _edits.remesh: Botsch-Kobbelt sweeps of checked edits),
+  merge by a tube (PYSE_OP_MERGE), contact-line joins by a bridge
+  (PYSE_OP_BRIDGE), pinch_off's vertex split by the checked separation.
+  Remeshing at the end of falls was measured and left out: it changed the
+  drainage page's pore (its jump dried one bead, not two), coarsened a
+  pinched-off drop (pressure 2% off the exact cap's, a test failing), and in
+  the wide set (16 beads, seeds 0-5, 15/20/25 degrees) did worse. Wide set:
+  remesh after changes only 3 of 18 runs to half the liquid, median 0.83 of
+  the way, 46 changes per failure; with falls too 1, 0.71, 32; phase 2's
+  edge keeping with the new events 0, 0.76, 36. The first 16-bead runs reach
+  half the liquid. Fallbacks used twice in 688 changes (contact-line joins).
+  Stops: descent ran away 7, three falls 5, relaxed but unsound 3.
+
 **Risks.** Every edit must keep all the bookkeeping (facetedge loops, body
 facet lists, vertex edge loops, method and quantity instances, content
 orientation); state outside the element blocks escapes a block snapshot

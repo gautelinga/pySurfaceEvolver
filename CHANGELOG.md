@@ -151,6 +151,16 @@
   facets is undone (a run evened out and tried again; a step halved; gradient
   steps taken one at a time).
 
+- The topology runs remesh after each change (a checked isotropic remesher in C:
+  edges split over 4/3 of the median edge, collapsed under 4/5, flipped toward
+  valence 6, 4 on a border, smoothed along the surface, each edit checked, contact
+  lines kept). Their changes are checked edits first: `merge()` joins the two facing
+  facets by a short tube of facets, contact lines meeting across dry ground are
+  bridged by two facets (lines at an angle, or sharing a vertex already, too), and
+  `pinch_off()` splits the vertex where the cones meet one per side; Evolver's
+  `facet_merge`, `vertex_merge` and `pop` stay as the fallbacks where an edit is
+  refused (`fallback:` records on the `pysurfaceevolver.topology` logger).
+
 ### Speed
 
 - pySE's own saves and restores inside `relax()` and the topology runs keep the
