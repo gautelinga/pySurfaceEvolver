@@ -11,6 +11,14 @@
 */
 
 #include "include.h"
+
+/* pySE: contact-line edges split after each step where set (absent from
+   the stock program) */
+#if defined(__GNUC__)
+extern int pyse_chop_lines(void) __attribute__((weak));
+#else
+static int (*pyse_chop_lines)(void) = 0;
+#endif
 #include "fastloops.h"
 
 int volgrads_changed_flag; /* whether volgrads recalced during move */
@@ -288,6 +296,8 @@ have_scale:
 
   vgrad_end();
   unsave_coords(&saved,SAVE_IN_ATTR);
+  /* pySE: contact-line edges kept short (bindings/pyse_edit.c) */
+  if ( pyse_chop_lines ) pyse_chop_lines();
   update_display();
   iterate_flag = old_flag; /* for interrupt handler */
   goto iterate_exit;

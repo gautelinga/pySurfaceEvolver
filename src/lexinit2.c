@@ -2592,7 +2592,9 @@ void convert_body_to_quantity(body_id b_id)
      if ( meth1 < 0 )
      { /* have to create */
         if ( volume_method_name[0] )
-        { meth1 = find_method_instance(volume_method_name); /* user instance? */
+        { /* pySE: a copy per body (one instance shared by all bodies summed their
+             volumes together), as for a body made later */
+          meth1 = dup_method_instance(volume_method_name,inst_name1); /* user instance? */
           if ( meth1 < 0 )  /* try pre-defined method */
           { meth1 = new_method_instance(volume_method_name,inst_name1);
             METH_INSTANCE(meth1)->flags |= DEFAULT_INSTANCE;
@@ -2625,6 +2627,21 @@ void convert_body_to_quantity(body_id b_id)
         METH_INSTANCE(meth1)->modulus = 1.0;
         attach_method_num(gq,meth1);
         set_body_volmeth(b_id,meth1);
+     }
+     else
+     { /* pySE: one there already (a dump writes the copies of a user volume
+          method, and a reload found body_1_vol_meth and left it off the body's
+          volume): attached as one made here is */
+       struct method_instance *mi = METH_INSTANCE(meth1);
+       int q, attached = 0;
+       for ( q = 0 ; q < MMAXQUANTS ; q++ )
+         if ( mi->quants[q] == gq ) attached = 1;
+       if ( !attached )
+       { mi->flags |= BODY_INSTANCE;
+         mi->modulus = 1.0;
+         attach_method_num(gq,meth1);
+         set_body_volmeth(b_id,meth1);
+       }
      }
      FOR_ALL_FACETS(f_id)
      { /* check both in case of torus wrapping */
@@ -2957,6 +2974,19 @@ void convert_new_body_to_quantity(body_id b_id)
         METH_INSTANCE(meth1)->flags |= BODY_INSTANCE;
         METH_INSTANCE(meth1)->modulus = 1.0;
         attach_method_num(gq,meth1);    
+     }
+     else
+     { /* pySE: one there already (a dump writes a user volume method's
+          copies): attached to the body's volume, as one made here is */
+       struct method_instance *mi = METH_INSTANCE(meth1);
+       int q, attached = 0;
+       for ( q = 0 ; q < MMAXQUANTS ; q++ )
+         if ( mi->quants[q] == gq ) attached = 1;
+       if ( !attached )
+       { mi->flags |= BODY_INSTANCE;
+         mi->modulus = 1.0;
+         attach_method_num(gq,meth1);
+       }
      }
      set_body_volmeth(b_id,meth1);
   }

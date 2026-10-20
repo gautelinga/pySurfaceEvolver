@@ -915,10 +915,14 @@ int two_split(
   int this_septum_flag /* no septum not implemented yet */
 )
 {
-  facetedge_id headsplitlist[10];
+  /* pySE: bounded (a trace along more than 10 wall edges overran these on
+     the stack: a 16-bead pack's relax() crashed in pop); the combined list
+     holds both */
+#define TWO_SPLIT_MAX 64
+  facetedge_id headsplitlist[2*TWO_SPLIT_MAX];
   int headsplitcount = 0;
   int headsplitflag = 0; /* whether to split end vertex */
-  facetedge_id tailsplitlist[10];
+  facetedge_id tailsplitlist[TWO_SPLIT_MAX];
   int tailsplitcount = 0;
   int tailsplitflag = 0; /* 7hether to split end vertex */
   facetedge_id fe_a,fe_aa,fe_aaa;
@@ -938,6 +942,18 @@ int two_split(
   { int head_degfree;
     int aa_degfree;
 
+    if ( headsplitcount >= TWO_SPLIT_MAX )
+    { /* pySE: traced as far as the list goes: not split there */
+      headsplitflag = 0;
+      break;
+    }
+    /* pySE: back at an edge already traced: the wall edges close in a loop,
+       which this doesn't split (traced round and round, the list overran
+       the stack; bounded, the loop's edges were split twice over, and a
+       16-bead pack's surface was left with 377 edges without facets) */
+    for ( i = 0 ; i < headsplitcount ; i++ )
+      if ( equal_id(positive_id(get_fe_edge(headsplitlist[i])),positive_id(get_fe_edge(fe_a))) )
+        return 0;
     headsplitlist[headsplitcount++] = fe_a;
 
     /* test head vertex */
@@ -994,6 +1010,19 @@ int two_split(
   { int tail_degfree;
     int aa_degfree;
 
+    if ( tailsplitcount >= TWO_SPLIT_MAX )
+    { /* pySE: traced as far as the list goes: not split there */
+      tailsplitflag = 0;
+      break;
+    }
+    /* pySE: a loop, as going forward (the first is the key edge itself) */
+    for ( i = 0 ; i < tailsplitcount ; i++ )
+      if ( equal_id(positive_id(get_fe_edge(tailsplitlist[i])),positive_id(get_fe_edge(fe_a))) )
+        return 0;
+    if ( tailsplitcount > 0 )
+      for ( i = 0 ; i < headsplitcount ; i++ )
+        if ( equal_id(positive_id(get_fe_edge(headsplitlist[i])),positive_id(get_fe_edge(fe_a))) )
+          return 0;
     tailsplitlist[tailsplitcount++] = fe_a;
 
     /* test tail vertex */

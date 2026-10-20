@@ -2139,6 +2139,7 @@ edge_id edge_refine(edge_id e_id)
 */
 int did_global_edge_calc = 0;  /* efficiency measure */
 static int vertices_joined(vertex_id,vertex_id);
+static int vertex_edge_count(vertex_id);
 
 /* pySE: equiangulate_edge()'s test, without the swap. stored: take edge
    lengths as stored (set for all edges by fl_calc_edges()) instead of
@@ -2229,6 +2230,15 @@ static int equiangulate_test(edge_id e_id, int stored)
           get_edge_headv(e_id)) ) 
        return 0;
     if ( vertices_joined(get_fe_tailv(fe_c),get_fe_headv(fe_d)) )
+       return 0;
+    /* pySE: nor where an end of the edge would be left with two edges, on
+       one facet: a contact line's vertex so, the facet's corner on the
+       wall, slid across a 16-bead pack's bead, its line's edges 1.6 long
+       in one relax() run. (Not every edge between two contact lines'
+       vertices: refused, a pore's narrow wet strips kept facets of 2.7
+       degrees and its surface didn't relax.) */
+    if ( vertex_edge_count(get_edge_tailv(e_id)) <= 3
+         || vertex_edge_count(get_edge_headv(e_id)) <= 3 )
        return 0;
   }
 
@@ -2403,6 +2413,20 @@ static int vertices_joined(vertex_id v1, vertex_id v2)
     e_id = get_next_tail_edge(e_id);
   } while ( !equal_id(e_id,start_id) );
   return 0;
+}
+
+/* pySE: how many edges meet at v */
+static int vertex_edge_count(vertex_id v)
+{ edge_id e_id,start_id;
+  int n = 0;
+
+  e_id = start_id = get_vertex_edge(v);
+  if ( !valid_id(e_id) ) return 0;
+  do
+  { n++;
+    e_id = get_next_tail_edge(e_id);
+  } while ( !equal_id(e_id,start_id) && n < 100000 );
+  return n;
 }
 
 /*************************************************************************

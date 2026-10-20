@@ -11,6 +11,16 @@
 */
 
 #include "include.h"
+
+/* pySE: the flux gauge's facet integrands evaluated in C where registered
+   (bindings/pyse_native.c; absent from the stock program) */
+#if defined(__GNUC__)
+extern int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
+                            REAL (*d)[MAXCOORD], REAL ***s) __attribute__((weak));
+#define PYSE_NATIVE(k,x,o,v,d,s) (pyse_native_eval && pyse_native_eval(k,x,o,v,d,s))
+#else
+#define PYSE_NATIVE(k,x,o,v,d,s) 0
+#endif
 #include "fastloops.h"
 
 /*********************************************************************
@@ -918,8 +928,13 @@ REAL facet_vector_integral(struct qinfo *f_info)
   if ( web.modeltype == QUADRATIC ) return facet_vector_integral_q(f_info);
   if ( web.modeltype == LAGRANGE ) return lagrange_vector_integral(f_info);
   for ( m = 0 ; m < gauss2D_num ; m++ )
-  { 
+  { REAL native[MAXCOORD];
     f_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
+    if ( PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],0,native,NULL,NULL) )
+    { for ( j = 0 ; j < SDIM ; j++ )
+        value += f_info->normal[j]*gauss2Dwt[m]*native[j];
+      continue;
+    }
     for ( j = 0 ; j < SDIM ; j++ )
      { REAL  green = gauss2Dwt[m]*
          eval(mi->expr[j],f_info->gauss_pt[m],f_info->id,NULL);
@@ -955,8 +970,9 @@ REAL facet_vector_integral_grad(struct qinfo *f_info)
     for ( m = 0 ; m < gauss2D_num ; m++ )
     { REAL weight = sign*gauss2Dwt[m];
       f_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-      for ( j = 0 ; j < SDIM ; j++ ) 
-        eval_all(mi->expr[j],f_info->gauss_pt[m],SDIM,val+j,
+      if ( !PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],1,val,derivs,NULL) )
+        for ( j = 0 ; j < SDIM ; j++ ) 
+          eval_all(mi->expr[j],f_info->gauss_pt[m],SDIM,val+j,
                                                         derivs[j],f_info->id);
       value += weight*SDIM_dot(val,f_info->normal);
       cross_prod(val,f_info->sides[0][0],cross0);
@@ -1004,8 +1020,9 @@ REAL facet_vector_integral_hess(struct qinfo *f_info)
   for ( m = 0 ; m < gauss2D_num ; m++ )
   { REAL weight = sign*gauss2Dwt[m];
     f_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-    for ( j = 0 ; j < SDIM ; j++ ) 
-      eval_second(mi->expr[j],f_info->gauss_pt[m],SDIM,val+j,
+    if ( !PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],2,val,derivs,second) )
+      for ( j = 0 ; j < SDIM ; j++ ) 
+        eval_second(mi->expr[j],f_info->gauss_pt[m],SDIM,val+j,
                                               derivs[j],second[j],f_info->id);
     value += weight*SDIM_dot(val,f_info->normal);
     cross_prod(val,f_info->sides[0][0],cross0);

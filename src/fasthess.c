@@ -217,6 +217,28 @@ static int method_safe(struct method_instance *mi, int pass)
   return 0;
 }
 
+/* method_safe() remembered per instance and pass: walking every
+   instance's integrands on every pass was a twentieth of a step where they
+   are long (the flux gauge's sums over 16 spheres). Forgotten when the
+   instances change: a load, or instances added or deleted. */
+static unsigned char *safe_seen = NULL;   /* 0 unknown, 1 safe, 2 not, per (instance, pass) */
+static int safe_count = 0;
+static long safe_load = -1;
+
+static int method_safe_cached(int mk, struct method_instance *mi, int pass)
+{ extern long pyse_load_serial(void) __attribute__((weak));
+  long load = pyse_load_serial ? pyse_load_serial() : 0;
+  if ( load != safe_load || meth_inst_count != safe_count )
+  { free(safe_seen);
+    safe_seen = (unsigned char *)calloc((size_t)meth_inst_count*3 + 3,1);
+    safe_count = meth_inst_count;
+    safe_load = load;
+  }
+  if ( !safe_seen ) return method_safe(mi,pass);
+  if ( !safe_seen[3*mk + pass] ) safe_seen[3*mk + pass] = method_safe(mi,pass) ? 1 : 2;
+  return safe_seen[3*mk + pass] == 1;
+}
+
 /* whether this pass over elements of `type` may run in parallel */
 static int quant_ok(int type, int pass)
 { int mk;
@@ -231,7 +253,7 @@ static int quant_ok(int type, int pass)
   for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
   { struct method_instance *mi = METH_INSTANCE(mk);
     if ( mi->flags & Q_DELETED ) continue;
-    if ( (mi->flags & Q_DOTHIS) && (mi->type == type) && !method_safe(mi,pass) )
+    if ( (mi->flags & Q_DOTHIS) && (mi->type == type) && !method_safe_cached(mk,mi,pass) )
       return 0;
   }
   return 1;
