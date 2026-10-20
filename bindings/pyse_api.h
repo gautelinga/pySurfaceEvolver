@@ -135,10 +135,22 @@ int pyse_set_solver(const char *name);
 int pyse_native_sphere(int con, const double *c, double R, const double *e1,
                        const double *e2, const double *e3, double k);
 void pyse_native_enable(int on);
+/* the flux gauge's integrands in C (constraints.sphere(gauge="flux")): a
+   method instance's facet integrand (method) or constraint con's energy
+   (which 0) or content (1) line integrand; base 0 none, 1 (0,0,z), 2 a
+   sphere's exact content part about bc; terms 11 numbers each (centre,
+   radius, direction (0 for a point source), energy flag, angle, tension,
+   spare). 0 if it can't be registered. */
+int pyse_native_flux(const char *method, int con, int which, int base, const double *bc,
+                     const double *terms, int nterm);
 const char *pyse_solver(void);
 /* Whether Newton steps carry the mesh along a line they move past the edges
    beside it (on by default); returns the previous setting. */
 int pyse_set_follow(int on);
+/* With length > 0, each gradient step ends with the contact-line edges (border
+   edges on a constraint) longer than length split, the midpoints onto their
+   constraints (0: off, the default); returns the previous setting. */
+double pyse_line_chop(double length);
 
 /* ---- Information about the last guarded call. ---------------------------- */
 int pyse_last_errnum(void);

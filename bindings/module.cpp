@@ -599,6 +599,18 @@ NB_MODULE(_core, m) {
   }, "con"_a, "centre"_a, "radius"_a, "e1"_a, "e2"_a, "e3"_a, "k"_a,
      "a sphere wall's contact-line integrands evaluated in C (constraints.sphere(axis=))");
   m.def("native_enable", [](bool on) { Lock lock; pyse_native_enable(on); }, "on"_a);
+  m.def("native_flux", [](std::string method, int con, int which, int base,
+                          std::vector<double> bc, std::vector<double> terms) {
+    Lock lock;
+    if ( bc.size() != 3 || terms.size() % 11 )
+      throw std::invalid_argument("native_flux(): bc a 3-vector, terms 11 numbers each");
+    return bool(pyse_native_flux(method.c_str(), con, which, base, bc.data(), terms.data(),
+                                 int(terms.size()/11)));
+  }, "method"_a, "con"_a, "which"_a, "base"_a, "bc"_a, "terms"_a,
+  "Register a flux-gauge integrand for evaluation in C (see _flux.native_specs).");
+  m.def("line_chop", [](double length) { Lock lock; return pyse_line_chop(length); }, "length"_a,
+        "With length > 0, each gradient step ends with contact-line edges longer than it "
+        "split onto their constraints (0: off); returns the previous setting.");
   m.def("set_follow", [](bool on) { Lock lock; return bool(pyse_set_follow(on)); }, "on"_a,
         "whether Newton steps carry the mesh along a line they move past the edges "
         "beside it (default on); returns the previous setting");

@@ -780,6 +780,8 @@ class _Engine:
         """The sphere(axis=) walls' contact-line integrands evaluated in C
         (bindings/pyse_native.c), registered by constraint number: after a
         load and as move_poles makes copies."""
+        if hasattr(_core, "native_flux"):
+            self._register_native_flux()
         native = {k: getattr(w, "native", None) for k, w in surface.walls.items()}
         native = {k: n for k, n in native.items() if n is not None}
         if not native or not hasattr(_core, "native_sphere"):
@@ -790,6 +792,36 @@ class _Engine:
             if data is not None:
                 centre, R, e1, e2, e3, k = data
                 _core.native_sphere(int(c), list(centre), R, list(e1), list(e2), list(e3), k)
+
+    def _register_native_flux(self) -> None:
+        """The flux gauge's integrands (constraints.sphere(gauge="flux"))
+        evaluated in C: each wall's line integrands by constraint number, the
+        facet integrands by method name (_flux.native_specs)."""
+        from ._flux import ENERGY_QUANTITY, native_specs
+        lines, facets = native_specs(dict(surface.walls))
+        if not lines and not facets:
+            return
+        nums, _, _, names = self._constraint_gaps()
+        number = {(name or int(c)): int(c) for c, name in zip(nums, names)}
+        for key, which, base, bc, terms in lines:
+            if key in number:
+                _core.native_flux("", number[key], which, base, list(bc), list(terms))
+        for name, base, terms in facets:
+            if name == ENERGY_QUANTITY:
+                # (the energy quantity's method: Evolver names it after the
+                # quantity, its number and the method)
+                for method in (f"{name}1_facet_vector_integral", f"{name}_inst", name):
+                    if _core.native_flux(method, 0, 0, base, [0.0, 0.0, 0.0], list(terms)):
+                        break
+                continue
+            # the volume method, and each body's copy of it: after a dump and a
+            # reload the copies have expressions of their own (left to the
+            # interpreter, whose second derivatives of these are wrong, Newton
+            # steps stalled at a residual of 1e-2)
+            _core.native_flux(name, 0, 0, base, [0.0, 0.0, 0.0], list(terms))
+            for b in self.bodies().ids:
+                _core.native_flux(f"body_{int(b)}_vol_meth", 0, 0, base, [0.0, 0.0, 0.0],
+                                  list(terms))
 
     def body(self, number: int) -> "BodyView":
         """A live handle on one body (1-based, as in the datafile).

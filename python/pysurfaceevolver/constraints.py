@@ -113,11 +113,18 @@ class Constraint:
     # radius, frame e1 e2 e3, the energy's coefficient or NaN where it isn't
     # a number): Evolver's interpreter took 22% of a pack's gradient steps
     native: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
+    # a sphere(gauge="flux")'s: (centre, radius, contact angle, tension), for
+    # make_datafile to put together the integrals all walls share (_flux)
+    flux: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
 
     @property
     def floored(self) -> bool:
         """Whether its contact angle takes ANGLE_FLOOR as its least (see
-        :meth:`~pysurfaceevolver.Evolver.relax`)."""
+        :meth:`~pysurfaceevolver.Evolver.relax`). (A sphere(gauge="flux")'s
+        wetting energy is in the facet integral make_datafile adds.)"""
+        if self.flux is not None:
+            k = _Coefficient(self.flux[2], self.flux[3])
+            return k.expr is not None and ANGLE_FLOOR in k.expr
         return ANGLE_FLOOR in self.text()
 
     def text(self) -> str:
@@ -291,7 +298,8 @@ def mirror(axis, at: float = 0.0) -> Constraint:
 
 def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
            wet_poles: Iterable[str] = (), span: float = 2*np.pi,
-           tension: float = 1.0, nonnegative: bool = False, axis=None) -> Constraint:
+           tension: float = 1.0, nonnegative: bool = False, axis=None,
+           gauge: str = "pole") -> Constraint:
     """A solid sphere, the liquid outside. The azimuth runs about the z axis
     through the centre; its poles are ``center +- radius*z``, where the
     integrals are singular: keep contact lines off them.
@@ -314,12 +322,28 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     integral itself rather than in ``volconst``, which can't follow the
     parameter; with both poles wet the centre must be numbers. With
     ``axis``, the centre must be numbers and ``span`` 2 pi.
+
+    ``gauge="flux"``: no pole at all. The wetted area is the flux out of the
+    liquid of the field radius^2 (x - c)/|x - c|^3 (singular only at the
+    centre, inside the solid) through the liquid's surface, a facet
+    integral, plus smooth line integrals on the other walls' contact lines
+    (:mod:`pysurfaceevolver._flux`, which :func:`make_datafile` puts
+    together for all of them; the volume likewise). Its walls may only be
+    spheres with this gauge and planes, every flat face the liquid meets a
+    plane; the centre must be numbers and ``span`` 2 pi (``axis`` and
+    ``wet_poles`` don't apply).
     """
     c = tuple(center)
     R = float(radius)
     if len(c) != 3 or R <= 0:
         raise ValueError("center must be a 3-vector and radius positive")
     moving = any(isinstance(x, str) for x in c)
+    if gauge not in ("pole", "flux"):
+        raise ValueError(f"gauge must be 'pole' or 'flux', not {gauge!r}")
+    if gauge == "flux":
+        if moving or span != 2*np.pi:
+            raise ValueError("a sphere with gauge='flux' needs a centre of numbers and span 2 pi")
+        return _flux_sphere(tuple(float(x) for x in c), R, contact_angle, tension, nonnegative)
     if axis is not None:
         if moving or span != 2*np.pi:
             raise ValueError("a sphere with an axis needs a centre of numbers and span 2 pi")
@@ -425,6 +449,22 @@ def _axis_sphere(c: Tuple[float, ...], R: float, contact_angle: Optional[float],
                               tuple(map(float, e2)), tuple(map(float, e3)),
                               float(k.value) if k.expr is None and k.value is not None
                               else float("nan")))
+
+
+def _flux_sphere(c: Tuple[float, ...], R: float, contact_angle: Optional[float], tension: float,
+                 nonnegative: bool) -> Constraint:
+    """sphere(gauge="flux"): its own line integral only the volume's part
+    with no total over the sphere (Evolver's z dx dy there, less the area's
+    R/3 dA, which the facets' field takes: -c_z X dY - (Z/3)(X dY - Y dX),
+    as _axis_sphere's); the rest make_datafile adds (_flux)."""
+    k = _Coefficient(contact_angle, tension)
+    X, Y, Z = (f"(x - {_n(c[0])})", f"(y - {_n(c[1])})", f"(z - {_n(c[2])})")
+    content = [f"({Z}/3*{Y})", f"(-({_n(c[2])} + {Z}/3)*{X})", "0"]
+    formula = (f"(x - {_n(c[0])})^2 + (y - {_n(c[1])})^2 + (z - {_n(c[2])})^2 = "
+               f"{float(R*R)!r}")
+    return Constraint(formula, None, content, 0.0, 0.0, nonnegative, 0.0,
+                      shape=("sphere", c, R), parameters=k.names, contact_angle=contact_angle,
+                      flux=(c, R, contact_angle, tension))
 
 
 def cylinder(point, direction, radius: float, contact_angle: Optional[float] = None, *,

@@ -417,6 +417,11 @@ def make_datafile(
         out.append(f"gravity_constant {float(gravity)!r}\n")
     if header:
         out.append(header.rstrip() + "\n")
+    # spheres without poles (constraints.sphere(gauge="flux")): their facet
+    # integrals, and every wall's line integrals for them
+    from ._flux import assemble
+    cons, flux_lines = assemble(cons)
+    out.append(flux_lines)
     for number, spec in cons.items():
         out.append(_constraint_text(number, spec))
     for number, b in bounds.items():

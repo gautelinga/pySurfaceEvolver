@@ -100,13 +100,14 @@ def square(Lx, Ly, z, h):
     return v, tri, sides
 
 
-def load(x, Lx, Ly, theta=20.0, h=0.2, above=0.005, floor=False):
+def load(x, Lx, Ly, theta=20.0, h=0.2, above=0.005, floor=False, gauge="pole"):
     """The liquid filling the box to a flat meniscus `above` over the top
     bead: an Evolver with the beads as constraints "bead<i>" and the side
     walls "wallxlo", "wallxhi", "wallylo", "wallyhi" (planes at 90 degrees);
     with floor, the floor z = 0 a wall "bottom" too (at 90 degrees: the gas
     reaching it is breakthrough; "floor" is an Evolver word), else only the
-    volume's lower bound."""
+    volume's lower bound. gauge: the beads' (constraints.sphere): "pole"
+    (an axis each) or "flux" (no poles; needs floor)."""
     import pysurfaceevolver as pyse
     from pysurfaceevolver import constraints as C
     H = float(x[:, 2].max() + 1 + above)
@@ -119,8 +120,12 @@ def load(x, Lx, Ly, theta=20.0, h=0.2, above=0.005, floor=False):
     if floor:
         cons["bottom"] = C.plane((0, 0, 1), 0.0, contact_angle=90.0)
     for i, c in enumerate(x):
-        cons[f"bead{i + 1}"] = C.sphere(tuple(c), 1.0, contact_angle=theta, axis=tuple(ax[i]),
-                                        wet_poles=("north",))
+        if gauge == "flux":
+            # (no poles: constraints.sphere's flux gauge)
+            cons[f"bead{i + 1}"] = C.sphere(tuple(c), 1.0, contact_angle=theta, gauge="flux")
+        else:
+            cons[f"bead{i + 1}"] = C.sphere(tuple(c), 1.0, contact_angle=theta, axis=tuple(ax[i]),
+                                            wet_poles=("north",))
     ev = pyse.Evolver()
     ev.load_arrays(v, f, constraints=cons, vertex_constraints={k: r for k, r in sides.items()},
                    bodies=[pyse.Body(volume=None)])
