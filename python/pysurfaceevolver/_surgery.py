@@ -628,8 +628,7 @@ def pinch_off(ev, event, relax: bool = True) -> List[int]:
             return []
         m = ev.mesh()
         x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
-        a, b = _facing_facets(x, f, p, behind=True, reach=reach)
-        if _tube(ev, m, a, b, None) is None:
+        if not _sheet_hole(ev, m, x, f, p, reach):
             # (the sheet thinnest where it meets a wall, its footprint there
             # not dried, the facets there on its contact line, which the
             # merge doesn't open: a pack's sheet against a side wall,
@@ -637,15 +636,8 @@ def pinch_off(ev, event, relax: bool = True) -> List[int]:
             # pair with no edge on the border nor on a constraint: the hole
             # opens beside the line and grows to it)
             inner = _inner_facets(ev, m)
-            if not inner.any():
-                raise ValueError("pinch_off(): the sheet's hole refused (the checked merge)")
-            try:
-                a, b = _facing_facets(x, f, p, behind=True, reach=reach + 2*float(event.scale),
-                                      allowed=inner)
-            except ValueError:
-                raise ValueError("pinch_off(): the sheet's hole refused (the checked merge)")
-            m = ev.mesh()
-            if _tube(ev, m, a, b, None) is None:
+            if not inner.any() or not _sheet_hole(ev, m, x, f, p, reach + 2*float(event.scale),
+                                                  allowed=inner):
                 raise ValueError("pinch_off(): the sheet's hole refused (the checked merge)")
             _log.debug("the sheet's hole opened beside its contact line")
         _log.debug("a sheet, not a neck: a hole opened through it")
@@ -828,6 +820,29 @@ def _domed(m, x, a: int, b: int, on, h: float) -> bool:
                     and float(np.linalg.norm(x[w] - x[a])) <= reach:
                 best[w] = nd
                 heapq.heappush(heap, (nd, w))
+    return False
+
+
+def _sheet_hole(ev, m, x, f, p, reach: float, allowed=None) -> bool:
+    """A hole opened through a sheet at p by the checked merge (_tube): of
+    the facets within reach of p, nearest first, each with the facet facing
+    it across the sheet, up to _HOLE_TRIES pairs (the nearest pair refused,
+    the mesh folded there: a pack's sheet 0.00075 thin refused four times
+    so, the surface then through itself in every run, and the descent gave
+    up). Whether it opened."""
+    centre = x[f].mean(axis=1)
+    near = np.linalg.norm(centre - p, axis=1) <= reach
+    ok = near if allowed is None else (near & allowed)
+    for _ in range(_HOLE_TRIES):
+        if not ok.any():
+            return False
+        try:
+            a, b = _facing_facets(x, f, p, behind=True, reach=reach, allowed=ok)
+        except ValueError:
+            return False
+        if _tube(ev, m, a, b, None) is not None:
+            return True
+        ok[a] = False
     return False
 
 
@@ -2092,6 +2107,7 @@ _GRADE = 0.5            # _sizes: how fast the targets grow away from a gap (per
 _COARSEN = 1.5          # _sizes: a vertex's target grows at most this much a remeshing
 _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
 _SHEET = 0.25           # a neck whose waist normals' second moment is under this of the first: a sheet
+_HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
 _PINCHED = 0.05         # a neck three edges round, each under this times the edge scale: collapsed
 _GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient steps
 
