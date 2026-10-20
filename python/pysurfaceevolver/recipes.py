@@ -700,8 +700,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     body, whose target is the bodies' added. The state each such descent ends
     in is a :class:`Step` with ``fell`` set and the events whose changes were
     made in ``changes``; the run goes on from there as from a new start, its
-    edges kept in range (``remesh`` if given, else within 0.4 and 2 median
-    edges, contact lines too). A branch that stops short after a change (a
+    edges kept in range (``remesh`` if given, else within 0.4 and 4/3 of
+    their targets, the median edge or finer near gaps, contact lines too;
+    within 0.4 and 2 of them right after a change). A branch that stops short after a change (a
     step that doesn't settle) goes on the same way from a relaxed state there.
     The run ends, with a warning, where a change or a descent fails, and
     after three descents in a row without a change of topology. How liquid
@@ -726,6 +727,12 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         last = last[-1:]                # (the state a change ended in: events coming from it)
         seen: List[np.ndarray] = []
         lost, event, moved = False, None, False
+        if not start and callable(run_remesh):
+            # (the edges in range from where a change or fall ended, not only
+            # from a branch's third point on: falling every few steps, a
+            # pack's surface went on with the edges a descent leaves, up to
+            # twice their targets, 0.41 for 0.2; the branch relaxes it first)
+            run_remesh(ev)
         for step in _branch(ev, what, ds, steps - index + (0 if start else 1), bounds=bounds,
                             tol=tol, tidy=tidy, halvings=halvings,
                             along=along if start else None, remesh=run_remesh, events=events,
@@ -771,9 +778,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             # after a change the mesh is uneven where it was made (a joined
             # contact line, a merged neck): the run goes on keeping its edges
             # in range, as the change's relaxing did
-            from ._surgery import _keep_edges, _median_edge
-            h0 = _median_edge(ev.mesh())
-            run_remesh = functools.partial(_keep_edges, h0=h0)
+            from ._surgery import _keep_edges, _edge_scale, _ON_THE_WAY
+            h0 = _edge_scale(ev)
+            run_remesh = functools.partial(_keep_edges, h0=h0, hi=_ON_THE_WAY)
         if stalled:
             # the branch stopped short (a step that didn't settle after
             # tidying: a pore's contact line receding over dry patches): from
@@ -842,14 +849,15 @@ def _smooth(ev, factor: float, tol: float) -> None:
     Newton's steps from there converged only linearly (a pack's contact line
     beside facets of 7 degrees: x0.7 a step, and the run's first step
     failed), x20 once evened (18 degrees). Undone where Newton doesn't get
-    back, or the surface went through a solid."""
-    from ._surgery import _even_out
-    start = ev._save()
+    back, the surface went through a solid or through itself."""
+    from ._surgery import _crossings, _even_out
+    start, crossed = ev._save(), _crossings(ev)
     for _ in range(5):
         ev.vertex_average()
         _even_out(ev, smooth=False)
         ev.newton(3, tol=tol)
-    if not ev.newton(20, tol=tol).converged or _through(ev.events(factor)):
+    if not ev.newton(20, tol=tol).converged or _through(ev.events(factor)) \
+            or _crossings(ev) > crossed:
         ev.restore(start)
     from ._surgery import _checked
     _checked(ev, "evening the mesh")
@@ -869,14 +877,19 @@ def _change(ev, event, factor: float, tol: float, keep) -> "tuple[Any, list, str
     left as it was) is passed over, as the descent passes over one: down
     from here, the changes coming on the way made."""
     from ._errors import EvolverError
-    from ._surgery import _settle, apply, descend
+    from ._surgery import _crossings, _settle, apply, descend, guard
+    crossed, start = _crossings(ev), ev._save()
     try:
         apply(ev, event, keep)
+        if _crossings(ev) > crossed:
+            ev.restore(start)
+            raise ValueError("the change passed the surface through itself")
     except ValueError:
         return descend(ev, factor, tol, falling=False, keep=keep)
     except EvolverError as error:
         return None, [], str(error)
     if event.kind == "neck":
+        guard(ev)
         r = _settle(ev, tol)
         if r is None:
             # (down from the cut in the descent's runs instead, as the
@@ -950,6 +963,23 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
     def look() -> list:
         return ev.events(factor) if factor is not None else []
 
+    def crossings() -> int:
+        from ._surgery import _crossings
+        return _crossings(ev) if factor is not None else 0
+
+    def passed(found: list, crossed: int) -> "Any":
+        """What the step went through: a solid (its event), itself (the
+        surface's crossings of itself up from the last point's: a 16-bead
+        pack's step put two sheets through each other, 34 crossings, before
+        their touch was seen, and the branch went on crossed three steps),
+        else None."""
+        through = _through(found)
+        if through:
+            return through[0]
+        if factor is not None and crossings() > crossed:
+            return "the surface through itself"
+        return None
+
     def put(v: float) -> None:
         set_value(ev, v)
         ev.command("recalc")        # boundaries follow a parameter (assigning one doesn't)
@@ -978,6 +1008,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
     ok, negative, residual = _arc_settle(ev, put, float(value), tol, False)
     points = [(float(value), ev.vertices)]
     before = look()
+    crossed = crossings()
     yield step(0, float(value), 0, negative, residual, before)
     if steps < 2:
         return
@@ -993,7 +1024,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
             if kept.converged:
                 ok, negative, residual = _arc_settle(ev, put, float(value + first), tol, tidy)
                 found = look() if ok else []
-                ok = ok and not _through(found)
+                ok = ok and passed(found, crossed) is None
         else:
             tangent = (np.sign(first)*along, 0.0)
             ok, iterations = _arc_correct(ev, put, x_start + first*along, float(value),
@@ -1002,7 +1033,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
                 ok, negative, residual = _arc_settle(ev, put, float(_current(ev, what)), tol,
                                                      tidy, tangent, abs(first))
                 found = look() if ok else []
-                ok = ok and not _through(found)
+                ok = ok and passed(found, crossed) is None
         if ok:
             break
         if not ev._put_back(start):
@@ -1016,6 +1047,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
         return
     v = float(_current(ev, what))
     points.append((v, ev.vertices))
+    crossed = crossings()
     coming = _coming(found, before)
     before = found
     yield step(1, v, iterations, negative, residual, found)
@@ -1029,6 +1061,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
             # the run goes on, and remeshing is tried again after the next point)
             points, _ = _arc_remesh(ev, put, points, remesh_now, tol, tidy,
                                     lambda: float(_current(ev, what)))
+            crossed = crossings()
         if ev.mesh_quality().angle_min < 1.0:
             say(f"arclength(): facets below 1 degree at {points[-1][0]:.6g}: refine "
                           "and start again from here")
@@ -1062,8 +1095,8 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
                 # untidied, so the last point's mesh)
                 ok, negative, residual = _arc_settle(ev, put, v, tol, tidy, (tx, tv), h)
                 found = look() if ok else []
-                if _through(found):
-                    ok, through = False, _through(found)[0]
+                if ok and passed(found, crossed) is not None:
+                    ok, through = False, passed(found, crossed)
                 if ok:
                     break
             # back at the last point: on the mesh as tidying left it (flips
@@ -1105,7 +1138,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
                 slide = (sx - _normal_part(ev, sx))*(_rms(ex)/shape if shape > 0 else 0.0)
                 tx, tv, sx, exact = ex, ev_, ex + slide, True
         if not ok:
-            why = (f" where the surface doesn't go through a solid ({through})" if through else
+            why = (f" where the surface goes through nothing ({through})" if through else
                    " that settles again after tidying its mesh (too coarse there? refine)"
                    if corrected else "")
             say(f"arclength(): no equilibrium found past {v1:.6g}{why} (even with "
@@ -1113,6 +1146,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
             return
         v = float(_current(ev, what))       # (settling back can move it a little)
         points = [points[-1], (v, ev.vertices)]
+        crossed = crossings()
         coming = _coming(found, before)
         before = found
         yield step(index, v, iterations, negative, residual, found)

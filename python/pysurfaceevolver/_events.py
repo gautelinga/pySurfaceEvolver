@@ -62,8 +62,11 @@ class Event:
         return f"{what} {self.gap:.3g} across at {at} (edges {self.scale:.3g})"
 
 
-def find(ev, factor: float) -> List[Event]:
-    """The events on ``ev``'s surface, closest (relative to the edges) first."""
+def find(ev, factor: float, self_factor: Optional[float] = None) -> List[Event]:
+    """The events on ``ev``'s surface, closest (relative to the edges) first;
+    the surface close to itself within ``self_factor`` (default factor:
+    its search grows as the cube of it, 0.45 s of a 16-bead pack's 1 s at
+    4)."""
     if not factor > 0:
         raise ValueError("events() needs factor > 0")
     m = ev.mesh()
@@ -109,7 +112,8 @@ def find(ev, factor: float) -> List[Event]:
     with_bodies = bool(bodies.any())
     moving = used & ~np.asarray(m.fixed, bool)
     events = _self(x, f, e, h, normal, behind, ahead, with_bodies, moving & ~folded,
-                   folded, factor, NECK/max(int(m.order), 1))
+                   folded, factor if self_factor is None else self_factor,
+                   NECK/max(int(m.order), 1))
     nums, attrs, dist, names, copies = _one_per_solid(*ev._constraint_gaps())
     found = _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
                    nums, attrs, dist, names)

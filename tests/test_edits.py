@@ -234,3 +234,95 @@ def test_patch_wets_the_facets_lying_on_a_wall():
     assert on.sum() == len(ring) and np.abs(ev.vertices[on, 2]).max() < 1e-12
     assert T._loops(T._border(ev)) == 1
     assert _problems(ev) == set() and ev.check() == []
+
+
+def test_crossed_contact_lines_count_as_crossings():
+    # two triangles lying on a plane (a wall), their borders its contact
+    # lines: no edge goes through a facet, but the lines cross
+    def pair(shift):
+        a = np.array([[0, 0, 0], [1, 0, 0], [0.5, 1, 0]], float)
+        v = np.r_[a, a + [shift, 0.5, 0]]
+        ev = pyse.Evolver()
+        ev.load_arrays(v, [[0, 1, 2], [3, 4, 5]], constraints={"plane": C.plane((0, 0, 1), 0.0)},
+                       vertex_constraints={"plane": range(6)})
+        return ev
+    assert crossings(pair(0.5), far=True) == 2
+    assert crossings(pair(1.5), far=True) == 0
+
+
+def _tent():
+    # a film over a plane, its border a contact line: rim vertices 0 1 2 3
+    # round the apex 4, vertex 1 a spike; equiangulation wants edge 1-4
+    # switched for a chord 0-2 between two of the line's vertices
+    v = np.array([[-0.3, 1, 0], [0, 0, 0], [0.3, 1, 0], [0, 1.5, 0], [0, 2, 0.5]])
+    f = [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints={"plane": C.plane((0, 0, 1), 0.0)},
+                   vertex_constraints={"plane": range(4)})
+    return ev
+
+
+def test_equiangulation_makes_no_chord_between_contact_line_vertices():
+    ev = _tent()
+    edges = {frozenset(e) for e in np.asarray(ev.mesh().edges).tolist()}
+    assert "switched in equiangulation: 0" in ev.command("u")
+    assert {frozenset(e) for e in np.asarray(ev.mesh().edges).tolist()} == edges
+
+
+def test_line_chop_keeps_contact_lines_short_through_gradient_steps():
+    from pysurfaceevolver import _core
+    ev = _drop()
+    m = ev.mesh()
+    line = m.edge_valence() == 1
+    limit = 0.6*float(m.edge_lengths()[line].min())
+    was = _core.line_chop(limit)
+    try:
+        ev.command("g 1")
+    finally:
+        _core.line_chop(was)
+    m = ev.mesh()
+    line = m.edge_valence() == 1
+    assert line.sum() > 24 and m.edge_lengths()[line].max() <= limit
+    on = ev.on_constraint("ball")
+    assert on.sum() == line.sum()
+    assert np.abs(np.linalg.norm(ev.vertices[on], axis=1) - 1).max() < 1e-9
+    assert _problems(ev) == set() and ev.check() == []
+    ev.command("g 1")                       # off again: nothing split
+    assert (ev.mesh().edge_valence() == 1).sum() == line.sum()
+
+
+def test_remesh_follows_a_target_length_per_vertex():
+    # a drop remeshed toward h, with a quarter of that near its top: the
+    # edges there come out about h/4, those elsewhere about h
+    ev = _drop()
+    m = ev.mesh()
+    h = float(np.median(m.edge_lengths()))
+    top = np.asarray(m.vertices)[np.argmax(np.asarray(m.vertices)[:, 2])]
+    for _ in range(3):
+        m = ev.mesh()
+        near = np.linalg.norm(np.asarray(m.vertices) - top, axis=1) < 0.15
+        remesh(ev, h, sizes=np.where(near, h/4, h))
+    m = ev.mesh()
+    x, e = np.asarray(m.vertices), np.asarray(m.edges)
+    mid = np.linalg.norm(x[e].mean(axis=1) - top, axis=1)
+    lengths = m.edge_lengths()
+    assert np.median(lengths[mid < 0.08]) < 0.4*h
+    assert 0.7*h < np.median(lengths[mid > 0.3]) < 1.3*h
+    assert _problems(ev) == set() and ev.check() == []
+
+
+def test_remesh_in_a_region_leaves_the_rest():
+    # a drop remeshed toward half its edges, near its top only: the vertices
+    # away from it stay where they were, the edges there as they were
+    ev = _drop()
+    m = ev.mesh()
+    h = float(np.median(m.edge_lengths()))
+    x0 = np.asarray(m.vertices).copy()
+    top = x0[np.argmax(x0[:, 2])]
+    near = np.linalg.norm(x0 - top, axis=1) < 0.2
+    far = np.linalg.norm(x0 - top, axis=1) > 0.45
+    done = remesh(ev, h/2, region=np.flatnonzero(near))
+    assert done["splits"] > 0
+    x = np.asarray(ev.mesh().vertices)
+    assert np.array_equal(x[:len(x0)][far], x0[far])
+    assert _problems(ev) == set() and ev.check() == []

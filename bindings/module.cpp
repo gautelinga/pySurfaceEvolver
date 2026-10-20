@@ -678,7 +678,8 @@ NB_MODULE(_core, m) {
   }, "walls"_a, "sides"_a, "tol"_a, "manifold"_a, CALLBACK_NAMES,
      "data: (problems found, the first 256 as (code, type, id, other, value))");
   m.def("edit", [](int op, std::vector<long> ids, std::vector<double> params,
-                   std::vector<int> walls, std::vector<int> sides, bool manifold, CALLBACK_ARGS) {
+                   std::vector<int> walls, std::vector<int> sides, bool manifold,
+                   std::vector<double> sizes, CALLBACK_ARGS) {
     CALL_SCOPE;
     if (params.size() != 10) throw std::invalid_argument("edit: ten parameters");
     if (walls.size() != sides.size()) throw std::invalid_argument("edit: one side per wall");
@@ -688,23 +689,39 @@ NB_MODULE(_core, m) {
     std::vector<int> results(count ? count : 1);
     CallResult r = run_guarded([&] {
       return pyse_edit(op, ids.data(), int(ids.size()), params.data(), walls.data(),
-                       sides.data(), int(walls.size()), manifold, results.data());
+                       sides.data(), int(walls.size()), manifold, results.data(),
+                       sizes.empty() ? nullptr : sizes.data(), long(sizes.size()));
     });
     if (r.status == PYSE_OK) {
       results.resize(count);
       r.data = nb::cast(results);
     }
     return r;
-  }, "op"_a, "ids"_a, "params"_a, "walls"_a, "sides"_a, "manifold"_a, CALLBACK_NAMES,
+  }, "op"_a, "ids"_a, "params"_a, "walls"_a, "sides"_a, "manifold"_a,
+     "sizes"_a, CALLBACK_NAMES,
      "data: per edit, PYSE_EDIT_DONE (0) or why it was refused");
   m.def("crossings", [](bool far, CALLBACK_ARGS) {
     CALL_SCOPE;
     long count = 0;
-    CallResult r = run_guarded([&] { return pyse_crossings(far, &count); });
+    CallResult r = run_guarded([&] { return pyse_crossings(far, &count, nullptr, 0); });
     if (r.status == PYSE_OK) r.data = nb::cast(count);
     return r;
   }, "far"_a, CALLBACK_NAMES,
-     "data: edges through facets on the whole surface (far: more than a ring apart)");
+     "data: edges through facets on the whole surface (far: more than a ring apart), "
+     "and contact lines crossing on a wall");
+  m.def("crossing_places", [](bool far, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    const long max = 4096;
+    long count = 0;
+    std::vector<double> where(size_t(max) * 3);
+    CallResult r = run_guarded([&] { return pyse_crossings(far, &count, where.data(), max); });
+    if (r.status == PYSE_OK)
+    { size_t n = size_t(count < max ? count : max);
+      where.resize(n * 3);
+      r.data = to_numpy(std::move(where), {n, size_t(3)});
+    }
+    return r;
+  }, "far"_a, CALLBACK_NAMES, "data: where the crossings are (n, 3; up to 4096)");
   m.def("everything_quantities", []() { Lock lock; return bool(pyse_everything_quantities()); });
   m.def("snapshot_restore", [](long handle, CALLBACK_ARGS) {
     CALL_SCOPE;

@@ -12,8 +12,8 @@
  * else restores, so the snapshot costs only when an edit fails afterwards.
  *
  * The edits (linear soap films in 3D):
- *   collapse  an edge to a point: Evolver's delete_edge (its link condition
- *             and shape checks), our rules first: a contact line's vertex
+ *   collapse  an edge to a point: Evolver's delete_edge (its shape checks),
+ *             our rules first: the strict link condition, a contact line's vertex
  *             only along the line, constraints kept, no facet turned more
  *             than max_turn, edges not longer than max_len, the volume swept
  *             under max_volume;
@@ -56,7 +56,7 @@ static void push(struct ids *l, element_id id)
   l->a[l->n++] = id;
 }
 
-struct grid { REAL lo[3], cell; int n[3]; long *start, *items; int built; };
+struct grid { REAL lo[3], cell; int n[3]; long *start, *items, total; int built; };
 
 /* elements made or changed since a grid was built, by its cells: per cell
    a list through next (head: its first entry, -1 none) */
@@ -194,6 +194,62 @@ static void project(vertex_id v)
 { if ( get_vattr(v) & CONSTRAINT ) project_v_constr(v,ACTUAL_MOVE,KEEP_ONESIDEDNESS);
 }
 
+/* ---- a target edge length per vertex ------------------------------------ */
+
+/* (set for one pyse_edit call: finer where the surface comes close to a wall
+   or to itself, as at a 16-bead pack's near-contacts, whose 0.03 gaps a
+   uniform mesh of 0.2 couldn't resolve) by vertex ordinal; <= 0: c->h */
+static REAL *sizes = NULL;
+static long sizes_n = 0;
+
+static REAL vertex_size(struct ctx *c, vertex_id v)
+{ long o = ordinal(v);
+  return sizes && o >= 0 && o < sizes_n && sizes[o] > 0 ? sizes[o] : c->h;
+}
+
+/* the target length of edge e: its ends' mean */
+static REAL edge_target(struct ctx *c, edge_id e)
+{ return 0.5*(vertex_size(c,get_edge_tailv(e)) + vertex_size(c,get_edge_headv(e))); }
+
+static void set_size(vertex_id v, REAL size)
+{ long o = ordinal(v), i;
+  if ( !sizes || o < 0 ) return;
+  if ( o >= sizes_n )
+  { long m = 2*o + 64;
+    REAL *grown = (REAL *)realloc(sizes,m*sizeof(REAL));
+    if ( !grown ) return;
+    sizes = grown;
+    for ( i = sizes_n ; i < m ; i++ ) sizes[i] = -1.0;
+    sizes_n = m;
+  }
+  sizes[o] = size;
+}
+
+/* (set for one remesh: the vertices it works on, by ordinal; NULL: all. A
+   descent's changes are local, and remeshing all of a refined pack's
+   surface after each, its 20k smoothing moves, took most of a descent) */
+static unsigned char *region = NULL;
+static long region_n = 0;
+
+static int in_region(vertex_id v)
+{ long o = ordinal(v);
+  return !region || (o >= 0 && o < region_n && region[o]);
+}
+
+static void add_to_region(vertex_id v)
+{ long o = ordinal(v), i;
+  if ( !region || o < 0 ) return;
+  if ( o >= region_n )
+  { long m = 2*o + 64;
+    unsigned char *grown = (unsigned char *)realloc(region,m);
+    if ( !grown ) return;
+    region = grown;
+    for ( i = region_n ; i < m ; i++ ) region[i] = 0;
+    region_n = m;
+  }
+  region[o] = 1;
+}
+
 /* ---- spatial grids ------------------------------------------------------ */
 
 static void elem_box(element_id id, REAL *lo, REAL *hi, REAL pad)
@@ -255,6 +311,7 @@ static void grid_build(struct ctx *c, struct grid *g, int type)
     }
   }
   for ( i = 0 ; i < ncells ; i++ ) g->start[i+1] += g->start[i];
+  g->total = total;
   g->items = (long *)temp_calloc(total ? total : 1,sizeof(long));
   fill = (long *)temp_calloc(ncells,sizeof(long));
   for ( id = web.skel[type].used ; valid_id(id) ; id = elptr(id)->forechain )
@@ -332,12 +389,15 @@ static void grids_build(struct ctx *c)
    which queries look at too (a list of them all, scanned by every query,
    made the remesher's checked edits quadratic in a batch: 1.6-2.5 s a
    remesh of a 16-bead pack's 1.5k facets); the grids made again once they
-   are many */
+   are as many as the grids' own (hundreds of splits in one place, a pack's
+   refined patch, piled up on its cells' lists: 641 splits took 11 s, the
+   first 100 of them 0.4) or many */
 static void changed(struct ctx *c, struct ids *f, struct ids *e)
 { int i;
   for ( i = 0 ; i < f->n ; i++ ) xgrid_add(c,&c->xf,&c->fgrid,f->a[i]);
   for ( i = 0 ; i < e->n ; i++ ) xgrid_add(c,&c->xe,&c->egrid,e->a[i]);
-  if ( c->xf.n + c->xe.n > XGRID_LIMIT ) grids_build(c);
+  if ( c->xf.n + c->xe.n > XGRID_LIMIT
+       || c->xf.n + c->xe.n > c->fgrid.total + c->egrid.total + 4096 ) grids_build(c);
 }
 
 /* ---- the patch's problems ----------------------------------------------- */
@@ -422,6 +482,114 @@ static int crossings_of(struct ctx *c, element_id id, struct ids *near)
   for ( i = 0 ; i < near->n ; i++ )
     if ( mark(c,near->a[i]) )
       n += other == FACET ? pair_crosses(c,id,near->a[i]) : pair_crosses(c,near->a[i],id);
+  return n;
+}
+
+/* ---- contact lines crossing each other ---------------------------------- */
+
+/* a contact-line edge: on one facet, on a constraint */
+static int is_line(edge_id e)
+{ return valid_element(e) && (get_eattr(e) & CONSTRAINT) && valence(e) == 1; }
+
+/* whether x lies on constraint con's surface (within 1e-6 h) */
+static int on_surface(int con, REAL *x, REAL h)
+{ REAL f, g[MAXCOORD];
+  eval_all(get_constraint(con)->formula,x,SDIM,&f,g,NULLID);
+  return fabs(f) <= 1e-6*h*norm3(g);
+}
+
+/* whether w is within depth contact-line edges of v along the lines */
+static int line_near(vertex_id v, vertex_id w, int depth)
+{ edge_id e, e0;
+  int guard;
+  if ( equal_id(v,w) ) return 1;
+  if ( depth == 0 ) return 0;
+  EACH_EDGE_AT(v,e,e0,guard)
+    if ( is_line(e) && line_near(get_edge_headv(e),w,depth - 1) ) return 1;
+  return 0;
+}
+
+/* whether contact-line edges e and o, sharing no vertex, on one wall (or
+   o's ends on e's wall's surface: a pole copy of a bead is a constraint of
+   its own), cross as seen along the wall's normal at their middle (mid,
+   when they do); far: not two within two edges of each other along the
+   lines (a fold of a line, as crossings_of leaves folds one ring across: a
+   finger of a pack's line two edges long, narrower than an edge, folded
+   over) */
+static int lines_cross(edge_id e, edge_id o, REAL h, int far, REAL *mid)
+{ vertex_id a0 = get_edge_tailv(e), a1 = get_edge_headv(e);
+  vertex_id b0 = get_edge_tailv(o), b1 = get_edge_headv(o);
+  REAL *p = get_coord(a0), *q = get_coord(a1), *r = get_coord(b0), *t = get_coord(b1);
+  REAL g[MAXCOORD], f, gl, e1[3], e2[3], P[4][2], d1, d2, d3, d4, *pts[4];
+  conmap_t *map = get_e_constraint_map(e);
+  unsigned int m;
+  int con = -1, k;
+  if ( equal_id(a0,b0) || equal_id(a0,b1) || equal_id(a1,b0) || equal_id(a1,b1) ) return 0;
+  for ( k = 0 ; k < 3 ; k++ )
+  { REAL alo = p[k] < q[k] ? p[k] : q[k], ahi = p[k] < q[k] ? q[k] : p[k];
+    REAL blo = r[k] < t[k] ? r[k] : t[k], bhi = r[k] < t[k] ? t[k] : r[k];
+    if ( ahi < blo - 1e-9*h || bhi < alo - 1e-9*h ) return 0;
+  }
+  if ( far && (line_near(a0,b0,2) || line_near(a0,b1,2) || line_near(a1,b0,2)
+               || line_near(a1,b1,2)) ) return 0;
+  for ( m = 1 ; m <= map[0] && con < 0 ; m++ )
+    if ( e_on_constraint(o,(int)(map[m] & CONMASK))
+         || (on_surface((int)(map[m] & CONMASK),r,h) && on_surface((int)(map[m] & CONMASK),t,h)) )
+      con = (int)(map[m] & CONMASK);
+  if ( con < 0 ) return 0;
+  for ( k = 0 ; k < 3 ; k++ ) mid[k] = (p[k] + q[k] + r[k] + t[k])/4;
+  eval_all(get_constraint(con)->formula,mid,SDIM,&f,g,NULLID);
+  gl = norm3(g);
+  if ( !(gl > 0) ) return 0;
+  for ( k = 0 ; k < 3 ; k++ ) g[k] /= gl;
+  /* e1, e2 across the normal */
+  if ( fabs(g[0]) < 0.6 ) { e1[0] = 0; e1[1] = g[2]; e1[2] = -g[1]; }
+  else { e1[0] = -g[2]; e1[1] = 0; e1[2] = g[0]; }
+  gl = norm3(e1);
+  for ( k = 0 ; k < 3 ; k++ ) e1[k] /= gl;
+  e2[0] = g[1]*e1[2] - g[2]*e1[1];
+  e2[1] = g[2]*e1[0] - g[0]*e1[2];
+  e2[2] = g[0]*e1[1] - g[1]*e1[0];
+  pts[0] = p; pts[1] = q; pts[2] = r; pts[3] = t;
+  for ( k = 0 ; k < 4 ; k++ )
+  { P[k][0] = dot3(pts[k],e1) - dot3(mid,e1);
+    P[k][1] = dot3(pts[k],e2) - dot3(mid,e2);
+  }
+#define ORIENT(o_,a_,b_) ((P[a_][0]-P[o_][0])*(P[b_][1]-P[o_][1]) - (P[a_][1]-P[o_][1])*(P[b_][0]-P[o_][0]))
+  d1 = ORIENT(0,1,2); d2 = ORIENT(0,1,3); d3 = ORIENT(2,3,0); d4 = ORIENT(2,3,1);
+#undef ORIENT
+  return d1*d2 < 0 && d3*d4 < 0;
+}
+
+/* contact-line edges crossing contact-line edge e (from the edge grid and
+   the changed lists, and near) */
+static int line_crossings_of(struct ctx *c, edge_id e, struct ids *near)
+{ struct grid *g = &c->egrid;
+  struct xgrid *extra = &c->xe;
+  REAL lo[3], hi[3], mid[MAXCOORD];
+  int a[3], b[3], x, y, z, i, n = 0;
+  long k;
+  if ( !is_line(e) ) return 0;
+  elem_box(e,lo,hi,0.0);
+  cells(c,g,lo,hi,a,b);
+  c->stamp_now++;
+  for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
+    for ( x = a[0] ; x <= b[0] ; x++ )
+    { long cc = CELL(g,x,y,z);
+      for ( k = g->start[cc] ; k < g->start[cc+1] ; k++ )
+      { edge_id o = get_ordinal_id(EDGE,g->items[k]);
+        if ( !mark(c,o) || equal_id(o,e) || !is_line(o) ) continue;
+        n += lines_cross(e,o,c->h,1,mid);
+      }
+      for ( k = extra->head ? extra->head[cc] : -1 ; k >= 0 ; k = extra->next[k] )
+      { edge_id o = extra->id[k];
+        if ( !mark(c,o) || equal_id(o,e) || !is_line(o) ) continue;
+        n += lines_cross(e,o,c->h,1,mid);
+      }
+    }
+  for ( i = 0 ; i < near->n ; i++ )
+    if ( mark(c,near->a[i]) && !equal_id(near->a[i],e) && is_line(near->a[i]) )
+      n += lines_cross(e,near->a[i],c->h,1,mid);
   return n;
 }
 
@@ -568,6 +736,8 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, struct ids
   /* crossings: the patch's edges against facets, its facets against edges */
   for ( i = 0 ; i < E.n ; i++ ) k->crossing += crossings_of(c,E.a[i],&F);
   for ( i = 0 ; i < F.n ; i++ ) k->crossing += crossings_of(c,F.a[i],&E);
+  /* and contact lines through each other (the patch's against all) */
+  for ( i = 0 ; i < E.n ; i++ ) k->crossing += line_crossings_of(c,E.a[i],&E);
 
   if ( out_e ) for ( i = 0 ; i < E.n ; i++ ) push(out_e,E.a[i]);
   if ( out_f ) for ( i = 0 ; i < F.n ; i++ ) push(out_f,F.a[i]);
@@ -644,7 +814,10 @@ static void moved_shape(struct ctx *c, vertex_id u, vertex_id w, REAL *p, REAL *
             tri_normal(y[0],y[1],y[2],n1);
             a0 = norm3(n0); a1 = norm3(n1);
             if ( a1 < *least ) *least = a1;
-            if ( a0 > 0 && a1 > 0 && dot3(n0,n1)/(a0*a1) < *worst_cos )
+            /* (not a facet of next to no area before: its normal is
+               round-off, and the turn it made refused every collapse that
+               would mend it) */
+            if ( a0 > 1e-6*c->h*c->h && a1 > 0 && dot3(n0,n1)/(a0*a1) < *worst_cos )
               *worst_cos = dot3(n0,n1)/(a0*a1);
           }
         }
@@ -657,6 +830,36 @@ static void moved_shape(struct ctx *c, vertex_id u, vertex_id w, REAL *p, REAL *
 static int sub_attr(vertex_id w, vertex_id u)
 { int r = compare_vertex_attr(w,u);
   return r == A_EQ_B || r == A_SUB_B;
+}
+
+/* whether merging the ends of e keeps the surface a manifold: no other edge
+   between them, and no neighbour common to both but the third corners of
+   e's facets (Evolver's delete_edge lets a common neighbour by when no two
+   facets would coincide, and merged, the ends then join it by two edges:
+   the surface pinched along an edge, a 16-bead pack's 80 of them, and its
+   constraint projection failed, ERROR 3005) */
+static int link_kept(edge_id e)
+{ vertex_id a = get_edge_tailv(e), b = get_edge_headv(e), third[64], x;
+  facetedge_id fe, fe0;
+  edge_id d, d0;
+  int n = 0, k, guard;
+  fe0 = fe = get_edge_fe(e);
+  if ( valid_id(fe) )
+    do
+    { if ( n < 64 ) third[n++] = get_fe_headv(get_next_edge(fe));
+      fe = get_next_facet(fe);
+    } while ( valid_id(fe) && !equal_id(fe,fe0) );
+  EACH_EDGE_AT(a,d,d0,guard)
+  { x = get_edge_headv(d);
+    if ( equal_id(x,b) )
+    { if ( !equal_element(d,e) ) return 0;
+      continue;
+    }
+    if ( !joined(b,x) ) continue;
+    for ( k = 0 ; k < n ; k++ ) if ( equal_id(third[k],x) ) break;
+    if ( k == n ) return 0;
+  }
+  return 1;
 }
 
 static int collapse(struct ctx *c, edge_id e, int relaxed)
@@ -684,6 +887,7 @@ static int collapse(struct ctx *c, edge_id e, int relaxed)
     if ( (on_border(a) || on_border(b)) && !border_edge ) return PYSE_EDIT_LINE;
     return PYSE_EDIT_CONSTRAINTS;
   }
+  if ( !link_kept(e) ) return PYSE_EDIT_LINK;
   if ( compare_vertex_attr(u,w) == A_EQ_B && !(get_vattr(u) & FIXED) )
     for ( k = 0 ; k < 3 ; k++ ) p[k] = (get_coord(u)[k] + get_coord(w)[k])/2;
   else
@@ -691,7 +895,7 @@ static int collapse(struct ctx *c, edge_id e, int relaxed)
   moved_shape(c,u,w,p,&cosw,&least,&longest,&volume);
   if ( least < 2e-10*c->h*c->h && !relaxed ) return PYSE_EDIT_DEGENERATE;
   if ( cosw < c->cos_turn && !relaxed ) return PYSE_EDIT_TURN;
-  if ( c->max_len > 0 && longest > c->max_len*c->h ) return PYSE_EDIT_LONG;
+  if ( c->max_len > 0 && longest > c->max_len*edge_target(c,e) ) return PYSE_EDIT_LONG;
   if ( fabs(volume) > c->max_volume*c->h*c->h*c->h ) return PYSE_EDIT_VOLUME;
 
   star(u,&verts); star(w,&verts);
@@ -784,8 +988,11 @@ static int flip(struct ctx *c, edge_id e, int mode)
   tri_normal(get_coord(p),get_coord(d),get_coord(cc),m1);
   tri_normal(get_coord(q),get_coord(cc),get_coord(d),m2);
   l1 = norm3(n1); l2 = norm3(n2);
-  if ( l1 <= 0 || l2 <= 0 ) return PYSE_EDIT_DEGENERATE;
-  for ( k = 0 ; k < 3 ; k++ ) avg[k] = n1[k]/l1 + n2[k]/l2;
+  if ( l1 <= 0 && l2 <= 0 ) return PYSE_EDIT_DEGENERATE;
+  /* (weighted by area: a facet of next to no area has a normal that is
+     round-off, and given the other's weight it turned every flip that
+     would mend it: a pack's remeshed surface kept 109 such, refused) */
+  for ( k = 0 ; k < 3 ; k++ ) avg[k] = n1[k] + n2[k];
   an = norm3(avg);
   if ( norm3(m1) < 2e-10*c->h*c->h || norm3(m2) < 2e-10*c->h*c->h ) return PYSE_EDIT_DEGENERATE;
   if ( an <= 0 || dot3(m1,avg) < c->cos_turn*norm3(m1)*an || dot3(m2,avg) < c->cos_turn*norm3(m2)*an )
@@ -818,6 +1025,8 @@ static int split(struct ctx *c, edge_id e)
   }
   m = get_edge_headv(e);                 /* e is the tail half now */
   project(m);
+  if ( sizes ) set_size(m,0.5*(vertex_size(c,a) + vertex_size(c,b)));
+  if ( region && (in_region(a) || in_region(b)) ) add_to_region(m);
   verts.n = 0;
   star(m,&verts); push(&verts,a); push(&verts,b);
   why = after(c,&verts,&was,0);
@@ -1218,9 +1427,27 @@ static int merge_facets(struct ctx *c, facet_id f1, facet_id f2)
   for ( i = 0 ; i < 3 ; i++ ) for ( k = 0 ; k < 3 ; k++ )
   { ca[k] += get_coord(a[i])[k]/3; cb[k] += get_coord(b[i])[k]/3; }
   side1 = faces(f1,cb); side2 = faces(f2,ca);
-  if ( side1 != side2 ) return PYSE_EDIT_ORIENTATION;
   front = get_facet_body(f1); back = get_facet_body(inverse_id(f1));
   front2 = get_facet_body(f2); back2 = get_facet_body(inverse_id(f2));
+  if ( side1 != side2 )
+  { /* two facets all but on each other (a sheet of liquid 6e-6 thick, its
+       hole refused run after run): which side each faces is round-off, so
+       by their normals, facing each other, the gap on the side whose bodies
+       agree */
+    REAL n1[3], n2[3], gap[3], l1, l2;
+    vertex_id va[3], vb[3];
+    facet_verts(f1,va); facet_verts(f2,vb);
+    tri_normal(get_coord(va[0]),get_coord(va[1]),get_coord(va[2]),n1);
+    tri_normal(get_coord(vb[0]),get_coord(vb[1]),get_coord(vb[2]),n2);
+    for ( k = 0 ; k < 3 ; k++ ) gap[k] = cb[k] - ca[k];
+    l1 = norm3(n1); l2 = norm3(n2);
+    if ( !(l1 > 0 && l2 > 0) || dot3(n1,n2) > -0.5*l1*l2
+         || fabs(dot3(n1,gap)) > 1e-3*l1*sqrt(l1) || fabs(dot3(n2,gap)) > 1e-3*l2*sqrt(l2) )
+      return PYSE_EDIT_ORIENTATION;
+    if ( equal_id(front,front2) ) side1 = side2 = 0;
+    else if ( equal_id(back,back2) ) side1 = side2 = 1;
+    else return PYSE_EDIT_ORIENTATION;
+  }
   /* across the gap (where the normals point: out of the front body), the
      same body or none */
   if ( !equal_id(side1 ? back : front, side2 ? back2 : front2) ) return PYSE_EDIT_ORIENTATION;
@@ -1543,15 +1770,26 @@ static int one(struct ctx *c, struct edit_args *a, int k)
 
 /* one batch: each edit in turn; one that comes out worse puts the batch's
    snapshot back, the edits made before it made again */
+/* edits a batch replays at most after one is undone: the surface is
+   saved again every so many (from the batch's start, a refined patch's 641
+   splits, a dozen undone, replayed thousands: 11 s, 4 in chunks of 100) */
+#define BATCH_CHECKPOINT 32
+
 static void run_batch(struct ctx *c, struct edit_args *a)
 { struct snapshot *s = NULL;
-  int k, j, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
+  int k, j, base = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
   a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
   for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
   grids_build(c);
   for ( k = 0 ; k < count ; k++ )
   { int r;
-    if ( !s && a->op != PYSE_OP_SMOOTH ) s = pyse_snapshot_hold();
+    if ( !s && a->op != PYSE_OP_SMOOTH ) { s = pyse_snapshot_hold(); base = k; }
+    else if ( s && k - base >= BATCH_CHECKPOINT )
+    { /* (the edits before k kept: replays start here) */
+      pyse_snapshot_drop(s);
+      s = pyse_snapshot_hold();
+      base = k;
+    }
     r = one(c,a,k);
     if ( r >= 0 ) { a->results[k] = r; continue; }
     a->results[k] = -r;
@@ -1559,7 +1797,7 @@ static void run_batch(struct ctx *c, struct edit_args *a)
     { int again = 0;
       pyse_snapshot_put_back(s);
       grids_build(c);
-      for ( j = 0 ; j < k && !again ; j++ )
+      for ( j = base ; j < k && !again ; j++ )
         if ( a->results[j] == PYSE_EDIT_DONE )
         { int rr = one(c,a,j);
           if ( rr != PYSE_EDIT_DONE )
@@ -1616,7 +1854,9 @@ static int by_length_up(const void *x, const void *y)
 
 /* edges as element numbers: longer than above (longest first), or shorter
    than below (shortest first), or (both 0) those on two facets */
-static long *edges_by(double above, double below, int *n)
+/* edges longer than above, or shorter than below, times their targets
+   (longest, shortest first, as their ratio to it), or with two facets */
+static long *edges_by(struct ctx *c, double above, double below, int *n)
 { edge_id e;
   long count = 0, k = 0;
   REAL *pairs;
@@ -1624,8 +1864,11 @@ static long *edges_by(double above, double below, int *n)
   FOR_ALL_EDGES(e) count++;
   pairs = (REAL *)temp_calloc(2*(count ? count : 1),sizeof(REAL));
   FOR_ALL_EDGES(e)
-  { REAL l = edge_length(e);
-    int keep = above > 0 ? l > above : below > 0 ? l < below : valence(e) == 2;
+  { REAL l;
+    int keep;
+    if ( !in_region(get_edge_tailv(e)) && !in_region(get_edge_headv(e)) ) continue;
+    l = edge_length(e)/edge_target(c,e);
+    keep = above > 0 ? l > above : below > 0 ? l < below : valence(e) == 2;
     if ( !keep ) continue;
     pairs[2*k] = above > 0 ? -l : l;
     pairs[2*k+1] = (REAL)(ordinal(e) + 1);
@@ -1644,7 +1887,7 @@ static long *all_vertices(int *n)
   long count = 0, k = 0, *out;
   FOR_ALL_VERTICES(v) count++;
   out = (long *)temp_calloc(count ? count : 1,sizeof(long));
-  FOR_ALL_VERTICES(v) out[k++] = ordinal(v) + 1;
+  FOR_ALL_VERTICES(v) if ( in_region(v) ) out[k++] = ordinal(v) + 1;
   *n = (int)k;
   return out;
 }
@@ -1664,9 +1907,18 @@ static void remesh_body(void *arg)
 { struct edit_args *a = (struct edit_args *)arg;
   struct ctx c;
   int sweep, sweeps = (int)a->params[9], n, pass;
-  double h, keep_len, keep_mode;
+  double keep_len, keep_mode;
+  int k;
   setup(&c,a);
-  h = c.h;
+  if ( a->n > 0 )
+  { /* the region: the vertices numbered (the edges with an end there) */
+    region = (unsigned char *)calloc(1,1);
+    region_n = 1;
+    for ( k = 0 ; k < a->n ; k++ )
+    { vertex_id v = item(PYSE_OP_SMOOTH,a->ids[k]);
+      if ( valid_id(v) ) add_to_region(v);
+    }
+  }
   keep_len = c.max_len; keep_mode = c.mode;
   for ( pass = 0 ; pass < 4 ; pass++ ) a->results[pass] = 0;
   for ( sweep = 0 ; sweep < (sweeps > 0 ? sweeps : 3) ; sweep++ )
@@ -1675,9 +1927,9 @@ static void remesh_body(void *arg)
     for ( pass = 0 ; pass < 4 ; pass++ )
     { long *ids;
       int *res;
-      if ( pass == 0 ) { ids = edges_by(4.0/3*h,0,&n); b.op = PYSE_OP_SPLIT; }
-      else if ( pass == 1 ) { ids = edges_by(0,0.8*h,&n); b.op = PYSE_OP_COLLAPSE; c.max_len = 4.0/3; }
-      else if ( pass == 2 ) { ids = edges_by(0,0,&n); b.op = PYSE_OP_FLIP; c.mode = 2; }
+      if ( pass == 0 ) { ids = edges_by(&c,4.0/3,0,&n); b.op = PYSE_OP_SPLIT; }
+      else if ( pass == 1 ) { ids = edges_by(&c,0,0.8,&n); b.op = PYSE_OP_COLLAPSE; c.max_len = 4.0/3; }
+      else if ( pass == 2 ) { ids = edges_by(&c,0,0,&n); b.op = PYSE_OP_FLIP; c.mode = 2; }
       else { ids = all_vertices(&n); b.op = PYSE_OP_SMOOTH; }
       res = (int *)temp_calloc(n ? n : 1,sizeof(int));
       b.ids = ids; b.n = n; b.results = res;
@@ -1690,18 +1942,27 @@ static void remesh_body(void *arg)
     }
     if ( !moved ) break;            /* (topology settled: smoothing alone doesn't repeat) */
   }
+  free(region);
+  region = NULL; region_n = 0;
   web_timestamp = top_timestamp = ++global_timestamp;
   recalc();
 }
 
 int pyse_edit(int op, const long *ids, int n, const double *params, const int *walls,
-              const int *sides, int nwalls, int manifold, int *results)
+              const int *sides, int nwalls, int manifold, int *results,
+              const double *size, long nsize)
 { struct edit_args *a;
   int status, k;
   if ( op < PYSE_OP_COLLAPSE || op > PYSE_OP_PATCH )
     return PYSE_ERROR;
   a = (struct edit_args *)calloc(1,sizeof(*a));
   if ( !a ) return PYSE_FATAL;
+  if ( size && nsize > 0 )
+  { sizes = (REAL *)malloc(nsize*sizeof(REAL));
+    if ( !sizes ) { free(a); return PYSE_FATAL; }
+    for ( k = 0 ; k < nsize ; k++ ) sizes[k] = size[k];
+    sizes_n = nsize;
+  }
   a->op = op; a->ids = ids; a->n = n; a->params = params; a->walls = walls;
   a->sides = sides; a->nwalls = nwalls; a->manifold = manifold; a->results = results;
   if ( op == PYSE_OP_REMESH )
@@ -1713,12 +1974,16 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
   }
   pyse_surface_changed();
   free(a);
+  free(sizes);
+  sizes = NULL; sizes_n = 0;
+  free(region);                /* (an Evolver error jumps past remesh_body's) */
+  region = NULL; region_n = 0;
   return status;
 }
 
 /* ---- crossings (for descent steps) -------------------------------------- */
 
-struct crossing_args { long count; int far; };
+struct crossing_args { long count; int far; double *where; long max; };
 
 /* whether an edge's end and a facet's corner are joined by an edge: a fold
    one ring across, not two sheets through each other */
@@ -1733,6 +1998,35 @@ static int near_pair(edge_id e, facet_id f)
 }
 
 
+/* where a crossing is (up to max kept) */
+static void record(struct crossing_args *a, long n, const REAL *x)
+{ int k;
+  if ( !a->where ) { a->count += n; return; }
+  for ( ; n > 0 && a->count < a->max ; n--, a->count++ )
+    for ( k = 0 ; k < 3 ; k++ ) a->where[3*a->count + k] = x[k];
+  a->count += n;
+}
+
+/* contact lines through each other: two border edges on one wall,
+   sharing no vertex, crossing as seen along the constraint's normal at their
+   middle (both lie on the wall, so neither goes through a facet and
+   crossings_of misses them: two lines on a 16-bead pack's bead crossed, and
+   the runs after were undone for the crossings that came of it later) */
+static long line_crossings(REAL h, struct crossing_args *a)
+{ struct ids L = {0,0,0};
+  edge_id e;
+  long n = 0;
+  int i, j;
+  REAL mid[MAXCOORD];
+  FOR_ALL_EDGES(e)
+    if ( is_line(e) ) push(&L,e);
+  for ( i = 0 ; i < L.n ; i++ )
+    for ( j = i + 1 ; j < L.n ; j++ )
+      if ( lines_cross(L.a[i],L.a[j],h,a->far,mid) ) { n++; record(a,1,mid); }
+  if ( L.a ) temp_free((char *)L.a);
+  return n;
+}
+
 static void crossing_body(void *arg)
 { struct crossing_args *a = (struct crossing_args *)arg;
   struct ctx c;
@@ -1746,18 +2040,78 @@ static void crossing_body(void *arg)
   grids_build(&c);
   a->count = 0;
   far_only = a->far;
-  FOR_ALL_EDGES(e) a->count += crossings_of(&c,e,&none);
+  FOR_ALL_EDGES(e)
+  { long n = crossings_of(&c,e,&none);
+    if ( n && a->where )
+    { REAL *p = get_coord(get_edge_tailv(e)), *q = get_coord(get_edge_headv(e)), mid[3];
+      int k;
+      for ( k = 0 ; k < 3 ; k++ ) mid[k] = (p[k] + q[k])/2;
+      record(a,n,mid);
+    }
+    else a->count += n;
+  }
   far_only = 0;
+  line_crossings(c.h,a);
 }
 
-int pyse_crossings(int far, long *count)
+int pyse_crossings(int far, long *count, double *where, long max)
 { struct crossing_args a;
   int status;
   a.count = 0;
   a.far = far;
+  a.where = where;
+  a.max = where ? max : 0;
   far_only = 0;
   status = pyse_surface_call(crossing_body,&a);
   far_only = 0;
   *count = a.count;
   return status;
+}
+
+/* ---- contact lines kept fine through gradient steps ---------------------- */
+
+/* A contact-line edge on a curved wall is a chord: grown long, it cuts into
+   the wall and its integrals go wrong, and the gradient follows the error (a
+   16-bead pack's relax() run stretched one on a bead of radius 1 from 0.36 to
+   1.9 in 18 steps, the energy 1.4 lower; split back onto the bead, it was 0.4
+   higher than where the run began). With a length set, each gradient step
+   (iterate()) ends with the border edges on a constraint longer than it split,
+   the midpoints onto their constraints, until none is. */
+static REAL line_chop = 0.0;
+
+double pyse_line_chop(double length)
+{ double was = line_chop;
+  line_chop = length > 0 ? length : 0.0;
+  return was;
+}
+
+int pyse_chop_lines(void)
+{ struct ids long_ = {0,0,0};
+  edge_id e;
+  int round, k, total = 0;
+  if ( line_chop <= 0 || web.representation != SOAPFILM ) return 0;
+  for ( round = 0 ; round < 6 ; round++ )
+  { long_.n = 0;
+    FOR_ALL_EDGES(e)
+    { REAL *a, *b, d[3];
+      if ( !(get_eattr(e) & CONSTRAINT) || valence(e) != 1 ) continue;
+      a = get_coord(get_edge_tailv(e)); b = get_coord(get_edge_headv(e));
+      for ( k = 0 ; k < 3 ; k++ ) d[k] = b[k] - a[k];
+      if ( norm3(d) > line_chop ) push(&long_,e);
+    }
+    if ( !long_.n ) break;
+    for ( k = 0 ; k < long_.n ; k++ )
+    { e = long_.a[k];
+      if ( !valid_element(e) || !valid_id(edge_refine(e)) ) continue;
+      project(get_edge_headv(e));        /* e is the tail half now */
+      total++;
+    }
+  }
+  if ( long_.a ) temp_free((char *)long_.a);
+  if ( total )
+  { if ( count_fixed_vol() || web.pressure_flag ) calc_content(Q_FIXED);
+    calc_pressure();
+    calc_energy();
+  }
+  return total;
 }

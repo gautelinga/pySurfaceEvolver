@@ -253,10 +253,19 @@ enum { PYSE_EDIT_DONE = 0, PYSE_EDIT_GONE, PYSE_EDIT_NOT_APPLICABLE, PYSE_EDIT_N
        PYSE_EDIT_EVOLVER, PYSE_EDIT_STRUCTURE, PYSE_EDIT_PINCH, PYSE_EDIT_DEGENERATE,
        PYSE_EDIT_FOLD, PYSE_EDIT_SOLID, PYSE_EDIT_CROSSING, PYSE_EDIT_REPLAY };
 int pyse_edit(int op, const long *ids, int n, const double *params, const int *walls,
-              const int *sides, int nwalls, int manifold, int *results);
+              const int *sides, int nwalls, int manifold, int *results,
+              const double *size, long nsize);
+/* size (or NULL): a target edge length per vertex, by Evolver's vertex
+   number - 1 (<= 0: the h of params), for remesh's splits and collapses
+   and a collapse's longest edge; a split's new vertex takes its ends' mean.
+   For remesh, ids (if any) are a region of vertices: only the edges with an
+   end there are split, collapsed and flipped, only its vertices smoothed
+   (a split's new vertex joins it). */
 /* Edges through facets on the whole surface (for descent steps); far: only
-   those more than a ring of edges from the facet (not folds). */
-int pyse_crossings(int far, long *count);
+   those more than a ring of edges from the facet (not folds); with contact
+   lines crossing each other on a wall. where (or NULL): the places, up to
+   max (x, y, z each: the edge's midpoint, the two lines' middle). */
+int pyse_crossings(int far, long *count, double *where, long max);
 
 /* Whether the surface is converted to quantities (everything_quantities;
    the first Hessian converts it): a snapshot restores only into the mode

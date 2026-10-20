@@ -77,6 +77,9 @@ class _Relaxing(_Analysis):
 
     _no_hessian: bool = False      # set by _newton(): no Hessian for this surface
     _keep_mesh: bool = False       # relax(): no tidying (elastic, crystalline)
+    # relax(): no junctions popped nor collapsed edges deleted (a topology
+    # descent's runs: it makes the changes itself, each one checked)
+    _topology_held: bool = False
     # set by _newton(): the coordinates a Newton step left and the negative
     # eigenvalues its factorization counted (where it began)
     _inertia: "tuple[_Coords, int] | None" = None
@@ -357,7 +360,8 @@ class _Relaxing(_Analysis):
                     more, residual = run.level(lev)
                     steps += more
             popped = collapsed = 0
-            if self.model == "linear" and _core.representation() != 3:
+            if self.model == "linear" and _core.representation() != 3 \
+                    and not self._topology_held:
                 for _ in range(_TOPOLOGY_PASSES):
                     pops = self.pop()
                     if not pops:

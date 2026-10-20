@@ -610,14 +610,16 @@ def test_contact_lines_of_two_drops_meet_and_join():
         ev.relax()
         steps = list(recipes.arclength(ev, ev.body(1), 0.1, 10, topology=True))
     fell = [s for s in steps if s.fell]
-    # (the joined surface may come to rest on the plane between them: wetted)
-    kinds = [(e.kind, e.constraint) for e in fell[0].changes]
-    assert len(fell) == 1 and kinds[0][0] == "contact lines"
+    # (the joined surface may come to rest on the plane between them: wetted,
+    # in that fall or a later one: which, the last bits of the arithmetic
+    # decide, as they differ with what ran before in the process)
+    kinds = [(e.kind, e.constraint) for s in fell for e in s.changes]
+    assert kinds[0][0] == "contact lines" and fell[0].changes[0].kind == "contact lines"
     assert all(k == ("solid", 1) for k in kinds[1:])
     k = steps.index(fell[0])
     assert fell[0].volumes == pytest.approx([steps[k - 1].value + other], rel=1e-8)
     assert _loops(_border(ev)) == 1
-    for s in steps[k:]:
+    for s in steps[steps.index(fell[-1]):]:
         assert s.pressures[0] == pytest.approx(_cap_pressure(s.volumes[0], 60.0), rel=0.003)
 
 
@@ -805,3 +807,291 @@ def test_a_vertex_held_where_two_walls_meet_makes_no_solid_event():
                    vertex_constraints={"xw": [0, 2], "yw": [0, 1]})
     found = [e for e in ev.events(2.0) if e.constraint == "zw"]
     assert found and all(e.gap > 0.1 and 0 not in e.vertices for e in found)
+
+
+def test_a_vertex_through_a_solid_is_left_off_its_guard():
+    # a cap on a plane, its top 0.15 into a ball above: the vertices through
+    # the ball are a contact to make, not put onto the guard (Evolver would
+    # project them out, onto two guards at once far off); those just outside
+    # it are guarded, and nothing moves
+    from pysurfaceevolver import _surgery as S
+    cap = shapes.cap(0.5, 0.25, nr=6, nt=24)
+    rim = np.asarray(cap.rims["rim"])
+    ev = pyse.Evolver()
+    ev.load_arrays(cap.vertices, cap.faces,
+                   constraints={"plane": C.plane((0, 0, 1), 0.0, contact_angle=60.0),
+                                "ball": C.sphere((0, 0, 1.1), 1.0, contact_angle=30.0)},
+                   vertex_constraints={"plane": rim}, bodies=[pyse.Body()])
+    x = ev.vertices.copy()
+    S.guard(ev)
+    assert np.array_equal(ev.vertices, x)
+    nums, _, dist, names = ev._constraint_gaps(guards=True)
+    names = [str(n) for n in names]
+    guarded = np.isnan(dist[:, names.index(f"{S.GUARD_PREFIX}ball")])
+    depth = 1.0 - np.linalg.norm(x - [0, 0, 1.1], axis=1)
+    h = S._median_edge(ev.mesh())
+    assert guarded.any() and (depth[guarded] <= 0.1*h).all() and (depth > 0.1*h).any()
+
+
+def test_a_closed_piece_enclosing_nothing_is_taken_away():
+    # a cube's body, and apart from it a closed piece of four facets lying
+    # flat (a tetrahedron squashed into its base plane): no gas in it, it goes
+    from pysurfaceevolver import _surgery as S
+    box = shapes.box(n=2)
+    v, f = np.asarray(box.vertices, float), np.asarray(box.faces)
+    flat = np.array([[3, 0, 0], [4, 0, 0], [3.5, 0.8, 0], [3.5, 0.3, 0]], float)
+    tet = np.array([[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]]) + len(v)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[v, flat], np.r_[f, tet], bodies=[pyse.Body(faces=range(len(f)))])
+    volume = ev.body(1).volume
+    assert S._drop_empty(ev) == 1
+    assert ev.counts["facets"] == len(f) and ev.counts["vertices"] == len(v)
+    assert ev.body(1).volume == pytest.approx(volume)
+    assert S._drop_empty(ev) == 0
+
+
+def _hourglass(waist):
+    # two triangular double cones joined at a waist `waist` across (a closed
+    # surface of 18 facets, one body)
+    def tri(r, z):
+        a = np.arange(3)*2*np.pi/3
+        return np.c_[r*np.cos(a), r*np.sin(a), np.full(3, z)]
+    v = np.r_[[[0, 0, -0.6]], tri(1, 0), tri(waist/np.sqrt(3), 1), tri(1, 2), [[0, 0, 2.6]]]
+    f = []
+    for i in range(3):
+        j = (i + 1) % 3
+        f.append([0, 1 + j, 1 + i])
+        for lo in (1, 4):
+            hi = lo + 3
+            f += [[lo + i, lo + j, hi + j], [lo + i, hi + j, hi + i]]
+        f.append([10, 7 + i, 7 + j])
+    return v, np.array(f)
+
+
+def _held(v, f):
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, bodies=[pyse.Body(faces=range(len(f)))])
+    volume = ev.body(1).volume
+    ev.body(1).target = volume
+    return ev, volume
+
+
+def test_a_neck_collapsed_below_the_mesh_is_cut():
+    # a body pinched to a waist 1e-5 across, three edges round, below what
+    # events() sees: cut there, two bodies holding the volume between them
+    from pysurfaceevolver import _surgery as S
+    ev, volume = _held(*_hourglass(1e-5))
+    assert volume > 0
+    assert len(S._collapsed_rings(ev.mesh(), S._median_edge(ev.mesh()))) == 1
+    assert S._pinch_collapsed(ev) == 1
+    bodies = list(ev.bodies().ids)
+    assert len(bodies) == 2
+    assert sum(ev.body(b).target for b in bodies) == pytest.approx(volume, rel=1e-6)
+    assert all(ev.body(b).target > 0.4*volume for b in bodies)
+    assert not S._collapsed_rings(ev.mesh(), S._median_edge(ev.mesh()))
+    ev.command("g 1")
+
+
+def test_a_collapse_keeps_the_surface_a_manifold():
+    # the hourglass's waist edges: merging an edge's ends would join them to
+    # the waist's third vertex by two edges (the surface pinched along an
+    # edge): the checked collapse refuses (the strict link condition)
+    from pysurfaceevolver._edits import REASONS, edit
+    ev, _ = _held(*_hourglass(1e-5))
+    m = ev.mesh()
+    waist = np.flatnonzero(m.edge_lengths() < 1e-3)
+    assert len(waist) == 3
+    r = edit(ev, "collapse", np.asarray(m.edge_ids)[waist])
+    assert [REASONS[abs(int(k))] for k in r] == ["the link condition"]*3
+    assert ev.counts["edges"] == len(m.edges)
+
+
+def test_a_neck_wider_than_the_mesh_is_left():
+    from pysurfaceevolver import _surgery as S
+    ev, _ = _held(*_hourglass(0.3))
+    assert S._pinch_collapsed(ev) == 0
+    assert list(ev.bodies().ids) == [1]
+
+
+def test_rebody_keeps_a_body_whose_surface_is_in_pieces():
+    # one body bounded by two separate cubes (as a liquid's pieces joined
+    # through the walls): the bodies' rebuild after a change keeps it one,
+    # its volume and target; a cut's split makes two
+    from pysurfaceevolver import _surgery as S
+    box = shapes.box(n=2)
+    v, f = np.asarray(box.vertices, float), np.asarray(box.faces)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[v, v + 3], np.r_[f, f + len(v)], bodies=[pyse.Body(faces=range(2*len(f)))])
+    volume = ev.body(1).volume
+    ev.body(1).target = volume
+    S._rebody(ev)
+    assert list(ev.bodies().ids) == [1]
+    assert ev.body(1).volume == pytest.approx(volume)
+    assert ev.body(1).target == pytest.approx(volume)
+    S._rebody(ev, split=True)
+    assert len(ev.bodies().ids) == 2
+
+
+def test_a_line_sweeping_far_from_a_pole_is_no_crossing():
+    # contact-line loops on a unit sphere, its pole at +z. A loop round the
+    # south grown in a run to bound more than half the sphere (its solid
+    # angle, fanned from the pole's antipode, up by over 2 pi), its vertices
+    # moving less than their distance from the pole: no crossing. A small
+    # loop beside the pole carried round it, the pole now inside: crossed
+    from types import SimpleNamespace
+    from pysurfaceevolver import _surgery as S
+
+    def loop(centre, r, n=48):
+        c = np.asarray(centre, float)/np.linalg.norm(centre)
+        u = np.cross(c, [1.0, 0.0, 0.0] if abs(c[0]) < 0.9 else [0.0, 1.0, 0.0])
+        u /= np.linalg.norm(u)
+        w = np.cross(c, u)
+        t = np.linspace(0, 2*np.pi, n, endpoint=False)
+        return np.cos(r)*c + np.sin(r)*(np.outer(np.cos(t), u) + np.outer(np.sin(t), w))
+
+    def lines(pts):
+        pole = np.array([0.0, 0.0, 1.0])
+        b = np.roll(pts, -1, axis=0)
+        return (None, None, None, None, 1.0, None, S._chord_reach(pts, b, pole),
+                float(S._fans(pts, b, pole).sum()), None, None, None, np.ones(len(pts), bool))
+
+    class Surface:              # (the vertices as a mesh, by id)
+        def __init__(self, x):
+            self.vertices = x
+
+        def mesh(self):
+            return SimpleNamespace(vertices=self.vertices, vertex_ids=np.arange(len(self.vertices)))
+
+    def run(start, end):
+        ev = Surface(start)
+        before = S._line_state(ev, lines(start))
+        ev.vertices = end
+        return abs(lines(end)[7] - before[0]), S._crossed(ev, before, lines(end))
+
+    jump, crossed = run(loop([0, 0, -1], 0.6), loop([0, 0, -1], np.pi - 1.0))
+    assert jump > 2*np.pi and not crossed
+    jump, crossed = run(loop([0.6, 0, 1], 0.3), loop([0, 0, 1], 0.3))
+    assert jump > 2*np.pi and crossed
+
+
+def test_a_crumb_and_the_body_it_bounds_are_taken_away():
+    # a cube's body and, apart from it, a tetrahedron 0.01 across, its own
+    # body: too small for the mesh, it goes with its body, and Evolver steps
+    from pysurfaceevolver import _surgery as S
+    box = shapes.box(n=2)
+    v, f = np.asarray(box.vertices, float), np.asarray(box.faces)
+    tip = 0.01*np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], float) + 3
+    tet = np.array([[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]]) + len(v)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.r_[v, tip], np.r_[f, tet],
+                   bodies=[pyse.Body(faces=range(len(f))), pyse.Body(faces=range(len(f), len(f) + 4))])
+    assert ev.body(2).volume > 0
+    volume = ev.body(1).volume
+    assert S._drop_empty(ev) == 1
+    assert list(ev.bodies().ids) == [1]
+    assert ev.counts["facets"] == len(f)
+    assert ev.body(1).volume == pytest.approx(volume)
+    ev.command("g 1")
+
+
+def test_a_run_taking_the_surface_into_a_solid_is_implausible():
+    # (a flux-gauged sphere's wetted area and the volume are wrong by the
+    # solid's with the surface inside it, and a pack's descent ran away so)
+    from pysurfaceevolver import _surgery
+    ev = _drop_under_a_sphere()
+    before = (ev.energy, _surgery._crossings(ev), ev._target_gap()[0], _surgery._outside(ev))
+    assert before[3] == 0
+    top = int(np.argmax(ev.vertices[:, 2]))
+    ev.command(f"set vertex[{int(ev.mesh().vertex_ids[top])}] z 1.3")
+    assert _surgery._outside(ev) == 1
+    ev.body(1).target = ev.body(1).volume       # (the volume not what's judged)
+    assert _surgery._implausible(ev, before) == "through a wall"
+
+
+def test_settling_that_fails_leaves_the_surface_as_the_cut_left_it():
+    from pysurfaceevolver import _surgery
+    ev = _drop_under_a_sphere()
+    x, target = ev.vertices.copy(), ev.body(1).target
+
+    class Failed:
+        converged, stable = False, None
+
+    def astray(*args, **kwargs):
+        ev.command("g 5")
+        return Failed()
+    ev.command("set vertex z z*1.2 where not fixed and on_constraint 1 == 0")
+    x = ev.vertices.copy()
+    ev.relax = astray
+    ev.newton = astray
+    assert _surgery._settle(ev) is None
+    assert np.allclose(ev.vertices, x) and ev.body(1).target == target
+
+
+def test_a_run_evolver_fails_in_is_undone_and_implausible():
+    # (a pack's relax() run met an internal error, cone_analyze on a mesh a
+    # failed change left; the descent goes on as from a run gone wrong)
+    from pysurfaceevolver import _surgery
+    from pysurfaceevolver._errors import EvolverError
+    ev = _drop_under_a_sphere()
+    x = ev.vertices.copy()
+
+    def run(n):
+        ev.command("g 3")
+        raise EvolverError("ERROR 1303: Internal error: cone_analyze vertex 7", 1303)
+    result, start, before = _surgery._away_from_poles(ev, run, 10)
+    assert not result.converged and np.allclose(ev.vertices, x)
+    assert _surgery._implausible(ev, before) == "Evolver failed"
+    _surgery._away_from_poles(ev, lambda n: ev.command(f"g {n}"), 2)
+    assert _surgery._implausible(ev, before) != "Evolver failed"
+
+
+def _sheet_on_a_wall():
+    """A thin sheet of liquid standing on the wall x = 0 (90 degrees: a
+    mirror), half a flattened hemisphere of radius 0.7, thinnest where it
+    meets the wall at mid-height (0.042 across)."""
+    cap = shapes.cap(0.7, 0.7, nr=8, nt=32)
+    v = np.asarray(cap.vertices, float)
+    x, y, z = v[:, 2], v[:, 0], v[:, 1]
+    ev = pyse.Evolver()
+    ev.load_arrays(np.c_[x, y*(0.03 + 0.6*x + 2*z**2), z], cap.faces,
+                   constraints={1: C.plane((1, 0, 0), 0.0, contact_angle=90.0)},
+                   vertex_constraints={1: cap.rims["rim"]}, bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    return ev
+
+
+def test_a_sheet_thinnest_at_a_wall_ruptures_there():
+    # (mirrored in the wall, a sheet twice as wide, its hole opening in the
+    # middle, on the mirror: its footprint cut in two, the liquid one body)
+    from pysurfaceevolver import _surgery
+    ev = _sheet_on_a_wall()
+    v0 = ev.body(1).volume
+    neck = [e for e in ev.events() if e.kind == "neck"]
+    assert neck and abs(neck[0].where[0]) < 1e-9 and abs(neck[0].where[2]) < 0.05
+    assert len(ev.contact_lines(1)) == 1
+    ev.pinch_off(neck[0], relax=False)
+    lines = ev.contact_lines(1)
+    assert len(lines) == 2 and all(np.allclose(line[0], line[-1]) for line in lines)
+    assert sorted(np.sign(np.mean(line[:-1, 2])) for line in lines) == [-1, 1]
+    assert list(ev.bodies().ids) == [1] and ev.body(1).volume == pytest.approx(v0, rel=1e-9)
+    assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
+
+
+def test_a_footprint_under_a_dome_is_told_from_a_sheets():
+    # (a neck lying against a wall domes over its footprint, the liquid under
+    # it, dried by laying the dome onto the wall; a sheet's faces rise off the
+    # wall with gas over the strip between them, joined only round its edge)
+    from pysurfaceevolver import _surgery
+    for ev, domed in ((_drop_under_a_sphere(), True), (_sheet_on_a_wall(), False)):
+        m = ev.mesh()
+        x = np.asarray(m.vertices)
+        on = ev.on_constraint(1)
+        rim = np.flatnonzero(on)
+        if domed:
+            a = rim[np.argmax(x[rim, 0])]
+            b = rim[np.argmin(x[rim, 0])]
+        else:
+            mid = rim[np.abs(x[rim, 2]) < 1e-9]
+            a, b = mid[np.argmax(x[mid, 1])], mid[np.argmin(x[mid, 1])]
+        h = float(np.median(m.edge_lengths()))
+        assert _surgery._domed(m, x, int(a), int(b), on, h) is domed

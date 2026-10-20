@@ -293,8 +293,8 @@ for base in (0.03, 0.01):
 ```
 
 ```text
-bottom gaps 0.03: the curvature peaks at 9.532 (volume 0.292); the bottom meniscus at -0.184 there, -0.087 at the end
-   the branch turns at volume 0.2877; a negative mode at volume 0.291
+bottom gaps 0.03: the curvature peaks at 9.532 (volume 0.292); the bottom meniscus at -0.184 there, -0.091 at the end
+   the branch turns at volume 0.2878; a negative mode at volume 0.291
 bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.253); the bottom meniscus at -0.294 there, -0.346 at the end
    the branch doesn't turn; the surface about to touch mirror_0 at volume 0.204
 ```

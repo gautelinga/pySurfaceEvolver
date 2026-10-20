@@ -105,6 +105,11 @@ class _SurfaceMemory:
         # unnamed; Evolver keeps them defined), left out of _constraint_gaps
         self.retired: set = set()
         self.unrelaxed_refines = 0          # refine() calls since relax() last converged
+        # descents: the edge length they remesh toward (the median when first
+        # needed; local refinement doesn't lower it, refine() resets it)
+        self.edge_scale: Optional[float] = None
+        self.sizes: Dict[int, float] = {}    # descents: the last target edge per vertex number
+        self.sizes_held = False             # in a descent: the targets don't coarsen
 
 
 surface = _SurfaceMemory()
@@ -388,6 +393,8 @@ class _Engine:
         for _ in range(times):
             self.command("r")
             surface.unrelaxed_refines += 1
+            surface.edge_scale = None
+            surface.sizes = {}
 
     def equiangulate(self) -> None:
         """Flip edges to improve triangle shapes (Evolver's ``u``)."""
