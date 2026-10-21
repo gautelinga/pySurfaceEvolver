@@ -1037,6 +1037,51 @@ REAL facet_vector_integral_hess(struct qinfo *f_info)
       f_info->grad[2][k] += weight*(gauss2Dpt[m][2]*sum
                     + cross0[k])/2;
     }
+    if ( SDIM == 3 )
+    { /* pySE: the same Hessian in closed form (the facet's normal n = s1 x
+         s2 is bilinear in its corners: dn/dx_rp = a_r e_p x s2 + c_r s1 x
+         e_p, d2n/dx_rp dx_sq = (a_r c_s - a_s c_r) e_p x e_q, with
+         a = (-1,1,0), c = (-1,0,1)); the loop below took a third of a
+         16-bead pack's Newton step, 486 branching terms a Gauss point */
+      static const REAL a[3] = {-1.0,1.0,0.0}, c[3] = {-1.0,0.0,1.0};
+      REAL dn[3][3][3], s2n[3][3], fd[3][3][3];
+      REAL *b = gauss2Dpt[m];
+      for ( p = 0 ; p < 3 ; p++ )
+      { REAL e[3] = {0.0,0.0,0.0}, ex2[3], s1xe[3];
+        e[p] = 1.0;
+        cross_prod(e,s2,ex2);
+        cross_prod(s1,e,s1xe);
+        for ( r = 0 ; r < 3 ; r++ )
+          for ( k = 0 ; k < 3 ; k++ )
+            dn[r][p][k] = a[r]*ex2[k] + c[r]*s1xe[k];
+        for ( q = 0 ; q < 3 ; q++ )
+        { REAL t = 0.0;
+          for ( k = 0 ; k < 3 ; k++ ) t += second[k][p][q]*f_info->normal[k];
+          s2n[p][q] = t;
+        }
+      }
+      /* fd[r][p][q] = sum_k dF_k/dx_q dn_k/dx_rp */
+      for ( r = 0 ; r < 3 ; r++ )
+        for ( p = 0 ; p < 3 ; p++ )
+          for ( q = 0 ; q < 3 ; q++ )
+          { REAL t = 0.0;
+            for ( k = 0 ; k < 3 ; k++ ) t += derivs[k][q]*dn[r][p][k];
+            fd[r][p][q] = t;
+          }
+      for ( r = 0 ; r < 3 ; r++ )
+        for ( s = 0 ; s < 3 ; s++ )
+        { REAL twist = a[r]*c[s] - a[s]*c[r];
+          for ( p = 0 ; p < 3 ; p++ )
+            for ( q = 0 ; q < 3 ; q++ )
+            { /* F . (e_p x e_q) = eps_pqk F_k */
+              REAL fe = 0.0;
+              if ( p != q ) { k = 3 - p - q; fe = ((q - p + 3) % 3 == 1 ? 1.0 : -1.0)*val[k]; }
+              sum = b[r]*b[s]*s2n[p][q] + b[r]*fd[s][q][p] + b[s]*fd[r][p][q] + twist*fe;
+              f_info->hess[r][s][p][q] += weight*sum/2;
+            }
+        }
+      continue;
+    }
     for ( r = 0 ; r < FACET_VERTS ; r++ )
       for ( s = 0 ; s < FACET_VERTS ; s++ )
         for ( p = 0 ; p < SDIM ; p++ )
