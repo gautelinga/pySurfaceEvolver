@@ -512,10 +512,14 @@ def _close_pairs(p, r):
         out_j.append(b[keep])
     i, j = np.concatenate(out_i), np.concatenate(out_j)
     i, j = np.minimum(i, j), np.maximum(i, j)
-    pair = np.unique(np.c_[i, j], axis=0) if len(i) else np.empty((0, 2), int)
-    d = np.linalg.norm(p[pair[:, 0]] - p[pair[:, 1]], axis=1)
+    # (each pair comes once: the offsets are one of each +- pair, a cell with
+    # itself only i < j; so the close ones, then in order of (i, j), as a
+    # unique over all the candidates gave them, a fifth of the event search)
+    d = np.linalg.norm(p[i] - p[j], axis=1)
     close = d < r
-    return pair[close, 0], pair[close, 1], d[close]
+    i, j, d = i[close], j[close], d[close]
+    order = np.lexsort((j, i))
+    return i[order], j[order], d[order]
 
 
 # ---- grouping ------------------------------------------------------------------------
