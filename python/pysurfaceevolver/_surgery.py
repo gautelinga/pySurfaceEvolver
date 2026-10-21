@@ -3214,6 +3214,31 @@ def _keep_edges(ev, h0: float, hi: Optional[float] = None) -> None:
             guard(ev)
 
 
+def _carried(m, ids, sizes, h0: float) -> np.ndarray:
+    """The target sizes (per row of an earlier mesh whose vertex ids were
+    ids) carried onto mesh m by id: a vertex an edit made takes its
+    neighbours' mean, as the edits give a split's new vertex its ends' (h0
+    where none is known). (Not found afresh after each pass of edits: the
+    event search was a fifth of a 16-bead pack's descent, and each pass let
+    the targets grow by _COARSEN again.)"""
+    known = dict(zip(np.asarray(ids).tolist(), np.asarray(sizes, float).tolist()))
+    out = np.array([known.get(int(i), np.nan) for i in m.vertex_ids])
+    edges = np.asarray(m.edges)
+    for _ in range(3):
+        new = np.isnan(out)
+        if not new.any() or not len(edges):
+            break
+        total = np.zeros(len(out))
+        count = np.zeros(len(out))
+        for a, b in ((0, 1), (1, 0)):
+            ok = new[edges[:, a]] & ~new[edges[:, b]]
+            np.add.at(total, edges[ok, a], out[edges[ok, b]])
+            np.add.at(count, edges[ok, a], 1)
+        fill = new & (count > 0)
+        out[fill] = total[fill]/count[fill]
+    return np.where(np.isnan(out), float(h0), out)
+
+
 def _keep_edges_unguarded(ev, h0: float, m, sizes=None, hi: Optional[float] = None) -> None:
     from ._edits import edit
     lo = _REMESH[0]
@@ -3230,8 +3255,8 @@ def _keep_edges_unguarded(ev, h0: float, m, sizes=None, hi: Optional[float] = No
         if not (edit(ev, "collapse", np.asarray(m.edge_ids)[order], sizes=sizes, max_len=hi,
                      h=h0) == 0).any():
             break
-        m = ev.mesh()
-        sizes = _sizes(ev, h0)
+        ids, m = m.vertex_ids, ev.mesh()
+        sizes = _carried(m, ids, sizes, h0)
     for _ in range(5):
         target = sizes[np.asarray(m.edges)].mean(axis=1)
         lengths = m.edge_lengths()
@@ -3241,8 +3266,8 @@ def _keep_edges_unguarded(ev, h0: float, m, sizes=None, hi: Optional[float] = No
         order = long[np.argsort(-lengths[long]/target[long])]
         if not (edit(ev, "split", np.asarray(m.edge_ids)[order], sizes=sizes, h=h0) == 0).any():
             break
-        m = ev.mesh()
-        sizes = _sizes(ev, h0)
+        ids, m = m.vertex_ids, ev.mesh()
+        sizes = _carried(m, ids, sizes, h0)
     _even_out(ev, smooth=False)
     _drop_crushed(ev)
 
