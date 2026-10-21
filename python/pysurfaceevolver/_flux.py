@@ -189,6 +189,25 @@ def assemble(cons: Dict[Any, Any]) -> Tuple[Dict[Any, Any], str]:
     return out, "".join(lines)
 
 
+def _plane_frame(w):
+    """A plane's frame (Constraint.frame) where it has none (a wall pickled
+    before planes kept theirs: a checkpoint's floor was left to the
+    interpreter, sixteen beads' terms with it): plane() made again from its
+    normal, offset and angle, and its frame taken where its integrands are
+    the wall's exactly (the default origin and in-plane direction)."""
+    from .constraints import plane
+    shape = getattr(w, "shape", None)
+    if shape is None or shape[0] != "plane" or isinstance(shape[1], str):
+        return None
+    try:
+        again = plane(shape[1], float(shape[2]), w.contact_angle)
+    except (TypeError, ValueError):
+        return None
+    if again.formula != w.formula or again.energy != w.energy or again.content != w.content:
+        return None
+    return again.frame
+
+
 def native_specs(walls: Dict[Any, Any]) -> "tuple[list, list]":
     """What bindings/pyse_native.c evaluates for the flux gauge, for walls
     (key -> Constraint): per wall, (key, which, base, bc, terms) for its
@@ -220,7 +239,7 @@ def native_specs(walls: Dict[Any, Any]) -> "tuple[list, list]":
     lines = []
     for key, w in walls.items():
         own = getattr(w, "flux", None)
-        frame = getattr(w, "frame", None)
+        frame = getattr(w, "frame", None) or _plane_frame(w)
         e_base, e_bc, c_base, c_bc = 0, [0.0]*3, 2 if own else 0, \
             list(map(float, own[0])) if own else [0.0]*3
         if not own:

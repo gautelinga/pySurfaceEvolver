@@ -817,7 +817,7 @@ class _Engine:
             if shape[0] == "plane":
                 shapes[key] = (0, [*map(float, shape[1]), float(shape[2])])
             elif (shape[0] == "sphere" and not any(isinstance(v, str) for v in shape[1])
-                  and str(w.formula).startswith("(x - ")):
+                  and str(getattr(w, "formula", "")).startswith("(x - ")):
                 # (the plain |x - c|^2 = R^2 only: a sphere(axis=)'s is in its
                 # rotated frame, which the closed form matches only to the
                 # last bit, and a relaxed drop came out 1 ulp apart)
