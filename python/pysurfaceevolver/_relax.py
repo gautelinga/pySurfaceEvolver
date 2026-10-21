@@ -396,14 +396,22 @@ class _Relaxing(_Analysis):
                         f"unstable equilibrium: {modes} direction(s) lower the energy "
                         f"(lowest eigenvalue {lowest:.3g})",
                         UnstableEquilibriumWarning, stacklevel=2)
-            try:
-                health: Optional[Health] = self._health(residual, stable, modes, tol)
-            except EvolverError:
-                health = None
-            try:
-                events: Optional[list] = self.events()
-            except EvolverError:
-                events = None
+            # (a topology descent's runs: health only where converged, the
+            # only place the descent looks at it, and no events, which it
+            # finds itself: both were a sixth of a 16-bead pack's descent)
+            held = self._topology_held
+            health: Optional[Health] = None
+            events: Optional[list] = None
+            if not held or residual < tol:
+                try:
+                    health = self._health(residual, stable, modes, tol)
+                except EvolverError:
+                    health = None
+            if not held:
+                try:
+                    events = self.events()
+                except EvolverError:
+                    events = None
             settled = trace.settled and not residual < tol
         # (refinements this call made were relaxed after; a converged surface
         # starts the count over)

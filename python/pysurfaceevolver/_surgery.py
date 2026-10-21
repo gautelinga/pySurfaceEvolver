@@ -193,6 +193,8 @@ def _pole_lines(ev):
     from a pole had a vertex at 0.08 once its edges were split. The solid
     angle, the sum of the triangles from the antipode to the edges, jumps by
     4 pi where the line crosses the pole, as the integrals do.)"""
+    if not any(getattr(w, "south_regular", False) for w in surface.walls.values()):
+        return []       # (no poles: sphere(gauge="flux") and planes; 6% of a pack's descent)
     nums, _, dist, names = ev._constraint_gaps()
     x = ev.vertices
     f = np.asarray(ev.mesh().facets)

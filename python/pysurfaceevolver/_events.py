@@ -331,6 +331,21 @@ def _closest_on_triangles(p, a, b, c):
     return best
 
 
+def _to_segments(p, a, b, block: int = 256) -> np.ndarray:
+    """Each point's distance to the nearest of the segments (a, b), in blocks
+    of points (a loop over the points, a vertex at a time, was the most
+    called function of a 16-bead pack's descent: 4.8 million calls)."""
+    ab = b - a
+    ab2 = np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-300)
+    out = np.empty(len(p))
+    for i in range(0, len(p), block):
+        q = p[i:i + block, None, :] - a[None, :, :]
+        t = np.clip(np.einsum("ijk,jk->ij", q, ab)/ab2, 0.0, 1.0)
+        d = q - t[:, :, None]*ab[None, :, :]
+        out[i:i + block] = np.sqrt(np.einsum("ijk,ijk->ij", d, d).min(axis=1))
+    return out
+
+
 def _closest_on_segments(p, a, b):
     ab = b - a
     t = np.einsum("ij,ij->i", p - a, ab)/np.maximum(np.einsum("ij,ij->i", ab, ab), 1e-300)
@@ -395,10 +410,7 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
         near = np.flatnonzero(band & ~flag)
         lines = edges[on[edges[:, 0]] & on[edges[:, 1]] & (valence == 1)]
         if angle is not None and len(near) and len(lines):
-            a, b = x[lines[:, 0]], x[lines[:, 1]]
-            s_ = np.array([np.linalg.norm(_closest_on_segments(np.broadcast_to(x[v], a.shape),
-                                                               a, b) - x[v], axis=1).min()
-                           for v in near])
+            s_ = _to_segments(x[near], x[lines[:, 0]], x[lines[:, 1]])
             wedge = np.where(between[near] == "outside", 180.0 - angle, angle).astype(float)
             flag[near] = g[near] < WEDGE*s_*np.sin(np.radians(wedge))
         flag &= band
@@ -510,24 +522,34 @@ def _close_pairs(p, r):
 
 def _groups(mask: np.ndarray, links: np.ndarray):
     """The connected groups of masked vertices, joined by links (vertex
-    pairs) between masked vertices: (label, member rows)."""
+    pairs) between masked vertices: (label, member rows), the label the
+    smallest member, in increasing order, the members increasing. (Array
+    union-find: links hooked to the smaller label, then labels jumped to
+    their labels' until they stay; a dict-based one was 3% of a 16-bead
+    pack's descent, its root() called 60 million times.)"""
     idx = np.flatnonzero(mask)
     if len(idx) == 0:
         return []
-    links = links[mask[links[:, 0]] & mask[links[:, 1]]]
-    parent = {int(v): int(v) for v in idx}
-
-    def root(v: int) -> int:
-        while parent[v] != v:
-            parent[v] = parent[parent[v]]
-            v = parent[v]
-        return v
-
-    for a, b in links.tolist():
-        ra, rb = root(a), root(b)
-        if ra != rb:
-            parent[max(ra, rb)] = min(ra, rb)
-    groups: dict = {}
-    for v in idx.tolist():
-        groups.setdefault(root(v), []).append(v)
-    return list(groups.items())
+    links = np.asarray(links)
+    links = links[mask[links[:, 0]] & mask[links[:, 1]]] if len(links) else links
+    if not len(links):
+        return [(int(v), [int(v)]) for v in idx]
+    where = np.full(len(mask), -1, dtype=np.int64)
+    where[idx] = np.arange(len(idx))
+    a, b = where[links[:, 0]], where[links[:, 1]]
+    label = np.arange(len(idx))
+    while True:
+        la, lb = label[a], label[b]
+        low = np.minimum(la, lb)
+        if np.array_equal(la, lb):
+            break
+        np.minimum.at(label, la, low)
+        np.minimum.at(label, lb, low)
+        while True:
+            jumped = label[label]
+            if np.array_equal(jumped, label):
+                break
+            label = jumped
+    order = np.argsort(label, kind="stable")
+    cuts = np.flatnonzero(np.diff(label[order])) + 1
+    return [(int(idx[g[0]]), idx[g].tolist()) for g in np.split(order, cuts)]
