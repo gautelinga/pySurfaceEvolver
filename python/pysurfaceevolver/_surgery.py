@@ -1817,13 +1817,27 @@ def _onto(ev, num: int, was_border: set) -> np.ndarray:
     return np.asarray(m.edge_ids)[border]
 
 
+def _edges_on(ev, keys) -> dict:
+    """For each of the walls keys (the defined ones), which edges (mesh()
+    rows) are on it, from one query (asked a wall at a time, 0.85 ms each,
+    the tidying's 27k queries were 4.5% of a 16-bead pack's descent)."""
+    nums, _, _, names = ev._constraint_gaps()
+    number = {(n or int(k)): int(k) for k, n in zip(nums, names)}
+    keys = [k for k in keys if k in number]
+    if not keys:
+        return {}
+    if not hasattr(_core, "edges_on_constraints"):
+        return {k: ev.on_constraint(k, "edge") for k in keys}
+    _, result = ev._call(_core.edges_on_constraints, [number[k] for k in keys])
+    on = np.asarray(result.data) > 0
+    return {k: on[:, j] for j, k in enumerate(keys)}
+
+
 def _on_walls(ev) -> np.ndarray:
     """Which edges (mesh() rows) are on a wall."""
-    names = {n or int(k) for k, n in zip(*ev._constraint_gaps()[::3])}
     out = np.zeros(ev.counts["edges"], dtype=bool)
-    for key in surface.walls:
-        if key in names:
-            out |= ev.on_constraint(key, "edge")
+    for on in _edges_on(ev, list(surface.walls)).values():
+        out |= on
     return out
 
 
@@ -1869,11 +1883,10 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
     m = ev.mesh()
     f, edges = np.asarray(m.facets), np.asarray(m.edges)
     x = np.asarray(m.vertices)
-    names = {n or int(k): (n or int(k)) for k, n in zip(*ev._constraint_gaps()[::3])}
     valence = m.edge_valence()
     closed = 0
-    for key in [k for k in surface.walls if k in names]:
-        line = np.flatnonzero(ev.on_constraint(key, "edge") & (valence == 1))
+    for key, on_wall in _edges_on(ev, list(surface.walls)).items():
+        line = np.flatnonzero(on_wall & (valence == 1))
         degree = np.bincount(edges[line].ravel(), minlength=len(x))
         after = {int(edges[i, 0]): i for i in line if degree[edges[i]].max() == 2}
         seen: set = set()
@@ -1902,8 +1915,8 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
             for side, b_id in (("frontbody", front), ("backbody", back)):
                 if b_id:
                     commands.append(f"set facet{body or '[pyse_patch]'} {side} {b_id}")
-            commands += [f"unset edge[{e}] constraint {names[key]}" for e in ids]
-            commands += [f"unset vertex[{int(m.vertex_ids[c])}] constraint {names[key]}"
+            commands += [f"unset edge[{e}] constraint {key}" for e in ids]
+            commands += [f"unset vertex[{int(m.vertex_ids[c])}] constraint {key}"
                          for c in corners]
             ev.command("; ".join(commands))
             # (nor where Evolver can't step from it: a pack's closed loop

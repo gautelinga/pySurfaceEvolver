@@ -1044,6 +1044,39 @@ static void gaps_body(void *arg)
   if ( row != a->n ) inconsistent("element count changed");
 }
 
+/* For each edge (mesh row order) and each of the constraints nums, whether
+   the edge is on it (Evolver's e_on_constraint): one call for what the
+   topology runs' tidying asked a wall at a time, 0.85 ms a query, 27k
+   queries in ten minutes of a 16-bead pack. */
+struct edges_on_args { const int *nums; int ncon; unsigned char *out; long n; };
+
+static void edges_on_body(void *arg)
+{ struct edges_on_args *a = (struct edges_on_args *)arg;
+  edge_id e_id;
+  long row = 0;
+  int c;
+  for ( c = 0 ; c < a->ncon ; c++ )
+    if ( a->nums[c] < 0 || a->nums[c] >= web.maxcon
+         || !(get_constraint(a->nums[c])->attr & IN_USE) )
+      inconsistent("constraint list changed");
+  FOR_ALL_EDGES(e_id)
+  { if ( row >= a->n ) inconsistent("too many edges");
+    for ( c = 0 ; c < a->ncon ; c++ )
+      a->out[(size_t)row*a->ncon + c] = (unsigned char)(e_on_constraint(e_id,a->nums[c]) != 0);
+    row++;
+  }
+  if ( row != a->n ) inconsistent("element count changed");
+}
+
+int pyse_edges_on_constraints(const int *nums, int ncon, unsigned char *out, long n)
+{ struct edges_on_args a;
+  if ( n != web.skel[EDGE].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "edges_on_constraints: output array does not match the edge count.");
+  a.nums = nums; a.ncon = ncon; a.out = out; a.n = n;
+  return surface_call(edges_on_body,&a);
+}
+
 struct corners_args { double *out; long n; };
 
 static void corners_body(void *arg)

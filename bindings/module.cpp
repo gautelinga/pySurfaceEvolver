@@ -275,6 +275,20 @@ NB_MODULE(_core, m) {
     return r;
   }, "n"_a, CALLBACK_NAMES, "data: (eigenvalues (found,), displacements (found, vertices, sdim))");
 
+  m.def("edges_on_constraints", [](std::vector<int> nums, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long n = pyse_count(PYSE_EDGE);
+    std::vector<unsigned char> flags(size_t(n)*nums.size());
+    CallResult r = run_guarded([&] {
+      return pyse_edges_on_constraints(nums.data(), int(nums.size()), flags.data(), n);
+    });
+    if (r.status == PYSE_OK) {
+      std::vector<double> as_double(flags.begin(), flags.end());
+      r.data = to_numpy(std::move(as_double), {size_t(n), nums.size()});
+    }
+    return r;
+  }, "nums"_a, CALLBACK_NAMES, "data: (edges, constraints) 1 where the edge is on it");
+
   m.def("newton_pair", [](int body, double delta, CALLBACK_ARGS) {
     CALL_SCOPE;
     long nv = pyse_count(PYSE_VERTEX), nm = pyse_multiplier_count();

@@ -153,6 +153,9 @@ int pyse_native_formula_register(int con, int kind, const double *p);
    the last step, the scale from a parabola with the energy's slope where it
    can be; off by default); returns the previous setting. */
 int pyse_set_fast_steps(int on);
+/* For each edge and each of the constraints nums, whether the edge is on it
+   (out: edges x ncon, row-major). */
+int pyse_edges_on_constraints(const int *nums, int ncon, unsigned char *out, long n);
 /* Two Newton steps from the same point (see recipes._arc_correct): at body
    number body's target and at that plus delta, from one factorization; the
    vertices (nv x 3) and multipliers (nm) each ends at; the surface put back.
