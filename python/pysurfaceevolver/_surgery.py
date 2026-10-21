@@ -2204,6 +2204,11 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     # vertices, 80 of them by the end of a fall, and its constraint
     # projection then failed: ERROR 3005)
     topology, ev._topology_held = ev._topology_held, True
+    # (and gradient steps with fewer energy evaluations: no move at scale 0
+    # where nothing changed since the last step, the scale from a parabola
+    # with the energy's slope; a pack's step 11 ms to 7. Not the stock
+    # search, which relax() and Evolver.command("g") otherwise keep)
+    fast = _core.set_fast_steps(True) if hasattr(_core, "set_fast_steps") else None
     try:
         result = _descend(ev, factor, tol, falling=falling, keep=keep, h0=h0, changes=changes)
         if result[2]:
@@ -2214,6 +2219,8 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
         return None, changes, f"Evolver: {error}"
     finally:
         _core.line_chop(chop)
+        if fast is not None:
+            _core.set_fast_steps(fast)
         surface.sizes_held = held
         ev._topology_held = topology
         _unguard(ev)

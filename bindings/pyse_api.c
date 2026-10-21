@@ -2152,3 +2152,11 @@ int pyse_snapshot_restore(long handle)
   surface_version++;
   return status;
 }
+
+extern int pyse_fast_steps;   /* src/iterate.c */
+
+int pyse_set_fast_steps(int on)
+{ int was = pyse_fast_steps;
+  pyse_fast_steps = on != 0;
+  return was;
+}

@@ -23,6 +23,51 @@ static int (*pyse_chop_lines)(void) = 0;
 
 int volgrads_changed_flag; /* whether volgrads recalced during move */
 
+/* pySE: fewer energy evaluations a gradient step (pyse_fast_steps; off by
+   default, the stock search, which pySE's regression tests follow and whose
+   steps a snapshot restored repeats exactly: the first part below depends
+   on what came before a step; pySE's topology descents turn it on for their
+   runs). Each trial move projects, restores the
+   volumes (two volume passes) and evaluates the energy, and a step made
+   about 4.5 of them; the flux gauge's integrands made that most of a
+   16-bead pack's step.
+   - The move at scale 0 (the energy with the restoring motion alone) is
+     left out where nothing has changed since the last step ended (the
+     clock where it ended: Evolver's edits, recalc(), pySE's edits and
+     snapshots all move it): it finds the energy that step ended at, its
+     volumes restored to 1e-13.
+   - The first trial's energy and the energy's exact slope at scale 0 along
+     the motion, -force . velocity, give a parabola whose minimum is taken
+     for the scale where the trial lowered the energy, the parabola is
+     convex and its minimum within a factor 8 of the trial's scale; else
+     the doubling or halving as before. (The step falls back to the trial's
+     scale, known to lower the energy, where it raised it.) */
+int pyse_fast_steps = 0;
+static long pyse_settled_stamp = -1;
+
+/* -force . velocity summed over the moving vertices (the energy's slope
+   along the motion at scale 0): 1 if found and negative, 0 where the motion
+   isn't a plain vertex one (boundaries, parameters, ...) or not downhill */
+static int fast_slope(REAL *slope)
+{ vertex_id v_id;
+  REAL s = 0.0;
+  int i;
+  if ( optparamcount > 0 || ackerman_flag || web.homothety || normal_motion_flag
+       || web.diffusion_flag || runge_kutta_flag || web.jiggle_flag )
+    return 0;
+  FOR_ALL_VERTICES(v_id)
+  { ATTR attr = get_vattr(v_id);
+    REAL *f, *v;
+    if ( attr & FIXED ) continue;
+    if ( attr & BOUNDARY ) return 0;
+    f = get_force(v_id);
+    v = get_velocity(v_id);
+    for ( i = 0 ; i < SDIM ; i++ ) s += f[i]*v[i];
+  }
+  *slope = -s;
+  return s > 0.0;
+}
+
 /*************************************************************
 *
 *  Function: iterate()
@@ -34,6 +79,9 @@ void iterate()
 {
   REAL energy0,energy1,energy2=0.0;
   int seekcount = 0;  /* to prevent infinite loop */
+  int settled = 0;    /* pySE: the move at scale 0 not needed */
+  REAL slope = 0.0;   /* pySE: the energy's slope there along the motion */
+  int sloped = 0;
   REAL denom;  /* denominator of interpolation expression */
   REAL scale0,scale1=0.0,scale2=0.0;  /* for interpolation */
   int old_flag = iterate_flag;
@@ -52,6 +100,10 @@ void iterate()
      diffuse();
   
   energy0 = web.total_energy;
+  { /* pySE: nothing changed since the last step ended (see pyse_fast_steps) */
+    long entry_stamp = global_timestamp;
+    settled = pyse_fast_steps && entry_stamp == pyse_settled_stamp && !web.diffusion_flag;
+  }
   if ( check_pinning_flag ) check_pinning();
   if ( normal_motion_flag ) begin_normal_motion();
   calc_all_grads(CALC_FORCE|CALC_VOLGRADS);
@@ -62,6 +114,7 @@ void iterate()
   { cg_calc_gamma(); /* find adjustment factor  */
     cg_direction();  /* fix up motion direction */
   }
+  if ( pyse_fast_steps ) sloped = fast_slope(&slope);
 
   ENTER_GRAPH_MUTEX;
 
@@ -91,6 +144,12 @@ void iterate()
        calc_leftside();
        volgrads_changed_flag = 0;
     }
+    if ( settled )
+    { /* pySE: the energy the last step ended at (energy0 as set above) */
+      scale0 = 0.0;
+      web.scale = tempscale;
+      goto pyse_scale_zero_done;
+    }
     web.scale = 0.0; /* to do restoring force */
     move_vertices(TEST_MOVE,web.scale);  /* moving by current scale */
     energy0 = web.total_energy;
@@ -114,6 +173,19 @@ void iterate()
     }
 
     web.scale = tempscale;
+pyse_scale_zero_done:
+    if ( sloped && is_finite(energy1) && energy1 < energy0 )
+    { /* pySE: the parabola through energy0 with the slope, and energy1 */
+      REAL c = (energy1 - energy0 - slope*scale1)/(scale1*scale1);
+      if ( c > 0.0 )
+      { REAL s = -slope/(2*c);
+        if ( s >= scale1/8 && s <= 8*scale1 )
+        { web.scale = s;
+          if ( itdebug ) printf("Parabola with the slope: scale %g\n",(double)s);
+          goto have_scale;
+        }
+      }
+    }
  
     if ( energy1 < energy0 )
     { do
@@ -296,9 +368,14 @@ have_scale:
 
   vgrad_end();
   unsave_coords(&saved,SAVE_IN_ATTR);
-  /* pySE: contact-line edges kept short (bindings/pyse_edit.c) */
-  if ( pyse_chop_lines ) pyse_chop_lines();
-  update_display();
+  { /* pySE: contact-line edges kept short (bindings/pyse_edit.c); then
+       where this step ended (pyse_fast_steps), after update_display(),
+       which moves the clock for the graphics: unless the chop split
+       anything, which changes the volumes a little */
+    int chopped = pyse_chop_lines ? pyse_chop_lines() : 0;
+    update_display();
+    pyse_settled_stamp = chopped ? -1 : global_timestamp;
+  }
   iterate_flag = old_flag; /* for interrupt handler */
   goto iterate_exit;
 

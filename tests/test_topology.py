@@ -1165,3 +1165,22 @@ def test_the_flux_gauge_in_c_is_the_datafiles():
     finally:
         _core.native_enable(True)
     assert np.allclose(native, interpreted, rtol=1e-10, atol=1e-10)
+
+
+def test_fast_gradient_steps_reach_the_stock_searchs_equilibrium():
+    # (a topology descent's steps: no move at scale 0 where nothing changed,
+    # the scale from a parabola with the energy's slope; off by default)
+    from pysurfaceevolver import _core
+    found = []
+    for fast in (False, True):
+        was = _core.set_fast_steps(fast)
+        try:
+            ev = _drop_under_a_sphere()
+            ev.body(1).target = 1.3*ev.body(1).target
+            r = ev.relax(tol=1e-9)
+            found.append((r.converged, ev.energy, ev.body(1).pressure))
+        finally:
+            _core.set_fast_steps(was)
+    assert found[0][0] and found[1][0]
+    assert found[1][1] == pytest.approx(found[0][1], rel=1e-7)
+    assert found[1][2] == pytest.approx(found[0][2], rel=1e-5)

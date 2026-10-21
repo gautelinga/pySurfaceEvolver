@@ -616,6 +616,9 @@ NB_MODULE(_core, m) {
   }, "con"_a, "kind"_a, "p"_a,
   "Register constraint con's formula in closed form: a plane (kind 0, n and d) or a "
   "sphere (kind 1, c and R^2); False where it doesn't match the interpreter.");
+  m.def("set_fast_steps", [](bool on) { Lock lock; return bool(pyse_set_fast_steps(on)); },
+        "on"_a, "Gradient steps with fewer energy evaluations (off by default); returns the "
+        "previous setting.");
   m.def("line_chop", [](double length) { Lock lock; return pyse_line_chop(length); }, "length"_a,
         "With length > 0, each gradient step ends with contact-line edges longer than it "
         "split onto their constraints (0: off); returns the previous setting.");
