@@ -605,6 +605,8 @@ def _remesher(ev, remesh: Any) -> Optional[Callable[[Callable[[], None]], bool]]
     return by_length
 
 
+_QUIET_FALLS = 20       # arclength(topology=True): falls in a row without a change, at most
+
 def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
               tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
@@ -705,7 +707,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     within 0.4 and 2 of them right after a change). A branch that stops short after a change (a
     step that doesn't settle) goes on the same way from a relaxed state there.
     The run ends, with a warning, where a change or a descent fails, and
-    after three descents in a row without a change of topology. How liquid
+    after three falls in a row that change neither the topology nor the value
+    (or twenty without a change of topology). How liquid
     splits at a pinch depends on the way down, here a guided descent of the
     energy, not the liquid's flow.
     """
@@ -719,7 +722,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     from ._views import BodyView
     from ._surgery import _resting, move_poles, orient_lines
     keep = what.number if isinstance(what, BodyView) else None
-    index, quiet, start = 0, 0, True
+    index, quiet, stuck, start = 0, 0, 0, True
     run_remesh = remesh
     last: List[Step] = []
     moves: List[float] = []             # (the value's steps along the branch)
@@ -759,7 +762,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         if index >= steps:
             return
         if moved:
-            quiet = 0                   # (falls without a change between steps aren't a stall)
+            quiet = stuck = 0           # (falls without a change between steps aren't a stall)
         stalled = not (lost or event is not None)
         if stalled and not start and not moved:
             # not a step from where a change or fall ended: the change
@@ -830,13 +833,22 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         settled = Step(index, _current(ev, what), ev.energy, np.array(bodies.volume),
                        np.array(bodies.pressure), result, events=ev.events(factor),
                        fell=True, changes=cut)
+        before = last[-1].value if last else None
         yield settled
         last = [settled]
         index += 1
         quiet = 0 if cut else quiet + 1
-        if quiet == 3:
-            warnings.warn("arclength(): three falls in a row ended without a change of "
-                          "topology: stopping", UserWarning, stacklevel=2)
+        # (stuck: falls without a change that didn't move the value either;
+        # falls pushed on past a fold each to a stable state at less liquid
+        # are drainage, if the branch can't step from them: a pack's run
+        # stopped after three, 72% drained, each draining more)
+        moved_on = before is not None and abs(settled.value - before) > 1e-9*max(1.0, abs(before))
+        stuck = 0 if (cut or moved_on) else stuck + 1
+        if stuck == 3 or quiet == _QUIET_FALLS:
+            reason = ("three falls in a row ended without a change of topology or of the "
+                      "value" if stuck == 3 else
+                      f"{quiet} falls in a row ended without a change of topology")
+            warnings.warn(f"arclength(): {reason}: stopping", UserWarning, stacklevel=2)
             return
 
 
