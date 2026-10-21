@@ -775,8 +775,8 @@ def _dry_footprint(ev, m, x, ring, walls, gaps, event, what="neck against two so
                 made = make
             else:
                 c = next(c for c in walls if (names[c] or int(nums[c])) == key)
-                made = contact if _domed(m, x, i, j, on[:, c], float(event.scale)) \
-                    else _join_across
+                made = contact if _domed(ev, m, x, i, j, int(nums[c]), key,
+                                         float(event.scale)) else _join_across
             made(ev, join)
             _log.debug("%s: its footprint on %s dried across", what, key)
             return
@@ -786,43 +786,74 @@ def _dry_footprint(ev, m, x, ring, walls, gaps, event, what="neck against two so
     raise ValueError(f"pinch_off(): the {what}: no footprint dried ({why})")
 
 
-def _domed(m, x, a: int, b: int, on, h: float) -> bool:
-    """Whether the surface goes over the strip of solid between contact-line
-    vertices a and b (rows; on: the vertices on that solid), as a neck's
-    half lying against it does: a path along the surface from a to b, off
-    the solid, within three times their distance and two edges. Else they
-    are a sheet's two faces rising off the solid, joined only far away
-    (round the sheet's edge), with gas over the strip: its footprint is cut
-    by joining the lines (_join_across), not by laying the surface over it
-    onto the solid (contact(), which wetted more of the solid there: a
-    pack's sheet in the corner of two side walls, thinnest at the corner,
-    a neck by its normals, and the surface went through itself there)."""
-    import heapq
-    reach = 3*float(np.linalg.norm(x[a] - x[b])) + 2*h
-    edges = np.asarray(m.edges)
-    keep = ~(on[edges[:, 0]] & on[edges[:, 1]])
-    edges = edges[keep]
-    length = np.linalg.norm(x[edges[:, 0]] - x[edges[:, 1]], axis=1)
-    both = np.r_[edges, edges[:, ::-1]]
-    both_len = np.r_[length, length]
-    order = np.argsort(both[:, 0], kind="stable")
-    both, both_len = both[order], both_len[order]
-    start = np.searchsorted(both[:, 0], np.arange(len(x)))
-    stop = np.searchsorted(both[:, 0], np.arange(len(x)), side="right")
-    best = {a: 0.0}
-    heap = [(0.0, a)]
-    while heap:
-        d, v = heapq.heappop(heap)
-        if v == b:
+def _domed(ev, m, x, a: int, b: int, num: int, key, h: float) -> bool:
+    """Whether the liquid over the strip of a solid between contact-line
+    vertices a and b (rows; num, key: the solid's constraint) is closed off
+    close to it, as under a neck lying against it (the surface arching over
+    the strip, or the neck's other solid across a wedge): a ray from the
+    strip's middle along the solid's normal meets a facet or another solid
+    within three times the strip's width and two edges. Else they are a
+    sheet's two faces rising off the solid, the liquid between them running
+    out far: its footprint is cut by joining the lines (_join_across), not
+    by laying the surface over it onto the solid (contact(), which wetted
+    more of the solid there: a pack's sheet in the corner of two side walls,
+    a neck by its normals, the surface then through itself). (A path along
+    the surface from a to b over the strip, the first test, missed a neck in
+    the wedge between a side wall and a bead: its ring is cut by both solids,
+    the lines were joined, and the descent made 60 contacts and never
+    settled.)"""
+    xa, xb = x[a], x[b]
+    width = float(np.linalg.norm(xa - xb))
+    reach = 3*width + 2*h
+    p = (xa + xb)/2
+    _, grad = ev._call(_core.constraint_normals, num)
+    g = np.asarray(grad.data, float)
+    n = g[a] + g[b]
+    if not np.linalg.norm(n):
+        return True
+    n = n/np.linalg.norm(n)
+    f = np.asarray(m.facets)
+    at = np.isin(f, [a, b]).any(axis=1)
+    if at.any() and float((x[f[at]].mean(axis=(0, 1)) - p) @ n) < 0:
+        n = -n                                  # (towards the surface's side)
+    # the facets: Moller-Trumbore, for those within reach
+    near = np.linalg.norm(x[f].mean(axis=1) - p, axis=1) < reach + 2*h
+    if near.any():
+        t0, t1, t2 = x[f[near, 0]], x[f[near, 1]], x[f[near, 2]]
+        e1, e2 = t1 - t0, t2 - t0
+        q = np.cross(n, e2)
+        det = np.einsum("ij,ij->i", e1, q)
+        ok = np.abs(det) > 1e-14
+        inv = np.where(ok, 1.0/np.where(ok, det, 1.0), 0.0)
+        s0 = p - t0
+        u = np.einsum("ij,ij->i", s0, q)*inv
+        r = np.cross(s0, e1)
+        v = (r @ n)*inv
+        t = np.einsum("ij,ij->i", e2, r)*inv
+        hit = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 1e-9*reach) & (t <= reach)
+        if hit.any():
             return True
-        if d > best.get(v, np.inf):
+    # the other solids: spheres and planes (constraints' shapes)
+    for k, w in surface.walls.items():
+        shape = getattr(w, "shape", None)
+        if k == key or shape is None or isinstance(shape[1], str):
             continue
-        for k in range(start[v], stop[v]):
-            w, nd = int(both[k, 1]), d + float(both_len[k])
-            if nd <= reach and nd < best.get(w, np.inf) \
-                    and float(np.linalg.norm(x[w] - x[a])) <= reach:
-                best[w] = nd
-                heapq.heappush(heap, (nd, w))
+        if shape[0] == "sphere" and not any(isinstance(c, str) for c in shape[1]):
+            c, R = np.asarray(shape[1], float), float(shape[2])
+            dc = p - c
+            bq = float(dc @ n)
+            disc = bq*bq - (float(dc @ dc) - R*R)
+            if disc >= 0:
+                t = -bq - np.sqrt(disc)
+                if 1e-9*reach < t <= reach:
+                    return True
+        elif shape[0] == "plane":
+            nq = np.asarray(shape[1], float)
+            along = float(nq @ n)
+            if abs(along) > 0.1:
+                t = (float(shape[2]) - float(nq @ p))/along
+                if 1e-9*reach < t <= reach:
+                    return True
     return False
 
 

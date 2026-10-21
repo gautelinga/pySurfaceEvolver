@@ -1082,7 +1082,8 @@ def test_a_footprint_under_a_dome_is_told_from_a_sheets():
     # it, dried by laying the dome onto the wall; a sheet's faces rise off the
     # wall with gas over the strip between them, joined only round its edge)
     from pysurfaceevolver import _surgery
-    for ev, domed in ((_drop_under_a_sphere(), True), (_sheet_on_a_wall(), False)):
+    for make, domed in ((_drop_under_a_sphere, True), (_sheet_on_a_wall, False)):
+        ev = make()                 # (one at a time: every handle is the one engine)
         m = ev.mesh()
         x = np.asarray(m.vertices)
         on = ev.on_constraint(1)
@@ -1094,7 +1095,9 @@ def test_a_footprint_under_a_dome_is_told_from_a_sheets():
             mid = rim[np.abs(x[rim, 2]) < 1e-9]
             a, b = mid[np.argmax(x[mid, 1])], mid[np.argmin(x[mid, 1])]
         h = float(np.median(m.edge_lengths()))
-        assert _surgery._domed(m, x, int(a), int(b), on, h) is domed
+        nums, _, _, names = ev._constraint_gaps()
+        num = int(nums[list(names).index(names[0])])
+        assert _surgery._domed(ev, m, x, int(a), int(b), num, 1, h) is domed
 
 
 # ---- the flux gauge (constraints.sphere(gauge="flux")) ---------------------------
