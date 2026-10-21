@@ -76,6 +76,7 @@ struct ctx
   REAL *gaps;                      /* per vertex and wall: x, y, z, the gap there */
   long gaps_size;                  /* vertex ordinals it has room for */
   REAL box_lo[3], box_hi[3];
+  int clean;                       /* no crossings when the remesh began: see patch() */
 };
 
 /* a fresh mark for this pass; 1 if id wasn't marked yet */
@@ -733,11 +734,18 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, struct ids
     }
   }
 
-  /* crossings: the patch's edges against facets, its facets against edges */
-  for ( i = 0 ; i < E.n ; i++ ) k->crossing += crossings_of(c,E.a[i],&F);
-  for ( i = 0 ; i < F.n ; i++ ) k->crossing += crossings_of(c,F.a[i],&E);
-  /* and contact lines through each other (the patch's against all) */
-  for ( i = 0 ; i < E.n ; i++ ) k->crossing += line_crossings_of(c,E.a[i],&E);
+  /* crossings: the patch's edges against facets, its facets against edges;
+     and contact lines through each other (the patch's against all). Not
+     counted before an edit (out_e NULL: the counts compared with after)
+     where the remesh began with none on the whole surface: every edit kept
+     since lets no patch's count grow and changes nothing outside it, so
+     there are none to count (the counts before and after were half a
+     remeshing's time, 1.2 s on a 16-bead pack) */
+  if ( !(c->clean && !out_e) )
+  { for ( i = 0 ; i < E.n ; i++ ) k->crossing += crossings_of(c,E.a[i],&F);
+    for ( i = 0 ; i < F.n ; i++ ) k->crossing += crossings_of(c,F.a[i],&E);
+    for ( i = 0 ; i < E.n ; i++ ) k->crossing += line_crossings_of(c,E.a[i],&E);
+  }
 
   if ( out_e ) for ( i = 0 ; i < E.n ; i++ ) push(out_e,E.a[i]);
   if ( out_f ) for ( i = 0 ; i < F.n ; i++ ) push(out_f,F.a[i]);
@@ -1903,6 +1911,8 @@ static int count_done(int *r, int n)
    flips toward valence 6 (4 on a border), vertices smoothed along the
    surface; every edit checked as in a batch, contact lines kept (they
    are the edits' features). results: splits, collapses, flips, moves. */
+static int surface_clean(struct ctx *c);
+
 static void remesh_body(void *arg)
 { struct edit_args *a = (struct edit_args *)arg;
   struct ctx c;
@@ -1919,6 +1929,7 @@ static void remesh_body(void *arg)
       if ( valid_id(v) ) add_to_region(v);
     }
   }
+  c.clean = surface_clean(&c);
   keep_len = c.max_len; keep_mode = c.mode;
   for ( pass = 0 ; pass < 4 ; pass++ ) a->results[pass] = 0;
   for ( sweep = 0 ; sweep < (sweeps > 0 ? sweeps : 3) ; sweep++ )
@@ -2025,6 +2036,21 @@ static long line_crossings(REAL h, struct crossing_args *a)
       if ( lines_cross(L.a[i],L.a[j],h,a->far,mid) ) { n++; record(a,1,mid); }
   if ( L.a ) temp_free((char *)L.a);
   return n;
+}
+
+/* whether the surface has no crossings at all (edges through facets,
+   contact lines through each other), with c's grids */
+static int surface_clean(struct ctx *c)
+{ struct crossing_args a;
+  struct ids none = {0,0,0};
+  edge_id e;
+  memset(&a,0,sizeof(a));
+  far_only = 0;
+  grids_build(c);                  /* (each batch builds them again) */
+  FOR_ALL_EDGES(e)
+    if ( crossings_of(c,e,&none) ) return 0;
+  line_crossings(c->h,&a);
+  return a.count == 0;
 }
 
 static void crossing_body(void *arg)
