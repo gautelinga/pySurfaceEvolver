@@ -2822,29 +2822,36 @@ def _unsteppable(ev, energy=None) -> str:
 
 
 def _steps_uncrossed(ev, n: int) -> bool:
-    """n gradient steps, or as many as don't pass the surface through itself:
-    where n do, the mesh evened out (smoothed, flipped) and n again (the
-    crossings in the corpus's falls were folds an edge or two across, beside
-    a contact line), then one at a time (a touch then comes as an event).
-    Whether they were held back."""
-    crossed, start = _crossings(ev), ev._save()
+    """n gradient steps, or as many as don't pass the surface through itself
+    nor take free vertices through a wall (_outside: a fall is unguarded,
+    and a resumed pack's first steps took one 0.33 through the floor, a
+    contact made there and the descent run away): where n do, the mesh
+    evened out (smoothed, flipped) and n again (the crossings in the
+    corpus's falls were folds an edge or two across, beside a contact line),
+    then one at a time (a touch, a contact then comes as an event). Whether
+    they were held back."""
+    crossed, out, start = _crossings(ev), _outside(ev), ev._save()
+
+    def wrong() -> bool:
+        return _crossings(ev) > crossed or _outside(ev) > out
     ev.command(f"g {n}")
-    if _crossings(ev) <= crossed:
+    if not wrong():
         return False
     ev.restore(start)
     _even_out(ev)
-    crossed, start = _crossings(ev), ev._save()
+    crossed, out, start = _crossings(ev), _outside(ev), ev._save()
     ev.command(f"g {n}")
-    if _crossings(ev) <= crossed:
+    if not wrong():
         return False
     ev.restore(start)
     for _ in range(n):
         here = ev._save()
         ev.command("g 1")
-        if _crossings(ev) > crossed:
-            _note_crossed(ev)
+        if wrong():
+            if _crossings(ev) > crossed:
+                _note_crossed(ev)
             ev.restore(here)
-            _log.debug("gradient steps stopped: the surface through itself")
+            _log.debug("gradient steps stopped: the surface through itself or a wall")
             return True
     return False
 
