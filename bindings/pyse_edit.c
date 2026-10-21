@@ -77,6 +77,7 @@ struct ctx
   long gaps_size;                  /* vertex ordinals it has room for */
   REAL box_lo[3], box_hi[3];
   int clean;                       /* no crossings when the remesh began: see patch() */
+  int in_cells;                    /* a smoothing batch: its moves leave elements in their cells */
 };
 
 /* a fresh mark for this pass; 1 if id wasn't marked yet */
@@ -772,7 +773,11 @@ static int after(struct ctx *c, struct ids *verts, struct counts *was, int pinch
   int why;
   patch(c,verts,&now,&E,&F);
   why = worse(was,&now,pinch_ok);
-  if ( !why ) changed(c,&F,&E);
+  /* (a smoothing move, a quarter edge at most, once a vertex in a batch,
+     leaves its elements in the cells their boxes, padded by half an edge,
+     were put in: added again, a pass over 15k facets' vertices made the
+     grids again 76 times, a fifth of a remesh) */
+  if ( !why && !c->in_cells ) changed(c,&F,&E);
   if ( E.a ) temp_free((char *)E.a);
   if ( F.a ) temp_free((char *)F.a);
   return why;
@@ -1785,21 +1790,26 @@ static int one(struct ctx *c, struct edit_args *a, int k)
 
 static void run_batch(struct ctx *c, struct edit_args *a)
 { struct snapshot *s = NULL;
-  int k, j, base = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
+  int k, j, base = 0, made = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
   a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
   for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
   grids_build(c);
+  c->in_cells = a->op == PYSE_OP_SMOOTH;
   for ( k = 0 ; k < count ; k++ )
   { int r;
-    if ( !s && a->op != PYSE_OP_SMOOTH ) { s = pyse_snapshot_hold(); base = k; }
-    else if ( s && k - base >= BATCH_CHECKPOINT )
-    { /* (the edits before k kept: replays start here) */
+    if ( !s && a->op != PYSE_OP_SMOOTH ) { s = pyse_snapshot_hold(); base = k; made = 0; }
+    else if ( s && made >= BATCH_CHECKPOINT )
+    { /* (the edits before k kept: replays start here; edits made, not
+         candidates, counted: a snapshot is the whole surface, and every 32
+         candidates a pass over all edges took one per 32 of them, 2700 in a
+         remesh of 15k facets, a fifth of its 8 s, quadratic in the facets) */
       pyse_snapshot_drop(s);
       s = pyse_snapshot_hold();
       base = k;
+      made = 0;
     }
     r = one(c,a,k);
-    if ( r >= 0 ) { a->results[k] = r; continue; }
+    if ( r >= 0 ) { a->results[k] = r; made += r == PYSE_EDIT_DONE; continue; }
     a->results[k] = -r;
     for ( ;; )
     { int again = 0;
