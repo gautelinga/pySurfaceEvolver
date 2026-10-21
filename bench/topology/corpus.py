@@ -10,8 +10,9 @@ logger) with its class. The measure: changes per failure (a failure: a run
 that stopped short, crashed or timed out) and how far the runs drained.
 
 usage: python bench/topology/corpus.py [--set quick|small|wide|wide-half|full]
-                                       [--jobs 4] [--out DIR] [--only NAME ...]
-                                       [--h H] [--ds DS]
+                                       [--jobs 4] [--threads 1] [--out DIR]
+                                       [--only NAME ...] [--h H] [--ds DS]
+                                       [--gauge flux|pole]
        python bench/topology/corpus.py --summary DIR
        python bench/topology/corpus.py --compare DIR_A DIR_B
 
@@ -114,7 +115,8 @@ def stop_class(message):
     return _shape(message)[:80]
 
 
-def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resume=None):
+def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resume=None,
+        gauge=None):
     """One run, in this process: NAME.json and NAME.log in out. checkpoints:
     a directory each step's state goes to (stepNNNN.fe and .pkl, the last
     KEEP kept); resume: such a state (its path without the extension), the
@@ -150,7 +152,12 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         ev, v0, first = restore_state(resume)
     else:
         x, _, _ = settle(n, L, L, seed=seed)
-        ev, _ = load(x, L, L, theta=theta, h=h, floor=goal == "breakthrough")
+        # (the beads in the flux gauge where the run goes to breakthrough:
+        # the pole gauge's volume bookkeeping lost whole beads' volumes where
+        # lines crossed poles; the older "half" sets as they were)
+        if gauge is None:
+            gauge = "flux" if goal == "breakthrough" else "pole"
+        ev, _ = load(x, L, L, theta=theta, h=h, floor=goal == "breakthrough", gauge=gauge)
         ev.relax()
         v0 = float(ev.body(1).volume)
     target = FRACTION*v0
@@ -293,16 +300,17 @@ def restore_state(path):
     return ev, float(saved["start"]), int(saved["step"]) + 1
 
 
-def launch(cfg, out, python):
+def launch(cfg, out, python, threads=1, gauge=None):
     name, n, L, seed, theta, h, ds, timeout, goal = cfg
-    env = dict(os.environ, OMP_NUM_THREADS="1")
+    env = dict(os.environ, OMP_NUM_THREADS=str(threads))
     path = os.path.join(out, f"{name}.json")
     if os.path.exists(path):
         os.remove(path)
     t = time.time()
     try:
         p = subprocess.run([python, os.path.abspath(__file__), "--one", name, str(n), str(L),
-                            str(seed), str(theta), str(h), str(ds), out, goal],
+                            str(seed), str(theta), str(h), str(ds), out, goal]
+                           + (["--gauge", gauge] if gauge else []),
                            env=env, capture_output=True, text=True, timeout=timeout)
         code, err = p.returncode, p.stderr
     except subprocess.TimeoutExpired as e:
@@ -390,7 +398,7 @@ def main(argv):
     if argv[:1] == ["--one"]:
         # --one NAME N L SEED THETA H DS OUT [GOAL] [--checkpoints DIR] [--resume STATE]
         options = {}
-        while len(argv) > 2 and argv[-2] in ("--checkpoints", "--resume"):
+        while len(argv) > 2 and argv[-2] in ("--checkpoints", "--resume", "--gauge"):
             options[argv[-2][2:]] = argv[-1]
             argv = argv[:-2]
         name, n, L, seed, theta, h, ds, out = argv[1:9]
@@ -400,6 +408,12 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--set", default="quick", choices=("quick", "small", "wide", "wide-half", "full"))
     ap.add_argument("--jobs", type=int, default=4)
+    ap.add_argument("--threads", type=int, default=1, choices=(1, 2, 3, 4),
+                    help="OpenMP threads per run (runs times threads up to the cores: a "
+                         "run's threads idle a third of the time, so several runs side by "
+                         "side do more an hour)")
+    ap.add_argument("--gauge", choices=("flux", "pole"),
+                    help="the beads' gauge (default: flux to breakthrough, else pole)")
     ap.add_argument("--out")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--h", type=float, help="the set's runs at this edge length")
@@ -419,9 +433,11 @@ def main(argv):
     todo = [c for c in configs(args.set, args.h, args.ds) if not args.only or c[0] in args.only]
     # the longest first, so the pool ends together
     todo.sort(key=lambda c: -c[1])
-    print(f"{len(todo)} runs, {args.jobs} at a time, into {out}", flush=True)
+    print(f"{len(todo)} runs, {args.jobs} at a time ({args.threads} thread"
+          f"{'s' if args.threads > 1 else ''} each), into {out}", flush=True)
     with ThreadPoolExecutor(args.jobs) as pool:
-        results = list(pool.map(lambda c: launch(c, out, args.python), todo))
+        results = list(pool.map(lambda c: launch(c, out, args.python, args.threads, args.gauge),
+                                todo))
     total = summary(results)
     json.dump(total, open(os.path.join(out, "summary.json"), "w"), indent=1)
 
