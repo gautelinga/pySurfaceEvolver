@@ -500,6 +500,48 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
     }
     return 1;
   }
+  if ( f->points && (f->base == 0 || f->base == 1) )
+  { /* second derivatives in closed form for point sources (a facet
+       integrand): with w = x - c, a = coef/r^3, F = a w,
+       dF_m/dx_i = a (d_mi - 3 w_m w_i/r^2),
+       d2F_m/dx_i dx_j = -3 a/r^2 (d_mi w_j + d_mj w_i + d_ij w_m)
+                         + 15 a w_m w_i w_j/r^4;
+       inside, F = coef w/R^3, linear. (The dual numbers, with pow, were a
+       quarter of a 16-bead pack's Newton step.) */
+    REAL v[3] = {0,0,0}, g[3][3] = {{0,0,0},{0,0,0},{0,0,0}}, h[3][3][3];
+    memset(h,0,sizeof(h));
+    if ( f->base == 1 ) { v[2] = x[2]; g[2][2] = 1.0; }
+    for ( t = 0 ; t < f->nterm ; t++ )
+    { REAL w[3], r2, coef = flux_coefficient(f->term + t,floor);
+      int k;
+      for ( m = 0 ; m < 3 ; m++ ) w[m] = x[m] - f->pc[m][t];
+      r2 = w[0]*w[0] + w[1]*w[1] + w[2]*w[2];
+      if ( r2 < f->pR2[t] )
+      { REAL a = coef/f->pR3[t];
+        for ( m = 0 ; m < 3 ; m++ ) { v[m] += w[m]*a; g[m][m] += a; }
+        continue;
+      }
+      { REAL a = coef/(r2*sqrt(r2)), b = 3.0*a/r2, e = 15.0*a/(r2*r2);
+        for ( m = 0 ; m < 3 ; m++ )
+        { v[m] += w[m]*a;
+          for ( i = 0 ; i < 3 ; i++ )
+          { g[m][i] += (m == i ? a : 0.0) - b*w[m]*w[i];
+            for ( k = 0 ; k < 3 ; k++ )
+              h[m][i][k] += -b*((m == i ? w[k] : 0.0) + (m == k ? w[i] : 0.0)
+                                + (i == k ? w[m] : 0.0)) + e*w[m]*w[i]*w[k];
+          }
+        }
+      }
+    }
+    for ( m = 0 ; m < 3 ; m++ )
+    { val[m] = v[m];
+      for ( i = 0 ; i < 3 ; i++ )
+      { d[m][i] = g[m][i];
+        for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = h[m][i][j];
+      }
+    }
+    return 1;
+  }
   for ( m = 0 ; m < 3 ; m++ ) out[m] = d_const(0.0);
   if ( f->base == 1 ) out[2] = d_lin(ex[2],0.0,x);
   else if ( f->base == 2 )
