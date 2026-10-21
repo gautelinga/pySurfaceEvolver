@@ -138,11 +138,16 @@ void pyse_native_enable(int on);
 /* the flux gauge's integrands in C (constraints.sphere(gauge="flux")): a
    method instance's facet integrand (method) or constraint con's energy
    (which 0) or content (1) line integrand; base 0 none, 1 (0,0,z), 2 a
-   sphere's exact content part about bc; terms 11 numbers each (centre,
+   sphere's exact content part about bc, 3 a plane's content (bc n_z, o, u,
+   v), 4 a plane's wetting (bc angle, tension, o, u, v); terms 11 numbers each (centre,
    radius, direction (0 for a point source), energy flag, angle, tension,
    spare). 0 if it can't be registered. */
 int pyse_native_flux(const char *method, int con, int which, int base, const double *bc,
-                     const double *terms, int nterm);
+                     int nbc, const double *terms, int nterm);
+/* constraint con's formula evaluated in closed form, a plane (kind 0: p = n,
+   d) or a sphere (kind 1: p = c, R^2), where that matches the interpreter at
+   test points (1; else 0). */
+int pyse_native_formula_register(int con, int kind, const double *p);
 const char *pyse_solver(void);
 /* Whether Newton steps carry the mesh along a line they move past the edges
    beside it (on by default); returns the previous setting. */

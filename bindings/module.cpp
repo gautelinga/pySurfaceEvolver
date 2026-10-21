@@ -602,12 +602,20 @@ NB_MODULE(_core, m) {
   m.def("native_flux", [](std::string method, int con, int which, int base,
                           std::vector<double> bc, std::vector<double> terms) {
     Lock lock;
-    if ( bc.size() != 3 || terms.size() % 11 )
-      throw std::invalid_argument("native_flux(): bc a 3-vector, terms 11 numbers each");
-    return bool(pyse_native_flux(method.c_str(), con, which, base, bc.data(), terms.data(),
-                                 int(terms.size()/11)));
+    if ( bc.size() > 12 || terms.size() % 11 )
+      throw std::invalid_argument("native_flux(): bc up to 12 numbers, terms 11 each");
+    return bool(pyse_native_flux(method.c_str(), con, which, base, bc.data(), int(bc.size()),
+                                 terms.data(), int(terms.size()/11)));
   }, "method"_a, "con"_a, "which"_a, "base"_a, "bc"_a, "terms"_a,
   "Register a flux-gauge integrand for evaluation in C (see _flux.native_specs).");
+  m.def("native_formula", [](int con, int kind, std::vector<double> p) {
+    Lock lock;
+    if ( p.size() != 4 )
+      throw std::invalid_argument("native_formula(): p 4 numbers (n, d or c, R^2)");
+    return bool(pyse_native_formula_register(con, kind, p.data()));
+  }, "con"_a, "kind"_a, "p"_a,
+  "Register constraint con's formula in closed form: a plane (kind 0, n and d) or a "
+  "sphere (kind 1, c and R^2); False where it doesn't match the interpreter.");
   m.def("line_chop", [](double length) { Lock lock; return pyse_line_chop(length); }, "length"_a,
         "With length > 0, each gradient step ends with contact-line edges longer than it "
         "split onto their constraints (0: off); returns the previous setting.");

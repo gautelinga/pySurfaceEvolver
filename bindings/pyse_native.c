@@ -202,8 +202,10 @@ struct flux_term
 
 struct flux_field
 { struct expnode *key;
-  int base;                      /* 0 none, 1 (0,0,z), 2 a sphere's content part */
-  REAL bc[3];                    /* that sphere's centre */
+  int base;                      /* 0 none, 1 (0,0,z), 2 a sphere's content part,
+                                    3 a plane's content, 4 a plane's wetting */
+  REAL bc[12];                   /* 2: the sphere's centre; 3: n_z, o, u, v;
+                                    4: angle, tension, o, u, v */
   int nterm;
   struct flux_term term[FLUX_TERMS];
 };
@@ -241,16 +243,24 @@ static REAL flux_coefficient(const struct flux_term *t, REAL floor)
   return t->coef;
 }
 
+/* a plane's wetting coefficient tension cos(angle), the floor raised past
+   an angle under FLUX_FLOOR_TOP as for the spheres (constraints._Coefficient) */
+static REAL plane_coefficient(const struct flux_field *f, REAL floor)
+{ REAL angle = f->bc[0], tension = f->bc[1];
+  if ( angle > 0 && angle < FLUX_FLOOR_TOP && floor > angle ) angle = floor;
+  return tension*cos(angle*M_PI/180.0);
+}
+
 /* register a field: target a method instance (its name) or a constraint's
    energy (which 0) or content (1) integrand; terms 11 numbers each (c, R,
    d, energy flag, angle, tension, and a spare); 0 if it can't be */
 int pyse_native_flux(const char *method, int con, int which, int base, const double *bc,
-                     const double *terms, int nterm)
+                     int nbc, const double *terms, int nterm)
 { struct expnode *key = NULL;
   struct flux_field *f = NULL;
   int i, k;
   if ( flux_load != pyse_load_serial() ) { flux_count = 0; flux_load = pyse_load_serial(); }
-  if ( nterm > FLUX_TERMS || SDIM != 3 ) return 0;
+  if ( nterm > FLUX_TERMS || SDIM != 3 || nbc > 12 ) return 0;
   if ( method && method[0] )
   { int m = find_method_instance((char *)method);
     if ( m < 0 ) return 0;
@@ -272,7 +282,7 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
   }
   f->key = key;
   f->base = base;
-  for ( k = 0 ; k < 3 ; k++ ) f->bc[k] = bc ? bc[k] : 0.0;
+  for ( k = 0 ; k < 12 ; k++ ) f->bc[k] = bc && k < nbc ? bc[k] : 0.0;
   f->nterm = nterm;
   for ( i = 0 ; i < nterm ; i++ )
   { const double *t = terms + 11*i;
@@ -306,6 +316,28 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
     { REAL XX = x[0] - f->bc[0], YY = x[1] - f->bc[1], ZZ = x[2] - f->bc[2];
       v[0] = ZZ/3.0*YY;        g[0][1] = ZZ/3.0; g[0][2] = YY/3.0;
       v[1] = -(f->bc[2] + ZZ/3.0)*XX;  g[1][0] = -(f->bc[2] + ZZ/3.0); g[1][2] = -XX/3.0;
+    }
+    else if ( f->base == 3 || f->base == 4 )
+    { /* a plane's: x = o + s u + t v; content u n_z (o_z t + u_z s t + v_z t^2/2),
+         wetting k u t (constraints.plane) */
+      const REAL *o = f->bc + (f->base == 3 ? 1 : 2), *u = o + 3, *w = o + 6;
+      REAL ss = 0, tt = 0, p, dp[3];
+      for ( i = 0 ; i < 3 ; i++ ) { ss += u[i]*(x[i] - o[i]); tt += w[i]*(x[i] - o[i]); }
+      if ( f->base == 3 )
+      { REAL nz = f->bc[0];
+        p = nz*(o[2]*tt + u[2]*ss*tt + 0.5*w[2]*tt*tt);
+        for ( i = 0 ; i < 3 ; i++ )
+          dp[i] = nz*(o[2]*w[i] + u[2]*(tt*u[i] + ss*w[i]) + w[2]*tt*w[i]);
+      }
+      else
+      { REAL k = plane_coefficient(f,floor);
+        p = k*tt;
+        for ( i = 0 ; i < 3 ; i++ ) dp[i] = k*w[i];
+      }
+      for ( m = 0 ; m < 3 ; m++ )
+      { v[m] = u[m]*p;
+        for ( i = 0 ; i < 3 ; i++ ) g[m][i] = u[m]*dp[i];
+      }
     }
     for ( t = 0 ; t < f->nterm ; t++ )
     { struct flux_term *u = f->term + t;
@@ -356,6 +388,21 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
     out[0] = d_mul(d_scale(ZZ,1.0/3.0),YY);
     out[1] = d_scale(d_mul(d_add(d_const(f->bc[2]),d_scale(ZZ,1.0/3.0)),XX),-1.0);
   }
+  else if ( f->base == 3 || f->base == 4 )
+  { const REAL *o = f->bc + (f->base == 3 ? 1 : 2), *u = o + 3, *w = o + 6;
+    dual ss = d_const(0.0), tt = d_const(0.0), p;
+    for ( i = 0 ; i < 3 ; i++ )
+    { dual xi = d_lin(ex[i],-o[i],x);
+      ss = d_add(ss,d_scale(xi,u[i]));
+      tt = d_add(tt,d_scale(xi,w[i]));
+    }
+    if ( f->base == 3 )
+      p = d_scale(d_add(d_add(d_scale(tt,o[2]),d_scale(d_mul(ss,tt),u[2])),
+                        d_scale(d_mul(tt,tt),0.5*w[2])),f->bc[0]);
+    else
+      p = d_scale(tt,plane_coefficient(f,floor));
+    for ( m = 0 ; m < 3 ; m++ ) out[m] = d_scale(p,u[m]);
+  }
   for ( t = 0 ; t < f->nterm ; t++ )
   { struct flux_term *u = f->term + t;
     REAL coef = flux_coefficient(u,floor);
@@ -384,5 +431,147 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
     if ( order >= 2 )
       for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = out[m].h[i][j];
   }
+  return 1;
+}
+
+/* ---- constraint formulas in closed form ----------------------------------
+ *
+ * A plane's formula n . x = d and a sphere's |x - c|^2 = R^2 (constraints.py,
+ * and the guards' one-sided copies) evaluated without Evolver's interpreter:
+ * Evolver evaluates every constraint at every vertex for its projection, and
+ * pySE's gap query (every vertex, every wall and guard) did so ten thousand
+ * times a call, a sixth of a 16-bead pack's main thread. The expression is
+ * marked by PYSE_NATIVE_FORMULA in its flag (src/eval_all.c, evaltree.c test
+ * it); registered only where the closed form matches the interpreter bit for
+ * bit at test points, so the datafile's formula stays the definition. */
+
+#define PYSE_NATIVE_FORMULA 0x40000000
+#define FORMULA_NATIVES 512
+
+struct formula_native
+{ struct expnode *key;
+  int kind;                      /* 0 plane: p = n, d; 1 sphere: p = c, R^2 */
+  REAL p[4];
+  REAL sign;                     /* the interpreter's value is sign times ours */
+};
+
+static struct formula_native formulas[FORMULA_NATIVES];
+static int formula_count = 0;
+static long formula_load = -1;
+
+static void formula_value(const struct formula_native *n, const REAL *x, REAL *f, REAL *g)
+{ /* in the interpreter's order (the datafile's A + B + C = D taken as
+     ((A + B) + C) - D, a plane's zero terms left out), so as to agree with it
+     bit for bit: a last bit's difference changed a relaxed drop's energy in
+     its seventh digit and the edits after it */
+  int i, first = 1;
+  REAL v = 0.0;
+  if ( n->kind == 0 )
+  { for ( i = 0 ; i < 3 ; i++ )
+      if ( n->p[i] != 0.0 )
+      { REAL t = n->p[i]*x[i];
+        v = first ? t : v + t;
+        first = 0;
+      }
+    v = v - n->p[3];
+    if ( g ) for ( i = 0 ; i < 3 ; i++ ) g[i] = n->p[i];
+  }
+  else
+  { REAL X = x[0] - n->p[0], Y = x[1] - n->p[1], Z = x[2] - n->p[2];
+    v = (X*X + Y*Y) + Z*Z - n->p[3];
+    if ( g ) { g[0] = 2.0*X; g[1] = 2.0*Y; g[2] = 2.0*Z; }
+  }
+  if ( n->sign < 0 )
+  { v = -v;
+    if ( g ) for ( i = 0 ; i < 3 ; i++ ) g[i] = -g[i];
+  }
+  *f = v;
+}
+
+int pyse_native_formula(struct expnode *ex, REAL *x, REAL *f, REAL *grad)
+{ int i;
+  if ( formula_load != pyse_load_serial() ) return 0;
+  for ( i = 0 ; i < formula_count ; i++ )
+    if ( formulas[i].key == ex )
+    { formula_value(formulas + i,x,f,grad);
+      return 1;
+    }
+  return 0;
+}
+
+/* register constraint con's formula as a plane (kind 0: n, d) or a sphere
+   (kind 1: c, R^2); 1 if registered (the closed form matching the
+   interpreter, value and gradient, at test points), else 0 */
+int pyse_native_formula_register(int con, int kind, const double *p)
+{ struct constraint *cn;
+  struct expnode *ex;
+  struct formula_native n;
+  REAL pts[8][3] = {{0.31,-0.27,0.73},{1.9,0.4,-0.6},{-0.8,2.3,1.1},{0.05,0.11,3.7},
+                    {-1.37,-0.91,0.29},{0.7071,0.7071,0.0},{2.9,-3.1,-0.4},{0.013,-0.6,-2.2}};
+  int i, k, j;
+  if ( formula_load != pyse_load_serial() )
+  { for ( i = 0 ; i < formula_count ; i++ )
+      formulas[i].key = NULL;    /* (the old load's expressions are gone) */
+    formula_count = 0;
+    formula_load = pyse_load_serial();
+  }
+  if ( SDIM != 3 || (kind != 0 && kind != 1) || con < 0 || con >= web.maxcon ) return 0;
+  cn = get_constraint(con);
+  if ( !cn || !(cn->attr & IN_USE) || !cn->formula ) return 0;
+  ex = cn->formula;
+  n.key = ex;
+  n.kind = kind;
+  n.sign = 1.0;
+  ex->flag &= ~PYSE_NATIVE_FORMULA;      /* (the interpreter for the test) */
+  { /* the constants as Evolver parsed them, read back from its interpreter
+       (exactly: a sphere's gradient at 0 is -2c, its value at c -R^2; a
+       plane's gradient n, its value at 0 -d), not as given: its parser and
+       Python's round some decimals apart, and the closed form then missed
+       the interpreter in the last bit at most points */
+    REAL zero[3] = {0,0,0}, f0, g0[2*MAXCOORD];
+    eval_all(ex,zero,SDIM,&f0,g0,NULLID);
+    if ( kind == 1 )
+    { /* s (|x - c|^2 - R^2), s = +1 or -1: with s = 1, c = -g/2 and the
+         value there -R^2 < 0; else s = -1, c = g/2, the value there R^2 */
+      REAL c[3], fc, gc[2*MAXCOORD];
+      for ( j = 0 ; j < 3 ; j++ ) c[j] = -g0[j]/2.0;
+      eval_all(ex,c,SDIM,&fc,gc,NULLID);
+      if ( !(fc < 0) )
+      { n.sign = -1.0;
+        for ( j = 0 ; j < 3 ; j++ ) c[j] = g0[j]/2.0;
+        eval_all(ex,c,SDIM,&fc,gc,NULLID);
+        fc = -fc;
+      }
+      for ( j = 0 ; j < 3 ; j++ ) n.p[j] = c[j];
+      n.p[3] = -fc;
+    }
+    else
+    { /* s (n . x - d): read back as s n and s d, the same thing */
+      for ( j = 0 ; j < 3 ; j++ ) n.p[j] = g0[j];
+      n.p[3] = -f0;
+    }
+    /* (and close to what pySE gave: else not the formula it meant) */
+    for ( j = 0 ; j < 4 ; j++ )
+      if ( fabs(fabs(n.p[j]) - fabs(p[j])) > 1e-9*(1.0 + fabs(p[j])) ) return 0;
+  }
+  for ( k = 0 ; k < 8 ; k++ )
+  { REAL x[3], fi, gi[2*MAXCOORD], fn, gn[3];
+    for ( j = 0 ; j < 3 ; j++ ) x[j] = (kind ? p[j] : 0.0) + pts[k][j];
+    eval_all(ex,x,SDIM,&fi,gi,NULLID);
+    formula_value(&n,x,&fn,gn);
+    /* (bit for bit: else the interpreter's own arithmetic, a rotated
+       frame's say, and this one's would part in the last bits) */
+    if ( fi != fn ) return 0;
+    for ( j = 0 ; j < 3 ; j++ )
+      if ( gi[j] != gn[j] ) return 0;
+  }
+  for ( i = 0 ; i < formula_count ; i++ )
+    if ( formulas[i].key == ex ) break;
+  if ( i == formula_count )
+  { if ( formula_count >= FORMULA_NATIVES ) return 0;
+    formula_count++;
+  }
+  formulas[i] = n;
+  ex->flag |= PYSE_NATIVE_FORMULA;
   return 1;
 }

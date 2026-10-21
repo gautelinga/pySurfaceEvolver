@@ -15,6 +15,17 @@
 #include "include.h" 
 #include "ytab.h"
 
+/* pySE: constraint formulas registered in closed form (bindings/pyse_native.c:
+   planes' and spheres', marked by PYSE_NATIVE_FORMULA in the expression's
+   flag; absent from the stock program) */
+#define PYSE_NATIVE_FORMULA 0x40000000
+#if defined(__GNUC__)
+extern int pyse_native_formula(struct expnode *ex, REAL *x, REAL *f, REAL *grad)
+  __attribute__((weak));
+#else
+static int (*pyse_native_formula)(struct expnode *, REAL *, REAL *, REAL *) = 0;
+#endif
+
 /* for easy assignments */
 #define FIRST for ( i = 0 ; i < pcount ; i++ ) stacktop->deriv[i] 
 #define SECOND  for ( i = 0 ; i < pcount ; i++ )\
@@ -51,6 +62,10 @@ void eval_all(
       stacktop->deriv[i] = 0.0;
   stacktop->value = 0.0;  /* for empty expression */
   if ( ex == NULL ) return;
+  /* pySE: a plane's or sphere's formula in closed form */
+  if ( (ex->flag & PYSE_NATIVE_FORMULA) && pyse_native_formula && pcount == SDIM
+       && pyse_native_formula(ex,params,fval,partials) )
+    return;
   if ( ex->start == NULL )
      kb_error(1017,"Internal error: eval_all expression node null.\n",
        RECOVERABLE);

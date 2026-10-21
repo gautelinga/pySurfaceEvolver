@@ -194,9 +194,11 @@ def native_specs(walls: Dict[Any, Any]) -> "tuple[list, list]":
     (key -> Constraint): per wall, (key, which, base, bc, terms) for its
     energy (which 0) and content (1) line integrands; and per facet method,
     (name, base, terms). Terms are 11 numbers each (centre, radius,
-    direction or zeros, energy flag, angle, tension, 0). Empty where a wall
-    has terms C doesn't evaluate (a plane's own wetting or content, an
-    angle given as an expression): those stay with Evolver's interpreter."""
+    direction or zeros, energy flag, angle, tension, 0). A plane's own
+    integrands are bases 4 (its wetting: bc its angle, tension, o, u, v) and
+    3 (its content: bc n_z, o, u, v). Empty where a wall has terms C doesn't
+    evaluate (an angle given as an expression): those stay with Evolver's
+    interpreter."""
     spheres = [(k, w) for k, w in walls.items() if getattr(w, "flux", None)]
     if not spheres:
         return [], []
@@ -218,10 +220,23 @@ def native_specs(walls: Dict[Any, Any]) -> "tuple[list, list]":
     lines = []
     for key, w in walls.items():
         own = getattr(w, "flux", None)
+        frame = getattr(w, "frame", None)
+        e_base, e_bc, c_base, c_bc = 0, [0.0]*3, 2 if own else 0, \
+            list(map(float, own[0])) if own else [0.0]*3
         if not own:
-            # a plane's own integrands: C knows none (fine where it has none)
-            if w.energy is not None or w.content is not None:
-                continue
+            # a plane's own integrands: from its frame (base 4 its wetting,
+            # where the angle is a number; base 3 its content), else C knows
+            # none (fine where it has none)
+            if w.energy is not None:
+                if frame is None or not numeric(w.contact_angle):
+                    continue
+                o, u, v, n, tension = frame
+                e_base, e_bc = 4, [float(w.contact_angle), tension, *o, *u, *v]
+            if w.content is not None:
+                if frame is None:
+                    continue
+                o, u, v, n, tension = frame
+                c_base, c_bc = 3, [n[2], *o, *u, *v]
         energy, content = [], []
         for skey, s in spheres:
             if skey == key:
@@ -232,10 +247,9 @@ def native_specs(walls: Dict[Any, Any]) -> "tuple[list, list]":
             if angle is not None and np.cos(np.radians(float(angle))) != 0:
                 energy += term(c, R, d, 1, angle, tension)
             content += term(c, R, d, 0, angle, tension)
-        if energy:
-            lines.append((key, 0, 0, [0.0, 0.0, 0.0], energy))
-        lines.append((key, 1, 2 if own else 0, list(map(float, own[0])) if own else [0.0]*3,
-                      content))
+        if energy or e_base:
+            lines.append((key, 0, e_base, e_bc, energy))
+        lines.append((key, 1, c_base, c_bc, content))
     vol, wet = [], []
     for _, s in spheres:
         c, R, angle, tension = s.flux

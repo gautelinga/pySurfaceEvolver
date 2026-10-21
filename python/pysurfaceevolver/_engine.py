@@ -789,6 +789,7 @@ class _Engine:
         load and as move_poles makes copies."""
         if hasattr(_core, "native_flux"):
             self._register_native_flux()
+        self._register_native_formulas()
         native = {k: getattr(w, "native", None) for k, w in surface.walls.items()}
         native = {k: n for k, n in native.items() if n is not None}
         if not native or not hasattr(_core, "native_sphere"):
@@ -799,6 +800,39 @@ class _Engine:
             if data is not None:
                 centre, R, e1, e2, e3, k = data
                 _core.native_sphere(int(c), list(centre), R, list(e1), list(e2), list(e3), k)
+
+    def _register_native_formulas(self) -> None:
+        """The plane and sphere walls' formulas, and their guards', evaluated
+        in closed form (pyse_native.c: Evolver's projection and the gap
+        query evaluate them at every vertex; C checks each against the
+        interpreter)."""
+        if not hasattr(_core, "native_formula"):
+            return
+        from ._surgery import GUARD_PREFIX
+        shapes = {}
+        for key, w in surface.walls.items():
+            shape = getattr(w, "shape", None)
+            if shape is None or isinstance(shape[1], str) or not getattr(w, "formula", None):
+                continue
+            if shape[0] == "plane":
+                shapes[key] = (0, [*map(float, shape[1]), float(shape[2])])
+            elif (shape[0] == "sphere" and not any(isinstance(v, str) for v in shape[1])
+                  and str(w.formula).startswith("(x - ")):
+                # (the plain |x - c|^2 = R^2 only: a sphere(axis=)'s is in its
+                # rotated frame, which the closed form matches only to the
+                # last bit, and a relaxed drop came out 1 ulp apart)
+                shapes[key] = (1, [*map(float, shape[1]), float(shape[2])**2])
+        if not shapes:
+            return
+        nums, _, _, names = self._constraint_gaps(guards=True)
+        for c, name in zip(nums, names):
+            key = name or int(c)
+            if isinstance(key, str) and key.startswith(GUARD_PREFIX):
+                key = key[len(GUARD_PREFIX):]
+                key = next((k for k in shapes if str(k) == key), key)
+            if key in shapes:
+                kind, p = shapes[key]
+                _core.native_formula(int(c), kind, p)
 
     def _register_native_flux(self) -> None:
         """The flux gauge's integrands (constraints.sphere(gauge="flux"))

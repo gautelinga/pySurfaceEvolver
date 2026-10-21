@@ -129,6 +129,7 @@ def guard(ev) -> None:
             ev.command(f"define constraint {name} nonnegative formula: {getattr(wall, 'formula')}")
             defined.append(name)
     if defined:
+        ev._register_native_formulas()      # (theirs in closed form too)
         nums, _, dist, names = ev._constraint_gaps(guards=True)
         names = [str(n) for n in names]
     _unguard(ev, names)

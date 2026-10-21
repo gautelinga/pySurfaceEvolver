@@ -16,6 +16,17 @@
 
 #include "include.h" 
 #include "fastloops.h"
+
+/* pySE: constraint formulas registered in closed form (bindings/pyse_native.c:
+   planes' and spheres', marked by PYSE_NATIVE_FORMULA in the expression's
+   flag; absent from the stock program) */
+#define PYSE_NATIVE_FORMULA 0x40000000
+#if defined(__GNUC__)
+extern int pyse_native_formula(struct expnode *ex, REAL *x, REAL *f, REAL *grad)
+  __attribute__((weak));
+#else
+static int (*pyse_native_formula)(struct expnode *, REAL *, REAL *, REAL *) = 0;
+#endif
 #include "ytab.h"
  
 /* for breakpoints */
@@ -128,6 +139,11 @@ REAL eval (
 #endif
   
   if ( ex_original == NULL ) return 0.0;
+  /* pySE: a plane's or sphere's formula in closed form */
+  if ( (ex_original->flag & PYSE_NATIVE_FORMULA) && pyse_native_formula )
+  { REAL f;
+    if ( pyse_native_formula(ex_original,params,&f,NULL) ) return f;
+  }
   ex_current = *ex_original;
 
   if ( ex_current.start == NULL )

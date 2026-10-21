@@ -116,6 +116,11 @@ class Constraint:
     # a sphere(gauge="flux")'s: (centre, radius, contact angle, tension), for
     # make_datafile to put together the integrals all walls share (_flux)
     flux: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
+    # a plane()'s frame (origin o, in-plane u and v, normal n, tension), for
+    # evaluating its own integrands in C beside a flux gauge's (the floor's
+    # content, interpreted with sixteen beads' terms, was a third of a pack's
+    # gradient step)
+    frame: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
 
     @property
     def floored(self) -> bool:
@@ -280,7 +285,9 @@ def plane(normal, offset: float = 0.0, contact_angle: Optional[float] = None, *,
         content = [f"{_n(ui)}*{p}" if ui != 0 else "0" for ui in u]
     return Constraint(f"{_lin(n)[1:-1]} = {float(d)!r}", energy, content,
                       shape=("plane", tuple(n), d), parameters=k.names,
-                      contact_angle=contact_angle)
+                      contact_angle=contact_angle,
+                      frame=(tuple(map(float, o)), tuple(map(float, u)), tuple(map(float, v)),
+                             tuple(map(float, n)), float(tension)))
 
 
 def mirror(axis, at: float = 0.0) -> Constraint:
