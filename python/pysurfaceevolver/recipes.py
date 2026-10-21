@@ -739,7 +739,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                             report=start):
             if not start and step.index == 0:
                 continue                # where the fall ended, yielded already
-            moved = True
+            moved = moved or step.index > 0     # (a step past where the branch began)
             if last and not step.fell:
                 moves.append(step.value - last[-1].value)
             step.index = index
@@ -771,7 +771,11 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             stalled = event is None
         if stalled:
             value = _current(ev, what)
-            if start or (bounds is not None and not (min(bounds) <= value <= max(bounds))):
+            # (the first branch ends the run only where it took no step: one
+            # that went on to a fold goes on past it as a later branch does,
+            # a pack's run resumed short of its fold stopped there)
+            if (start and not moved) or (bounds is not None
+                                         and not (min(bounds) <= value <= max(bounds))):
                 return
         start = False
         if remesh is None:
