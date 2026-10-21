@@ -4,9 +4,9 @@
 A sphere's wetted area has no line integral singular nowhere on the sphere
 (its area form isn't exact), and sphere(axis=)'s pole had to be kept off
 the contact lines, moved as they swept across. Here, with
-``F_i = R_i^2 (x - c_i)/|x - c_i|^3`` outside the sphere (divergence-free
-there; ``F_i . n = 1`` on it) and ``(x - c_i)/R_i`` inside, where no
-liquid is (bounded: no jump for a surface pushed through the solid), the divergence
+``F_i = R_i^2 (x - c_i)/|x - c_i|^3`` outside a cap deep inside the sphere
+(divergence-free there; ``F_i . n = 1`` on the sphere) and bounded within
+it, where no liquid is (no jump for a surface pushed through the solid), the divergence
 theorem over the liquid gives bead i's wetted area as the flux of F_i out
 of the liquid through its surface (a facet integral) plus that through the
 other walls' wetted parts. On another sphere j and on the planes F_i's flux
@@ -52,14 +52,24 @@ def _w(c) -> Tuple[str, str, str]:
     return tuple(f"(x{k + 1} - {_n(c[k])})" for k in range(3))     # type: ignore[return-value]
 
 
+# the field's cap, a radius of the sphere's: the point source down to CORE R,
+# where liquid never is (a facet along a contact line dips a chord's sag,
+# h^2/8R, into the sphere), bounded inside. Capped at R itself, the kink sat
+# on the contact lines, their facets' quadrature points either side of it:
+# Newton's quadratic model failed there (a 4-bead pack's Newton steps from
+# residual 0.03 went to 1.2, then 10; 8 of 18 runs never settled after a
+# fall); at R/2, 8 safeguarded steps to 2e-13.
+CORE = 0.5
+
+
 def source(c, R: float) -> List[str]:
-    """F = R^2 (x - c)/max(|x - c|, R)^3, per component: outside the sphere
-    the point source; inside, where liquid never is, (x - c)/R, bounded
+    """F = R^2 (x - c)/max(|x - c|, K)^3 (K = CORE R), per component: the
+    point source outside the cap; inside it, R^2 (x - c)/K^3, bounded
     (singular at the centre, a surface pushed across it changed the wetted
     area by 4 pi R^2 in one gradient step, Evolver's line search found the
     jump, and a pack's descent ran away: every change refused)."""
     w = _w(c)
-    r3 = f"maximum({w[0]}^2 + {w[1]}^2 + {w[2]}^2, {float(R*R)!r})^1.5"
+    r3 = f"maximum({w[0]}^2 + {w[1]}^2 + {w[2]}^2, {float((CORE*R)**2)!r})^1.5"
     return [f"{_n(R*R)}*{w[k]}/{r3}" for k in range(3)]
 
 

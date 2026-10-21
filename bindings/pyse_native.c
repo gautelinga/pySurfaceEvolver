@@ -180,8 +180,9 @@ int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
 /* ---- the flux gauge (constraints.sphere(gauge="flux"), _flux.py) ---------
  *
  * Its integrands sum over the spheres: on the facets, point sources
- * R^2 (x - c)/|x - c|^3, (x - c)/R inside the sphere (bounded where no
- * liquid is: no jump at the centre); on each wall's contact lines, monopole potentials
+ * R^2 (x - c)/|x - c|^3, R^2 (x - c)/K^3 inside a cap of radius K =
+ * FLUX_CORE R (bounded where no liquid is: no jump at the centre); on each
+ * wall's contact lines, monopole potentials
  * R^2 (d x w)/(r (r - d . w)), w = x - c; each term times -k (the wetting
  * energy, k = tension cos(max(angle, pyse_angle_floor)) for angles under
  * ANGLE_FLOOR_TOP, else tension cos(angle)) or -R/3 (the volume). Plus the
@@ -192,9 +193,11 @@ int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
 #define FLUX_FIELDS 512
 #define FLUX_TERMS 64
 #define FLUX_FLOOR_TOP 20.0       /* constraints.ANGLE_FLOOR_TOP */
+#define FLUX_CORE 0.5             /* _flux.CORE: the field's cap radius, of R */
 
 struct flux_term
 { REAL c[3], R2, d[3];           /* d zero: a point source */
+  REAL K2, K3;                   /* the cap's radius (FLUX_CORE R) squared, cubed */
   int energy;                    /* -k R^2 (else -R/3 R^2) */
   REAL angle, tension, R;
   REAL coef;                     /* the coefficient with the floor below the angle */
@@ -293,6 +296,7 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
     struct flux_term *u = f->term + i;
     for ( k = 0 ; k < 3 ; k++ ) { u->c[k] = t[k]; u->d[k] = t[4+k]; }
     u->R = t[3]; u->R2 = t[3]*t[3];
+    u->K2 = FLUX_CORE*FLUX_CORE*u->R2; u->K3 = u->K2*FLUX_CORE*u->R;
     u->energy = t[7] != 0;
     u->angle = t[8]; u->tension = t[9];
     u->coef = u->energy ? -u->tension*cos(u->angle*M_PI/180.0)*u->R2 : -u->R/3.0*u->R2;
@@ -302,8 +306,8 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
   { struct flux_term *u = f->term + i;
     if ( u->d[0] != 0 || u->d[1] != 0 || u->d[2] != 0 ) f->points = 0;
     for ( k = 0 ; k < 3 ; k++ ) f->pc[k][i] = u->c[k];
-    f->pR2[i] = u->R2;
-    f->pR3[i] = u->R2*u->R;
+    f->pR2[i] = u->K2;
+    f->pR3[i] = u->K3;
   }
   return 1;
 }
@@ -396,7 +400,7 @@ static void flux_points(const struct flux_field *f, const REAL *x, int order, RE
   flux_inv(n,r2,coef,f->pR2,f->pR3,order,ir3,ir5);
   for ( t = 0 ; t < n ; t++ )
   { REAL a = ir3[t];
-    if ( r2[t] < f->pR2[t] )           /* inside: coef (x - c)/R^3 */
+    if ( r2[t] < f->pR2[t] )           /* inside the cap: coef (x - c)/K^3 */
     { for ( m = 0 ; m < 3 ; m++ )
       { v[m] += X[m][t]*a;
         if ( order ) g[m][m] += a;
@@ -464,8 +468,8 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
       for ( m = 0 ; m < 3 ; m++ ) X[m] = x[m] - u->c[m];
       r2 = X[0]*X[0] + X[1]*X[1] + X[2]*X[2];
       r = sqrt(r2);
-      if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 && r2 < u->R2 )
-      { REAL ir3 = coef/(u->R2*u->R);      /* inside: coef (x - c)/R^3 */
+      if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 && r2 < u->K2 )
+      { REAL ir3 = coef/u->K3;             /* inside the cap: coef (x - c)/K^3 */
         for ( m = 0 ; m < 3 ; m++ )
         { v[m] += X[m]*ir3;
           if ( order ) g[m][m] += ir3;
@@ -594,7 +598,7 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
     for ( m = 0 ; m < 3 ; m++ ) X[m] = d_lin(ex[m],-u->c[m],x);
     r2 = d_add(d_add(d_mul(X[0],X[0]),d_mul(X[1],X[1])),d_mul(X[2],X[2]));
     if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 )
-    { dual inv = r2.v < u->R2 ? d_const(coef/(u->R2*u->R))   /* inside: (x - c)/R^3 */
+    { dual inv = r2.v < u->K2 ? d_const(coef/u->K3)   /* inside the cap: (x - c)/K^3 */
                               : d_scale(d_pow(r2,-1.5),coef);   /* coef (x - c)/r^3 */
       for ( m = 0 ; m < 3 ; m++ ) out[m] = d_add(out[m],d_mul(X[m],inv));
     }

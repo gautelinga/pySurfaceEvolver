@@ -1151,6 +1151,24 @@ def test_a_surface_through_a_flux_sphere_has_no_jump_at_its_centre():
     assert np.abs(np.diff(V)).max() < 0.05          # (a jump: 4 pi/3 = 4.2)
 
 
+
+def test_the_flux_field_is_smooth_through_the_sphere():
+    # (capped at the sphere itself, the field's kink sat on the contact lines,
+    # where a chord's facets dip into the sphere: their quadrature points
+    # either side of it, Newton's quadratic model failed there, and 8 of 18
+    # 4-bead packs' descents never settled; the cap is now deep inside)
+    ev = _drop_on_ball_flux()
+    x = ev.vertices
+    top = int(np.argmax(x[:, 2]))
+    energy = []
+    for z in np.linspace(1.0, 0.85, 151):      # (its facets' points through r = 1)
+        y = x.copy()
+        y[top] = [0, 0, z]
+        ev.vertices = y
+        energy.append(ev.energy)
+    d2 = np.abs(np.diff(energy, 2))
+    assert d2.max() < 5*np.median(d2)               # (59 times, capped at R)
+
 def test_the_flux_gauge_in_c_is_the_datafiles():
     # (the integrands evaluated natively, inside the sphere too, against
     # Evolver's interpreter of the datafile's expressions)
