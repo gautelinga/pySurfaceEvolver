@@ -1095,3 +1095,70 @@ def test_a_footprint_under_a_dome_is_told_from_a_sheets():
             a, b = mid[np.argmax(x[mid, 1])], mid[np.argmin(x[mid, 1])]
         h = float(np.median(m.edge_lengths()))
         assert _surgery._domed(m, x, int(a), int(b), on, h) is domed
+
+
+# ---- the flux gauge (constraints.sphere(gauge="flux")) ---------------------------
+
+def _drop_on_ball_flux():
+    # _drop_on_ball's drop on a sphere with no pole: its wetted area the flux
+    # of the sphere's point source through the drop
+    cap = shapes.cap(0.5, 0.25, nr=5, nt=18)
+    v = cap.vertices + [0, 0, 1.0]
+    rim = np.asarray(cap.rims["rim"])
+    v[rim] /= np.linalg.norm(v[rim], axis=1)[:, None]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, cap.faces,
+                   constraints={"ball": C.sphere((0, 0, 0), 1.0, contact_angle=60.0, gauge="flux")},
+                   vertex_constraints={"ball": rim}, bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.relax()
+    return ev
+
+
+def test_a_drop_on_a_flux_sphere_is_the_exact_cap():
+    # (refined, its pressure 1.3%, 0.32%, 0.08% off: second order)
+    ev = _drop_on_ball_flux()
+    ev.refine()
+    ev.relax()
+    V = ev.body(1).volume
+    assert V == pytest.approx(ev.body(1).target, rel=1e-8)
+    assert ev.body(1).pressure == pytest.approx(_cap_on_sphere(V, 60.0), rel=5e-3)
+
+
+def _vertex_through_the_ball(ev, n=41, vid=None):
+    """The energies and volumes with the drop's top vertex (or vertex vid)
+    moved down the z axis through the sphere's centre, to z = -0.5."""
+    if vid is None:
+        m = ev.mesh()
+        vid = int(m.vertex_ids[int(np.argmax(np.asarray(m.vertices)[:, 2]))])
+    out = []
+    for z in np.linspace(0.5, -0.5, n):
+        ev.command(f"set vertex[{vid}] x 0; set vertex[{vid}] y 0; set vertex[{vid}] z {z!r}; recalc")
+        out.append((ev.energy, ev.body(1).volume))
+    return np.asarray(out)
+
+
+def test_a_surface_through_a_flux_sphere_has_no_jump_at_its_centre():
+    # (inside the sphere, where liquid never is, the field is bounded: a
+    # surface pushed across the centre changed the wetted area by 4 pi R^2,
+    # Evolver's line search found the jump, and a pack's descent ran away)
+    ev = _drop_on_ball_flux()
+    E, V = _vertex_through_the_ball(ev).T
+    assert np.abs(np.diff(E)).max() < 0.2           # (a jump: 4 pi cos 60 = 6.3)
+    assert np.abs(np.diff(V)).max() < 0.05          # (a jump: 4 pi/3 = 4.2)
+
+
+def test_the_flux_gauge_in_c_is_the_datafiles():
+    # (the integrands evaluated natively, inside the sphere too, against
+    # Evolver's interpreter of the datafile's expressions)
+    from pysurfaceevolver import _core
+    ev = _drop_on_ball_flux()
+    m = ev.mesh()
+    vid = int(m.vertex_ids[int(np.argmax(np.asarray(m.vertices)[:, 2]))])
+    native = _vertex_through_the_ball(ev, n=9, vid=vid)
+    _core.native_enable(False)
+    try:
+        interpreted = _vertex_through_the_ball(ev, n=9, vid=vid)
+    finally:
+        _core.native_enable(True)
+    assert np.allclose(native, interpreted, rtol=1e-10, atol=1e-10)

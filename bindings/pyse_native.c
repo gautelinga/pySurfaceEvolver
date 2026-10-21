@@ -180,7 +180,8 @@ int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
 /* ---- the flux gauge (constraints.sphere(gauge="flux"), _flux.py) ---------
  *
  * Its integrands sum over the spheres: on the facets, point sources
- * R^2 (x - c)/|x - c|^3; on each wall's contact lines, monopole potentials
+ * R^2 (x - c)/|x - c|^3, (x - c)/R inside the sphere (bounded where no
+ * liquid is: no jump at the centre); on each wall's contact lines, monopole potentials
  * R^2 (d x w)/(r (r - d . w)), w = x - c; each term times -k (the wetting
  * energy, k = tension cos(max(angle, pyse_angle_floor)) for angles under
  * ANGLE_FLOOR_TOP, else tension cos(angle)) or -R/3 (the volume). Plus the
@@ -312,7 +313,14 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
       for ( m = 0 ; m < 3 ; m++ ) X[m] = x[m] - u->c[m];
       r2 = X[0]*X[0] + X[1]*X[1] + X[2]*X[2];
       r = sqrt(r2);
-      if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 )
+      if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 && r2 < u->R2 )
+      { REAL ir3 = coef/(u->R2*u->R);      /* inside: coef (x - c)/R^3 */
+        for ( m = 0 ; m < 3 ; m++ )
+        { v[m] += X[m]*ir3;
+          if ( order ) g[m][m] += ir3;
+        }
+      }
+      else if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 )
       { REAL ir3 = coef/(r2*r), ir5 = 3.0*ir3/r2;
         for ( m = 0 ; m < 3 ; m++ )
         { v[m] += X[m]*ir3;
@@ -355,7 +363,8 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
     for ( m = 0 ; m < 3 ; m++ ) X[m] = d_lin(ex[m],-u->c[m],x);
     r2 = d_add(d_add(d_mul(X[0],X[0]),d_mul(X[1],X[1])),d_mul(X[2],X[2]));
     if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 )
-    { dual inv = d_scale(d_pow(r2,-1.5),coef);         /* coef (x - c)/r^3 */
+    { dual inv = r2.v < u->R2 ? d_const(coef/(u->R2*u->R))   /* inside: (x - c)/R^3 */
+                              : d_scale(d_pow(r2,-1.5),coef);   /* coef (x - c)/r^3 */
       for ( m = 0 ; m < 3 ; m++ ) out[m] = d_add(out[m],d_mul(X[m],inv));
     }
     else
