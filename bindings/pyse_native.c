@@ -508,37 +508,60 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
                          + 15 a w_m w_i w_j/r^4;
        inside, F = coef w/R^3, linear. (The dual numbers, with pow, were a
        quarter of a 16-bead pack's Newton step.) */
-    REAL v[3] = {0,0,0}, g[3][3] = {{0,0,0},{0,0,0},{0,0,0}}, h[3][3][3];
-    memset(h,0,sizeof(h));
+    /* (F = -grad of a potential: d2F_m/dx_i dx_k is symmetric in all three
+       indices, ten components: 000 111 222, 001 002 110 112 220 221, 012) */
+    REAL v[3] = {0,0,0}, g[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
+    REAL h000 = 0, h111 = 0, h222 = 0, h001 = 0, h002 = 0, h110 = 0, h112 = 0,
+         h220 = 0, h221 = 0, h012 = 0;
     if ( f->base == 1 ) { v[2] = x[2]; g[2][2] = 1.0; }
     for ( t = 0 ; t < f->nterm ; t++ )
-    { REAL w[3], r2, coef = flux_coefficient(f->term + t,floor);
-      int k;
-      for ( m = 0 ; m < 3 ; m++ ) w[m] = x[m] - f->pc[m][t];
-      r2 = w[0]*w[0] + w[1]*w[1] + w[2]*w[2];
+    { REAL w0 = x[0] - f->pc[0][t], w1 = x[1] - f->pc[1][t], w2 = x[2] - f->pc[2][t];
+      REAL r2 = w0*w0 + w1*w1 + w2*w2, coef = flux_coefficient(f->term + t,floor);
+      REAL a, b, e;
       if ( r2 < f->pR2[t] )
-      { REAL a = coef/f->pR3[t];
-        for ( m = 0 ; m < 3 ; m++ ) { v[m] += w[m]*a; g[m][m] += a; }
+      { a = coef/f->pR3[t];
+        v[0] += w0*a; v[1] += w1*a; v[2] += w2*a;
+        g[0][0] += a; g[1][1] += a; g[2][2] += a;
         continue;
       }
-      { REAL a = coef/(r2*sqrt(r2)), b = 3.0*a/r2, e = 15.0*a/(r2*r2);
-        for ( m = 0 ; m < 3 ; m++ )
-        { v[m] += w[m]*a;
-          for ( i = 0 ; i < 3 ; i++ )
-          { g[m][i] += (m == i ? a : 0.0) - b*w[m]*w[i];
-            for ( k = 0 ; k < 3 ; k++ )
-              h[m][i][k] += -b*((m == i ? w[k] : 0.0) + (m == k ? w[i] : 0.0)
-                                + (i == k ? w[m] : 0.0)) + e*w[m]*w[i]*w[k];
-          }
-        }
-      }
+      a = coef/(r2*sqrt(r2)); b = 3.0*a/r2; e = 15.0*a/(r2*r2);
+      v[0] += w0*a; v[1] += w1*a; v[2] += w2*a;
+      g[0][0] += a - b*w0*w0; g[1][1] += a - b*w1*w1; g[2][2] += a - b*w2*w2;
+      g[0][1] -= b*w0*w1; g[0][2] -= b*w0*w2; g[1][2] -= b*w1*w2;
+      h000 += -3.0*b*w0 + e*w0*w0*w0;
+      h111 += -3.0*b*w1 + e*w1*w1*w1;
+      h222 += -3.0*b*w2 + e*w2*w2*w2;
+      h001 += -b*w1 + e*w0*w0*w1;
+      h002 += -b*w2 + e*w0*w0*w2;
+      h110 += -b*w0 + e*w1*w1*w0;
+      h112 += -b*w2 + e*w1*w1*w2;
+      h220 += -b*w0 + e*w2*w2*w0;
+      h221 += -b*w1 + e*w2*w2*w1;
+      h012 += e*w0*w1*w2;
     }
+    g[1][0] = g[0][1]; g[2][0] = g[0][2]; g[2][1] = g[1][2];
     for ( m = 0 ; m < 3 ; m++ )
     { val[m] = v[m];
-      for ( i = 0 ; i < 3 ; i++ )
-      { d[m][i] = g[m][i];
-        for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = h[m][i][j];
-      }
+      for ( i = 0 ; i < 3 ; i++ ) d[m][i] = g[m][i];
+    }
+    { REAL h[3][3][3];
+      int k;
+      for ( m = 0 ; m < 3 ; m++ )
+        for ( i = 0 ; i < 3 ; i++ )
+          for ( k = 0 ; k < 3 ; k++ )
+          { int n0 = (m == 0) + (i == 0) + (k == 0), n1 = (m == 1) + (i == 1) + (k == 1);
+            int n2 = 3 - n0 - n1;
+            REAL c;
+            if ( n0 == 3 ) c = h000; else if ( n1 == 3 ) c = h111; else if ( n2 == 3 ) c = h222;
+            else if ( n0 == 2 ) c = n1 ? h001 : h002;
+            else if ( n1 == 2 ) c = n0 ? h110 : h112;
+            else if ( n2 == 2 ) c = n0 ? h220 : h221;
+            else c = h012;
+            h[m][i][k] = c;
+          }
+      for ( m = 0 ; m < 3 ; m++ )
+        for ( i = 0 ; i < 3 ; i++ )
+          for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = h[m][i][j];
     }
     return 1;
   }
