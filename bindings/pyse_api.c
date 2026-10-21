@@ -2132,7 +2132,11 @@ static void snapshot_take_body(void *arg)
       size_t bytes = (size_t)src->count*t->size;
       t->blocks[b].start_ord = src->start_ord;
       t->blocks[b].count = src->count;
-      t->blocks[b].blockptr = (struct element *)snap_alloc(bytes,1);
+      /* (not zeroed first, copied over whole: the zeroing was a quarter
+         of a snapshot's time) */
+      t->blocks[b].blockptr = (struct element *)malloc(bytes ? bytes : 1);
+      if ( !t->blocks[b].blockptr )
+        kb_error(PYSE_ERR_BAD_ARGUMENT,"Out of memory for a snapshot.\n",RECOVERABLE);
       t->nblocks = b + 1;
       memcpy(t->blocks[b].blockptr,src->blockptr,bytes);
     }

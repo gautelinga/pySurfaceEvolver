@@ -56,11 +56,32 @@ static void push(struct ids *l, element_id id)
   l->a[l->n++] = id;
 }
 
-struct grid { REAL lo[3], cell; int n[3]; long *start, *items, total; int built; };
+/* an element in a grid's cell: its ordinal and a box round it (where it
+   was put in, padded: it stays inside while the element is unchanged, so a
+   query passes over most candidates by these without going to the element,
+   whose facetedges' pointer-chasing was a third of a remesh's time) */
+struct gitem { float lo[3], hi[3]; int ord; };
 
-/* elements made or changed since a grid was built, by its cells: per cell
-   a list through next (head: its first entry, -1 none) */
-struct xgrid { long *head, *next; element_id *id; long n, max, ncells; };
+/* elements by the cells of side cell their boxes are in, the cells kept by
+   a hash of their numbers (only those with something in them: a dense
+   array of the box's cells, capped at 128 a side, was mostly empty and
+   cleared at every build, and at 50k facets its cells grew past h, each
+   query's candidates with them). Per cell, the items put in when the grid
+   was built and a list (through xnext, from xhead, -1 none) of those of
+   elements made or changed since. */
+struct grid
+{ REAL lo[3], cell;
+  long n[3];
+  long cap, used, *key, *bstart, *xhead;    /* cells by hash: key -1, an empty slot */
+  int *bcount;
+  struct gitem *items, *xitems;
+  long total, *xnext, xn, xmax;
+  int built;
+};
+
+/* the edges and facets of a patch before an edit (each with its
+   vertices and where they were), to tell after it which it changed */
+struct sig { element_id id, v[3]; REAL x[9]; };
 
 struct ctx
 { const int *walls, *sides;
@@ -71,13 +92,22 @@ struct ctx
   int *stamp[NUMELEMENTS];
   long stamp_size[NUMELEMENTS];
   int stamp_now;
-  struct grid fgrid, egrid;        /* facets and edges where the batch began */
-  struct xgrid xf, xe;             /* facets and edges made or changed since */
+  struct grid fgrid, egrid;        /* facets and edges */
+  REAL pad;                        /* the grids' boxes padded by this */
+  int epoch;                       /* the grids' builds */
+  int *moved;                      /* per vertex: the build it was smoothed in */
+  long moved_size;
+  struct sig *sigs;                /* the patch before the edit: see before() */
+  int nsigs, maxsigs, sig_now;
+  int *sig_at[NUMELEMENTS];        /* per edge, facet: its sig + 1 when sig_now's */
+  int *sig_ep[NUMELEMENTS];
+  long sig_size[NUMELEMENTS];
   REAL *gaps;                      /* per vertex and wall: x, y, z, the gap there */
   long gaps_size;                  /* vertex ordinals it has room for */
   REAL box_lo[3], box_hi[3];
   int clean;                       /* no crossings when the remesh began: see patch() */
   int in_cells;                    /* a smoothing batch: its moves leave elements in their cells */
+  int readd;                       /* this move doesn't: its elements put in again */
 };
 
 /* a fresh mark for this pass; 1 if id wasn't marked yet */
@@ -269,103 +299,170 @@ static void elem_box(element_id id, REAL *lo, REAL *hi, REAL pad)
   for ( d = 0 ; d < 3 ; d++ ) { lo[d] -= pad; hi[d] += pad; }
 }
 
-static void cells(struct ctx *c, struct grid *g, const REAL *lo, const REAL *hi, int *a, int *b)
+/* the cells a box is in (those past the grid's box: its last) */
+static void cells(struct grid *g, const REAL *lo, const REAL *hi, long *a, long *b)
 { int d;
-  (void)c;
   for ( d = 0 ; d < 3 ; d++ )
-  { a[d] = (int)floor((lo[d] - g->lo[d])/g->cell);
-    b[d] = (int)floor((hi[d] - g->lo[d])/g->cell);
-    if ( a[d] < 0 ) a[d] = 0;
-    if ( b[d] < 0 ) b[d] = 0;
-    if ( a[d] > g->n[d] - 1 ) a[d] = g->n[d] - 1;
-    if ( b[d] > g->n[d] - 1 ) b[d] = g->n[d] - 1;
+  { REAL s = floor((lo[d] - g->lo[d])/g->cell), t = floor((hi[d] - g->lo[d])/g->cell);
+    a[d] = !(s > 0) ? 0 : s > g->n[d] - 1 ? g->n[d] - 1 : (long)s;
+    b[d] = !(t > 0) ? 0 : t > g->n[d] - 1 ? g->n[d] - 1 : (long)t;
   }
 }
 
-#define CELL(g,i,j,k) (((long)(k)*(g)->n[1] + (j))*(g)->n[0] + (i))
+#define CELL(g,i,j,k) (((k)*(g)->n[1] + (j))*(g)->n[0] + (i))
 
-/* elements' boxes padded by half an edge: a vertex smoothed by at most a
-   quarter edge in the batch leaves its elements in their cells */
+/* cell key's slot, or the empty one where it would go */
+static long slot_probe(const struct grid *g, long key)
+{ unsigned long u = (unsigned long)key*0x9E3779B97F4A7C15UL;
+  long m = g->cap - 1, s = (long)((u ^ (u >> 32)) & (unsigned long)m);
+  while ( g->key[s] >= 0 && g->key[s] != key ) s = (s + 1) & m;
+  return s;
+}
+
+static void slots_alloc(struct grid *g, long cap)
+{ long i;
+  g->cap = cap;
+  g->used = 0;
+  g->key = (long *)temp_calloc(cap,sizeof(long));
+  g->bstart = (long *)temp_calloc(cap,sizeof(long));
+  g->xhead = (long *)temp_calloc(cap,sizeof(long));
+  g->bcount = (int *)temp_calloc(cap,sizeof(int));
+  for ( i = 0 ; i < cap ; i++ ) g->key[i] = g->xhead[i] = -1;
+}
+
+static void slots_free(struct grid *g)
+{ temp_free((char *)g->key); temp_free((char *)g->bstart);
+  temp_free((char *)g->xhead); temp_free((char *)g->bcount);
+}
+
+/* cell key's slot, made if it has none (the slots twice as many once half
+   are used) */
+static long slot_add(struct grid *g, long key)
+{ long s = slot_probe(g,key);
+  if ( g->key[s] == key ) return s;
+  if ( 2*(g->used + 1) > g->cap )
+  { struct grid old = *g;
+    long i;
+    slots_alloc(g,2*old.cap);
+    for ( i = 0 ; i < old.cap ; i++ )
+      if ( old.key[i] >= 0 )
+      { long t = slot_probe(g,old.key[i]);
+        g->key[t] = old.key[i]; g->bstart[t] = old.bstart[i];
+        g->bcount[t] = old.bcount[i]; g->xhead[t] = old.xhead[i];
+        g->used++;
+      }
+    slots_free(&old);
+    s = slot_probe(g,key);
+  }
+  g->key[s] = key;
+  g->bstart[s] = 0; g->bcount[s] = 0; g->xhead[s] = -1;
+  g->used++;
+  return s;
+}
+
+/* floats round a double from below and above */
+static float below(REAL x) { float f = (float)x; return (REAL)f > x ? nextafterf(f,-HUGE_VALF) : f; }
+static float above(REAL x) { float f = (float)x; return (REAL)f < x ? nextafterf(f,HUGE_VALF) : f; }
+
+static void item_of(struct gitem *it, element_id id, const REAL *lo, const REAL *hi)
+{ int d;
+  it->ord = ordinal(id);
+  for ( d = 0 ; d < 3 ; d++ ) { it->lo[d] = below(lo[d]); it->hi[d] = above(hi[d]); }
+}
+
+/* whether a box is further than tol from an item's (so from its element's) */
+static int apart(const struct gitem *it, const REAL *lo, const REAL *hi, REAL tol)
+{ return hi[0] < it->lo[0] - tol || lo[0] > it->hi[0] + tol
+      || hi[1] < it->lo[1] - tol || lo[1] > it->hi[1] + tol
+      || hi[2] < it->lo[2] - tol || lo[2] > it->hi[2] + tol;
+}
+
+/* the grids' padding: c->pad, and 1e-6 h more (the crossing tests' boxes
+   are 1e-9 h apart at most: none is missed across a cell's side) */
+static REAL grid_pad(struct ctx *c) { return c->pad + 1e-6*c->h; }
+
 static void grid_build(struct ctx *c, struct grid *g, int type)
 { element_id id;
-  long ncells, total = 0, i, *fill;
-  int a[3], b[3], d, x, y, z;
-  REAL lo[3], hi[3];
-  if ( g->built ) { temp_free((char *)g->start); temp_free((char *)g->items); }
+  long nt = 0, mt = 0, *tkey = NULL, i, s, run, cap, a[3], b[3], x, y, z;
+  struct gitem *tit = NULL, it;
+  REAL lo[3], hi[3], pad = grid_pad(c);
+  int d;
+  if ( g->built )
+  { slots_free(g);
+    temp_free((char *)g->items);
+    if ( g->xitems ) { temp_free((char *)g->xitems); temp_free((char *)g->xnext); }
+  }
+  memset(g,0,sizeof(*g));
   for ( d = 0 ; d < 3 ; d++ ) g->lo[d] = c->box_lo[d];
   g->cell = c->h;      /* (2 h: twice the candidates a query) */
   for ( d = 0 ; d < 3 ; d++ )
   { double n = floor((c->box_hi[d] - c->box_lo[d])/g->cell) + 1;
-    g->n[d] = n > 128 ? 128 : (int)n;
+    g->n[d] = n > 1024 ? 1024 : (long)n;
   }
   for ( d = 0 ; d < 3 ; d++ )
     if ( (c->box_hi[d] - c->box_lo[d])/g->n[d] > g->cell )
       g->cell = (c->box_hi[d] - c->box_lo[d])/g->n[d]*1.0000001;
-  ncells = (long)g->n[0]*g->n[1]*g->n[2];
-  g->start = (long *)temp_calloc(ncells + 1,sizeof(long));
+  for ( cap = 64 ; cap < 2*web.skel[type].count ; cap *= 2 ) ;
+  slots_alloc(g,cap);
+  /* (each element's box once: the cells' keys and its item, in turn) */
   for ( id = web.skel[type].used ; valid_id(id) ; id = elptr(id)->forechain )
   { if ( !(elptr(id)->attr & ALLOCATED) ) continue;
-    if ( type == EDGE || valid_id(get_facet_fe(id)) )
-    { elem_box(id,lo,hi,c->h/2);
-      cells(c,g,lo,hi,a,b);
-      for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
-        for ( x = a[0] ; x <= b[0] ; x++ ) { g->start[CELL(g,x,y,z) + 1]++; total++; }
-    }
-  }
-  for ( i = 0 ; i < ncells ; i++ ) g->start[i+1] += g->start[i];
-  g->total = total;
-  g->items = (long *)temp_calloc(total ? total : 1,sizeof(long));
-  fill = (long *)temp_calloc(ncells,sizeof(long));
-  for ( id = web.skel[type].used ; valid_id(id) ; id = elptr(id)->forechain )
-  { if ( !(elptr(id)->attr & ALLOCATED) ) continue;
-    if ( type == EDGE || valid_id(get_facet_fe(id)) )
-    { elem_box(id,lo,hi,c->h/2);
-      cells(c,g,lo,hi,a,b);
-      for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
-        for ( x = a[0] ; x <= b[0] ; x++ )
-        { i = CELL(g,x,y,z);
-          g->items[g->start[i] + fill[i]++] = ordinal(id);
+    if ( type == FACET && !valid_id(get_facet_fe(id)) ) continue;
+    elem_box(id,lo,hi,pad);
+    item_of(&it,id,lo,hi);
+    cells(g,lo,hi,a,b);
+    for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
+      for ( x = a[0] ; x <= b[0] ; x++ )
+      { if ( nt == mt )
+        { mt = mt ? 2*mt : 4096;
+          tkey = tkey ? (long *)temp_realloc((char *)tkey,mt*sizeof(long))
+                      : (long *)temp_calloc(mt,sizeof(long));
+          tit = tit ? (struct gitem *)temp_realloc((char *)tit,mt*sizeof(struct gitem))
+                    : (struct gitem *)temp_calloc(mt,sizeof(struct gitem));
         }
-    }
+        tkey[nt] = CELL(g,x,y,z);
+        tit[nt++] = it;
+        s = slot_add(g,tkey[nt-1]);       /* (it may move the slots) */
+        g->bcount[s]++;
+      }
   }
-  temp_free((char *)fill);
+  for ( s = 0, run = 0 ; s < g->cap ; s++ )
+    if ( g->key[s] >= 0 ) { g->bstart[s] = run; run += g->bcount[s]; g->bcount[s] = 0; }
+  g->items = (struct gitem *)temp_calloc(nt ? nt : 1,sizeof(struct gitem));
+  for ( i = 0 ; i < nt ; i++ )
+  { s = slot_probe(g,tkey[i]);
+    g->items[g->bstart[s] + g->bcount[s]++] = tit[i];
+  }
+  if ( tkey ) { temp_free((char *)tkey); temp_free((char *)tit); }
+  g->total = nt;
   g->built = 1;
 }
 
 #define XGRID_LIMIT (1L << 18)
 
-static void xgrid_reset(struct xgrid *x, struct grid *g)
-{ long ncells = (long)g->n[0]*g->n[1]*g->n[2], i;
-  if ( !x->head || x->ncells != ncells )
-  { if ( x->head ) temp_free((char *)x->head);
-    x->head = (long *)temp_calloc(ncells ? ncells : 1,sizeof(long));
-    x->ncells = ncells;
-  }
-  for ( i = 0 ; i < ncells ; i++ ) x->head[i] = -1;
-  x->n = 0;
-}
-
-static void xgrid_add(struct ctx *c, struct xgrid *x, struct grid *g, element_id id)
+static void xgrid_add(struct ctx *c, struct grid *g, element_id id)
 { REAL lo[3], hi[3];
-  int a[3], b[3], xx, y, z;
+  long a[3], b[3], x, y, z;
+  struct gitem it;
   if ( !valid_id(id) || !valid_element(id) ) return;
   if ( id_type(id) == FACET && !valid_id(get_facet_fe(id)) ) return;
-  elem_box(id,lo,hi,c->h/2);
-  cells(c,g,lo,hi,a,b);
+  elem_box(id,lo,hi,grid_pad(c));
+  item_of(&it,id,lo,hi);
+  cells(g,lo,hi,a,b);
   for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
-    for ( xx = a[0] ; xx <= b[0] ; xx++ )
-    { long cc = CELL(g,xx,y,z);
-      if ( x->n == x->max )
-      { long m = x->max ? 2*x->max : 1024;
-        x->next = x->next ? (long *)temp_realloc((char *)x->next,m*sizeof(long))
-                          : (long *)temp_calloc(m,sizeof(long));
-        x->id = x->id ? (element_id *)temp_realloc((char *)x->id,m*sizeof(element_id))
-                      : (element_id *)temp_calloc(m,sizeof(element_id));
-        x->max = m;
+    for ( x = a[0] ; x <= b[0] ; x++ )
+    { long s = slot_add(g,CELL(g,x,y,z));
+      if ( g->xn == g->xmax )
+      { long m = g->xmax ? 2*g->xmax : 1024;
+        g->xnext = g->xnext ? (long *)temp_realloc((char *)g->xnext,m*sizeof(long))
+                            : (long *)temp_calloc(m,sizeof(long));
+        g->xitems = g->xitems ? (struct gitem *)temp_realloc((char *)g->xitems,m*sizeof(struct gitem))
+                              : (struct gitem *)temp_calloc(m,sizeof(struct gitem));
+        g->xmax = m;
       }
-      x->id[x->n] = positive_id(id);
-      x->next[x->n] = x->head[cc];
-      x->head[cc] = x->n++;
+      g->xitems[g->xn] = it;
+      g->xnext[g->xn] = g->xhead[s];
+      g->xhead[s] = g->xn++;
     }
 }
 
@@ -381,10 +478,9 @@ static void grids_build(struct ctx *c)
     first = 0;
   }
   if ( first ) for ( d = 0 ; d < 3 ; d++ ) c->box_lo[d] = c->box_hi[d] = 0;
+  c->epoch++;
   grid_build(c,&c->fgrid,FACET);
   grid_build(c,&c->egrid,EDGE);
-  xgrid_reset(&c->xf,&c->fgrid);
-  xgrid_reset(&c->xe,&c->egrid);
 }
 
 /* elements an edit made or changed: in the cells their boxes are in now,
@@ -396,10 +492,74 @@ static void grids_build(struct ctx *c)
    first 100 of them 0.4) or many */
 static void changed(struct ctx *c, struct ids *f, struct ids *e)
 { int i;
-  for ( i = 0 ; i < f->n ; i++ ) xgrid_add(c,&c->xf,&c->fgrid,f->a[i]);
-  for ( i = 0 ; i < e->n ; i++ ) xgrid_add(c,&c->xe,&c->egrid,e->a[i]);
-  if ( c->xf.n + c->xe.n > XGRID_LIMIT
-       || c->xf.n + c->xe.n > c->fgrid.total + c->egrid.total + 4096 ) grids_build(c);
+  for ( i = 0 ; i < f->n ; i++ ) xgrid_add(c,&c->fgrid,f->a[i]);
+  for ( i = 0 ; i < e->n ; i++ ) xgrid_add(c,&c->egrid,e->a[i]);
+  if ( c->fgrid.xn + c->egrid.xn > XGRID_LIMIT
+       || c->fgrid.xn + c->egrid.xn > c->fgrid.total + c->egrid.total + 4096 ) grids_build(c);
+}
+
+/* ---- what an edit changed ------------------------------------------------ */
+
+static void sig_of(element_id id, struct sig *s)
+{ vertex_id v[3];
+  int k, n;
+  s->id = positive_id(id);
+  if ( id_type(id) == EDGE ) { v[0] = get_edge_tailv(id); v[1] = get_edge_headv(id); n = 2; }
+  else { facet_verts(id,v); n = 3; }
+  for ( k = 0 ; k < 3 ; k++ )
+  { REAL *x = k < n ? get_coord(v[k]) : NULL;
+    s->v[k] = k < n ? v[k] : NULLID;
+    s->x[3*k] = x ? x[0] : 0; s->x[3*k+1] = x ? x[1] : 0; s->x[3*k+2] = x ? x[2] : 0;
+  }
+}
+
+/* the edges and facets of the patch before an edit, as they are */
+static void sigs_record(struct ctx *c, struct ids *E, struct ids *F)
+{ int i, j;
+  c->sig_now++;
+  c->nsigs = 0;
+  for ( j = 0 ; j < 2 ; j++ )
+  { struct ids *l = j ? F : E;
+    for ( i = 0 ; i < l->n ; i++ )
+    { element_id id = l->a[i];
+      int type = id_type(id);
+      long ord = ordinal(id), k;
+      if ( ord < 0 ) continue;
+      if ( ord >= c->sig_size[type] )
+      { long m = 2*ord + 64;
+        c->sig_at[type] = c->sig_at[type] ? (int *)temp_realloc((char *)c->sig_at[type],m*sizeof(int))
+                                          : (int *)temp_calloc(m,sizeof(int));
+        c->sig_ep[type] = c->sig_ep[type] ? (int *)temp_realloc((char *)c->sig_ep[type],m*sizeof(int))
+                                          : (int *)temp_calloc(m,sizeof(int));
+        for ( k = c->sig_size[type] ; k < m ; k++ ) c->sig_ep[type][k] = 0;
+        c->sig_size[type] = m;
+      }
+      if ( c->nsigs == c->maxsigs )
+      { int m = c->maxsigs ? 2*c->maxsigs : 256;
+        c->sigs = c->sigs ? (struct sig *)temp_realloc((char *)c->sigs,m*sizeof(struct sig))
+                          : (struct sig *)temp_calloc(m,sizeof(struct sig));
+        c->maxsigs = m;
+      }
+      sig_of(id,&c->sigs[c->nsigs]);
+      c->sig_ep[type][ord] = c->sig_now;
+      c->sig_at[type][ord] = c->nsigs++;
+    }
+  }
+}
+
+/* whether id is as it was before the edit: in the patch then, on the
+   same vertices, they where they were (what a crossing test looks at) */
+static int unchanged(struct ctx *c, element_id id)
+{ int type = id_type(id), k;
+  long ord = ordinal(id);
+  struct sig now, *was;
+  if ( ord < 0 || ord >= c->sig_size[type] || c->sig_ep[type][ord] != c->sig_now ) return 0;
+  was = &c->sigs[c->sig_at[type][ord]];
+  sig_of(id,&now);
+  if ( !equal_id(was->id,now.id) ) return 0;
+  for ( k = 0 ; k < 3 ; k++ ) if ( !equal_id(was->v[k],now.v[k]) ) return 0;
+  for ( k = 0 ; k < 9 ; k++ ) if ( !(was->x[k] == now.x[k]) ) return 0;
+  return 1;
 }
 
 /* ---- the patch's problems ----------------------------------------------- */
@@ -457,29 +617,33 @@ static int pair_crosses(struct ctx *c, edge_id e, facet_id f)
   return pyse_crosses(p,q,a,b,w,1e-12*c->h*c->h*c->h);
 }
 
+/* candidate it against id: not past its item's box, not seen yet */
+static int candidate(struct ctx *c, element_id id, int other, const struct gitem *it,
+                     const REAL *lo, const REAL *hi)
+{ element_id o;
+  if ( apart(it,lo,hi,1e-9*c->h) ) return 0;
+  o = get_ordinal_id(other,it->ord);
+  if ( !mark(c,o) ) return 0;
+  return other == FACET ? pair_crosses(c,id,o) : pair_crosses(c,o,id);
+}
+
 static int crossings_of(struct ctx *c, element_id id, struct ids *near)
 { struct grid *g = id_type(id) == EDGE ? &c->fgrid : &c->egrid;
-  struct xgrid *extra = id_type(id) == EDGE ? &c->xf : &c->xe;
   int other = id_type(id) == EDGE ? FACET : EDGE;
   REAL lo[3], hi[3];
-  int a[3], b[3], x, y, z, i, n = 0;
-  long k;
+  long a[3], b[3], x, y, z, k;
+  int i, n = 0;
   elem_box(id,lo,hi,0.0);
-  cells(c,g,lo,hi,a,b);
+  cells(g,lo,hi,a,b);
   c->stamp_now++;
   for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
     for ( x = a[0] ; x <= b[0] ; x++ )
-    { long cc = CELL(g,x,y,z);
-      for ( k = g->start[cc] ; k < g->start[cc+1] ; k++ )
-      { element_id o = get_ordinal_id(other,g->items[k]);
-        if ( !mark(c,o) ) continue;
-        n += other == FACET ? pair_crosses(c,id,o) : pair_crosses(c,o,id);
-      }
-      for ( k = extra->head ? extra->head[cc] : -1 ; k >= 0 ; k = extra->next[k] )
-      { element_id o = extra->id[k];
-        if ( !mark(c,o) ) continue;
-        n += other == FACET ? pair_crosses(c,id,o) : pair_crosses(c,o,id);
-      }
+    { long s = slot_probe(g,CELL(g,x,y,z));
+      if ( g->key[s] < 0 ) continue;
+      for ( k = g->bstart[s] ; k < g->bstart[s] + g->bcount[s] ; k++ )
+        n += candidate(c,id,other,&g->items[k],lo,hi);
+      for ( k = g->xhead[s] ; k >= 0 ; k = g->xnext[k] )
+        n += candidate(c,id,other,&g->xitems[k],lo,hi);
     }
   for ( i = 0 ; i < near->n ; i++ )
     if ( mark(c,near->a[i]) )
@@ -565,29 +729,33 @@ static int lines_cross(edge_id e, edge_id o, REAL h, int far, REAL *mid)
 
 /* contact-line edges crossing contact-line edge e (from the edge grid and
    the changed lists, and near) */
+static int line_candidate(struct ctx *c, edge_id e, const struct gitem *it, const REAL *lo,
+                          const REAL *hi)
+{ REAL mid[MAXCOORD];
+  edge_id o;
+  if ( apart(it,lo,hi,1e-9*c->h) ) return 0;
+  o = get_ordinal_id(EDGE,it->ord);
+  if ( !mark(c,o) || equal_id(o,e) || !is_line(o) ) return 0;
+  return lines_cross(e,o,c->h,1,mid);
+}
+
 static int line_crossings_of(struct ctx *c, edge_id e, struct ids *near)
 { struct grid *g = &c->egrid;
-  struct xgrid *extra = &c->xe;
   REAL lo[3], hi[3], mid[MAXCOORD];
-  int a[3], b[3], x, y, z, i, n = 0;
-  long k;
+  long a[3], b[3], x, y, z, k;
+  int i, n = 0;
   if ( !is_line(e) ) return 0;
   elem_box(e,lo,hi,0.0);
-  cells(c,g,lo,hi,a,b);
+  cells(g,lo,hi,a,b);
   c->stamp_now++;
   for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
     for ( x = a[0] ; x <= b[0] ; x++ )
-    { long cc = CELL(g,x,y,z);
-      for ( k = g->start[cc] ; k < g->start[cc+1] ; k++ )
-      { edge_id o = get_ordinal_id(EDGE,g->items[k]);
-        if ( !mark(c,o) || equal_id(o,e) || !is_line(o) ) continue;
-        n += lines_cross(e,o,c->h,1,mid);
-      }
-      for ( k = extra->head ? extra->head[cc] : -1 ; k >= 0 ; k = extra->next[k] )
-      { edge_id o = extra->id[k];
-        if ( !mark(c,o) || equal_id(o,e) || !is_line(o) ) continue;
-        n += lines_cross(e,o,c->h,1,mid);
-      }
+    { long s = slot_probe(g,CELL(g,x,y,z));
+      if ( g->key[s] < 0 ) continue;
+      for ( k = g->bstart[s] ; k < g->bstart[s] + g->bcount[s] ; k++ )
+        n += line_candidate(c,e,&g->items[k],lo,hi);
+      for ( k = g->xhead[s] ; k >= 0 ; k = g->xnext[k] )
+        n += line_candidate(c,e,&g->xitems[k],lo,hi);
     }
   for ( i = 0 ; i < near->n ; i++ )
     if ( mark(c,near->a[i]) && !equal_id(near->a[i],e) && is_line(near->a[i]) )
@@ -595,11 +763,85 @@ static int line_crossings_of(struct ctx *c, edge_id e, struct ids *near)
   return n;
 }
 
-/* the patch round verts: its edges and facets (out, when wanted) and its
-   problems */
-static void patch(struct ctx *c, struct ids *verts, struct counts *k, struct ids *out_e,
-                  struct ids *out_f)
-{ struct ids E = {0,0,0}, F = {0,0,0};
+/* edge e's problems of structure, and its fold, into k */
+static void edge_problems(struct ctx *c, edge_id e, struct counts *k)
+{ facetedge_id fe0;
+  facet_id f[3];
+  int n = 0, w;
+  vertex_id t, hh;
+  t = get_edge_tailv(e); hh = get_edge_headv(e);
+  fe0 = get_edge_fe(e);
+  if ( !valid_id(fe0) ) { k->structure++; return; }
+  { facetedge_id fe = fe0;
+    do { if ( n < 3 ) f[n] = get_fe_facet(fe); n++; fe = get_next_facet(fe); }
+    while ( valid_id(fe) && !equal_id(fe,fe0) && n < 1000 );
+  }
+  if ( n > 2 ) { if ( c->manifold ) k->structure++; return; }
+  if ( n == 2 )
+  { int s1 = inverted(f[0]), s2 = inverted(f[1]);
+    body_id fr1 = get_facet_body(positive_id(f[0])), bk1 = get_facet_body(inverse_id(positive_id(f[0])));
+    body_id fr2 = get_facet_body(positive_id(f[1])), bk2 = get_facet_body(inverse_id(positive_id(f[1])));
+    int alike = equal_id(fr1,fr2) && equal_id(bk1,bk2);
+    int swapped = equal_id(fr1,bk2) && equal_id(bk1,fr2);
+    if ( (alike && s1 == s2) || (!alike && swapped && s1 != s2) ) k->structure++;
+    else if ( alike || swapped )
+    { REAL n1[3], n2[3], a1, a2, d;
+      pyse_facet_normal(positive_id(f[0]),n1,&a1);
+      pyse_facet_normal(positive_id(f[1]),n2,&a2);
+      d = dot3(n1,n2)/(4*a1*a2 + 1e-300);
+      if ( swapped && !alike ) d = -d;
+      if ( a1 > 0 && a2 > 0 && d < -0.95 ) k->fold++;
+    }
+    return;
+  }
+  { ATTR attr = get_eattr(e);
+    if ( !(attr & (CONSTRAINT|BOUNDARY|FIXED)) ) k->structure++;
+    if ( attr & CONSTRAINT )
+    { conmap_t *map = get_e_constraint_map(e);
+      unsigned int m;
+      for ( m = 1 ; m <= map[0] ; m++ )
+        if ( !v_on_constraint(t,(int)(map[m]&CONMASK)) || !v_on_constraint(hh,(int)(map[m]&CONMASK)) )
+          k->structure++;
+    }
+    for ( w = 0 ; w < c->nwalls ; w++ )
+      if ( e_on_constraint(e,c->walls[w]) && (inverted(f[0]) || (attr & NEGBOUNDARY)) )
+        k->structure++;
+  }
+}
+
+/* whether vertex v is in wall w's solid */
+static int vertex_solid(struct ctx *c, int w, vertex_id v)
+{ double side = c->sides[w] < 0 ? -1.0 : 1.0;
+  if ( !valid_element(v) || v_on_constraint(v,c->walls[w]) ) return 0;
+  return -side*vertex_gap(c,w,v) > c->tol*c->h;
+}
+
+/* whether edge e's middle is in wall w's solid */
+static int edge_solid(struct ctx *c, int w, edge_id e)
+{ int wc = c->walls[w], d;
+  double side = c->sides[w] < 0 ? -1.0 : 1.0, deep;
+  vertex_id t = get_edge_tailv(e), hh = get_edge_headv(e);
+  REAL *p = get_coord(t), *q = get_coord(hh), mid[3];
+  if ( v_on_constraint(t,wc) && v_on_constraint(hh,wc) ) return 0;
+  /* (the midpoint can't be in deeper than its ends by more than about
+     half the edge, the gap growing about as the distance does: with
+     twice that to spare, not evaluated) */
+  deep = -side*vertex_gap(c,w,t);
+  if ( -side*vertex_gap(c,w,hh) > deep ) deep = -side*vertex_gap(c,w,hh);
+  if ( deep + dist3(p,q) < c->tol*c->h ) return 0;
+  for ( d = 0 ; d < 3 ; d++ ) mid[d] = (p[d] + q[d])/2;
+  return -side*pyse_wall_gap(wc,mid) > c->tol*c->h;
+}
+
+/* a patch's stage: before an edit, after it, or only looked at */
+enum { PATCH_BEFORE, PATCH_AFTER, PATCH_CHECK };
+
+/* the patch round verts: its problems; before an edit, its edges and
+   facets as they are (sigs_record); after it, those it changed (in out_e,
+   out_f) */
+static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
+                  struct ids *out_e, struct ids *out_f)
+{ struct ids E = {0,0,0}, F = {0,0,0}, CE = {0,0,0}, CF = {0,0,0};
   int i, w, guard;
   edge_id e, e0;
   memset(k,0,sizeof(*k));
@@ -621,51 +863,7 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, struct ids
   }
 
   /* edges */
-  for ( i = 0 ; i < E.n ; i++ )
-  { facetedge_id fe0;
-    facet_id f[3];
-    int n = 0;
-    vertex_id t, hh;
-    e = E.a[i];
-    t = get_edge_tailv(e); hh = get_edge_headv(e);
-    fe0 = get_edge_fe(e);
-    if ( !valid_id(fe0) ) { k->structure++; continue; }
-    { facetedge_id fe = fe0;
-      do { if ( n < 3 ) f[n] = get_fe_facet(fe); n++; fe = get_next_facet(fe); }
-      while ( valid_id(fe) && !equal_id(fe,fe0) && n < 1000 );
-    }
-    if ( n > 2 ) { if ( c->manifold ) k->structure++; continue; }
-    if ( n == 2 )
-    { int s1 = inverted(f[0]), s2 = inverted(f[1]);
-      body_id fr1 = get_facet_body(positive_id(f[0])), bk1 = get_facet_body(inverse_id(positive_id(f[0])));
-      body_id fr2 = get_facet_body(positive_id(f[1])), bk2 = get_facet_body(inverse_id(positive_id(f[1])));
-      int alike = equal_id(fr1,fr2) && equal_id(bk1,bk2);
-      int swapped = equal_id(fr1,bk2) && equal_id(bk1,fr2);
-      if ( (alike && s1 == s2) || (!alike && swapped && s1 != s2) ) k->structure++;
-      else if ( alike || swapped )
-      { REAL n1[3], n2[3], a1, a2, d;
-        pyse_facet_normal(positive_id(f[0]),n1,&a1);
-        pyse_facet_normal(positive_id(f[1]),n2,&a2);
-        d = dot3(n1,n2)/(4*a1*a2 + 1e-300);
-        if ( swapped && !alike ) d = -d;
-        if ( a1 > 0 && a2 > 0 && d < -0.95 ) k->fold++;
-      }
-      continue;
-    }
-    { ATTR attr = get_eattr(e);
-      if ( !(attr & (CONSTRAINT|BOUNDARY|FIXED)) ) k->structure++;
-      if ( attr & CONSTRAINT )
-      { conmap_t *map = get_e_constraint_map(e);
-        unsigned int m;
-        for ( m = 1 ; m <= map[0] ; m++ )
-          if ( !v_on_constraint(t,(int)(map[m]&CONMASK)) || !v_on_constraint(hh,(int)(map[m]&CONMASK)) )
-            k->structure++;
-      }
-      for ( w = 0 ; w < c->nwalls ; w++ )
-        if ( e_on_constraint(e,c->walls[w]) && (inverted(f[0]) || (attr & NEGBOUNDARY)) )
-          k->structure++;
-    }
-  }
+  for ( i = 0 ; i < E.n ; i++ ) edge_problems(c,E.a[i],k);
 
   /* fans round each vertex */
   for ( i = 0 ; i < verts->n ; i++ )
@@ -711,48 +909,49 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, struct ids
 
   /* solids */
   for ( w = 0 ; w < c->nwalls ; w++ )
-  { int wc = c->walls[w];
-    double side = c->sides[w] < 0 ? -1.0 : 1.0;
-    for ( i = 0 ; i < verts->n ; i++ )
-    { vertex_id v = verts->a[i];
-      if ( !valid_element(v) || v_on_constraint(v,wc) ) continue;
-      if ( -side*vertex_gap(c,w,v) > c->tol*c->h ) k->solid++;
-    }
-    for ( i = 0 ; i < E.n ; i++ )
-    { vertex_id t = get_edge_tailv(E.a[i]), hh = get_edge_headv(E.a[i]);
-      REAL *p = get_coord(t), *q = get_coord(hh), mid[3];
-      double deep;
-      int d;
-      if ( v_on_constraint(t,wc) && v_on_constraint(hh,wc) ) continue;
-      /* (the midpoint can't be in deeper than its ends by more than about
-         half the edge, the gap growing about as the distance does: with
-         twice that to spare, not evaluated) */
-      deep = -side*vertex_gap(c,w,t);
-      if ( -side*vertex_gap(c,w,hh) > deep ) deep = -side*vertex_gap(c,w,hh);
-      if ( deep + dist3(p,q) < c->tol*c->h ) continue;
-      for ( d = 0 ; d < 3 ; d++ ) mid[d] = (p[d] + q[d])/2;
-      if ( -side*pyse_wall_gap(wc,mid) > c->tol*c->h ) k->solid++;
-    }
+  { for ( i = 0 ; i < verts->n ; i++ ) k->solid += vertex_solid(c,w,verts->a[i]);
+    for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solid(c,w,E.a[i]);
+  }
+
+  /* the elements the edit changed (all, without a record from before it) */
+  if ( stage == PATCH_AFTER )
+  { for ( i = 0 ; i < E.n ; i++ ) if ( !unchanged(c,E.a[i]) ) push(&CE,E.a[i]);
+    for ( i = 0 ; i < F.n ; i++ ) if ( !unchanged(c,F.a[i]) ) push(&CF,F.a[i]);
+    c->sig_now++;                    /* (the record used up) */
   }
 
   /* crossings: the patch's edges against facets, its facets against edges;
      and contact lines through each other (the patch's against all). Not
-     counted before an edit (out_e NULL: the counts compared with after)
-     where the remesh began with none on the whole surface: every edit kept
-     since lets no patch's count grow and changes nothing outside it, so
-     there are none to count (the counts before and after were half a
-     remeshing's time, 1.2 s on a 16-bead pack) */
-  if ( !(c->clean && !out_e) )
-  { for ( i = 0 ; i < E.n ; i++ ) k->crossing += crossings_of(c,E.a[i],&F);
-    for ( i = 0 ; i < F.n ; i++ ) k->crossing += crossings_of(c,F.a[i],&E);
+     counted before an edit (the counts compared with after) where the
+     remesh began with none on the whole surface: every edit kept since
+     lets no patch's count grow and changes nothing outside it, so there
+     are none to count (the counts before and after were half a remeshing's
+     time, 1.2 s on a 16-bead pack); and after it only the elements it
+     changed against all, the others' crossings being among those none
+     (a smoothing move changes its vertex's 12 of a patch's 60; the
+     patch's own lines still, whose crossings go by how near they are
+     along the lines, which an edit changes) */
+  if ( !(c->clean && stage != PATCH_AFTER) )
+  { int few = c->clean && stage == PATCH_AFTER && !far_only;
+    struct ids *QE = few ? &CE : &E, *QF = few ? &CF : &F;
+    for ( i = 0 ; i < QE->n ; i++ ) k->crossing += crossings_of(c,QE->a[i],&F);
+    for ( i = 0 ; i < QF->n ; i++ ) k->crossing += crossings_of(c,QF->a[i],&E);
     for ( i = 0 ; i < E.n ; i++ ) k->crossing += line_crossings_of(c,E.a[i],&E);
   }
 
-  if ( out_e ) for ( i = 0 ; i < E.n ; i++ ) push(out_e,E.a[i]);
-  if ( out_f ) for ( i = 0 ; i < F.n ; i++ ) push(out_f,F.a[i]);
+  if ( stage == PATCH_BEFORE ) sigs_record(c,&E,&F);
+  if ( out_e ) for ( i = 0 ; i < CE.n ; i++ ) push(out_e,CE.a[i]);
+  if ( out_f ) for ( i = 0 ; i < CF.n ; i++ ) push(out_f,CF.a[i]);
   if ( E.a ) temp_free((char *)E.a);
   if ( F.a ) temp_free((char *)F.a);
+  if ( CE.a ) temp_free((char *)CE.a);
+  if ( CF.a ) temp_free((char *)CF.a);
 }
+
+/* the patch round verts before an edit: its problems, and its elements
+   as they are, which after() tells the changed of */
+static void before(struct ctx *c, struct ids *verts, struct counts *was)
+{ patch(c,verts,was,PATCH_BEFORE,NULL,NULL); }
 
 /* PYSE_EDIT_* of the first count that grew (pinches may grow where allowed) */
 static int worse(struct counts *was, struct counts *now, int pinch_ok)
@@ -771,13 +970,92 @@ static int after(struct ctx *c, struct ids *verts, struct counts *was, int pinch
 { struct counts now;
   struct ids E = {0,0,0}, F = {0,0,0};
   int why;
-  patch(c,verts,&now,&E,&F);
+  patch(c,verts,&now,PATCH_AFTER,&E,&F);
   why = worse(was,&now,pinch_ok);
-  /* (a smoothing move, a quarter edge at most, once a vertex in a batch,
-     leaves its elements in the cells their boxes, padded by half an edge,
-     were put in: added again, a pass over 15k facets' vertices made the
-     grids again 76 times, a fifth of a remesh) */
-  if ( !why && !c->in_cells ) changed(c,&F,&E);
+  /* (a smoothing move, once a vertex in a batch, by no more than the
+     grids' padding, leaves its elements in their items' boxes: added
+     again, a pass over 15k facets' vertices made the grids again 76 times,
+     a fifth of a remesh) */
+  if ( !why && (!c->in_cells || c->readd) ) changed(c,&F,&E);
+  if ( E.a ) temp_free((char *)E.a);
+  if ( F.a ) temp_free((char *)F.a);
+  return why;
+}
+
+/* the patch round vertex v as a smoothing move sees it, on a surface clean
+   when the remesh began: what the move can change of the whole patch's
+   counts (its edges and facets unchanged, no vertex's fans: the folds of
+   the edges at v and across from it, its facets' areas, v and its edges
+   in a solid; after the move, the crossings of its edges and facets, and
+   of the patch's contact lines, as in patch()). The same differences
+   before and after as the patch's, so the same verdict (the whole patch,
+   twice a move, was 40% of a remesh; a move changes 18 of its 60
+   elements) */
+static void moved_patch(struct ctx *c, vertex_id v, struct counts *k, int stage,
+                        struct ids *out_e, struct ids *out_f)
+{ struct ids E = {0,0,0}, F = {0,0,0}, L = {0,0,0};
+  edge_id e, e0;
+  int i, w, guard;
+  memset(k,0,sizeof(*k));
+  c->stamp_now++;
+  EACH_EDGE_AT(v,e,e0,guard)
+    if ( mark(c,positive_id(e)) ) push(&E,positive_id(e));
+  for ( i = 0 ; i < E.n ; i++ )
+  { facetedge_id fe0 = get_edge_fe(E.a[i]), fe = fe0;
+    int n = 0;
+    if ( valid_id(fe0) ) do
+    { facet_id f = positive_id(get_fe_facet(fe));
+      if ( valid_id(f) && mark(c,f) ) push(&F,f);
+      fe = get_next_facet(fe);
+    } while ( valid_id(fe) && !equal_id(fe,fe0) && ++n < 1000 );
+  }
+  for ( i = 0 ; i < F.n ; i++ )      /* the edges across from v */
+  { facetedge_id fe = get_facet_fe(F.a[i]);
+    int j;
+    for ( j = 0 ; j < 3 ; j++, fe = get_next_edge(fe) )
+      if ( mark(c,positive_id(get_fe_edge(fe))) ) push(&L,positive_id(get_fe_edge(fe)));
+  }
+  for ( i = 0 ; i < E.n ; i++ ) edge_problems(c,E.a[i],k);
+  for ( i = 0 ; i < L.n ; i++ ) edge_problems(c,L.a[i],k);
+  for ( i = 0 ; i < F.n ; i++ )
+  { REAL n[3], area;
+    pyse_facet_normal(F.a[i],n,&area);
+    if ( area < 1e-10*c->h*c->h ) k->degenerate++;
+  }
+  for ( w = 0 ; w < c->nwalls ; w++ )
+  { k->solid += vertex_solid(c,w,v);
+    for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solid(c,w,E.a[i]);
+  }
+  if ( stage == PATCH_AFTER )
+  { struct ids P = {0,0,0};        /* the patch's edges: at v and its neighbours */
+    for ( i = 0 ; i < E.n ; i++ ) k->crossing += crossings_of(c,E.a[i],&F);
+    for ( i = 0 ; i < F.n ; i++ ) k->crossing += crossings_of(c,F.a[i],&E);
+    c->stamp_now++;
+    EACH_EDGE_AT(v,e,e0,guard)
+    { vertex_id u = get_edge_headv(e);
+      edge_id d, d0;
+      int g2;
+      if ( mark(c,positive_id(e)) ) push(&P,positive_id(e));
+      EACH_EDGE_AT(u,d,d0,g2)
+        if ( mark(c,positive_id(d)) ) push(&P,positive_id(d));
+    }
+    for ( i = 0 ; i < P.n ; i++ ) k->crossing += line_crossings_of(c,P.a[i],&P);
+    if ( P.a ) temp_free((char *)P.a);
+  }
+  if ( out_e ) for ( i = 0 ; i < E.n ; i++ ) push(out_e,E.a[i]);
+  if ( out_f ) for ( i = 0 ; i < F.n ; i++ ) push(out_f,F.a[i]);
+  if ( E.a ) temp_free((char *)E.a);
+  if ( F.a ) temp_free((char *)F.a);
+  if ( L.a ) temp_free((char *)L.a);
+}
+
+static int moved_after(struct ctx *c, vertex_id v, struct counts *was)
+{ struct counts now;
+  struct ids E = {0,0,0}, F = {0,0,0};
+  int why;
+  moved_patch(c,v,&now,PATCH_AFTER,&E,&F);
+  why = worse(was,&now,0);
+  if ( !why && (!c->in_cells || c->readd) ) changed(c,&F,&E);
   if ( E.a ) temp_free((char *)E.a);
   if ( F.a ) temp_free((char *)F.a);
   return why;
@@ -912,7 +1190,7 @@ static int collapse(struct ctx *c, edge_id e, int relaxed)
   if ( fabs(volume) > c->max_volume*c->h*c->h*c->h ) return PYSE_EDIT_VOLUME;
 
   star(u,&verts); star(w,&verts);
-  patch(c,&verts,&was,NULL,NULL);
+  before(c,&verts,&was);
   stamp = top_timestamp;
   /* Evolver eliminates the head where it may: w at the head */
   if ( !equal_id(get_edge_headv(e),w) ) e = inverse_id(e);
@@ -1015,7 +1293,7 @@ static int flip(struct ctx *c, edge_id e, int mode)
     return PYSE_EDIT_VOLUME;
 
   push(&verts,p); push(&verts,q); push(&verts,cc); push(&verts,d);
-  patch(c,&verts,&was,NULL,NULL);
+  before(c,&verts,&was);
   if ( !edgeswap(e) )
   { if ( verts.a ) temp_free((char *)verts.a);
     return PYSE_EDIT_EVOLVER;
@@ -1031,7 +1309,7 @@ static int split(struct ctx *c, edge_id e)
   vertex_id a = get_edge_tailv(e), b = get_edge_headv(e), m;
   int why;
   star(a,&verts); star(b,&verts);
-  patch(c,&verts,&was,NULL,NULL);
+  before(c,&verts,&was);
   if ( !valid_id(edge_refine(e)) )
   { if ( verts.a ) temp_free((char *)verts.a);
     return PYSE_EDIT_EVOLVER;
@@ -1052,7 +1330,7 @@ static int smooth(struct ctx *c, vertex_id v)
   struct ids verts = {0,0,0};
   struct counts was;
   edge_id e, e0;
-  int guard, k, cnt = 0, border = 0, why;
+  int guard, k, cnt = 0, border = 0, why, few;
   vertex_id line[2];
 
   if ( get_vattr(v) & (FIXED|BOUNDARY) ) return PYSE_EDIT_FIXED;
@@ -1143,12 +1421,30 @@ static int smooth(struct ctx *c, vertex_id v)
       } while ( valid_id(fe) && !equal_id(fe,fe0) && ++m < 1000 );
     }
   }
-  star(v,&verts);
-  patch(c,&verts,&was,NULL,NULL);
+  few = c->clean && !far_only;
+  if ( few ) moved_patch(c,v,&was,PATCH_BEFORE,NULL,NULL);
+  else { star(v,&verts); before(c,&verts,&was); }
   for ( k = 0 ; k < 3 ; k++ ) x[k] += d[k];
   project(v);
-  why = after(c,&verts,&was,0);
+  { /* its elements put in the grids again where the move (projected) went
+       past their items' padding, or v moved before since the grids were
+       built */
+    long o = ordinal(v), i;
+    REAL far = 0;
+    for ( k = 0 ; k < 3 ; k++ ) if ( !(fabs(x[k] - old[k]) <= far) ) far = fabs(x[k] - old[k]);
+    if ( o >= c->moved_size )
+    { long m = 2*o + 64;
+      c->moved = c->moved ? (int *)temp_realloc((char *)c->moved,m*sizeof(int))
+                          : (int *)temp_calloc(m,sizeof(int));
+      for ( i = c->moved_size ; i < m ; i++ ) c->moved[i] = 0;
+      c->moved_size = m;
+    }
+    c->readd = !(far <= c->pad) || c->moved[o] == c->epoch;
+  }
+  why = few ? moved_after(c,v,&was) : after(c,&verts,&was,0);
+  c->readd = 0;
   if ( why ) for ( k = 0 ; k < 3 ; k++ ) x[k] = old[k];    /* (a move undoes exactly) */
+  else c->moved[ordinal(v)] = c->epoch;
   if ( verts.a ) temp_free((char *)verts.a);
   return why ? why : PYSE_EDIT_DONE;
 }
@@ -1179,7 +1475,7 @@ static int snap(struct ctx *c, vertex_id a, vertex_id b)
     p[k] = (r == A_EQ_B && !(get_vattr(keep) & FIXED))
            ? (get_coord(a)[k] + get_coord(b)[k])/2 : get_coord(keep)[k];
   star(a,&verts); star(b,&verts);
-  patch(c,&verts,&was,NULL,NULL);
+  before(c,&verts,&was);
   merge_vertex(keep,gone);
   for ( k = 0 ; k < 3 ; k++ ) get_coord(keep)[k] = p[k];
   project(keep);
@@ -1244,7 +1540,7 @@ static int separate(struct ctx *c, vertex_id v)
     efan[k] = b;
   }
   star(v,&verts);
-  patch(c,&verts,&was,NULL,NULL);
+  before(c,&verts,&was);
   for ( b = 0 ; b < nroots ; b++ )
   { vertex_id u = v;
     REAL centre[3] = {0,0,0}, dir[3], len;
@@ -1269,7 +1565,7 @@ static int separate(struct ctx *c, vertex_id v)
   if ( !why )
   { /* the pinch is gone */
     struct counts now;
-    patch(c,&verts,&now,NULL,NULL);
+    patch(c,&verts,&now,PATCH_CHECK,NULL,NULL);
     if ( now.pinched >= was.pinched ) why = PYSE_EDIT_PINCH;
   }
   if ( verts.a ) temp_free((char *)verts.a);
@@ -1312,7 +1608,7 @@ static int degenerate(struct ctx *c, facet_id f)
           struct counts was;
           int why;
           for ( j = 0 ; j < 3 ; j++ ) star(v[j],&verts);
-          patch(c,&verts,&was,NULL,NULL);
+          before(c,&verts,&was);
           if ( !dissolve_facet(f) || !dissolve_facet(t) )
           { if ( verts.a ) temp_free((char *)verts.a);
             return -PYSE_EDIT_EVOLVER;
@@ -1472,7 +1768,7 @@ static int merge_facets(struct ctx *c, facet_id f1, facet_id f2)
     if ( d < bestd ) { bestd = d; best = k; }
   }
   for ( i = 0 ; i < 3 ; i++ ) { star(a[i],&verts); star(b[i],&verts); }
-  patch(c,&verts,&was,NULL,NULL);
+  before(c,&verts,&was);
   /* out with the two facets (their bodies first: dissolve_facet keeps a
      facet between two bodies) */
   set_facet_body(f1,NULLID); set_facet_body(inverse_id(f1),NULLID);
@@ -1559,7 +1855,7 @@ static int bridge(struct ctx *c, edge_id e1, edge_id e2)
     if ( joined(a1,b2) || joined(a2,b1) ) return PYSE_EDIT_LINK;
   }
   star(a1,&verts); star(a2,&verts); star(b1,&verts); star(b2,&verts);
-  patch(c,&verts,&was,NULL,NULL);
+  before(c,&verts,&was);
   if ( shared )
   { /* one facet: (a2, a1, b1) where a1 = b2, or (a2, a1, b2) where a2 = b1 */
     edge_id t[3];
@@ -1635,7 +1931,7 @@ static int patch_on(struct ctx *c, int wall, element_id *fs, int nf)
     }
   }
   for ( i = 0 ; i < verts.n ; i++ ) star(verts.a[i],&ring);
-  patch(c,&ring,&was,NULL,NULL);
+  before(c,&ring,&was);
   /* onto the wall (with the others it is on: a corner) */
   for ( i = 0 ; i < verts.n ; i++ )
     if ( !v_on_constraint(verts.a[i],wall) )
@@ -1788,13 +2084,27 @@ static int one(struct ctx *c, struct edit_args *a, int k)
    splits, a dozen undone, replayed thousands: 11 s, 4 in chunks of 100) */
 #define BATCH_CHECKPOINT 32
 
+/* the grids' padding in a smoothing batch, times h: its moves are a
+   quarter edge at most before they are projected (none of a 16-bead pack's
+   remesh's 90k went further; one that does puts its elements in again) */
+#define SMOOTH_PAD 0.3
+
 static void run_batch(struct ctx *c, struct edit_args *a)
 { struct snapshot *s = NULL;
+  REAL pad;
   int k, j, base = 0, made = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
   a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
   for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
-  grids_build(c);
   c->in_cells = a->op == PYSE_OP_SMOOTH;
+  pad = c->in_cells ? SMOOTH_PAD*c->h : 0.0;
+  /* (the grids of the batch before kept where its padding serves and its
+     changed lists are short: not for a smoothing batch, whose moves are
+     checked against where its vertices were when they were built) */
+  if ( !c->fgrid.built || c->in_cells || pad != c->pad
+       || 4*(c->fgrid.xn + c->egrid.xn) > c->fgrid.total + c->egrid.total )
+  { c->pad = pad;
+    grids_build(c);
+  }
   for ( k = 0 ; k < count ; k++ )
   { int r;
     if ( !s && a->op != PYSE_OP_SMOOTH ) { s = pyse_snapshot_hold(); base = k; made = 0; }
