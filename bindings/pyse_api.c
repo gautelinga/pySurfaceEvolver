@@ -1996,6 +1996,8 @@ struct snapshot
   REAL scale;
   int quant_count;
   struct gen_quant *quants;
+  int inst_count;                  /* method instances: names, flags, quantities */
+  struct inst_rec *insts;
   int global_count;
   REAL *params;                    /* NAN where not a datafile parameter */
 };
@@ -2004,9 +2006,79 @@ static struct snapshot **snapshots = NULL;
 static long snapshot_slots = 0;
 static pthread_mutex_t snapshot_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* ---- quantities' and method instances' slots while snapshots are held -----
+   Evolver frees a dissolved body's volume quantity and its instances onto
+   free lists and gives the slots to the next ones made; elements and bodies
+   name them by slot. A snapshot put back after a body went and another came
+   (a neck's cut undone, a stray piece folded back: the new body's volume in
+   the old one's slots) had its quantities' flags copied back slot by slot:
+   the new body's volume marked deleted under its live method, which a dump
+   declared and never wrote (a 16-bead pack's checkpoints didn't load: ERROR
+   3226). So while a snapshot is held, the freed slots are parked, off the
+   free lists, and a restore brings those freed since back in place (Evolver's
+   freeing keeps all but a slot's name and flags), and frees a body's volume
+   made since, as a dissolve does. */
+struct inst_rec { char name[MNAMESIZE]; int flags; int quants[MMAXQUANTS]; };
+static int slot_holds = 0;          /* live snapshots (snapshot_mutex) */
+static int *parked[2], parked_n[2], parked_max[2];  /* quantities, instances */
+
+static int holding(void)
+{ int held;
+  pthread_mutex_lock(&snapshot_mutex);
+  held = slot_holds;
+  pthread_mutex_unlock(&snapshot_mutex);
+  return held;
+}
+
+/* (src/quantity.c, as a slot is freed: whether it is kept off the free list) */
+int pyse_park(int kind, int slot)
+{ if ( !holding() ) return 0;
+  if ( parked_n[kind] == parked_max[kind] )
+  { int more = parked_max[kind] ? 2*parked_max[kind] : 64;
+    int *grown = (int *)realloc(parked[kind],more*sizeof(int));
+    if ( !grown ) return 0;
+    parked[kind] = grown;
+    parked_max[kind] = more;
+  }
+  parked[kind][parked_n[kind]++] = slot;
+  return 1;
+}
+
+/* (before an allocation) the parked slots onto the free lists once no
+   snapshot is held */
+void pyse_unpark_all(void)
+{ int i;
+  if ( !(parked_n[0] + parked_n[1]) || holding() ) return;
+  for ( i = 0 ; i < parked_n[0] ; i++ )
+  { GEN_QUANT(parked[0][i])->next = (int)gen_quant_free_head;
+    gen_quant_free_head = parked[0][i];
+  }
+  for ( i = 0 ; i < parked_n[1] ; i++ )
+  { METH_INSTANCE(parked[1][i])->next = (int)meth_inst_free_head;
+    meth_inst_free_head = parked[1][i];
+  }
+  parked_n[0] = parked_n[1] = 0;
+}
+
+/* (a new surface: its lists start empty) */
+void pyse_park_reset(void) { parked_n[0] = parked_n[1] = 0; }
+
+static int unpark(int kind, int slot)
+{ int i;
+  for ( i = 0 ; i < parked_n[kind] ; i++ )
+    if ( parked[kind][i] == slot )
+    { parked[kind][i] = parked[kind][--parked_n[kind]];
+      return 1;
+    }
+  return 0;
+}
+
 static void snapshot_release(struct snapshot *s)
 { int type, b;
   if ( !s ) return;
+  pthread_mutex_lock(&snapshot_mutex);
+  slot_holds--;
+  pthread_mutex_unlock(&snapshot_mutex);
   for ( type = 0 ; type < NUMELEMENTS ; type++ )
   { struct snap_type *t = s->t + type;
     for ( b = 0 ; b < t->nblocks ; b++ )
@@ -2015,6 +2087,7 @@ static void snapshot_release(struct snapshot *s)
     free(t->extras);
   }
   free(s->quants);
+  free(s->insts);
   free(s->params);
   free(s);
 }
@@ -2034,6 +2107,9 @@ static void snapshot_take_body(void *arg)
 
   free_discards(DISCARDS_ALL);  /* (freed elements onto the free list) */
   s = (struct snapshot *)snap_alloc(1,sizeof(*s));
+  pthread_mutex_lock(&snapshot_mutex);
+  slot_holds++;
+  pthread_mutex_unlock(&snapshot_mutex);
   a->s = s;
   s->load = load_serial;
   s->quantities = everything_quantities_flag;
@@ -2068,6 +2144,14 @@ static void snapshot_take_body(void *arg)
   s->quants = (struct gen_quant *)snap_alloc(gen_quant_count,sizeof(struct gen_quant));
   if ( gen_quant_count )
     memcpy(s->quants,GEN_QUANT(0),gen_quant_count*sizeof(struct gen_quant));
+  s->inst_count = meth_inst_count;
+  s->insts = (struct inst_rec *)snap_alloc(meth_inst_count,sizeof(struct inst_rec));
+  for ( i = LOW_INST ; i < meth_inst_count ; i++ )
+  { struct method_instance *mi = METH_INSTANCE(i);
+    memcpy(s->insts[i].name,mi->name,sizeof(mi->name));
+    s->insts[i].flags = mi->flags;
+    memcpy(s->insts[i].quants,mi->quants,sizeof(mi->quants));
+  }
   s->global_count = web.global_count;
   s->params = (REAL *)snap_alloc(web.global_count,sizeof(REAL));
   for ( i = 0 ; i < web.global_count ; i++ )
@@ -2146,6 +2230,55 @@ static void snapshot_copy_element(char *to, const char *from, int type, struct s
     size_t now_span = now_end - (size_t)EXTRAS(type)[k].offset;
     memcpy(to + EXTRAS(type)[k].offset,from + t->extras[k].offset,
            was_span < now_span ? was_span : now_span);
+  }
+}
+
+/* The quantities and method instances as at the snapshot (see pyse_park()):
+   a body's volume made since freed with its instances, as a dissolve does;
+   then those freed since back in their slots (in that order: a body made
+   again since has its old volume's names) */
+static int alive_at(const struct snapshot *s, int kind, int i)
+{ if ( kind == 0 ) return i < s->quant_count && !(s->quants[i].flags & Q_DELETED);
+  return i >= LOW_INST && i < s->inst_count && !(s->insts[i].flags & Q_DELETED);
+}
+
+static void restore_slots(struct snapshot *s)
+{ int i, k, j;
+  for ( i = LOW_INST ; i < meth_inst_count ; i++ )
+  { struct method_instance *mi = METH_INSTANCE(i);
+    if ( !alive_at(s,1,i) && !(mi->flags & Q_DELETED) && (mi->flags & BODY_INSTANCE) )
+      free_method_instance(mi);
+  }
+  for ( i = 0 ; i < gen_quant_count ; i++ )
+  { struct gen_quant *q = GEN_QUANT(i);
+    if ( !alive_at(s,0,i) && !(q->flags & Q_DELETED) && valid_id(q->b_id) )
+      free_quantity(q);
+  }
+  for ( i = LOW_INST ; i < meth_inst_count ; i++ )
+  { struct method_instance *mi = METH_INSTANCE(i);
+    if ( alive_at(s,1,i) && (mi->flags & Q_DELETED) && unpark(1,i) )
+    { memcpy(mi->name,s->insts[i].name,sizeof(mi->name));
+      mi->flags = s->insts[i].flags;
+      memcpy(mi->quants,s->insts[i].quants,sizeof(mi->quants));
+      lookup_global_hash(mi->name,i,METHODNAME,HASH_ADD);
+    }
+  }
+  for ( i = 0 ; i < gen_quant_count ; i++ )
+  { struct gen_quant *q = GEN_QUANT(i);
+    if ( alive_at(s,0,i) && (q->flags & Q_DELETED) && unpark(0,i) )
+    { memcpy(q->name,s->quants[i].name,sizeof(q->name));
+      q->flags = s->quants[i].flags;
+      lookup_global_hash(q->name,i,QUANTITYNAME,HASH_ADD);
+    }
+  }
+  /* (the quantities' lists without the instances freed) */
+  for ( i = 0 ; i < gen_quant_count ; i++ )
+  { struct gen_quant *q = GEN_QUANT(i);
+    if ( q->flags & (Q_DELETED|Q_COMPOUND) ) continue;
+    for ( k = j = 0 ; k < q->method_count ; k++ )
+      if ( !(METH_INSTANCE(q->meth_inst[k])->flags & Q_DELETED) )
+        q->meth_inst[j++] = q->meth_inst[k];
+    q->method_count = j;
   }
 }
 
@@ -2236,9 +2369,10 @@ static void snapshot_restore_body(void *arg)
   web.bodycount = s->bodycount;
   web.outside_body = s->outside_body;
   web.scale = s->scale;
+  restore_slots(s);
   for ( i = 0 ; i < gen_quant_count ; i++ )
   { struct gen_quant *q = GEN_QUANT(i);
-    if ( i < s->quant_count )
+    if ( i < s->quant_count && !(s->quants[i].flags & Q_DELETED) && !(q->flags & Q_DELETED) )
     { struct gen_quant *was = s->quants + i;
       q->flags = was->flags;
       q->target = was->target;
@@ -2250,13 +2384,6 @@ static void snapshot_restore_body(void *arg)
       q->b_id = was->b_id;
       q->vol_number = was->vol_number;
       q->fixnum = was->fixnum;
-    }
-    else if ( valid_id(q->b_id) && !(q->flags & Q_DELETED) )
-    { /* the volume of a body made since: gone with it (as free_element() leaves
-         a deleted body's) */
-      q->modulus = 1;
-      q->flags &= ~(Q_ENERGY|Q_FIXED|Q_CONSERVED);
-      q->flags |= Q_INFO;
     }
     q->timestamp = 0;
   }

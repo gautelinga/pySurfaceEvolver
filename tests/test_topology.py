@@ -1187,3 +1187,52 @@ def test_fast_gradient_steps_reach_the_stock_searchs_equilibrium():
     assert found[0][0] and found[1][0]
     assert found[1][1] == pytest.approx(found[0][1], rel=1e-4)
     assert found[1][2] < max(2*found[0][2], 1e-3)
+
+
+def _two_drops_on_ball_flux():
+    """Two drops on a flux-gauge sphere, at its poles: two bodies, each its own
+    copy of the volume method."""
+    cap = shapes.cap(0.5, 0.25, nr=4, nt=12)
+    v = cap.vertices + [0, 0, 1.0]
+    rim = np.asarray(cap.rims["rim"])
+    v[rim] /= np.linalg.norm(v[rim], axis=1)[:, None]
+    f = np.asarray(cap.faces)
+    w = v*[1, 1, -1]                        # (the south drop, its facets turned)
+    verts = np.r_[v, w]
+    faces = np.r_[f, f[:, ::-1] + len(v)]
+    ev = pyse.Evolver()
+    ev.load_arrays(verts, faces,
+                   constraints={"ball": C.sphere((0, 0, 0), 1.0, contact_angle=60.0, gauge="flux")},
+                   vertex_constraints={"ball": np.r_[rim, rim + len(v)]},
+                   bodies=[pyse.Body(volume=None, faces=range(len(f))),
+                           pyse.Body(volume=None, faces=range(len(f), 2*len(f)))])
+    return ev
+
+
+def test_a_body_gone_and_another_made_since_a_snapshot_restore_whole(tmp_path):
+    # (a dissolved body's volume quantity and method go to free slots, and the
+    # next body's take them; a snapshot put back over that marked the new
+    # volume deleted under its live method: a 16-bead pack's dumps declared
+    # body_7_vol_meth, never wrote it, and didn't load, ERROR 3226)
+    ev = _two_drops_on_ball_flux()
+    ev.command("convert_to_quantities")
+    ev.body(1).target = ev.body(1).volume
+    ev.body(2).target = ev.body(2).volume
+    volumes, energy = list(ev.bodies().volume), ev.energy
+    saved = ev._save()
+    assert type(saved).__name__ == "_Saved"
+    ev.command("dissolve body[2]")
+    ev.command("pyse_b := new_body; set facet frontbody pyse_b where frontbody == 0 "
+               "and backbody == 0")
+    assert len(ev.bodies().ids) == 2
+    ev.restore(saved)
+    assert list(ev.bodies().ids) == [1, 2]
+    assert list(ev.bodies().volume) == pytest.approx(volumes, rel=1e-12)
+    assert ev.energy == pytest.approx(energy, rel=1e-12)
+    path = tmp_path / "back.fe"
+    ev.dump(path)
+    ev.command("g 3")
+    assert list(ev.bodies().volume) == pytest.approx(volumes, rel=1e-6)
+    again = pyse.Evolver()
+    again.load(path)
+    assert list(again.bodies().volume) == pytest.approx(volumes, rel=1e-12)

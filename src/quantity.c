@@ -11,6 +11,11 @@
 */
 
 #include "include.h"
+
+/* pySE (bindings/pyse_api.c): freed slots kept while snapshots are held */
+extern int pyse_park(int kind, int slot) __attribute__((weak));
+extern void pyse_unpark_all(void) __attribute__((weak));
+extern void pyse_park_reset(void) __attribute__((weak));
 #include "fastloops.h"
 
 int compound_quant_list_head = -1;
@@ -337,6 +342,8 @@ struct gen_quant_method basic_gen_methods[] =
 void quantity_init()
 { int k;
 
+  if ( pyse_park_reset ) pyse_park_reset();   /* pySE: see pyse_park() */
+
   /* set lists to empty; memory deallocation taken care of by global
      permanent memory freeing at the start of each new surface */
   gen_quant_count = 0;
@@ -407,6 +414,7 @@ int find_method_instance(char *name)
 int new_quantity_alloc()
 { int retval;
 
+  if ( pyse_unpark_all ) pyse_unpark_all();   /* pySE: see pyse_park() */
   if ( gen_quant_free_head < 0 )
   { int old_max = gen_quant_list_max;
     int i;
@@ -447,10 +455,13 @@ int new_quantity_alloc()
 void free_quantity(struct gen_quant *q)
 { if ( q->flags & Q_DELETED )
     return;
-  q->next = (int)gen_quant_free_head;
   q->flags = Q_DELETED;
   lookup_global_hash(q->name,0,QUANTITYNAME,HASH_DELETE);
   q->name[0] = 0;
+  /* pySE: off the free list while a snapshot is held (see pyse_park()) */
+  if ( pyse_park && pyse_park(0,(int)(q - gen_quant_list)) )
+    return;
+  q->next = (int)gen_quant_free_head;
   gen_quant_free_head = (int)(q - gen_quant_list);
 } // end free_quantity()
 
@@ -513,6 +524,7 @@ int new_quantity(
 int new_method_instance_alloc()
 { int retval;
 
+  if ( pyse_unpark_all ) pyse_unpark_all();   /* pySE: see pyse_park() */
   if ( meth_inst_free_head <= 0 )
   { int old_max = meth_inst_list_max;
     int i;
@@ -552,12 +564,15 @@ int new_method_instance_alloc()
 void free_method_instance(struct method_instance *mi)
 { if ( mi->flags & Q_DELETED )
     return;
-  mi->next = (int)meth_inst_free_head;
   mi->flags = Q_DELETED;
   if ( mi->name[0] )
   { lookup_global_hash(mi->name,0,METHODNAME,HASH_DELETE);
     mi->name[0] = 0;
   }
+  /* pySE: off the free list while a snapshot is held (see pyse_park()) */
+  if ( pyse_park && pyse_park(1,(int)(mi - meth_inst_list)) )
+    return;
+  mi->next = (int)meth_inst_free_head;
   meth_inst_free_head = (int)(mi - meth_inst_list);
 }
 

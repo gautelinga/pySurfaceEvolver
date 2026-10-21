@@ -33,6 +33,7 @@ char *color_names[] = {
 #define COLORNAME(n) (((n)<-1)||((n)>WHITE)?"black":color_names[(n)+1])
 
 #include "include.h"
+int pyse_orphaned_instance(struct method_instance *mi);
 #include "lex.h"
 #include "ytab.h"
 
@@ -2560,6 +2561,22 @@ void list_quantity(int k  /* quantity number */)
 * Purpose: List method instance in top of datafile, and implement 
 *          "list method_instance" command.
 */
+/* pySE: a method instance whose quantities are all deleted (a body's copy of
+   the volume method, its body dissolved: the instance stays, its quantity
+   doesn't): neither declared nor written (declared, it was never defined,
+   since only its quantity would write it, and the dump didn't load again:
+   ERROR 3226, "Forward declared method_instance body_7_vol_meth not
+   instantiated") */
+int pyse_orphaned_instance(struct method_instance *mi)
+{ int q, any = 0;
+  for ( q = 0 ; q < MMAXQUANTS ; q++ )
+  { if ( mi->quants[q] < 0 ) continue;
+    any = 1;
+    if ( !(GEN_QUANT(mi->quants[q])->flags & Q_DELETED) ) return 0;
+  }
+  return any;
+}
+
 void list_method_instance(int k /* method number */ )
 { struct method_instance *mi = METH_INSTANCE(k);
  
@@ -2723,6 +2740,7 @@ void list_forwards()
   { struct method_instance *mi = METH_INSTANCE(i);
     if ( mi->flags & (Q_DELETED|IMPLICIT_INSTANCE|DEFAULT_INSTANCE) )
       continue;
+    if ( pyse_orphaned_instance(mi) ) continue;   /* pySE: see there */
     if ( !title_flag )  outstring("\n// Forward declarations\n");
     title_flag = 1;
     outstring("method_instance ");
