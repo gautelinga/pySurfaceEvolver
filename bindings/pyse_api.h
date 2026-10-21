@@ -153,6 +153,12 @@ int pyse_native_formula_register(int con, int kind, const double *p);
    the last step, the scale from a parabola with the energy's slope where it
    can be; off by default); returns the previous setting. */
 int pyse_set_fast_steps(int on);
+/* Two Newton steps from the same point (see recipes._arc_correct): at body
+   number body's target and at that plus delta, from one factorization; the
+   vertices (nv x 3) and multipliers (nm) each ends at; the surface put back.
+   PYSE_OK or an error status. */
+int pyse_newton_pair(int body, double delta, double *x0, double *m0, double *x1, double *m1,
+                     long nv, long nm);
 const char *pyse_solver(void);
 /* Whether Newton steps carry the mesh along a line they move past the edges
    beside it (on by default); returns the previous setting. */

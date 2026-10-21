@@ -1786,6 +1786,116 @@ int pyse_modes(int n, double *values, double *vectors, long nv, int *found)
   return status;
 }
 
+/* Two Newton steps from the same point, at a body's target and at that plus
+   delta (arclength's corrector: the step's change with the value), from one
+   factorization: only the constraint rows of the right side change with the
+   target (hessian_fill's last loops), the Hessian doesn't. Each as Evolver's
+   hessian command makes it (the multipliers updated by the solve, the move
+   with the mesh not following, projected at that step's target), the
+   vertices and multipliers it ends at returned; the surface, its targets and
+   multipliers put back as they were. The corrector made the second step by
+   a second hessian, factorizing the same matrix again: half its cost, a
+   fifth of a 16-bead pack's run. */
+struct pair_args { int body; double delta; double *x0, *m0, *x1, *m1; long nv, nm; };
+
+static void constraint_rows(struct linsys *S, REAL *rhs)
+{ body_id b_id;
+  int k;
+  if ( !everything_quantities_flag )
+  { FOR_ALL_BODIES(b_id)
+    { REAL *current = rhs + S->bodyrowstart + loc_ordinal(b_id);
+      if ( get_battr(b_id) & FIXEDVOL )
+        *current = -(get_body_fixvol(b_id) - get_body_volume(b_id));
+    }
+  }
+  for ( k = 0 ; k < gen_quant_count ; k++ )
+  { struct gen_quant *q = GEN_QUANT(k);
+    if ( q->flags & (Q_DELETED|Q_REDUNDANT) ) continue;
+    if ( q->flags & Q_FIXED )
+      rhs[S->quanrowstart + k] = -(q->target - q->value);
+  }
+}
+
+static void pair_coords(double *out, long nv)
+{ vertex_id v_id;
+  long row = 0;
+  int j;
+  FOR_ALL_VERTICES(v_id)
+  { REAL *x = get_coord(v_id);
+    if ( row >= nv ) inconsistent("too many vertices");
+    for ( j = 0 ; j < SDIM ; j++ ) out[row*SDIM + j] = (double)x[j];
+    row++;
+  }
+  if ( row != nv ) inconsistent("vertex count changed");
+}
+
+static void pair_body(void *arg)
+{ struct pair_args *a = (struct pair_args *)arg;
+  struct linsys S;
+  REAL *rhs = NULL, *rhs2 = NULL, *X = NULL, *X2 = NULL;
+  body_id b_id = get_ordinal_id(BODY,a->body - 1);
+  double *p0;
+  REAL target;
+  int was;
+  if ( !valid_id(b_id) || !(get_battr(b_id) & FIXEDVOL) )
+    kb_error(1307,"newton_pair: the body has no target volume.\n",RECOVERABLE);
+  target = get_body_fixvol(b_id);
+  p0 = (double *)temp_calloc(a->nm > 0 ? a->nm : 1,sizeof(double));
+  pyse_get_multipliers(p0,a->nm);
+  was = fl_set_follow(0);
+  memset(&S,0,sizeof(S));
+  hmode = hessian_normal_flag;
+  hessian_cleanup();
+  hessian_init(&S,&rhs);
+  hess_flag = 1; rhs_flag = 1;
+  hessian_fill(&S,&rhs);
+  rhs2 = (REAL *)temp_calloc(S.total_rows,sizeof(REAL));
+  memcpy(rhs2,rhs,S.total_rows*sizeof(REAL));
+  set_body_fixvol(b_id,target + a->delta);
+  constraint_rows(&S,rhs2);
+  set_body_fixvol(b_id,target);
+  sp_Hessian_solver(&S,rhs,&X);                 /* factorized here */
+  pyse_get_multipliers(a->m0,a->nm);
+  pyse_set_multipliers(p0,a->nm);
+  X2 = (REAL *)temp_calloc(S.N,sizeof(REAL));
+  sp_hessian_solve(&S,rhs2,X2,SET_PRESSURE);    /* the same factors */
+  fl_hessian_deflate(&S,X2);
+  pyse_get_multipliers(a->m1,a->nm);
+  hessian_iterate_flag = 1;
+  pyse_set_multipliers(a->m0,a->nm);
+  hessian_move((REAL)1.0,ACTUAL_MOVE,X);
+  pair_coords(a->x0,a->nv);
+  restore_coords(&saved,SAVE_IN_ATTR);
+  set_body_fixvol(b_id,target + a->delta);
+  pyse_set_multipliers(a->m1,a->nm);
+  hessian_move((REAL)1.0,ACTUAL_MOVE,X2);
+  pair_coords(a->x1,a->nv);
+  restore_coords(&saved,SAVE_IN_ATTR);
+  set_body_fixvol(b_id,target);
+  hessian_iterate_flag = 0;
+  pyse_set_multipliers(p0,a->nm);
+  hessian_exit(NULL);
+  free_system(&S);
+  fl_set_follow(was);
+  temp_free((char *)rhs);
+  temp_free((char *)rhs2);
+  temp_free((char *)X);
+  temp_free((char *)X2);
+  temp_free((char *)p0);
+  recalc();
+}
+
+int pyse_newton_pair(int body, double delta, double *x0, double *m0, double *x1, double *m1,
+                     long nv, long nm)
+{ struct pair_args a;
+  if ( nv != web.skel[VERTEX].count || nm != pyse_multiplier_count() )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "newton_pair: output arrays don't match the vertices or multipliers.");
+  a.body = body; a.delta = delta; a.x0 = x0; a.m0 = m0; a.x1 = x1; a.m1 = m1;
+  a.nv = nv; a.nm = nm;
+  return surface_call(pair_body,&a);
+}
+
 /* The Lagrange multipliers: each body's pressure (in body order), then each
    quantity's (in quantity order). A Newton step (hessian) uses them in the
    Hessian and adds its increments to them, so undoing a step undoes them too. */

@@ -275,6 +275,25 @@ NB_MODULE(_core, m) {
     return r;
   }, "n"_a, CALLBACK_NAMES, "data: (eigenvalues (found,), displacements (found, vertices, sdim))");
 
+  m.def("newton_pair", [](int body, double delta, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long nv = pyse_count(PYSE_VERTEX), nm = pyse_multiplier_count();
+    int sdim = pyse_sdim();
+    std::vector<double> x0(size_t(nv)*size_t(sdim)), x1(size_t(nv)*size_t(sdim));
+    std::vector<double> m0(static_cast<size_t>(nm)), m1(static_cast<size_t>(nm));
+    CallResult r = run_guarded([&] {
+      return pyse_newton_pair(body, delta, x0.data(), m0.data(), x1.data(), m1.data(), nv, nm);
+    });
+    if (r.status == PYSE_OK)
+      r.data = nb::make_tuple(to_numpy(std::move(x0), {size_t(nv), size_t(sdim)}),
+                              to_numpy(std::move(m0), {size_t(nm)}),
+                              to_numpy(std::move(x1), {size_t(nv), size_t(sdim)}),
+                              to_numpy(std::move(m1), {size_t(nm)}));
+    return r;
+  }, "body"_a, "delta"_a, CALLBACK_NAMES,
+  "data: (vertices, multipliers) after a Newton step at the body's target and at that plus "
+  "delta, from one factorization");
+
   m.def("residual", [](bool full, CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(PYSE_VERTEX) + pyse_optparam_count();

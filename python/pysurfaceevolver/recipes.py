@@ -395,6 +395,28 @@ def _newton_target(ev, put: Callable[[Any], None],
     return x, multipliers
 
 
+def _newton_pair(ev, put, value: float, delta: float) -> "Optional[tuple]":
+    """_newton_target at value and at value + delta, from one factorization
+    where the value is a body's target (only the constraint rows of the
+    right side change with it: _core.newton_pair): the vertices and
+    multipliers each ends at. None where it can't be (another kind of
+    value, or Evolver refusing: then the two steps as before, which handle
+    a body with no valid pressures yet or held all round by solids)."""
+    from ._errors import EvolverError, EvolverWarning
+    body = getattr(put, "body", None)
+    if body is None or not hasattr(_core, "newton_pair"):
+        return None
+    put(value)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
+        try:
+            _, result = ev._call(_core.newton_pair, int(body), float(delta))
+        except EvolverError:
+            return None
+    x0, m0, x1, m1 = result.data
+    return np.asarray(x0), np.asarray(m0), np.asarray(x1), np.asarray(m1)
+
+
 def _normal_part(ev, dx: np.ndarray) -> np.ndarray:
     """The part of a displacement along the surface's normals (area-weighted
     facet normals at each vertex): the shape's change, without the vertices'
@@ -437,8 +459,12 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
     for it in range(1, max_iter + 1):
         x = ev.vertices
         delta = 1e-6*max(1.0, abs(value))
-        n0, m0 = _newton_target(ev, put, value)
-        n1, m1 = _newton_target(ev, put, value + delta)
+        pair = _newton_pair(ev, put, value, delta)
+        if pair is not None:
+            n0, m0, n1, m1 = pair
+        else:
+            n0, m0 = _newton_target(ev, put, value)
+            n1, m1 = _newton_target(ev, put, value + delta)
         dn = (n1 - n0)/delta
         # the new point n0 + dv*dn on the plane: tx.(x - x_pred)/n + tv*(v - v_pred) = 0
         gap = float((tx*(n0 - x_pred)).sum())/n + tv*(value - v_pred)
@@ -999,6 +1025,9 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
     def put(v: float) -> None:
         set_value(ev, v)
         ev.command("recalc")        # boundaries follow a parameter (assigning one doesn't)
+    from ._views import BodyView
+    # (a body's target: the corrector's two Newton steps from one factorization)
+    put.body = what.number if isinstance(what, BodyView) else None  # type: ignore[attr-defined]
 
     def step(index: int, v: float, iterations: int, negative: int, residual: float,
              found: list) -> Step:

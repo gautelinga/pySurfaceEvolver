@@ -296,3 +296,30 @@ def test_arclength_arguments(cube):
         next(recipes.arclength(cube, cube.body(1), 0.0, 5))
     with pytest.raises(TypeError):
         next(recipes.arclength(cube, lambda ev, v: None, 0.1, 5))
+
+
+def test_the_correctors_two_newton_steps_come_from_one_factorization():
+    # (at a body's target and at that plus delta: only the constraint rows of
+    # the right side change, so one factorization gives both, the same)
+    drop = shapes.cap(0.7, 0.7, nr=6, nt=24)
+    ev = pyse.Evolver()
+    ev.load_arrays(drop.vertices, drop.faces,
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
+                   vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.relax()
+    body = ev.body(1)
+
+    def put(v):
+        body.target = v
+        ev.command("recalc")
+    put.body = 1
+    value, delta = 1.1*body.target, 1e-6
+    start = ev._coords()
+    n0, m0 = recipes._newton_target(ev, put, value)
+    n1, m1 = recipes._newton_target(ev, put, value + delta)
+    ev._put_back(start)
+    x0, q0, x1, q1 = recipes._newton_pair(ev, put, value, delta)
+    assert np.allclose(x0, n0, rtol=0, atol=1e-12) and np.allclose(x1, n1, rtol=0, atol=1e-12)
+    assert np.allclose(q0, m0, rtol=1e-12) and np.allclose(q1, m1, rtol=1e-12)
+    assert np.array_equal(ev.vertices, start.coords)
