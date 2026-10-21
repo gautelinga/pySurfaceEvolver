@@ -208,6 +208,10 @@ struct flux_field
                                     4: angle, tension, o, u, v */
   int nterm;
   struct flux_term term[FLUX_TERMS];
+  /* point sources only (a facet integrand): their centres, R^2 and R^3 as
+     arrays, for flux_points */
+  int points;
+  REAL pc[3][FLUX_TERMS], pR2[FLUX_TERMS], pR3[FLUX_TERMS];
 };
 
 static struct flux_field fluxes[FLUX_FIELDS];
@@ -293,7 +297,119 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
     u->angle = t[8]; u->tension = t[9];
     u->coef = u->energy ? -u->tension*cos(u->angle*M_PI/180.0)*u->R2 : -u->R/3.0*u->R2;
   }
+  f->points = nterm > 0;
+  for ( i = 0 ; i < nterm ; i++ )
+  { struct flux_term *u = f->term + i;
+    if ( u->d[0] != 0 || u->d[1] != 0 || u->d[2] != 0 ) f->points = 0;
+    for ( k = 0 ; k < 3 ; k++ ) f->pc[k][i] = u->c[k];
+    f->pR2[i] = u->R2;
+    f->pR3[i] = u->R2*u->R;
+  }
   return 1;
+}
+
+/* The point sources' 1/r^3 and 3/r^5 factors, the costly part of a facet
+   integrand (most of a 16-bead pack's gradient step): ir3 = coef/(r^2 r)
+   (coef/R^3 inside, where r^2 < R^2) and, with want5, ir5 = 3 ir3/r^2 (0
+   inside). Four terms at a time with AVX2, two with SSE2, picked at run
+   time; IEEE square roots, quotients and products, no fused operations
+   (-ffp-contract=off), so each term's factors are the scalar ones to the
+   bit, and the sums after them are taken in the same order as before. */
+static void flux_inv_scalar(int n, const REAL *r2, const REAL *coef, const REAL *R2,
+                            const REAL *R3, int want5, REAL *ir3, REAL *ir5)
+{ int t;
+  for ( t = 0 ; t < n ; t++ )
+    if ( r2[t] < R2[t] )
+    { ir3[t] = coef[t]/R3[t];
+      if ( want5 ) ir5[t] = 0.0;
+    }
+    else
+    { REAL r = sqrt(r2[t]);
+      ir3[t] = coef[t]/(r2[t]*r);
+      if ( want5 ) ir5[t] = 3.0*ir3[t]/r2[t];
+    }
+}
+
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__)) && !defined(LONGDOUBLE) \
+    && !defined(FLOAT128)
+#include <immintrin.h>
+#define FLUX_SIMD 1
+__attribute__((target("avx2")))
+static void flux_inv_avx2(int n, const REAL *r2, const REAL *coef, const REAL *R2,
+                          const REAL *R3, int want5, REAL *ir3, REAL *ir5)
+{ int t = 0;
+  const __m256d three = _mm256_set1_pd(3.0), zero = _mm256_setzero_pd();
+  for ( ; t + 4 <= n ; t += 4 )
+  { __m256d q = _mm256_loadu_pd(r2 + t), c = _mm256_loadu_pd(coef + t);
+    __m256d in = _mm256_cmp_pd(q, _mm256_loadu_pd(R2 + t), _CMP_LT_OQ);
+    __m256d out3 = _mm256_div_pd(c,_mm256_mul_pd(q,_mm256_sqrt_pd(q)));
+    __m256d i3 = _mm256_blendv_pd(out3,_mm256_div_pd(c,_mm256_loadu_pd(R3 + t)),in);
+    _mm256_storeu_pd(ir3 + t,i3);
+    if ( want5 )
+      _mm256_storeu_pd(ir5 + t,_mm256_blendv_pd(_mm256_div_pd(_mm256_mul_pd(three,out3),q),
+                                                zero,in));
+  }
+  flux_inv_scalar(n - t,r2 + t,coef + t,R2 + t,R3 + t,want5,ir3 + t,ir5 + t);
+}
+
+static void flux_inv_sse2(int n, const REAL *r2, const REAL *coef, const REAL *R2,
+                          const REAL *R3, int want5, REAL *ir3, REAL *ir5)
+{ int t = 0;
+  const __m128d three = _mm_set1_pd(3.0);
+  for ( ; t + 2 <= n ; t += 2 )
+  { __m128d q = _mm_loadu_pd(r2 + t), c = _mm_loadu_pd(coef + t);
+    __m128d in = _mm_cmplt_pd(q,_mm_loadu_pd(R2 + t));
+    __m128d out3 = _mm_div_pd(c,_mm_mul_pd(q,_mm_sqrt_pd(q)));
+    __m128d in3 = _mm_div_pd(c,_mm_loadu_pd(R3 + t));
+    _mm_storeu_pd(ir3 + t,_mm_or_pd(_mm_and_pd(in,in3),_mm_andnot_pd(in,out3)));
+    if ( want5 )
+      _mm_storeu_pd(ir5 + t,_mm_andnot_pd(in,_mm_div_pd(_mm_mul_pd(three,out3),q)));
+  }
+  flux_inv_scalar(n - t,r2 + t,coef + t,R2 + t,R3 + t,want5,ir3 + t,ir5 + t);
+}
+#endif
+
+static void flux_inv(int n, const REAL *r2, const REAL *coef, const REAL *R2, const REAL *R3,
+                     int want5, REAL *ir3, REAL *ir5)
+{
+#ifdef FLUX_SIMD
+  static int level = -1;            /* (a benign race: every thread finds the same) */
+  if ( level < 0 ) level = __builtin_cpu_supports("avx2") ? 2 : 1;
+  if ( level == 2 ) { flux_inv_avx2(n,r2,coef,R2,R3,want5,ir3,ir5); return; }
+  flux_inv_sse2(n,r2,coef,R2,R3,want5,ir3,ir5);
+#else
+  flux_inv_scalar(n,r2,coef,R2,R3,want5,ir3,ir5);
+#endif
+}
+
+/* a field of point sources only at x, in flux_eval's order: v and (order)
+   g added to */
+static void flux_points(const struct flux_field *f, const REAL *x, int order, REAL floor,
+                        REAL v[3], REAL g[3][3])
+{ REAL X[3][FLUX_TERMS], r2[FLUX_TERMS], coef[FLUX_TERMS], ir3[FLUX_TERMS], ir5[FLUX_TERMS];
+  int t, m, i, n = f->nterm;
+  for ( t = 0 ; t < n ; t++ )
+  { for ( m = 0 ; m < 3 ; m++ ) X[m][t] = x[m] - f->pc[m][t];
+    r2[t] = X[0][t]*X[0][t] + X[1][t]*X[1][t] + X[2][t]*X[2][t];
+    coef[t] = flux_coefficient(f->term + t,floor);
+  }
+  flux_inv(n,r2,coef,f->pR2,f->pR3,order,ir3,ir5);
+  for ( t = 0 ; t < n ; t++ )
+  { REAL a = ir3[t];
+    if ( r2[t] < f->pR2[t] )           /* inside: coef (x - c)/R^3 */
+    { for ( m = 0 ; m < 3 ; m++ )
+      { v[m] += X[m][t]*a;
+        if ( order ) g[m][m] += a;
+      }
+    }
+    else
+    { REAL b = order ? ir5[t] : 0.0;
+      for ( m = 0 ; m < 3 ; m++ )
+      { v[m] += X[m][t]*a;
+        if ( order ) for ( i = 0 ; i < 3 ; i++ ) g[m][i] += (m == i ? a : 0.0) - b*X[m][t]*X[i][t];
+      }
+    }
+  }
 }
 
 static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
@@ -339,6 +455,9 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
         for ( i = 0 ; i < 3 ; i++ ) g[m][i] = u[m]*dp[i];
       }
     }
+    if ( f->points )
+      flux_points(f,x,order,floor,v,g);
+    else
     for ( t = 0 ; t < f->nterm ; t++ )
     { struct flux_term *u = f->term + t;
       REAL coef = flux_coefficient(u,floor), X[3], r2, r;
