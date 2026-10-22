@@ -226,6 +226,15 @@
 
 ### Speed
 
+- `Evolver.residual()` and the volumes' gap from their targets that `relax()` checks
+  with it are kept for the surface's version (`_core.surface_version()`: any
+  command, edit or move changes it): a 16-bead pack's descent asked 57% of its 12.6k
+  residuals, and half its 18k gaps, of a state it had just measured. The same
+  values (the gap's first reading where a second one differed at round-off: 1e-16);
+  with the guards' change below, six arclength steps of a 16-bead pack from step
+  240 at one thread 4.95e12 -> 3.53e12 instructions (867 -> 637 s), the same run
+  line for line.
+
 - Topology runs: the guards go on and off the vertices in one call
   (`_core.set_vertex_constraints`, one recalc) instead of a command per guard, each
   with its recalc, and only where they change; and writing pySE's scratch

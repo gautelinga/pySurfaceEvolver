@@ -35,6 +35,13 @@ _ELASTIC_METHODS = frozenset({
     "relaxed_elastic2_A", "dirichlet_elastic", "SVK_elastic", "neo_hookean",
     "stress_integral"})
 
+# residual() and _target_gap() of the surface as it last was, kept for its
+# version (_core.surface_version(): any edit, command or move changes it): a
+# 16-bead pack's descent asked 57% of its 12.6k residuals of a state it had
+# just measured (a run's check before relax(), relax()'s own at its start),
+# 73 s of a 1500 s replay, and the volumes' gap as often
+_measured: Dict[str, tuple] = {}
+
 class _Analysis(_Engine):
     """How the surface stands: equilibrium, stability, mesh quality, health."""
 
@@ -43,6 +50,10 @@ class _Analysis(_Engine):
         targets (the largest gap, relative to the target; absolute for a
         target of 0), and what closing the gaps costs in energy to first
         order (the sum of |pressure * gap|)."""
+        version = _core.surface_version()
+        kept = _measured.get("target_gap")
+        if kept is not None and kept[0] == version:
+            return kept[1]
         gaps: List[float] = []
         cost = 0.0
         b = self.bodies()
@@ -55,7 +66,10 @@ class _Analysis(_Engine):
             if q.kind == "fixed":
                 gaps.append(abs(q.target - q.value)/(abs(q.target) if q.target else 1.0))
                 cost += abs(q.pressure*(q.target - q.value))
-        return max(gaps, default=0.0), cost
+        out = max(gaps, default=0.0), cost
+        if _core.surface_version() == version:     # (nothing changed meanwhile)
+            _measured["target_gap"] = (version, out)
+        return out
 
     def _degenerate(self) -> bool:
         """Whether a facet is degenerate (an angle below 1 degree)."""
@@ -90,17 +104,25 @@ class _Analysis(_Engine):
         mean square times N, the imbalance times the length; in general the
         imbalance times the surface measure to the power 1/dimension.)
         """
+        version = _core.surface_version()
+        kept = _measured.get("residual")
+        if kept is not None and kept[0] == version:
+            return kept[1]
         _, result = self._call(_core.residual, self._elastic())
         r = np.asarray(result.data, dtype=float)
-        if len(r) == 0:
-            return 0.0
         area = _core.total_area()           # a string's length, a simplex's volume
-        if area <= 0:
-            return float(np.sqrt((r**2).sum()))
-        rep = _core.representation()
-        dim = 1 if rep == 1 else 2 if rep == 2 else int(self.eval("surface_dimension"))
-        n = max(_core.count(_core.VERTEX), 1)      # (r: the vertices, then the parameters)
-        return float(np.sqrt((r**2).sum()*n)/area**((dim - 1)/dim))
+        if len(r) == 0:
+            out = 0.0
+        elif area <= 0:
+            out = float(np.sqrt((r**2).sum()))
+        else:
+            rep = _core.representation()
+            dim = 1 if rep == 1 else 2 if rep == 2 else int(self.eval("surface_dimension"))
+            n = max(_core.count(_core.VERTEX), 1)      # (r: the vertices, then the parameters)
+            out = float(np.sqrt((r**2).sum()*n)/area**((dim - 1)/dim))
+        if _core.surface_version() == version:     # (nothing changed meanwhile)
+            _measured["residual"] = (version, out)
+        return out
 
     def health(self, tol: float = 1e-8, stability: bool = False) -> Health:
         """A check-up of the surface: is it in equilibrium (:meth:`residual`
