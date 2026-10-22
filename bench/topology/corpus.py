@@ -144,6 +144,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
             log.write(f"{time.time() - t0:8.1f}s step {state['step']:4d}  {text}\n")
             log.flush()
 
+    if checkpoints:
+        os.makedirs(checkpoints, exist_ok=True)
     logger = logging.getLogger("pysurfaceevolver.topology")
     logger.addHandler(Handler())
     logger.setLevel(logging.DEBUG)

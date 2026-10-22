@@ -213,6 +213,17 @@
   were against a side wall, most of the rest against a bead. A cut whose pieces
   don't settle at once goes on down in the descent's runs.
 
+- `constraints.sphere(..., gauge="flux")`: a sphere without poles. Its wetted area
+  is the flux of a point source at its centre through the liquid's facets plus
+  smooth line integrals on the other walls' contact lines (the divergence theorem
+  over the liquid), so no pole has to be kept off the contact lines and no
+  volume or area constant is left out; all spheres and planes of a datafile are
+  coupled through the integrals. The field is capped at half the radius, inside
+  the solid, where no liquid is (bounded at the centre; capped on the sphere
+  itself, its kink sat on the contact lines and broke Newton steps there).
+  Needs an open side (no closed box). bench/topology's corpus uses it for runs
+  to breakthrough.
+
 ### Speed
 
 - Evolver's volume projection (project_all) evaluates the energy with the content
@@ -248,6 +259,35 @@
   instead of a solve for each: about 0.1-0.2 s of a 1.1 s step on the free 98k
   quadratic cube.
 
+- The flux gauge's integrands in C at any number of spheres (no 64-term limit;
+  beyond it Evolver's interpreter, whose second derivatives of these powers are
+  wrong): four terms at a time (AVX2, a scalar path the same to the bit), value,
+  gradient and Hessian in closed form, one sum for the fields that share their
+  spheres (volume and wetting). Gradient step per facet at 64 beads 23.5 -> 5.8 us
+  (pole gauge 1.1), at 256 beads 2209 -> 14 us. Evolver's volume projection no
+  longer scans every energy expression for a pressure at each pass (known from the
+  parse; 19% of a 64-bead step).
+
+- Topology events (`Evolver.events`, and every look in a descent): the search's
+  loops in C (bindings/pyse_events.c: the surface near itself, with threads;
+  contact-line chains and pairs; distances to segments; grouping), the same events:
+  4-6 times faster at a 16-bead pack's 2-3k facets, 20-35 times with a large
+  factor.
+
+- The remesher: an edit's crossing checks only on the elements it changed (on a
+  surface without crossings at the start), smoothing moves' checks reduced to what
+  a move can change, grids hashed (only cells in use) with a box per entry,
+  snapshots per edits made (every facets/64 on a large surface) instead of per
+  candidate, no grid re-binning after smoothing moves, contact-line crossings by
+  grid: the same meshes to the bit, a full remesh of 14k facets 8.6 -> 2.4 s, of
+  106k 121 -> 25 s (about linear in the facets).
+
+- Newton steps: facet vector integrals' Hessians in closed form (linear model, 3D)
+  and the flux point sources' second derivatives as ten symmetric components; the
+  arclength corrector's two Newton steps from one factorization (197 -> 103 ms);
+  descents' gradient steps skip the move at scale 0 where nothing changed and take
+  a parabola's step from the energy's slope (11 -> 7 ms a step; off elsewhere).
+
 ### Documentation
 
 - New page "Draining through changes of topology" (docs/drainage_topology.md): a drop
@@ -274,6 +314,22 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
+  was dissolved and another made: Evolver gives the freed volume quantity's and
+  method instance's slots to the next ones, and the restore copied flags back slot
+  by slot, so the new body's volume was marked deleted under its live method (its
+  volume read 0; dumps declared a method they never wrote and didn't load). Freed
+  slots are now kept while a snapshot is held, and a restore brings them back.
+
+- Topology events: each vertex's edge length was the mean of other edges'
+  lengths (bincount weights out of order: 7-17% of a pack's vertices off by more
+  than a fifth), and the body behind or ahead of a vertex the last facet's, not
+  the largest. The neck factor (`NECK`) goes from 3 to 4, which keeps necks found
+  before they pinch with the true lengths.
+
+- `close_patches` asks for the walls' edges again after closing a patch (the
+  lists it had no longer matched the mesh: "operands could not be broadcast").
 
 - Evolver's Hessian setup with constraints kept apart (bk.c,
   `bk_constraint_setup`) counted each constraint's entries from each row's end,
