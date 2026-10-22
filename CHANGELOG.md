@@ -235,6 +235,15 @@
   240 at one thread 4.95e12 -> 3.53e12 instructions (867 -> 637 s), the same run
   line for line.
 
+- The table of each vertex's gap to each constraint (events, guards, remeshing
+  sizes, health) and the constraint normals at chosen vertices look each formula's
+  closed form up once per call, not per vertex, and the table's rows go in parallel
+  (threads) where every formula has one: at a 16-bead pack's 14k facets 108 -> 38
+  million instructions a table at one thread, `events()` 294 -> 217; the same
+  values bit for bit, threads or not. `guard()` builds its tables only for the
+  vertices within reach of a wall (122 -> 104 million instructions at 14k facets for
+  one that changes nothing).
+
 - Topology runs: the guards go on and off the vertices in one call
   (`_core.set_vertex_constraints`, one recalc) instead of a command per guard, each
   with its recalc, and only where they change; and writing pySE's scratch

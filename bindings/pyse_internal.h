@@ -14,6 +14,10 @@ long pyse_load_serial(void);
 
 /* changes to the native integrands (pyse_native.c): registrations, toggles */
 long pyse_native_serial(void);
+/* a constraint formula's closed form (pyse_native.c): its slot (-1: none,
+   Evolver's interpreter), and its value and gradient there */
+int pyse_native_formula_slot(struct expnode *ex);
+void pyse_native_formula_at(int slot, const REAL *x, REAL *f, REAL *grad);
 
 /* geometry (pyse_check.c) */
 REAL pyse_det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d);

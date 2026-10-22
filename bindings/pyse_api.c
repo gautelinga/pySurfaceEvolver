@@ -1089,31 +1089,68 @@ int pyse_constraint_list(int *nums, int *attrs, const char **names, int max, int
 
 struct gaps_args { const int *nums; int ncon; double *out; long n; };
 
-static void gaps_body(void *arg)
-{ struct gaps_args *a = (struct gaps_args *)arg;
+/* the vertices in row order (temp_calloc'd) */
+static vertex_id *vertex_list(long n)
+{ vertex_id *vs = (vertex_id*)temp_calloc((size_t)(n > 0 ? n : 1),sizeof(vertex_id));
   vertex_id v_id;
   long row = 0;
-  int c,i;
+  FOR_ALL_VERTICES(v_id)
+  { if ( row >= n ) inconsistent("too many vertices");
+    vs[row++] = v_id;
+  }
+  if ( row != n ) inconsistent("element count changed");
+  return vs;
+}
+
+/* constraint con's value and gradient at x: its closed form where it has
+   one (slot >= 0: pyse_native.c), else Evolver's interpreter */
+static void formula_at(int con, int slot, REAL *x, vertex_id v_id, REAL *f, REAL *grad)
+{ if ( slot >= 0 ) pyse_native_formula_at(slot,x,f,grad);
+  else eval_all(get_constraint(con)->formula,x,SDIM,f,grad,v_id);
+}
+
+/* (each formula's closed form looked up once, not at every vertex, and the
+   vertices in parallel where all have one: the table was 108 million
+   instructions at a 16-bead pack's 14k facets, and the topology runs ask
+   it after every change of the surface) */
+static void gaps_body(void *arg)
+{ struct gaps_args *a = (struct gaps_args *)arg;
+  vertex_id *vs;
+  int *slot;
+  long row;
+  int c, native = 1, threads;
   for ( c = 0 ; c < a->ncon ; c++ )
     if ( a->nums[c] < 0 || a->nums[c] >= web.maxcon
          || !(get_constraint(a->nums[c])->attr & IN_USE) )
       inconsistent("constraint list changed");
-  FOR_ALL_VERTICES(v_id)
-  { REAL *x = get_coord(v_id);
-    if ( row >= a->n ) inconsistent("too many vertices");
-    for ( c = 0 ; c < a->ncon ; c++ )
-    { double *o = a->out + (size_t)row*a->ncon + c;
-      if ( v_on_constraint(v_id,a->nums[c]) ) *o = NAN;
+  vs = vertex_list(a->n);
+  slot = (int*)temp_calloc((size_t)a->ncon + 1,sizeof(int));
+  for ( c = 0 ; c < a->ncon ; c++ )
+  { slot[c] = pyse_native_formula_slot(get_constraint(a->nums[c])->formula);
+    if ( slot[c] < 0 ) native = 0;
+  }
+  /* (the interpreter's stack is one per thread only in Evolver's own loops) */
+  threads = native && (double)a->n*a->ncon >= 200000.0 ? fl_threads() : 1;
+#ifdef _OPENMP
+  #pragma omp parallel for num_threads(threads > 1 ? threads : 1) schedule(static)
+#endif
+  for ( row = 0 ; row < a->n ; row++ )
+  { vertex_id v_id = vs[row];
+    REAL *x = get_coord(v_id);
+    int k, i;
+    for ( k = 0 ; k < a->ncon ; k++ )
+    { double *o = a->out + (size_t)row*a->ncon + k;
+      if ( v_on_constraint(v_id,a->nums[k]) ) *o = NAN;
       else
       { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
-        eval_all(get_constraint(a->nums[c])->formula,x,SDIM,&f,grad,v_id);
+        formula_at(a->nums[k],slot[k],x,v_id,&f,grad);
         for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
         *o = g > 0.0 ? (double)(f/sqrt(g)) : NAN;
       }
     }
-    row++;
   }
-  if ( row != a->n ) inconsistent("element count changed");
+  temp_free((char*)slot);
+  temp_free((char*)vs);
 }
 
 /* For each edge (mesh row order) and each of the constraints nums, whether
@@ -1187,42 +1224,27 @@ struct cnormals_args { int num; double *out; long n; const int64_t *rows; long n
 
 static void cnormals_body(void *arg)
 { struct cnormals_args *a = (struct cnormals_args *)arg;
-  vertex_id v_id;
-  long row = 0, k;
-  int i;
-  double *out = a->out;    /* (with rows: per vertex, then gathered) */
-  unsigned char *want = NULL;
+  vertex_id *vs;
+  long k, count = a->rows ? a->nrows : a->n;
+  int i, slot;
   if ( a->num < 0 || a->num >= web.maxcon || !(get_constraint(a->num)->attr & IN_USE) )
     inconsistent("no such constraint");
-  if ( a->rows )
-  { out = (double*)temp_calloc((size_t)(a->n > 0 ? a->n : 1)*3,sizeof(double));
-    want = (unsigned char*)temp_calloc((size_t)(a->n > 0 ? a->n : 1),1);
-    for ( k = 0 ; k < a->nrows ; k++ )
-    { if ( a->rows[k] < 0 || a->rows[k] >= a->n ) inconsistent("vertex row out of range");
-      want[a->rows[k]] = 1;
-    }
-  }
-  FOR_ALL_VERTICES(v_id)
-  { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
-    double *o = out + (size_t)row*3;
-    if ( row >= a->n ) inconsistent("too many vertices");
-    if ( want && !want[row] ) { row++; continue; }
+  for ( k = 0 ; a->rows && k < a->nrows ; k++ )
+    if ( a->rows[k] < 0 || a->rows[k] >= a->n ) inconsistent("vertex row out of range");
+  vs = vertex_list(a->n);
+  slot = pyse_native_formula_slot(get_constraint(a->num)->formula);
+  for ( k = 0 ; k < count ; k++ )
+  { vertex_id v_id = vs[a->rows ? a->rows[k] : k];
+    REAL f = 0.0, grad[MAXCOORD], g = 0.0;
+    double *o = a->out + (size_t)k*3;
     for ( i = 0 ; i < MAXCOORD ; i++ ) grad[i] = 0.0;
-    eval_all(get_constraint(a->num)->formula,get_coord(v_id),SDIM,&f,grad,v_id);
+    formula_at(a->num,slot,get_coord(v_id),v_id,&f,grad);
     for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
     g = sqrt(g);
     for ( i = 0 ; i < 3 ; i++ )
       o[i] = (g > 0.0 && i < SDIM) ? (double)(grad[i]/g) : (g > 0.0 ? 0.0 : NAN);
-    row++;
   }
-  if ( row != a->n ) inconsistent("element count changed");
-  if ( a->rows )
-  { for ( k = 0 ; k < a->nrows ; k++ )
-      for ( i = 0 ; i < 3 ; i++ )
-        a->out[k*3 + i] = out[a->rows[k]*3 + i];
-    temp_free((char*)out);
-    temp_free((char*)want);
-  }
+  temp_free((char*)vs);
 }
 
 int pyse_constraint_normals(int num, double *out, long n)

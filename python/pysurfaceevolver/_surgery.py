@@ -135,19 +135,25 @@ def guard(ev) -> None:
         names = [str(n) for n in names]
     m = ev.mesh()
     real = [i for i, n in enumerate(names) if not n.startswith(GUARD_PREFIX)]
-    on = np.isnan(dist[:, real]) if real else np.zeros((len(m.vertices), 0), dtype=bool)
+    cols = [_column(nums, names, key) for key in walls]
+    h = _edge_scale(ev)
+    # (the tables below only for the vertices within reach of a wall and free
+    # to move, sel: the others take no guard, and over all of them the tables
+    # were most of a guard() that changed nothing at 14k facets)
+    with np.errstate(invalid="ignore"):
+        sel = np.flatnonzero((np.abs(dist[:, cols]) <= _GUARD_REACH*h).any(axis=1)
+                             & ~np.asarray(m.fixed, dtype=bool))
+    on = np.isnan(dist[np.ix_(sel, real)]) if real else np.zeros((len(sel), 0), dtype=bool)
     # (the guards a vertex can take: _GUARDS less the walls it is on, so it
     # hits no more constraints than that at once: unguarded, a contact
     # line's vertex on a side wall went 0.17 out through the side wall it
     # meets at the box's edge, run after run undone)
-    room = np.where(np.asarray(m.fixed, dtype=bool), 0, _GUARDS - on.sum(axis=1))
-    cols = [_column(nums, names, key) for key in walls]
-    h = _edge_scale(ev)
+    room = _GUARDS - on.sum(axis=1)
     # (not a vertex through the solid by more than a tenth of an edge: the
     # surface gone through it is a contact to make, and put on the guard,
     # Evolver projected it out: a pack's vertex 0.47 inside a bead, on
     # another bead's guard too, went 3.9 onto both, out of the box)
-    signed = dist[:, cols]
+    signed = dist[np.ix_(sel, cols)]
     gap = np.abs(np.nan_to_num(signed, nan=np.inf))
     gap[room <= 0] = np.inf
     gap[np.nan_to_num(signed, nan=0.0) < -0.1*h] = np.inf
@@ -159,10 +165,8 @@ def guard(ev) -> None:
     # as before that: a free vertex by a bead in the corner, guarded against
     # the bead and one side, went 0.23 out through the other)
     order = _guard_order(gap)
-    chosen = np.zeros_like(gap, dtype=bool)
-    rows = np.arange(len(gap))[:, None]
-    chosen[rows, order] = np.isfinite(gap[rows, order]) \
-        & (np.arange(order.shape[1])[None, :] < room[:, None])
+    rows = np.arange(len(sel))[:, None]
+    picked = np.isfinite(gap[rows, order]) & (np.arange(order.shape[1])[None, :] < room[:, None])
     # (not two whose normals there are within 10 degrees of each other, nor
     # one within 10 degrees of a wall the vertex is on: a free vertex in the
     # 0.015 gap where a bead touches a side wall, on both guards, left
@@ -173,7 +177,7 @@ def guard(ev) -> None:
     # its guards' walls, each constraint's at the vertices that have it, in
     # one call: a loop over the walls and the guards, the normals gathered a
     # vertex at a time, was most of a guard() that changed nothing)
-    need = np.flatnonzero((chosen.any(axis=1) & on.any(axis=1)) | (chosen.sum(axis=1) >= 2))
+    need = np.flatnonzero((picked.any(axis=1) & on.any(axis=1)) | (picked.sum(axis=1) >= 2))
     if len(need):
         # the walls each is on (columns of the table; -1: none), at most _GUARDS
         on_cols = np.full((len(need), _GUARDS), -1)
@@ -182,11 +186,18 @@ def guard(ev) -> None:
         keep = k_ < _GUARDS
         on_cols[r_[keep], k_[keep]] = np.asarray(real)[c_[keep]]
         g_cols = np.asarray(cols)[order[need]]                  # its guards' walls, nearest first
+        sub = picked[need]
+        # (each column's rows: those it is on, those it guards)
+        pairs = np.unique(np.r_[on_cols.ravel()*len(need) + np.repeat(np.arange(len(need)), _GUARDS),
+                                np.where(sub, g_cols, -1).ravel()*len(need)
+                                + np.repeat(np.arange(len(need)), order.shape[1])])
+        pairs = pairs[pairs >= 0]
+        q_, at_ = pairs // len(need), pairs % len(need)
         unit = np.zeros((len(names), len(need), 3))
-        for q in np.unique(np.r_[on_cols[on_cols >= 0], g_cols[chosen[need[:, None], order[need]]]]):
-            at = np.flatnonzero((on_cols == q).any(axis=1) | (g_cols == q).any(axis=1))
+        for q, start, stop in zip(*_runs(q_)):
+            at = at_[start:stop]
             _, grad = ev._call(_core.constraint_normals_at, int(nums[q]),
-                               np.ascontiguousarray(need[at], dtype=np.int64))
+                               np.ascontiguousarray(sel[need[at]], dtype=np.int64))
             grad = np.asarray(grad.data)
             unit[q, at] = grad/np.maximum(np.linalg.norm(grad, axis=1), 1e-300)[:, None]
 
@@ -194,16 +205,17 @@ def guard(ev) -> None:
             """Rows at whose normals of columns qa and qb are within 10 degrees."""
             return at[np.abs(np.einsum("ij,ij->i", unit[qa[at], at], unit[qb[at], at])) > 0.985]
 
-        picked = chosen[need[:, None], order[need]]
         for far in range(order.shape[1]):
             for k in range(_GUARDS):
-                picked[tangent(np.flatnonzero(picked[:, far] & (on_cols[:, k] >= 0)),
-                               on_cols[:, k], g_cols[:, far]), far] = False
+                sub[tangent(np.flatnonzero(sub[:, far] & (on_cols[:, k] >= 0)),
+                            on_cols[:, k], g_cols[:, far]), far] = False
         for near in range(order.shape[1]):
             for far in range(near + 1, order.shape[1]):
-                picked[tangent(np.flatnonzero(picked[:, near] & picked[:, far]),
-                               g_cols[:, near], g_cols[:, far]), far] = False
-        chosen[need[:, None], order[need]] = picked
+                sub[tangent(np.flatnonzero(sub[:, near] & sub[:, far]),
+                            g_cols[:, near], g_cols[:, far]), far] = False
+        picked[need] = sub
+    chosen = np.zeros((len(dist), len(cols)), dtype=bool)
+    chosen[sel[:, None], order] = picked
     # only what changed from the guards the vertices are on (those of walls
     # gone taken off), all at once, one recalc: unguarded and guarded again a
     # command per guard, each with its recalc, guard() was 0.7 G instructions
@@ -215,6 +227,14 @@ def guard(ev) -> None:
     _set_guards(ev, [int(nums[i]) for i in gone + gcols],
                 np.c_[np.isnan(dist[:, gone]), now & ~chosen], False)
     _set_guards(ev, [int(nums[i]) for i in gcols], chosen & ~now, True)
+
+
+def _runs(keys: np.ndarray) -> tuple:
+    """The runs of equal values in sorted keys: (each run's value, start, stop)."""
+    if not len(keys):
+        return keys, keys, keys
+    start = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
+    return keys[start], start, np.r_[start[1:], len(keys)]
 
 
 def _set_guards(ev, nums: list, mask: np.ndarray, on: bool) -> None:

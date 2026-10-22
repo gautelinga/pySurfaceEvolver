@@ -1265,6 +1265,22 @@ int pyse_native_formula(struct expnode *ex, REAL *x, REAL *f, REAL *grad)
   return 0;
 }
 
+/* The slot of the closed form eval_all() takes for ex (as above), or -1:
+   looked up once for a loop over the vertices (pyse_api.c's gap and normal
+   queries), whose evaluations then go straight to it, the same values */
+int pyse_native_formula_slot(struct expnode *ex)
+{ int i;
+  if ( !ex || !(ex->flag & PYSE_NATIVE_FORMULA) || formula_load != pyse_load_serial() )
+    return -1;
+  for ( i = 0 ; i < formula_count ; i++ )
+    if ( formulas[i].key == ex ) return i;
+  return -1;
+}
+
+void pyse_native_formula_at(int slot, const REAL *x, REAL *f, REAL *grad)
+{ formula_value(formulas + slot,x,f,grad);
+}
+
 /* register constraint con's formula as a plane (kind 0: n, d) or a sphere
    (kind 1: c, R^2); 1 if registered (the closed form matching the
    interpreter, value and gradient, at test points), else 0 */
