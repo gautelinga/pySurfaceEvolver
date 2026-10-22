@@ -13,7 +13,7 @@ import numpy as np
 from . import _core
 
 KINDS = ("neck", "touch", "solid", "contact lines")
-NECK = 3.0      # a neck counts within this many times the gap two sheets do
+NECK = 4.0      # a neck counts within this many times the gap two sheets do
 WEDGE = 0.7     # next to a contact line: closer than this share of its wedge's height
 
 
@@ -89,18 +89,23 @@ def find(ev, factor: float, self_factor: Optional[float] = None) -> List[Event]:
     # where it has some (fixed facets often draw a pad or a table, coarsely)
     fixed = np.asarray(m.fixed, bool)
     free = ~fixed[e[:, 0]] & ~fixed[e[:, 1]]
-    h = np.bincount(e.ravel(), np.r_[length, length], minlength=n)/np.maximum(count, 1)
+    # (the weights each edge's length twice in a row, as ravel() lists its
+    # two ends: listed all once and then again, 7-17% of a pack's vertices
+    # had a scale off by more than a fifth, other edges' lengths)
+    h = np.bincount(e.ravel(), np.repeat(length, 2), minlength=n)/np.maximum(count, 1)
     nfree = np.bincount(e[free].ravel(), minlength=n)
-    hfree = np.bincount(e[free].ravel(), np.r_[length[free], length[free]], minlength=n)
+    hfree = np.bincount(e[free].ravel(), np.repeat(length[free], 2), minlength=n)
     h = np.where(nfree > 0, hfree/np.maximum(nfree, 1), h)
     bodies = np.zeros((len(f), 2), dtype=np.int64) if m.facet_bodies is None \
         else np.asarray(m.facet_bodies)
     # the body on each side of a vertex: the facets' normals point out of
     # their front body, so it lies behind (-normal) and the back body in front
     behind, ahead = np.zeros(n, dtype=np.int64), np.zeros(n, dtype=np.int64)
+    # (unbuffered: an assignment through f[:, i] kept the last facet's body
+    # where a vertex has several facets in that column)
     for i in range(3):
-        behind[f[:, i]] = np.maximum(behind[f[:, i]], bodies[:, 0])
-        ahead[f[:, i]] = np.maximum(ahead[f[:, i]], bodies[:, 1])
+        np.maximum.at(behind, f[:, i], bodies[:, 0])
+        np.maximum.at(ahead, f[:, i], bodies[:, 1])
     with_bodies = bool(bodies.any())
     moving = used & ~np.asarray(m.fixed, bool)
     events = _self(x, f, e, h, normal, behind, ahead, with_bodies, moving & ~folded,
@@ -168,10 +173,13 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
     the normal; not within two edges of it, where a fold of the mesh can
     face back): a neck when a body lies across, a touch when the outside
     does. Two sheets count within factor*h, a neck within NECK*factor*h
-    across: a neck is round, and a ring of fewer than about five edges no
-    longer follows it (NECK*0.5 edges across: five round), where Evolver's
+    across: a neck is round, and a ring of fewer than about six edges no
+    longer follows it (NECK*0.5 edges across: six round), where Evolver's
     tiny-edge deletion soon closes it; curved edges follow it further
-    (neck_factor: NECK over the elements' order)."""
+    (neck_factor: NECK over the elements' order). (NECK was 3 while h, each
+    vertex's edge length, was other edges' mean: at a thinning waist 1.1-1.35
+    times the true one; with the true h, 3 let a bridge pinch between two
+    looks, 0.43 across at the last, under 0.37 to count.)"""
     r = factor*h
     reach = max(neck_factor, 1.0)
     if not moving.any():

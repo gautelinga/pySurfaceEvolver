@@ -349,7 +349,9 @@ def test_arclength_stops_before_a_growing_drop_touches_a_solid():
     assert 0 <= last.events[0].gap < 0.5*last.events[0].scale
     assert steps[-2].events and all(not s.events for s in steps[:-2])     # closer at the last
     top = ev.vertices[:, 2].max()
-    assert 0.9 < top < 1.0                  # below the sphere's bottom, close to it
+    # below the sphere's bottom, within the event's reach of it (the apex's
+    # own edge length)
+    assert 0 < 1.0 - top < last.events[0].scale
 
 
 def test_continuation_stops_before_a_growing_drop_touches_a_solid():
