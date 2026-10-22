@@ -107,6 +107,9 @@ struct ctx
   REAL box_lo[3], box_hi[3];
   int clean;                       /* no crossings when the remesh began: see patch() */
   int in_cells;                    /* a smoothing batch: its moves leave elements in their cells */
+  int fresh;                       /* its grids built for it (else its moves put their elements in) */
+  struct snapshot *snap;           /* the batch's: see before() */
+  int snapping, snap_k, cur_k;     /* the batch takes them; the edit it was taken for; now */
   int readd;                       /* this move doesn't: its elements put in again */
 };
 
@@ -949,9 +952,14 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
 }
 
 /* the patch round verts before an edit: its problems, and its elements
-   as they are, which after() tells the changed of */
+   as they are, which after() tells the changed of. The batch's snapshot
+   taken here if it has none (every edit calls this before it changes
+   anything): a batch that changes nothing takes none (a remesh near a
+   change took nine, each the whole surface, for a few edits) */
 static void before(struct ctx *c, struct ids *verts, struct counts *was)
-{ patch(c,verts,was,PATCH_BEFORE,NULL,NULL); }
+{ if ( c->snapping && !c->snap ) { c->snap = pyse_snapshot_hold(); c->snap_k = c->cur_k; }
+  patch(c,verts,was,PATCH_BEFORE,NULL,NULL);
+}
 
 /* PYSE_EDIT_* of the first count that grew (pinches may grow where allowed) */
 static int worse(struct counts *was, struct counts *now, int pinch_ok)
@@ -1428,7 +1436,7 @@ static int smooth(struct ctx *c, vertex_id v)
   project(v);
   { /* its elements put in the grids again where the move (projected) went
        past their items' padding, or v moved before since the grids were
-       built */
+       built, or they weren't built for this batch */
     long o = ordinal(v), i;
     REAL far = 0;
     for ( k = 0 ; k < 3 ; k++ ) if ( !(fabs(x[k] - old[k]) <= far) ) far = fabs(x[k] - old[k]);
@@ -1439,7 +1447,7 @@ static int smooth(struct ctx *c, vertex_id v)
       for ( i = c->moved_size ; i < m ; i++ ) c->moved[i] = 0;
       c->moved_size = m;
     }
-    c->readd = !(far <= c->pad) || c->moved[o] == c->epoch;
+    c->readd = !c->fresh || !(far <= c->pad) || c->moved[o] == c->epoch;
   }
   why = few ? moved_after(c,v,&was) : after(c,&verts,&was,0);
   c->readd = 0;
@@ -2090,40 +2098,52 @@ static int one(struct ctx *c, struct edit_args *a, int k)
 #define SMOOTH_PAD 0.3
 
 static void run_batch(struct ctx *c, struct edit_args *a)
-{ struct snapshot *s = NULL;
-  REAL pad;
-  int k, j, base = 0, made = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
+{ int k, j, base, made = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
   a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
   for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
   c->in_cells = a->op == PYSE_OP_SMOOTH;
-  pad = c->in_cells ? SMOOTH_PAD*c->h : 0.0;
-  /* (the grids of the batch before kept where its padding serves and its
-     changed lists are short: not for a smoothing batch, whose moves are
-     checked against where its vertices were when they were built) */
-  if ( !c->fgrid.built || c->in_cells || pad != c->pad
-       || 4*(c->fgrid.xn + c->egrid.xn) > c->fgrid.total + c->egrid.total )
-  { c->pad = pad;
-    grids_build(c);
+  /* (the grids of the batch before kept where their changed lists are
+     short, and either the batch is small, its edits' elements then put in
+     the changed lists, or for one of splits, collapses or flips, they have
+     no padding; else built again, for a smoothing batch padded so that its
+     moves leave their elements in their items. A remesh near a change on a
+     30k-facet pack built them 13 times for 100 vertices, a fifth of its
+     time) */
+  { long total = c->fgrid.total + c->egrid.total;
+    int few = 256L*count < total;
+    int keep = c->fgrid.built && 4*(c->fgrid.xn + c->egrid.xn) <= total
+               && (few || (!c->in_cells && c->pad == 0));
+    if ( !keep )
+    { c->pad = c->in_cells ? SMOOTH_PAD*c->h : 0.0;
+      grids_build(c);
+    }
+    c->fresh = c->in_cells && !keep;
   }
+  c->snap = NULL;
+  c->snapping = a->op != PYSE_OP_SMOOTH;
   for ( k = 0 ; k < count ; k++ )
   { int r;
-    if ( !s && a->op != PYSE_OP_SMOOTH ) { s = pyse_snapshot_hold(); base = k; made = 0; }
-    else if ( s && made >= BATCH_CHECKPOINT )
-    { /* (the edits before k kept: replays start here; edits made, not
-         candidates, counted: a snapshot is the whole surface, and every 32
-         candidates a pass over all edges took one per 32 of them, 2700 in a
-         remesh of 15k facets, a fifth of its 8 s, quadratic in the facets) */
-      pyse_snapshot_drop(s);
-      s = pyse_snapshot_hold();
-      base = k;
+    c->cur_k = k;
+    if ( c->snap && made >= BATCH_CHECKPOINT )
+    { /* (the edits before k kept: replays start at the next one's
+         snapshot; edits made, not candidates, counted: a snapshot is the
+         whole surface, and every 32 candidates a pass over all edges took
+         one per 32 of them, 2700 in a remesh of 15k facets, a fifth of its
+         8 s, quadratic in the facets) */
+      pyse_snapshot_drop(c->snap);
+      c->snap = NULL;
       made = 0;
     }
     r = one(c,a,k);
     if ( r >= 0 ) { a->results[k] = r; made += r == PYSE_EDIT_DONE; continue; }
     a->results[k] = -r;
+    if ( !c->snap )
+      kb_error(PYSE_ERR_BAD_ARGUMENT,"Internal error: an edit changed the surface before "
+               "its checks.\n",RECOVERABLE);
+    base = c->snap_k;
     for ( ;; )
     { int again = 0;
-      pyse_snapshot_put_back(s);
+      pyse_snapshot_put_back(c->snap);
       grids_build(c);
       for ( j = base ; j < k && !again ; j++ )
         if ( a->results[j] == PYSE_EDIT_DONE )
@@ -2138,7 +2158,11 @@ static void run_batch(struct ctx *c, struct edit_args *a)
       if ( !again ) break;
     }
   }
-  if ( s ) pyse_snapshot_drop(s);
+  if ( c->snap ) pyse_snapshot_drop(c->snap);
+  else if ( c->snapping && count )
+    free_discards(DISCARDS_ALL);   /* (as the snapshot it didn't take: the same numbering after) */
+  c->snap = NULL;
+  c->snapping = 0;
   temp_free((char *)a->keys);
   a->keys = NULL;
 }
@@ -2342,18 +2366,67 @@ static void record(struct crossing_args *a, long n, const REAL *x)
    sharing no vertex, crossing as seen along the constraint's normal at their
    middle (both lie on the wall, so neither goes through a facet and
    crossings_of misses them: two lines on a 16-bead pack's bead crossed, and
-   the runs after were undone for the crossings that came of it later) */
-static long line_crossings(REAL h, struct crossing_args *a)
-{ struct ids L = {0,0,0};
-  edge_id e;
-  long n = 0;
-  int i, j;
+   the runs after were undone for the crossings that came of it later).
+   Each pair once, in the order of a scan of all pairs (by c's edge grid:
+   all pairs, 3k lines on a 30k-facet pack, were most of a count) */
+struct line_hit { int j; REAL mid[3]; };
+
+/* line L[i] against the line on item it (at: L's places + 1 by ordinal):
+   a crossing with one after it in L into hits */
+static void line_hit(struct ctx *c, struct crossing_args *a, struct ids *L, int i, int *at,
+                     const struct gitem *it, const REAL *lo, const REAL *hi,
+                     struct line_hit **hits, int *nh, int *mh)
+{ edge_id o;
   REAL mid[MAXCOORD];
+  if ( apart(it,lo,hi,1e-9*c->h) || it->ord > web.skel[EDGE].max_ord ) return;
+  if ( at[it->ord] <= i + 1 ) return;          /* (not a line, or not after L[i]) */
+  o = get_ordinal_id(EDGE,it->ord);
+  if ( !mark(c,o) || !lines_cross(L->a[i],o,c->h,a->far,mid) ) return;
+  if ( *nh == *mh )
+  { *mh = *mh ? 2**mh : 16;
+    *hits = *hits ? (struct line_hit *)temp_realloc((char *)*hits,*mh*sizeof(**hits))
+                  : (struct line_hit *)temp_calloc(*mh,sizeof(**hits));
+  }
+  (*hits)[*nh].j = at[it->ord];
+  (*hits)[*nh].mid[0] = mid[0]; (*hits)[*nh].mid[1] = mid[1]; (*hits)[*nh].mid[2] = mid[2];
+  (*nh)++;
+}
+
+static int by_j(const void *x, const void *y)
+{ return ((const struct line_hit *)x)->j - ((const struct line_hit *)y)->j; }
+
+static long line_crossings(struct ctx *c, struct crossing_args *a)
+{ struct ids L = {0,0,0};
+  struct grid *g = &c->egrid;
+  struct line_hit *hits = NULL;
+  edge_id e;
+  long n = 0, k, x, y, z, lo_c[3], hi_c[3];
+  int i, nh = 0, mh = 0, *at;
   FOR_ALL_EDGES(e)
     if ( is_line(e) ) push(&L,e);
+  /* each line's place in L, + 1, by ordinal */
+  at = (int *)temp_calloc(web.skel[EDGE].max_ord + 1,sizeof(int));
+  for ( i = 0 ; i < L.n ; i++ ) at[ordinal(L.a[i])] = i + 1;
   for ( i = 0 ; i < L.n ; i++ )
-    for ( j = i + 1 ; j < L.n ; j++ )
-      if ( lines_cross(L.a[i],L.a[j],h,a->far,mid) ) { n++; record(a,1,mid); }
+  { REAL lo[3], hi[3];
+    elem_box(L.a[i],lo,hi,0.0);
+    cells(g,lo,hi,lo_c,hi_c);
+    c->stamp_now++;
+    nh = 0;
+    for ( z = lo_c[2] ; z <= hi_c[2] ; z++ ) for ( y = lo_c[1] ; y <= hi_c[1] ; y++ )
+      for ( x = lo_c[0] ; x <= hi_c[0] ; x++ )
+      { long s = slot_probe(g,CELL(g,x,y,z));
+        if ( g->key[s] < 0 ) continue;
+        for ( k = g->bstart[s] ; k < g->bstart[s] + g->bcount[s] ; k++ )
+          line_hit(c,a,&L,i,at,&g->items[k],lo,hi,&hits,&nh,&mh);
+        for ( k = g->xhead[s] ; k >= 0 ; k = g->xnext[k] )
+          line_hit(c,a,&L,i,at,&g->xitems[k],lo,hi,&hits,&nh,&mh);
+      }
+    if ( nh > 1 ) qsort(hits,(size_t)nh,sizeof(*hits),by_j);
+    for ( k = 0 ; k < nh ; k++ ) { n++; record(a,1,hits[k].mid); }
+  }
+  temp_free((char *)at);
+  if ( hits ) temp_free((char *)hits);
   if ( L.a ) temp_free((char *)L.a);
   return n;
 }
@@ -2369,7 +2442,7 @@ static int surface_clean(struct ctx *c)
   grids_build(c);                  /* (each batch builds them again) */
   FOR_ALL_EDGES(e)
     if ( crossings_of(c,e,&none) ) return 0;
-  line_crossings(c->h,&a);
+  line_crossings(c,&a);
   return a.count == 0;
 }
 
@@ -2397,7 +2470,7 @@ static void crossing_body(void *arg)
     else a->count += n;
   }
   far_only = 0;
-  line_crossings(c.h,a);
+  line_crossings(&c,a);
 }
 
 int pyse_crossings(int far, long *count, double *where, long max)
