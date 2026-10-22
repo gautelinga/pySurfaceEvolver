@@ -104,12 +104,17 @@ struct ctx
   long sig_size[NUMELEMENTS];
   REAL *gaps;                      /* per vertex and wall: x, y, z, the gap there */
   long gaps_size;                  /* vertex ordinals it has room for */
+  REAL *reach;                     /* per vertex: x, y, z, vertex_reach there */
+  long reach_size;
   REAL box_lo[3], box_hi[3];
   int clean;                       /* no crossings when the remesh began: see patch() */
   int in_cells;                    /* a smoothing batch: its moves leave elements in their cells */
   int fresh;                       /* its grids built for it (else its moves put their elements in) */
   struct snapshot *snap;           /* the batch's: see before() */
   int snapping, snap_k, cur_k;     /* the batch takes them; the edit it was taken for; now */
+  struct edit_args *batch;         /* the batch's, its keys taken when its first edit is made */
+  int grids_due;                   /* the grids to be built when first needed, padded so */
+  REAL due_pad;
   int readd;                       /* this move doesn't: its elements put in again */
 };
 
@@ -836,6 +841,57 @@ static int edge_solid(struct ctx *c, int w, edge_id e)
   return -side*pyse_wall_gap(wc,mid) > c->tol*c->h;
 }
 
+/* how far vertex v is in the solid of the wall it is deepest in (-side
+   times its gap, the most over all walls, those it is on too: about 0
+   there; infinite where a gap isn't a number), kept while v stays where
+   it was: no wall's solid has v or an edge of it unless this is near
+   (the walls looked at one by one for each vertex and edge of a patch,
+   20 walls on a 16-bead pack, were a tenth of a remesh) */
+static double vertex_reach(struct ctx *c, vertex_id v)
+{ long ord = ordinal(v), i;
+  REAL *x = get_coord(v), *r;
+  if ( ord >= c->reach_size )
+  { long m = 2*ord + 64;
+    c->reach = c->reach ? (REAL *)temp_realloc((char *)c->reach,m*4*sizeof(REAL))
+                        : (REAL *)temp_calloc(m*4,sizeof(REAL));
+    for ( i = c->reach_size*4 ; i < m*4 ; i++ ) c->reach[i] = NAN;
+    c->reach_size = m;
+  }
+  r = c->reach + 4*ord;
+  if ( !(r[0] == x[0] && r[1] == x[1] && r[2] == x[2]) )
+  { double most = -HUGE_VAL;
+    int w, nan = 0;
+    for ( w = 0 ; w < c->nwalls ; w++ )
+    { double d = -(c->sides[w] < 0 ? -1.0 : 1.0)*vertex_gap(c,w,v);
+      if ( d != d ) nan = 1;
+      else if ( d > most ) most = d;
+    }
+    r[0] = x[0]; r[1] = x[1]; r[2] = x[2];
+    r[3] = nan ? HUGE_VAL : most;
+  }
+  return (double)r[3];
+}
+
+/* vertex v's and edge e's counts in the walls' solids (those of each
+   wall it is near) */
+static int vertex_solids(struct ctx *c, vertex_id v)
+{ int w, n = 0;
+  if ( !valid_element(v) || !(vertex_reach(c,v) > c->tol*c->h) ) return 0;
+  for ( w = 0 ; w < c->nwalls ; w++ ) n += vertex_solid(c,w,v);
+  return n;
+}
+
+static int edge_solids(struct ctx *c, edge_id e)
+{ vertex_id t = get_edge_tailv(e), hh = get_edge_headv(e);
+  double deep = vertex_reach(c,t);
+  int w, n = 0;
+  if ( vertex_reach(c,hh) > deep ) deep = vertex_reach(c,hh);
+  /* (as edge_solid skips each wall: deeper in none) */
+  if ( deep + dist3(get_coord(t),get_coord(hh)) < c->tol*c->h ) return 0;
+  for ( w = 0 ; w < c->nwalls ; w++ ) n += edge_solid(c,w,e);
+  return n;
+}
+
 /* a patch's stage: before an edit, after it, or only looked at */
 enum { PATCH_BEFORE, PATCH_AFTER, PATCH_CHECK };
 
@@ -845,7 +901,7 @@ enum { PATCH_BEFORE, PATCH_AFTER, PATCH_CHECK };
 static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
                   struct ids *out_e, struct ids *out_f)
 { struct ids E = {0,0,0}, F = {0,0,0}, CE = {0,0,0}, CF = {0,0,0};
-  int i, w, guard;
+  int i, guard;
   edge_id e, e0;
   memset(k,0,sizeof(*k));
   c->stamp_now++;
@@ -911,10 +967,8 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
   }
 
   /* solids */
-  for ( w = 0 ; w < c->nwalls ; w++ )
-  { for ( i = 0 ; i < verts->n ; i++ ) k->solid += vertex_solid(c,w,verts->a[i]);
-    for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solid(c,w,E.a[i]);
-  }
+  for ( i = 0 ; i < verts->n ; i++ ) k->solid += vertex_solids(c,verts->a[i]);
+  for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solids(c,E.a[i]);
 
   /* the elements the edit changed (all, without a record from before it) */
   if ( stage == PATCH_AFTER )
@@ -956,8 +1010,20 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
    taken here if it has none (every edit calls this before it changes
    anything): a batch that changes nothing takes none (a remesh near a
    change took nine, each the whole surface, for a few edits) */
+static void keys_now(struct edit_args *a);
+
+/* the grids built if they are due (see run_batch) */
+static void ensure_grids(struct ctx *c)
+{ if ( !c->grids_due ) return;
+  c->grids_due = 0;
+  c->pad = c->due_pad;
+  grids_build(c);
+}
+
 static void before(struct ctx *c, struct ids *verts, struct counts *was)
 { if ( c->snapping && !c->snap ) { c->snap = pyse_snapshot_hold(); c->snap_k = c->cur_k; }
+  if ( c->batch ) keys_now(c->batch);
+  ensure_grids(c);
   patch(c,verts,was,PATCH_BEFORE,NULL,NULL);
 }
 
@@ -1003,7 +1069,8 @@ static void moved_patch(struct ctx *c, vertex_id v, struct counts *k, int stage,
                         struct ids *out_e, struct ids *out_f)
 { struct ids E = {0,0,0}, F = {0,0,0}, L = {0,0,0};
   edge_id e, e0;
-  int i, w, guard;
+  int i, guard;
+  ensure_grids(c);
   memset(k,0,sizeof(*k));
   c->stamp_now++;
   EACH_EDGE_AT(v,e,e0,guard)
@@ -1030,10 +1097,8 @@ static void moved_patch(struct ctx *c, vertex_id v, struct counts *k, int stage,
     pyse_facet_normal(F.a[i],n,&area);
     if ( area < 1e-10*c->h*c->h ) k->degenerate++;
   }
-  for ( w = 0 ; w < c->nwalls ; w++ )
-  { k->solid += vertex_solid(c,w,v);
-    for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solid(c,w,E.a[i]);
-  }
+  k->solid += vertex_solids(c,v);
+  for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solids(c,E.a[i]);
   if ( stage == PATCH_AFTER )
   { struct ids P = {0,0,0};        /* the patch's edges: at v and its neighbours */
     for ( i = 0 ; i < E.n ; i++ ) k->crossing += crossings_of(c,E.a[i],&F);
@@ -2009,6 +2074,7 @@ struct edit_args
   int manifold;
   int *results;
   long *keys;
+  int keyed;                       /* keys taken (else the elements are as when the batch began) */
 };
 
 static int op_type(int op)
@@ -2046,6 +2112,20 @@ static long key(element_id id)
   return ordinal(id);
 }
 
+/* the keys of the batch's elements as they are, before its first edit
+   changes anything (their keys then: a batch of a whole surface's facets,
+   few of them edited, took them all first, a quarter of its time) */
+static void keys_now(struct edit_args *a)
+{ int k;
+  if ( a->keyed ) return;
+  for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
+  a->keyed = 1;
+}
+
+/* element i's key when the batch began */
+static long key_was(struct edit_args *a, int i)
+{ return a->keyed ? a->keys[i] : key(item(a->op,a->ids[i])); }
+
 static int one(struct ctx *c, struct edit_args *a, int k)
 { element_id id, id2;
   int op = a->op;
@@ -2055,7 +2135,7 @@ static int one(struct ctx *c, struct edit_args *a, int k)
     int i, r;
     for ( i = 1 ; i < a->n ; i++ )
     { fs[i-1] = item(op,a->ids[i]);
-      if ( !valid_id(fs[i-1]) || key(fs[i-1]) != a->keys[i] ) { temp_free((char *)fs); return PYSE_EDIT_GONE; }
+      if ( !valid_id(fs[i-1]) || key(fs[i-1]) != key_was(a,i) ) { temp_free((char *)fs); return PYSE_EDIT_GONE; }
     }
     r = patch_on(c,(int)a->ids[0],fs,a->n - 1);
     temp_free((char *)fs);
@@ -2064,8 +2144,8 @@ static int one(struct ctx *c, struct edit_args *a, int k)
   if ( paired(op) )
   { id = item(op,a->ids[2*k]);
     id2 = item(op,a->ids[2*k+1]);
-    if ( !valid_id(id) || !valid_id(id2) || key(id) != a->keys[2*k]
-         || key(id2) != a->keys[2*k+1] ) return PYSE_EDIT_GONE;
+    if ( !valid_id(id) || !valid_id(id2) || key(id) != key_was(a,2*k)
+         || key(id2) != key_was(a,2*k+1) ) return PYSE_EDIT_GONE;
     switch ( op )
     { case PYSE_OP_SNAP: return snap(c,id,id2);
       case PYSE_OP_MERGE: return merge_facets(c,id,id2);
@@ -2073,7 +2153,7 @@ static int one(struct ctx *c, struct edit_args *a, int k)
     }
   }
   id = item(op,a->ids[k]);
-  if ( !valid_id(id) || key(id) != a->keys[k] ) return PYSE_EDIT_GONE;
+  if ( !valid_id(id) || key(id) != key_was(a,k) ) return PYSE_EDIT_GONE;
   switch ( op )
   { case PYSE_OP_COLLAPSE: return collapse(c,id,0);
     case PYSE_OP_FLIP: return flip(c,id,c->mode);
@@ -2106,7 +2186,8 @@ static int one(struct ctx *c, struct edit_args *a, int k)
 static void run_batch(struct ctx *c, struct edit_args *a)
 { int k, j, base, made = 0, undone = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
   a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
-  for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
+  a->keyed = 0;
+  c->batch = a;
   c->in_cells = a->op == PYSE_OP_SMOOTH;
   /* (the grids of the batch before kept where their changed lists are
      short, and either the batch is small, its edits' elements then put in
@@ -2119,10 +2200,10 @@ static void run_batch(struct ctx *c, struct edit_args *a)
     int few = 256L*count < total;
     int keep = c->fgrid.built && 4*(c->fgrid.xn + c->egrid.xn) <= total
                && (few || (!c->in_cells && c->pad == 0));
-    if ( !keep )
-    { c->pad = c->in_cells ? SMOOTH_PAD*c->h : 0.0;
-      grids_build(c);
-    }
+    /* (built when first needed: a batch whose candidates are all refused
+       before they change anything builds none) */
+    c->grids_due = !keep;
+    c->due_pad = c->in_cells ? SMOOTH_PAD*c->h : 0.0;
     c->fresh = c->in_cells && !keep;
   }
   c->snap = NULL;
@@ -2173,6 +2254,7 @@ static void run_batch(struct ctx *c, struct edit_args *a)
   c->snapping = 0;
   temp_free((char *)a->keys);
   a->keys = NULL;
+  c->batch = NULL;
 }
 
 static void setup(struct ctx *c, struct edit_args *a)
