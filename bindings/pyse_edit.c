@@ -121,6 +121,10 @@ struct ctx
   int *vok, vok_now;               /* per vertex: its elements found clean (near_verify), */
   long vok_size;                   /* when this is vok_now */
   int changed;                     /* an edit made (or undone) */
+  REAL cell_h;                     /* the grids' cells, times h (0: 1) */
+  int fcache;                      /* facets' vertices kept in fv (a remesh): see fverts() */
+  vertex_id *fv;                   /* per facet ordinal: its three vertices */
+  long fv_size;
 };
 
 /* a fresh mark for this pass; 1 if id wasn't marked yet */
@@ -295,13 +299,56 @@ static void add_to_region(vertex_id v)
   region[o] = 1;
 }
 
+/* ---- facets' vertices, kept ---------------------------------------------- */
+
+/* A remesh keeps each facet's vertices by its ordinal (c->fv): the grids'
+   queries test hundreds of candidate facets an edit, and facet_verts' walk
+   round the facetedges, ten dependent loads, was a sixth of a remesh's time.
+   Taken for every facet as the grids are built (after a snapshot is put back
+   too), and for the facets of each patch after an edit, before its counts:
+   the facets an edit makes or changes are all in its patch (they have a
+   vertex of it, the patch() logic's premise), a smoothing move changes no
+   facet's vertices, and a freed facet is told by valid_element. */
+static void fcache_put(struct ctx *c, facet_id f, const vertex_id *v)
+{ long o = ordinal(f), i;
+  if ( o < 0 ) return;
+  if ( o >= c->fv_size )
+  { long m = 2*o + 64;
+    c->fv = c->fv ? (vertex_id *)temp_realloc((char *)c->fv,3*m*sizeof(vertex_id))
+                  : (vertex_id *)temp_calloc(3*m,sizeof(vertex_id));
+    for ( i = 3*c->fv_size ; i < 3*m ; i++ ) c->fv[i] = NULLID;
+    c->fv_size = m;
+  }
+  c->fv[3*o] = v[0]; c->fv[3*o+1] = v[1]; c->fv[3*o+2] = v[2];
+}
+
+/* facet f's vertices: kept (c->fcache), else walked round into buf */
+static const vertex_id *fverts(struct ctx *c, facet_id f, vertex_id *buf)
+{ long o = ordinal(f);
+  if ( c && c->fcache && o >= 0 && o < c->fv_size && valid_id(c->fv[3*o]) )
+  {
+#ifdef PYSE_FCACHE_CHECK
+    facet_verts(f,buf);
+    if ( !equal_id(buf[0],c->fv[3*o]) || !equal_id(buf[1],c->fv[3*o+1])
+         || !equal_id(buf[2],c->fv[3*o+2]) )
+    { fprintf(stderr,"pyse_edit: facet %ld's kept vertices are stale\n",o + 1);
+      abort();
+    }
+#endif
+    return c->fv + 3*o;
+  }
+  facet_verts(f,buf);
+  return buf;
+}
+
 /* ---- spatial grids ------------------------------------------------------ */
 
-static void elem_box(element_id id, REAL *lo, REAL *hi, REAL pad)
-{ vertex_id v[3];
+static void elem_box(struct ctx *c, element_id id, REAL *lo, REAL *hi, REAL pad)
+{ vertex_id buf[3];
+  const vertex_id *v = buf;
   int n, k, d;
-  if ( id_type(id) == EDGE ) { v[0] = get_edge_tailv(id); v[1] = get_edge_headv(id); n = 2; }
-  else { facet_verts(id,v); n = 3; }
+  if ( id_type(id) == EDGE ) { buf[0] = get_edge_tailv(id); buf[1] = get_edge_headv(id); n = 2; }
+  else { v = fverts(c,id,buf); n = 3; }
   for ( k = 0 ; k < n ; k++ )
   { REAL *x = get_coord(v[k]);
     for ( d = 0 ; d < 3 ; d++ )
@@ -407,7 +454,10 @@ static void grid_build(struct ctx *c, struct grid *g, int type)
   }
   memset(g,0,sizeof(*g));
   for ( d = 0 ; d < 3 ; d++ ) g->lo[d] = c->box_lo[d];
-  g->cell = c->h;      /* (2 h: twice the candidates a query) */
+  /* (2 h: twice the candidates a query, but for a remesh, whose star
+     queries scan their sets' boxes once: there 11% fewer instructions than
+     with h at 28k facets, 6% at 14k) */
+  g->cell = c->cell_h > 0 ? c->cell_h*c->h : c->h;
   for ( d = 0 ; d < 3 ; d++ )
   { double n = floor((c->box_hi[d] - c->box_lo[d])/g->cell) + 1;
     g->n[d] = n > 1024 ? 1024 : (long)n;
@@ -421,7 +471,12 @@ static void grid_build(struct ctx *c, struct grid *g, int type)
   for ( id = web.skel[type].used ; valid_id(id) ; id = elptr(id)->forechain )
   { if ( !(elptr(id)->attr & ALLOCATED) ) continue;
     if ( type == FACET && !valid_id(get_facet_fe(id)) ) continue;
-    elem_box(id,lo,hi,pad);
+    if ( type == FACET && c->fcache )
+    { vertex_id v[3];
+      facet_verts(id,v);
+      fcache_put(c,id,v);
+    }
+    elem_box(c,id,lo,hi,pad);
     item_of(&it,id,lo,hi);
     cells(g,lo,hi,a,b);
     for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
@@ -459,7 +514,7 @@ static void xgrid_add(struct ctx *c, struct grid *g, element_id id)
   struct gitem it;
   if ( !valid_id(id) || !valid_element(id) ) return;
   if ( id_type(id) == FACET && !valid_id(get_facet_fe(id)) ) return;
-  elem_box(id,lo,hi,grid_pad(c));
+  elem_box(c,id,lo,hi,grid_pad(c));
   item_of(&it,id,lo,hi);
   cells(g,lo,hi,a,b);
   for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
@@ -604,12 +659,13 @@ static int far_only;
 static int near_pair(edge_id e, facet_id f);
 
 static int pair_crosses(struct ctx *c, edge_id e, facet_id f)
-{ vertex_id v[3], t, hd;
+{ vertex_id buf[3], t, hd;
+  const vertex_id *v;
   REAL *p, *q, *a, *b, *w, pad;
   int d;
   if ( !valid_element(e) || !valid_element(f) || !valid_id(get_facet_fe(f)) ) return 0;
   t = get_edge_tailv(e); hd = get_edge_headv(e);
-  facet_verts(f,v);
+  v = fverts(c,f,buf);
   if ( equal_id(v[0],t) || equal_id(v[1],t) || equal_id(v[2],t)
        || equal_id(v[0],hd) || equal_id(v[1],hd) || equal_id(v[2],hd) ) return 0;
   /* (boxes apart: no crossing; most of a query's candidates, which the
@@ -646,7 +702,7 @@ static int crossings_of(struct ctx *c, element_id id, struct ids *near)
   REAL lo[3], hi[3];
   long a[3], b[3], x, y, z, k;
   int i, n = 0;
-  elem_box(id,lo,hi,0.0);
+  elem_box(c,id,lo,hi,0.0);
   cells(g,lo,hi,a,b);
   c->stamp_now++;
   for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
@@ -661,6 +717,134 @@ static int crossings_of(struct ctx *c, element_id id, struct ids *near)
   for ( i = 0 ; i < near->n ; i++ )
     if ( mark(c,near->a[i]) )
       n += other == FACET ? pair_crosses(c,id,near->a[i]) : pair_crosses(c,near->a[i],id);
+  return n;
+}
+
+/* The crossings of edges QE against all facets (and nearF) and of facets QF
+   against all edges (and nearE): the sum of crossings_of() over them, in one
+   pass over the cells of each set's box, every candidate tried against each
+   query, its vertices and box looked up once (a smoothing move's twelve
+   queries, its star's edges and facets, scanned the same cells' items twelve
+   times: a fifth of a remesh's time). A candidate counts for a query as in
+   pair_crosses(), the same tests in the same order; one crossing a query is
+   in the cells of the query's box, which are among the set's, so each query
+   finds the same partners. */
+struct qedge { vertex_id t, h; const REAL *p, *q; REAL lo[3], hi[3]; int ok; };
+struct qfacet { vertex_id v[3]; const REAL *a, *b, *w; REAL lo[3], hi[3]; int ok; };
+
+static void box3(const REAL *const *x, int n, REAL *lo, REAL *hi)
+{ int k, d;
+  for ( d = 0 ; d < 3 ; d++ ) lo[d] = hi[d] = x[0][d];
+  for ( k = 1 ; k < n ; k++ )
+    for ( d = 0 ; d < 3 ; d++ )
+    { if ( x[k][d] < lo[d] ) lo[d] = x[k][d];
+      if ( x[k][d] > hi[d] ) hi[d] = x[k][d];
+    }
+}
+
+static void qedge_of(struct qedge *e, edge_id id)
+{ const REAL *x[2];
+  e->ok = valid_element(id);
+  if ( !e->ok ) return;
+  e->t = get_edge_tailv(id); e->h = get_edge_headv(id);
+  x[0] = e->p = get_coord(e->t); x[1] = e->q = get_coord(e->h);
+  box3(x,2,e->lo,e->hi);
+}
+
+static void qfacet_of(struct ctx *c, struct qfacet *f, facet_id id)
+{ vertex_id buf[3];
+  const vertex_id *v;
+  const REAL *x[3];
+  f->ok = valid_element(id) && valid_id(get_facet_fe(id));
+  if ( !f->ok ) return;
+  v = fverts(c,id,buf);
+  f->v[0] = v[0]; f->v[1] = v[1]; f->v[2] = v[2];
+  x[0] = f->a = get_coord(v[0]); x[1] = f->b = get_coord(v[1]); x[2] = f->w = get_coord(v[2]);
+  box3(x,3,f->lo,f->hi);
+}
+
+/* (pair_crosses on the looked-up pair) */
+static int qpair(struct ctx *c, const struct qedge *e, const struct qfacet *f, edge_id eid,
+                 facet_id fid)
+{ REAL pad = 1e-9*c->h;
+  int d;
+  if ( !e->ok || !f->ok ) return 0;
+  if ( equal_id(f->v[0],e->t) || equal_id(f->v[1],e->t) || equal_id(f->v[2],e->t)
+       || equal_id(f->v[0],e->h) || equal_id(f->v[1],e->h) || equal_id(f->v[2],e->h) ) return 0;
+  for ( d = 0 ; d < 3 ; d++ )
+    if ( e->hi[d] < f->lo[d] - pad || e->lo[d] > f->hi[d] + pad ) return 0;
+  if ( far_only && near_pair(eid,fid) ) return 0;
+  return pyse_crosses(e->p,e->q,f->a,f->b,f->w,1e-12*c->h*c->h*c->h);
+}
+
+/* candidate o (a facet in pass 0, an edge in pass 1) against each query */
+static int star_try(struct ctx *c, int pass, element_id o, struct ids *QE, struct qedge *qe,
+                    struct ids *QF, struct qfacet *qf)
+{ int i, n = 0;
+  if ( pass )
+  { struct qedge oe;
+    qedge_of(&oe,o);
+    for ( i = 0 ; i < QF->n ; i++ ) n += qpair(c,&oe,qf + i,o,QF->a[i]);
+  }
+  else
+  { struct qfacet of;
+    qfacet_of(c,&of,o);
+    for ( i = 0 ; i < QE->n ; i++ ) n += qpair(c,qe + i,&of,QE->a[i],o);
+  }
+  return n;
+}
+
+#define STAR_MAX 16
+
+static int star_crossings(struct ctx *c, struct ids *QE, struct ids *nearF, struct ids *QF,
+                          struct ids *nearE)
+{ struct qedge qe[STAR_MAX];
+  struct qfacet qf[STAR_MAX];
+  int pass, i, n = 0;
+  if ( QE->n > STAR_MAX || QF->n > STAR_MAX )
+  { /* (a patch's: its box many queries' cells, each candidate tried against them all) */
+    for ( i = 0 ; i < QE->n ; i++ ) n += crossings_of(c,QE->a[i],nearF);
+    for ( i = 0 ; i < QF->n ; i++ ) n += crossings_of(c,QF->a[i],nearE);
+    return n;
+  }
+  for ( i = 0 ; i < QE->n ; i++ ) qedge_of(qe + i,QE->a[i]);
+  for ( i = 0 ; i < QF->n ; i++ ) qfacet_of(c,qf + i,QF->a[i]);
+  for ( pass = 0 ; pass < 2 ; pass++ )
+  { struct ids *Q = pass ? QF : QE, *near = pass ? nearE : nearF;
+    struct grid *g = pass ? &c->egrid : &c->fgrid;
+    int type = pass ? EDGE : FACET, any = 0, d;
+    REAL lo[3], hi[3];
+    long a[3], b[3], x, y, z, k;
+    for ( i = 0 ; i < Q->n ; i++ )
+    { const REAL *ql = pass ? qf[i].lo : qe[i].lo, *qh = pass ? qf[i].hi : qe[i].hi;
+      if ( !(pass ? qf[i].ok : qe[i].ok) ) continue;
+      for ( d = 0 ; d < 3 ; d++ )
+      { if ( !any || ql[d] < lo[d] ) lo[d] = ql[d];
+        if ( !any || qh[d] > hi[d] ) hi[d] = qh[d];
+      }
+      any = 1;
+    }
+    if ( !any ) continue;
+    cells(g,lo,hi,a,b);
+    c->stamp_now++;
+    for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
+      for ( x = a[0] ; x <= b[0] ; x++ )
+      { long s = slot_probe(g,CELL(g,x,y,z));
+        if ( g->key[s] < 0 ) continue;
+        for ( k = g->bstart[s] ; k < g->bstart[s] + g->bcount[s] ; k++ )
+          if ( !apart(&g->items[k],lo,hi,1e-9*c->h) )
+          { element_id o = get_ordinal_id(type,g->items[k].ord);
+            if ( mark(c,o) ) n += star_try(c,pass,o,QE,qe,QF,qf);
+          }
+        for ( k = g->xhead[s] ; k >= 0 ; k = g->xnext[k] )
+          if ( !apart(&g->xitems[k],lo,hi,1e-9*c->h) )
+          { element_id o = get_ordinal_id(type,g->xitems[k].ord);
+            if ( mark(c,o) ) n += star_try(c,pass,o,QE,qe,QF,qf);
+          }
+      }
+    for ( i = 0 ; i < near->n ; i++ )
+      if ( mark(c,near->a[i]) ) n += star_try(c,pass,near->a[i],QE,qe,QF,qf);
+  }
   return n;
 }
 
@@ -758,7 +942,7 @@ static int line_crossings_of(struct ctx *c, edge_id e, struct ids *near)
   long a[3], b[3], x, y, z, k;
   int i, n = 0;
   if ( !is_line(e) ) return 0;
-  elem_box(e,lo,hi,0.0);
+  elem_box(c,e,lo,hi,0.0);
   cells(g,lo,hi,a,b);
   c->stamp_now++;
   for ( z = a[2] ; z <= b[2] ; z++ ) for ( y = a[1] ; y <= b[1] ; y++ )
@@ -975,9 +1159,16 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
   for ( i = 0 ; i < verts->n ; i++ ) k->solid += vertex_solids(c,verts->a[i]);
   for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solids(c,E.a[i]);
 
-  /* the elements the edit changed (all, without a record from before it) */
+  /* the elements the edit changed (all, without a record from before it);
+     the patch's facets' vertices kept again (see fverts) */
   if ( stage == PATCH_AFTER )
-  { for ( i = 0 ; i < E.n ; i++ ) if ( !unchanged(c,E.a[i]) ) push(&CE,E.a[i]);
+  { if ( c->fcache )
+      for ( i = 0 ; i < F.n ; i++ )
+      { vertex_id v[3];
+        facet_verts(F.a[i],v);
+        fcache_put(c,F.a[i],v);
+      }
+    for ( i = 0 ; i < E.n ; i++ ) if ( !unchanged(c,E.a[i]) ) push(&CE,E.a[i]);
     for ( i = 0 ; i < F.n ; i++ ) if ( !unchanged(c,F.a[i]) ) push(&CF,F.a[i]);
     c->sig_now++;                    /* (the record used up) */
   }
@@ -996,8 +1187,7 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
   if ( !(c->clean && stage != PATCH_AFTER) )
   { int few = c->clean && stage == PATCH_AFTER && !far_only;
     struct ids *QE = few ? &CE : &E, *QF = few ? &CF : &F;
-    for ( i = 0 ; i < QE->n ; i++ ) k->crossing += crossings_of(c,QE->a[i],&F);
-    for ( i = 0 ; i < QF->n ; i++ ) k->crossing += crossings_of(c,QF->a[i],&E);
+    k->crossing += star_crossings(c,QE,&F,QF,&E);
     for ( i = 0 ; i < E.n ; i++ ) k->crossing += line_crossings_of(c,E.a[i],&E);
   }
 
@@ -1108,8 +1298,7 @@ static void moved_patch(struct ctx *c, vertex_id v, struct counts *k, int stage,
   for ( i = 0 ; i < E.n ; i++ ) k->solid += edge_solids(c,E.a[i]);
   if ( stage == PATCH_AFTER )
   { struct ids P = {0,0,0};        /* the patch's edges: at v and its neighbours */
-    for ( i = 0 ; i < E.n ; i++ ) k->crossing += crossings_of(c,E.a[i],&F);
-    for ( i = 0 ; i < F.n ; i++ ) k->crossing += crossings_of(c,F.a[i],&E);
+    k->crossing += star_crossings(c,&E,&F,&F,&E);
     c->stamp_now++;
     EACH_EDGE_AT(v,e,e0,guard)
     { vertex_id u = get_edge_headv(e);
@@ -2194,8 +2383,10 @@ static int one(struct ctx *c, struct edit_args *a, int k)
 
 /* the grids' padding in a smoothing batch, times h: its moves are a
    quarter edge at most before they are projected (none of a 16-bead pack's
-   remesh's 90k went further; one that does puts its elements in again) */
-#define SMOOTH_PAD 0.3
+   remesh's 90k went further; one that does puts its elements in again).
+   0.15: fewer items a cell, and few moves go further (0.3 took 5% more
+   instructions in a remesh of 14k facets, 0.1 and 0.06 no fewer than 0.15) */
+#define SMOOTH_PAD 0.15
 
 static void run_batch(struct ctx *c, struct edit_args *a)
 { int k, j, base, made = 0, undone = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
@@ -2403,6 +2594,8 @@ static void remesh_body(void *arg)
   double keep_len, keep_mode;
   int k;
   setup(&c,a);
+  c.fcache = 1;
+  c.cell_h = 2.0;
   if ( a->n > 0 )
   { /* the region: the vertices numbered (the edges with an end there) */
     region = (unsigned char *)calloc(1,1);
@@ -2438,6 +2631,7 @@ static void remesh_body(void *arg)
   }
   if ( c.nkey ) temp_free((char *)c.nkey);
   if ( c.vok ) temp_free((char *)c.vok);
+  if ( c.fv ) temp_free((char *)c.fv);
   free(region);
   region = NULL; region_n = 0;
   recalc_unless(&c);
@@ -2554,7 +2748,7 @@ static long line_crossings(struct ctx *c, struct crossing_args *a)
   for ( i = 0 ; i < L.n ; i++ ) at[ordinal(L.a[i])] = i + 1;
   for ( i = 0 ; i < L.n ; i++ )
   { REAL lo[3], hi[3];
-    elem_box(L.a[i],lo,hi,0.0);
+    elem_box(c,L.a[i],lo,hi,0.0);
     cells(g,lo,hi,lo_c,hi_c);
     c->stamp_now++;
     nh = 0;
