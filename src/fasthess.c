@@ -336,7 +336,21 @@ static void element_setup(struct linsys *S, struct qinfo *q, int type, vertex_id
   if ( needs & NEED_NORMAL )
     cross_prod(q->sides[0][0],q->sides[0][1],q->normal);
   if ( needs & NEED_GAUSS )
-    mat_mult(gpoly,q->x,q->gauss_pt,gauss2D_num,ctrl_num,SDIM);
+  { /* mat_mult()'s arithmetic, its loops over three corners and coordinates
+       unrolled (the generic loops, through row pointers, were a twelfth of
+       a 4-bead flux pack's gradient step) */
+    if ( ctrl_num == 3 && SDIM == 3 )
+      for ( i = 0 ; i < gauss2D_num ; i++ )
+      { REAL *g = gpoly[i], *c = q->gauss_pt[i], c0 = 0.0, c1 = 0.0, c2 = 0.0;
+        for ( j = 0 ; j < 3 ; j++ )
+        { REAL aa = g[j], *b = q->xx[j];
+          if ( aa == 0.0 ) continue;
+          c0 += aa*b[0]; c1 += aa*b[1]; c2 += aa*b[2];
+        }
+        c[0] = c0; c[1] = c1; c[2] = c2;
+      }
+    else mat_mult(gpoly,q->x,q->gauss_pt,gauss2D_num,ctrl_num,SDIM);
+  }
 }
 
 /* per thread: an element's summed Hessian blocks, [vcount][vcount] blocks of

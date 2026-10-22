@@ -778,13 +778,33 @@ struct flux_cached
   int group, order;
   REAL floor;
   unsigned long long x[3];
+  int cols, used;                /* the columns taken, those asked for */
   REAL out[FLUX_COLS][FLUX_OUT];
 };
+
+/* A facet's Gauss points' sums (pyse_native_points): each facet's methods
+   in turn ask for the same points, the volume's and the wetting's, and the
+   points hashed one by one into the cache above collided (twelve of a
+   facet in sixteen slots) and cost a hash, a slot's check and a TLS lookup
+   each: a fifth of a 4-bead pack's gradient step with the kernels' setup.
+   The last facet's, all points at once. */
+#define FLUX_PTS 37               /* Gauss points a facet at most (Evolver's 2D rules) */
+struct flux_facet
+{ long gen;
+  int group, order, n;
+  REAL floor;
+  int cols, used;
+  unsigned long long b[FLUX_PTS][3];
+  REAL out[FLUX_PTS][FLUX_COLS][FLUX_OUT];
+};
+
 struct flux_thread
 { struct flux_cached cache[FLUX_CACHE];
+  struct flux_facet facet;
   REAL *coefbuf;                 /* the columns' coefficients, the floor raised */
   int coefcap, cos_ok;
   REAL cos_floor, cos_value;     /* cos(floor), the last floor's */
+  int single, waste;             /* columns taken one at a time: see flux_columns() */
 };
 static __thread struct flux_thread flux_tls;   /* (one lookup a call: each is a call
                                                   to __tls_get_addr in a module) */
@@ -799,58 +819,118 @@ static REAL flux_cos(struct flux_thread *T, REAL floor)
   return T->cos_value;
 }
 
+/* column c's coefficients, the floor raised past the angles under it
+   (relax()'s staging); NULL if out of memory */
+static const REAL *flux_coef(struct flux_thread *T, const struct flux_group *g, int c, REAL floor)
+{ int t;
+  REAL cosf;
+  if ( !(floor > g->amin[c]) ) return g->c0[c];
+  cosf = flux_cos(T,floor);
+  if ( T->coefcap < FLUX_COLS*g->np )
+  { REAL *nb = (REAL*)realloc(T->coefbuf,(size_t)FLUX_COLS*g->np*sizeof(REAL));
+    if ( !nb ) return NULL;
+    T->coefbuf = nb;
+    T->coefcap = FLUX_COLS*g->np;
+  }
+  for ( t = 0 ; t < g->np ; t++ )
+    T->coefbuf[c*g->np+t] = floor > g->athr[c][t] ? g->kc[c][t]*cosf : g->c0[c][t];
+  return T->coefbuf + c*g->np;
+}
+
+/* A group of several columns (spheres of more than one radius or angle: a
+   polydisperse pack) has them all summed at once where both are asked for
+   at the same points, the energy's and the volume's (each term's distance
+   and powers shared); but the volume's projection asks for the volume's
+   alone, pass after pass, and the other column was a third of the kernels'
+   time there. So: all columns while each entry's are all asked for, one at
+   a time after four entries in a row (point or facet) had only one asked
+   for, and all again once another is asked for at a point taken. Each
+   column's sums are the same, to the bit, either way. */
+static int flux_columns(struct flux_thread *T, const struct flux_group *g, int cols, int used,
+                        int need)
+{ int all = (1 << g->ncol) - 1;
+  if ( cols && cols != used )
+  { if ( used == (used & -used) && ++T->waste >= 4 ) T->single = 1; }
+  else if ( cols ) T->waste = 0;
+  return T->single ? need : all;
+}
+
+/* columns cols of group g at x, to the order, into out (a uniform group: its one
+   sum); 0 if out of memory */
+static int flux_sum(struct flux_thread *T, const struct flux_group *g, int cols, const REAL *x,
+                    int order, REAL floor, REAL out[FLUX_COLS][FLUX_OUT])
+{ const REAL *coef[FLUX_COLS];
+  int c, k;
+  if ( g->uniform )
+  { /* (the sum with coefficients 1: each column is it times its own) */
+    coef[0] = g->one;
+    flux_kernel(g,1,coef,x,order,out);
+    return 1;
+  }
+  if ( cols == (1 << g->ncol) - 1 )
+  { for ( c = 0 ; c < g->ncol ; c++ )
+      if ( !(coef[c] = flux_coef(T,g,c,floor)) ) return 0;
+    flux_kernel(g,g->ncol,coef,x,order,out);
+    return 1;
+  }
+  for ( c = 0 ; c < g->ncol ; c++ )
+    if ( cols & (1 << c) )
+    { REAL one[FLUX_COLS][FLUX_OUT];
+      if ( !(coef[0] = flux_coef(T,g,c,floor)) ) return 0;
+      flux_kernel(g,1,coef,x,order,one);
+      for ( k = 0 ; k < flux_nout(g->kind,order) ; k++ ) out[c][k] = one[0][k];
+    }
+  return 1;
+}
+
+/* field f's share of its group's sums out, into res[flux_nout()] */
+static void flux_share(struct flux_thread *T, const struct flux_field *f,
+                       const struct flux_group *g, REAL floor, int nout,
+                       REAL out[FLUX_COLS][FLUX_OUT], REAL *res)
+{ int c = f->col, k;
+  if ( g->uniform )
+  { /* (every term's coefficient, the floor raised past its angle or not) */
+    REAL a = floor > g->athr[c][0] ? g->kc[c][0]*flux_cos(T,floor) : g->c0[c][0];
+    for ( k = 0 ; k < nout ; k++ ) res[k] = a*out[0][k];
+  }
+  else
+    for ( k = 0 ; k < nout ; k++ ) res[k] = out[c][k];
+}
+
 /* field f's terms at x (its group's column), to the order, into
    res[flux_nout()]; 0 if out of memory */
 static int flux_group_terms(const struct flux_field *f, const REAL *x, int order, REAL floor,
                             REAL *res)
 { const struct flux_group *g = flux_groups + f->group;
   struct flux_thread *T = &flux_tls;
-  const REAL *coef[FLUX_COLS];
   struct flux_cached *e;
   unsigned long long b[3], h;
-  int c, t, k, nout = flux_nout(g->kind,order);
+  int c, need = g->uniform ? 1 : 1 << f->col;
   memcpy(b,x,sizeof(b));
   h = b[0]*0x9E3779B97F4A7C15ULL ^ b[1]*0xC2B2AE3D27D4EB4FULL ^ b[2]*0x165667B19E3779F9ULL;
   e = T->cache + ((h ^ (h >> 29)) >> 32) % FLUX_CACHE;
-  if ( !(e->gen == flux_gen && e->x[0] == b[0] && e->x[1] == b[1] && e->x[2] == b[2]
-         && e->group == f->group && e->order >= order && e->floor == floor) )
-  { if ( g->uniform )
-    { coef[0] = g->one;
-      flux_kernel(g,1,coef,x,order,e->out);
+  if ( e->gen == flux_gen && e->x[0] == b[0] && e->x[1] == b[1] && e->x[2] == b[2]
+       && e->group == f->group && e->order >= order && e->floor == floor )
+  { if ( !(e->cols & need) )
+    { /* (another column at a point taken: both asked for) */
+      if ( !flux_sum(T,g,need,x,e->order,floor,e->out) ) return 0;
+      e->cols |= need;
+      T->single = T->waste = 0;
     }
-    else
-    { for ( c = 0 ; c < g->ncol ; c++ )
-      { coef[c] = g->c0[c];
-        if ( floor > g->amin[c] )
-        { /* relax()'s staging: the angles under the floor raised to it */
-          REAL cosf = flux_cos(T,floor);
-          if ( T->coefcap < FLUX_COLS*g->np )
-          { REAL *nb = (REAL*)realloc(T->coefbuf,(size_t)FLUX_COLS*g->np*sizeof(REAL));
-            if ( !nb ) return 0;
-            T->coefbuf = nb;
-            T->coefcap = FLUX_COLS*g->np;
-          }
-          for ( t = 0 ; t < g->np ; t++ )
-            T->coefbuf[c*g->np+t] = floor > g->athr[c][t] ? g->kc[c][t]*cosf : g->c0[c][t];
-          coef[c] = T->coefbuf + c*g->np;
-        }
-      }
-      flux_kernel(g,g->ncol,coef,x,order,e->out);
-    }
+  }
+  else
+  { int cols = g->uniform ? 1 : flux_columns(T,g,e->gen == flux_gen ? e->cols : 0,e->used,need);
+    if ( !flux_sum(T,g,cols,x,order,floor,e->out) ) return 0;
     e->gen = flux_gen;
     e->group = f->group;
     e->order = order;
     e->floor = floor;
+    e->cols = cols;
+    e->used = 0;
     for ( c = 0 ; c < 3 ; c++ ) e->x[c] = b[c];
   }
-  if ( g->uniform )
-  { /* (every term's coefficient, the floor raised past its angle or not) */
-    c = f->col;
-    REAL a = floor > g->athr[c][0] ? g->kc[c][0]*flux_cos(T,floor) : g->c0[c][0];
-    for ( k = 0 ; k < nout ; k++ ) res[k] = a*e->out[0][k];
-  }
-  else
-    for ( k = 0 ; k < nout ; k++ ) res[k] = e->out[f->col][k];
+  e->used |= need;
+  flux_share(T,f,g,floor,flux_nout(g->kind,order),e->out,res);
   return 1;
 }
 
@@ -912,6 +992,43 @@ static void flux_base_second(const struct flux_field *f, REAL h[3][3][3])
   }
 }
 
+/* a grouped field's integrand at x from its group's share o
+   (flux_group_terms): values V, with order 1 or 2 derivatives D, S */
+static void flux_assemble(const struct flux_field *f, const REAL *x, int order, REAL floor,
+                          const REAL *o, REAL V[3], REAL D[3][3], REAL S[3][3][3])
+{ const struct flux_group *G = flux_groups + f->group;
+  REAL v[3], g[3][3];
+  int i, j, m;
+  flux_base(f,x,floor,v,g);
+  for ( m = 0 ; m < 3 ; m++ ) v[m] += o[m];
+  if ( order && !G->kind )
+  { g[0][0] += o[3]; g[1][1] += o[4]; g[2][2] += o[5];
+    g[0][1] += o[6]; g[1][0] += o[6];
+    g[0][2] += o[7]; g[2][0] += o[7];
+    g[1][2] += o[8]; g[2][1] += o[8];
+  }
+  else if ( order )
+    for ( m = 0 ; m < 3 ; m++ )
+      for ( i = 0 ; i < 3 ; i++ ) g[m][i] += o[3+3*m+i];
+  for ( m = 0 ; m < 3 ; m++ )
+  { V[m] = v[m];
+    if ( order ) for ( i = 0 ; i < 3 ; i++ ) D[m][i] = g[m][i];
+  }
+  if ( order >= 2 )
+  { /* (the ten of a point source's, the six of each monopole component's) */
+    static const int sym[3][3][3] = {{{0,3,4},{3,5,9},{4,9,7}},
+                                     {{3,5,9},{5,1,6},{9,6,8}},
+                                     {{4,9,7},{9,6,8},{7,8,2}}};
+    static const int pair[3][3] = {{0,3,4},{3,1,5},{4,5,2}};
+    REAL h[3][3][3];
+    flux_base_second(f,h);
+    for ( m = 0 ; m < 3 ; m++ )
+      for ( i = 0 ; i < 3 ; i++ )
+        for ( j = 0 ; j < 3 ; j++ )
+          S[m][i][j] = h[m][i][j] + (G->kind ? o[12 + 6*m + pair[i][j]] : o[9 + sym[m][i][j]]);
+  }
+}
+
 static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
                      REAL (*d)[MAXCOORD], REAL ***s)
 { struct flux_field *f = NULL;
@@ -921,40 +1038,19 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
   f = flux_find(key);
   if ( !f ) return 0;
   floor = flux_floor();
-  flux_base(f,x,floor,v,g);
   if ( f->group >= 0 )
-  { const struct flux_group *G = flux_groups + f->group;
-    REAL o[FLUX_OUT];
+  { REAL o[FLUX_OUT], V[3], D[3][3], S[3][3][3];
     if ( !flux_group_terms(f,x,order,floor,o) ) return 0;
-    for ( m = 0 ; m < 3 ; m++ ) v[m] += o[m];
-    if ( order && !G->kind )
-    { g[0][0] += o[3]; g[1][1] += o[4]; g[2][2] += o[5];
-      g[0][1] += o[6]; g[1][0] += o[6];
-      g[0][2] += o[7]; g[2][0] += o[7];
-      g[1][2] += o[8]; g[2][1] += o[8];
-    }
-    else if ( order )
-      for ( m = 0 ; m < 3 ; m++ )
-        for ( i = 0 ; i < 3 ; i++ ) g[m][i] += o[3+3*m+i];
+    flux_assemble(f,x,order,floor,o,V,D,S);
     for ( m = 0 ; m < 3 ; m++ )
-    { val[m] = v[m];
-      if ( order ) for ( i = 0 ; i < 3 ; i++ ) d[m][i] = g[m][i];
-    }
-    if ( order >= 2 )
-    { /* (the ten of a point source's, the six of each monopole component's) */
-      static const int sym[3][3][3] = {{{0,3,4},{3,5,9},{4,9,7}},
-                                       {{3,5,9},{5,1,6},{9,6,8}},
-                                       {{4,9,7},{9,6,8},{7,8,2}}};
-      static const int pair[3][3] = {{0,3,4},{3,1,5},{4,5,2}};
-      REAL h[3][3][3];
-      flux_base_second(f,h);
-      for ( m = 0 ; m < 3 ; m++ )
-        for ( i = 0 ; i < 3 ; i++ )
-          for ( j = 0 ; j < 3 ; j++ )
-            s[m][i][j] = h[m][i][j] + (G->kind ? o[12 + 6*m + pair[i][j]] : o[9 + sym[m][i][j]]);
+    { val[m] = V[m];
+      if ( order ) for ( i = 0 ; i < 3 ; i++ ) d[m][i] = D[m][i];
+      if ( order >= 2 )
+        for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = S[m][i][j];
     }
     return 1;
   }
+  flux_base(f,x,floor,v,g);
   if ( order < 2 )
   { /* term by term (a field of mixed terms; none of _flux's) */
     for ( t = 0 ; t < f->nterm ; t++ )
@@ -1040,6 +1136,66 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
         for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = out[m].h[i][j];
       }
     }
+  }
+  return 1;
+}
+
+/* The integrand vectors of the flux field whose integrand key is at the n
+   points x[m] (a facet's or an edge's Gauss points): V[m], with order 1 or
+   2 D[m], S[m], each the same to the bit as pyse_native_eval's at the point;
+   0 (nothing done) where key isn't a grouped flux field's or n is over
+   FLUX_PTS: the caller then asks point by point. */
+int pyse_native_points(struct expnode *key, REAL **x, int n, int order, REAL (*V)[3],
+                       REAL (*D)[3][3], REAL (*S)[3][3][3])
+{ struct flux_field *f;
+  const struct flux_group *g;
+  struct flux_thread *T;
+  struct flux_facet *e;
+  REAL floor, o[FLUX_OUT];
+  int m, need, nout;
+  if ( !native_on || !key || SDIM != 3 || n > FLUX_PTS || n < 1 ) return 0;
+  if ( flux_load != pyse_load_serial() ) return 0;
+  f = flux_find(key);
+  if ( !f || f->group < 0 ) return 0;
+  floor = flux_floor();
+  g = flux_groups + f->group;
+  T = &flux_tls;
+  e = &T->facet;
+  need = g->uniform ? 1 : 1 << f->col;
+  nout = flux_nout(g->kind,order);
+  if ( e->gen == flux_gen && e->group == f->group && e->n == n && e->order >= order
+       && e->floor == floor && !memcmp(e->b[0],x[0],sizeof(e->b[0])) )
+  { for ( m = 1 ; m < n && !memcmp(e->b[m],x[m],sizeof(e->b[m])) ; m++ ) ;
+    if ( m < n ) e->gen = -1;
+  }
+  else e->gen = -1;
+  if ( e->gen != -1 )
+  { if ( !(e->cols & need) )
+    { /* (another column at the points taken: both asked for) */
+      for ( m = 0 ; m < n ; m++ )
+        if ( !flux_sum(T,g,need,x[m],e->order,floor,e->out[m]) ) return 0;
+      e->cols |= need;
+      T->single = T->waste = 0;
+    }
+  }
+  else
+  { int cols = g->uniform ? 1 : flux_columns(T,g,e->cols,e->used,need);
+    for ( m = 0 ; m < n ; m++ )
+    { if ( !flux_sum(T,g,cols,x[m],order,floor,e->out[m]) ) return 0;
+      memcpy(e->b[m],x[m],sizeof(e->b[m]));
+    }
+    e->gen = flux_gen;
+    e->group = f->group;
+    e->order = order;
+    e->n = n;
+    e->floor = floor;
+    e->cols = cols;
+    e->used = 0;
+  }
+  e->used |= need;
+  for ( m = 0 ; m < n ; m++ )
+  { flux_share(T,f,g,floor,nout,e->out[m],o);
+    flux_assemble(f,x[m],order,floor,o,V[m],order ? D[m] : NULL,order >= 2 ? S[m] : NULL);
   }
   return 1;
 }

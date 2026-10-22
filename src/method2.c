@@ -18,9 +18,18 @@
 extern int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
                             REAL (*d)[MAXCOORD], REAL ***s) __attribute__((weak));
 #define PYSE_NATIVE(k,x,o,v,d,s) (pyse_native_eval && pyse_native_eval(k,x,o,v,d,s))
+/* (all of an element's Gauss points at once: the same values as point by
+   point, one lookup an element; 0 where it can't, then point by point) */
+extern int pyse_native_points(struct expnode *key, REAL **x, int n, int order, REAL (*v)[3],
+                              REAL (*d)[3][3], REAL (*s)[3][3][3]) __attribute__((weak));
+#define PYSE_POINTS(k,x,n,o,v,d,s) (SDIM == 3 && pyse_native_points \
+                                   && pyse_native_points(k,x,n,o,v,d,s))
 #else
 #define PYSE_NATIVE(k,x,o,v,d,s) 0
+#define PYSE_POINTS(k,x,n,o,v,d,s) 0
 #endif
+/* (Evolver's rules have at most 37 points) */
+#define PYSE_POINTS_MAX 37
 #include "fastloops.h"
 
 /*********************************************************************
@@ -925,11 +934,21 @@ REAL facet_vector_integral(struct qinfo *f_info)
   REAL sign = (get_fattr(f_info->id) & NEGBOUNDARY) ? -1.0 : 1.0;
   struct method_instance *mi = METH_INSTANCE(f_info->method);
    
+  REAL nv[PYSE_POINTS_MAX][3];
+  int all;
+
   if ( web.modeltype == QUADRATIC ) return facet_vector_integral_q(f_info);
   if ( web.modeltype == LAGRANGE ) return lagrange_vector_integral(f_info);
+  all = gauss2D_num <= PYSE_POINTS_MAX
+        && PYSE_POINTS(mi->expr[0],f_info->gauss_pt,gauss2D_num,0,nv,NULL,NULL);
   for ( m = 0 ; m < gauss2D_num ; m++ )
   { REAL native[MAXCOORD];
     f_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
+    if ( all )
+    { for ( j = 0 ; j < SDIM ; j++ )
+        value += f_info->normal[j]*gauss2Dwt[m]*nv[m][j];
+      continue;
+    }
     if ( PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],0,native,NULL,NULL) )
     { for ( j = 0 ; j < SDIM ; j++ )
         value += f_info->normal[j]*gauss2Dwt[m]*native[j];
@@ -962,15 +981,25 @@ REAL facet_vector_integral_grad(struct qinfo *f_info)
   REAL sign = (get_fattr(f_info->id) & NEGBOUNDARY) ? -1.0 : 1.0;
   struct method_instance *mi = METH_INSTANCE(f_info->method);
 
+  REAL nv[PYSE_POINTS_MAX][3], nd[PYSE_POINTS_MAX][3][3];
+  int all;
+
   if ( web.modeltype == QUADRATIC ) return facet_vector_integral_q_grad(f_info);
   if ( web.modeltype == LAGRANGE ) return lagrange_vector_integral_grad(f_info);
   for ( j = 0 ; j < SDIM ; j++ ) 
     for ( m = 0 ; m < FACET_VERTS ; m++ )
        f_info->grad[m][j] = 0.0;
+  all = gauss2D_num <= PYSE_POINTS_MAX
+        && PYSE_POINTS(mi->expr[0],f_info->gauss_pt,gauss2D_num,1,nv,nd,NULL);
     for ( m = 0 ; m < gauss2D_num ; m++ )
     { REAL weight = sign*gauss2Dwt[m];
       f_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-      if ( !PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],1,val,derivs,NULL) )
+      if ( all )
+        for ( j = 0 ; j < 3 ; j++ )
+        { val[j] = nv[m][j];
+          for ( k = 0 ; k < 3 ; k++ ) derivs[j][k] = nd[m][j][k];
+        }
+      else if ( !PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],1,val,derivs,NULL) )
         for ( j = 0 ; j < SDIM ; j++ ) 
           eval_all(mi->expr[j],f_info->gauss_pt[m],SDIM,val+j,
                                                         derivs[j],f_info->id);
@@ -1015,12 +1044,25 @@ REAL facet_vector_integral_hess(struct qinfo *f_info)
   REAL sign = (get_fattr(f_info->id) & NEGBOUNDARY) ? -1.0 : 1.0;
   struct method_instance *mi = METH_INSTANCE(f_info->method);
 
+  REAL nv[PYSE_POINTS_MAX][3], nd[PYSE_POINTS_MAX][3][3], ns[PYSE_POINTS_MAX][3][3][3];
+  int all;
+
   if ( web.modeltype == QUADRATIC ) return facet_vector_integral_q_hess(f_info);
   if ( web.modeltype == LAGRANGE ) return lagrange_vector_integral_hess(f_info);
+  all = gauss2D_num <= PYSE_POINTS_MAX
+        && PYSE_POINTS(mi->expr[0],f_info->gauss_pt,gauss2D_num,2,nv,nd,ns);
   for ( m = 0 ; m < gauss2D_num ; m++ )
   { REAL weight = sign*gauss2Dwt[m];
     f_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-    if ( !PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],2,val,derivs,second) )
+    if ( all )
+      for ( j = 0 ; j < 3 ; j++ )
+      { val[j] = nv[m][j];
+        for ( k = 0 ; k < 3 ; k++ )
+        { derivs[j][k] = nd[m][j][k];
+          for ( i = 0 ; i < 3 ; i++ ) second[j][k][i] = ns[m][j][k][i];
+        }
+      }
+    else if ( !PYSE_NATIVE(mi->expr[0],f_info->gauss_pt[m],2,val,derivs,second) )
       for ( j = 0 ; j < SDIM ; j++ ) 
         eval_second(mi->expr[j],f_info->gauss_pt[m],SDIM,val+j,
                                               derivs[j],second[j],f_info->id);

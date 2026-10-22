@@ -18,9 +18,18 @@
 extern int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
                             REAL (*d)[MAXCOORD], REAL ***s) __attribute__((weak));
 #define PYSE_NATIVE(k,x,o,v,d,s) (pyse_native_eval && pyse_native_eval(k,x,o,v,d,s))
+/* (all of an element's Gauss points at once: the same values as point by
+   point, one lookup an element; 0 where it can't, then point by point) */
+extern int pyse_native_points(struct expnode *key, REAL **x, int n, int order, REAL (*v)[3],
+                              REAL (*d)[3][3], REAL (*s)[3][3][3]) __attribute__((weak));
+#define PYSE_POINTS(k,x,n,o,v,d,s) (SDIM == 3 && pyse_native_points \
+                                   && pyse_native_points(k,x,n,o,v,d,s))
 #else
 #define PYSE_NATIVE(k,x,o,v,d,s) 0
+#define PYSE_POINTS(k,x,n,o,v,d,s) 0
 #endif
+/* (Evolver's rules have at most 37 points) */
+#define PYSE_POINTS_MAX 37
 
 
 /***********************************************************************
@@ -829,11 +838,21 @@ REAL edge_vector_integral(struct qinfo *e_info)
   REAL value=0.0;
   struct method_instance *mi = METH_INSTANCE(e_info->method);
 
+  REAL nv[PYSE_POINTS_MAX][3];
+  int all;
+
   if ( web.modeltype == QUADRATIC ) return edge_vector_integral_q(e_info);
   if ( web.modeltype == LAGRANGE ) return edge_vector_integral_lagrange(e_info);
+  all = gauss1D_num <= PYSE_POINTS_MAX
+        && PYSE_POINTS(mi->expr[0],e_info->gauss_pt,gauss1D_num,0,nv,NULL,NULL);
   for (  m = 0 ; m < gauss1D_num ; m++ )
   { REAL native[MAXCOORD];
     e_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
+    if ( all )
+    { for ( j = 0 ; j < SDIM ; j++ )
+        value += e_info->sides[0][0][j]*gauss1Dwt[m]*nv[m][j];
+      continue;
+    }
     if ( PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],0,native,NULL,NULL) )
     { for ( j = 0 ; j < SDIM ; j++ )
         value += e_info->sides[0][0][j]*gauss1Dwt[m]*native[j];
@@ -868,13 +887,22 @@ REAL edge_vector_integral_grad(struct qinfo *e_info)
   if ( web.modeltype == QUADRATIC ) return edge_vector_integral_q_grad(e_info);
   if ( web.modeltype == LAGRANGE ) 
      return edge_vector_integral_lagrange_grad(e_info);
+  REAL nv[PYSE_POINTS_MAX][3], nd[PYSE_POINTS_MAX][3][3];
+  int all;
   for ( k = 0 ; k < 2 ; k++ )
      for ( j = 0 ; j < SDIM ; j++ ) 
         e_info->grad[k][j] = 0.0;
+  all = gauss1D_num <= PYSE_POINTS_MAX
+        && PYSE_POINTS(mi->expr[0],e_info->gauss_pt,gauss1D_num,1,nv,nd,NULL);
   for ( m = 0 ; m < gauss1D_num ; m++ )
   { REAL weight = sign*gauss1Dwt[m];
     e_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-    if ( !PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],1,val,derivs,NULL) )
+    if ( all )
+      for ( j = 0 ; j < 3 ; j++ )
+      { val[j] = nv[m][j];
+        for ( k = 0 ; k < 3 ; k++ ) derivs[j][k] = nd[m][j][k];
+      }
+    else if ( !PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],1,val,derivs,NULL) )
       for ( j = 0 ; j < SDIM ; j++ ) 
         eval_all(mi->expr[j],e_info->gauss_pt[m],SDIM,
           val+j, derivs[j],e_info->id);
@@ -911,10 +939,21 @@ REAL edge_vector_integral_hess(struct qinfo *e_info)
   if ( web.modeltype == QUADRATIC ) return edge_vector_integral_q_hess(e_info);
   if ( web.modeltype == LAGRANGE ) 
      return edge_vector_integral_lagrange_hess(e_info);
+  { REAL nv[PYSE_POINTS_MAX][3], nd[PYSE_POINTS_MAX][3][3], ns[PYSE_POINTS_MAX][3][3][3];
+  int all = gauss1D_num <= PYSE_POINTS_MAX
+            && PYSE_POINTS(mi->expr[0],e_info->gauss_pt,gauss1D_num,2,nv,nd,ns);
   for ( m = 0 ; m < gauss1D_num ; m++ )
   { REAL weight = sign*gauss1Dwt[m];
     e_info->gauss_pt[m][2*SDIM] = m; /* kludge for attr interpolation. */
-    if ( !PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],2,val,derivs,second) )
+    if ( all )
+      for ( j = 0 ; j < 3 ; j++ )
+      { val[j] = nv[m][j];
+        for ( k = 0 ; k < 3 ; k++ )
+        { derivs[j][k] = nd[m][j][k];
+          for ( i = 0 ; i < 3 ; i++ ) second[j][k][i] = ns[m][j][k][i];
+        }
+      }
+    else if ( !PYSE_NATIVE(mi->expr[0],e_info->gauss_pt[m],2,val,derivs,second) )
       for ( j = 0 ; j < SDIM ; j++ ) 
         eval_second(mi->expr[j],e_info->gauss_pt[m],SDIM,val+j,
                                                 derivs[j],second[j],e_info->id);
@@ -940,6 +979,7 @@ REAL edge_vector_integral_hess(struct qinfo *e_info)
        e_info->hess[1][1][k][i] += weight*gauss1poly[1][m]
             *(gauss1poly[1][m]*sum + derivs[k][i] + derivs[i][k]);
      }
+  }
   }
 
   return value;
