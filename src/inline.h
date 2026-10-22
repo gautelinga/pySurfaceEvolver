@@ -292,10 +292,12 @@ INLINE facetedge_id get_vertex_fe(v_id) vertex_id v_id;
   if ( !valid_id(xx_id) ) return NULLID;
   fe = eptr(xx_id)->fe_id;
   start_e = xx_id;
-  while ( !valid_id(fe) )
-  { xx_id = get_next_tail_edge(xx_id);
-    if ( equal_element(xx_id,start_e) ) return NULLID;
-    fe = eptr(xx_id)->fe_id;
+  { int n = 0;   /* pySE: a star that never closes: none */
+    while ( !valid_id(fe) )
+    { xx_id = get_next_tail_edge(xx_id);
+      if ( equal_element(xx_id,start_e) || ++n > 100000 ) return NULLID;
+      fe = eptr(xx_id)->fe_id;
+    }
   }
   return  same_sign(fe,xx_id);
 }

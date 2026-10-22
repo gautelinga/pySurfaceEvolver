@@ -711,6 +711,10 @@ void set_zoom (REAL);
 void skinny_histogram(void);
 int skinny (REAL);
 int get_edge_valence (edge_id);
+int edge_ring_closes (edge_id); /* pySE */
+int vertex_star_closes (vertex_id); /* pySE */
+long walk_limit (void); /* pySE */
+void walk_overrun (const char *); /* pySE */
 int get_facet_valence (edge_id);
 void alice(void);
 void sqcurve_force_string (vertex_id);

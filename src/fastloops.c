@@ -1547,11 +1547,13 @@ static int vn_applicable(void)
 static int vn_usual(vertex_id v_id)
 { edge_id e_id, start_e;
   if ( get_vattr(v_id) & (AXIAL_POINT|Q_MIDPOINT|Q_MIDEDGE|Q_MIDFACET) ) return 0;
+  int n = 0;   /* pySE: a star that never closes isn't usual */
   e_id = start_e = get_vertex_edge(v_id);
   if ( !valid_id(e_id) ) return 0;
   do
   { if ( get_edge_valence(e_id) >= 3 ) return 0;
     e_id = get_next_tail_edge(e_id);
+    if ( ++n > 100000 ) return 0;
   } while ( !equal_id(e_id,start_e) );
   return valid_id(get_vertex_fe(v_id));
 }
@@ -2231,6 +2233,8 @@ static int av_vertex_ring(vertex_id v_id, av_edge **e, long *e_size, long *me,
                           long **f, long *f_size, long *mf)
 { edge_id e_id, start_e;
   facetedge_id fe, start_fe;
+  int n = 0;   /* pySE: a ring that never closes isn't a plain one (a worker
+                  thread: no error) */
   if ( get_vattr(v_id) & (FIXED|AXIAL_POINT|CONSTRAINT|BOUNDARY|Q_MIDPOINT|Q_MIDEDGE|Q_MIDFACET) )
     return 0;
   e_id = start_e = get_vertex_edge(v_id);
@@ -2249,14 +2253,17 @@ static int av_vertex_ring(vertex_id v_id, av_edge **e, long *e_size, long *me,
     ve->fa = (long)ordinal(get_fe_facet(fe));
     ve->fb = (long)ordinal(get_fe_facet(get_next_facet(fe)));
     e_id = get_next_tail_edge(e_id);
+    if ( ++n > 100000 ) return 0;
   } while ( !equal_id(e_id,start_e) );
   fe = start_fe = get_vertex_first_facet(v_id);
+  n = 0;
   do
   { facet_id f_id = get_fe_facet(fe);
     long o = (long)ordinal(f_id) + 1;
     if ( !av_grow((void**)f,f_size,*mf + 1,sizeof(long)) ) return -1;
     (*f)[(*mf)++] = inverted(f_id) ? -o : o;
     fe = get_next_vertex_facet(v_id,fe);
+    if ( ++n > 100000 ) return 0;
   } while ( !equal_element(fe,start_fe) );
   return 1;
 }

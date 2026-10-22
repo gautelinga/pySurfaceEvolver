@@ -644,12 +644,15 @@ int find_vertex_average(
   }
   else
   { /* corner vertex, average with neighbors */
+    int walked = 0;   /* pySE: rings that never close: not moved (run in
+                         parallel threads too: no error) */
     e_id = start_e = get_vertex_edge(v_id);
     if ( !valid_id(e_id) ) return 0;
     k = 0; total_weight = 0.0;
     /* get weighted sum of neighbors */
     do
     { facetedge_id fe,start_fe;
+      if ( ++walked > 100000 ) return 0;
 
       if ( mode != RAWEST )
       { /* check constraint compatibility */
@@ -722,6 +725,7 @@ int find_vertex_average(
 			   }
 		       weight += a;
                fe = get_next_facet(fe);
+               if ( ++walked > 100000 ) return 0;  /* pySE */
              } while ( !equal_id(fe,start_fe) );
       }
       if ( weight == 0.0 ) goto loopend;

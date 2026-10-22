@@ -1620,6 +1620,67 @@ int get_edge_valence(edge_id e_id)
   return n;
 } // end get_edge_valence()
 
+/***************************************************************
+*
+*  Function:  edge_ring_closes, vertex_star_closes
+*
+*  Purpose:  pySE: whether the facets round an edge (its facet-edge
+*            ring), or the edges round a vertex (its tail-edge star),
+*            come back to the first within as many steps as there are
+*            facet-edges, or twice the edges. A ring that doesn't is a
+*            walk round it that never ends: a 16-bead pack's remeshing
+*            spun in one for half an hour. Never an error: the callers,
+*            before they change anything, refuse what they were about
+*            to do.
+*/
+
+int edge_ring_closes(edge_id e_id)
+{ facetedge_id fe,first;
+  long n = 0, max = web.skel[FACETEDGE].count + 1;
+
+  first = fe = get_edge_fe(e_id);
+  if ( !valid_id(fe) ) return 1;
+  do
+  { fe = get_next_facet(fe);
+    if ( ++n > max ) return 0;
+  } while ( valid_id(fe) && !equal_id(fe,first) );
+  return 1;
+}
+
+int vertex_star_closes(vertex_id v_id)
+{ edge_id e_id,first;
+  long n = 0, max = 2*web.skel[EDGE].count + 1;
+
+  first = e_id = get_vertex_edge(v_id);
+  if ( !valid_id(e_id) ) return 1;
+  do
+  { e_id = get_next_tail_edge(e_id);
+    if ( ++n > max || !valid_id(e_id) ) return 0;
+  } while ( !equal_id(e_id,first) );
+  return 1;
+}
+
+/***************************************************************
+*
+*  Function:  walk_limit, walk_overrun
+*
+*  Purpose:  pySE: the most steps a walk round a ring of the mesh
+*            (an edge's facets, a vertex's edges, a facet's edges) can
+*            take, and the error for one that took more: one already
+*            changing the surface can't refuse, so it stops (recoverable;
+*            the caller's undo or the glue's restore puts things back).
+*/
+
+long walk_limit(void)
+{ return (long)web.skel[FACETEDGE].count + 2*(long)web.skel[EDGE].count + 16;
+}
+
+void walk_overrun(const char *where)
+{ sprintf(errmsg,
+    "Internal error: a walk round the mesh in %s didn't come back to its start.\n",where);
+  kb_error(6370,errmsg,RECOVERABLE);
+}
+
 
 
 /***************************************************************
@@ -2365,13 +2426,15 @@ int new_calc_vertex_normal(
   /* so can handle same way as string edges  */
   if ( web.representation == SOAPFILM )
   { edge_id e_id,start_e;
+    int n = 0;   /* pySE: a star that never closes: all directions */
 
     e_id = get_vertex_edge(v_id);
     if ( !valid_id(e_id) ) goto full_dim; /* bare point */
 
     start_e = e_id;
     do 
-    { valence = get_edge_valence(e_id);
+    { if ( ++n > 100000 ) goto full_dim;
+      valence = get_edge_valence(e_id);
       if ( valence == 0 ) bares++;
       if ( valence == 1 ) singles++;
       if ( valence == 2 ) doubles++;
@@ -2542,10 +2605,13 @@ tripletest:
      facetedge_id start_e;
      edge_id e_id;
 
+     int n = 0;   /* pySE: a star that never closes: all directions */
+
      for ( i = 0 ; i < SDIM ; i++ ) fnorm[0][i] = 0.;
      start_e = e_id = get_vertex_edge(v_id);
      do 
      { int valence = get_edge_valence(e_id);
+       if ( ++n > 100000 ) goto full_dim;
        if ( valence >= 3 )  
        { if ( web.modeltype==QUADRATIC )
          { retval = quadratic_edge_normal(v_id,e_id,norm);
@@ -4051,6 +4117,9 @@ element_id get_next_vertex_facet(
   facetedge_id fe_id,start_fe, first_fe = NULLID;
   facet_id next_f;
   int found; /* whether old f_id found yet */
+  long walked = 0;  /* pySE: rings that never close: back to the first, which
+                       ends the callers' walks (no error: worker threads walk
+                       these too) */
 
   if ( web.representation == SIMPLEX ) 
   {
@@ -4092,9 +4161,11 @@ element_id get_next_vertex_facet(
           found = 1;
       }
       fe_id = get_next_facet(fe_id);
+      if ( ++walked > 100000 ) return first_fe;
     } while ( !equal_id(start_fe,fe_id) );
 
     ee_id = get_next_tail_edge(ee_id);
+    if ( ++walked > 100000 ) return first_fe;
   } while ( !equal_id(ee_id,start_e) );
 
   if ( found )

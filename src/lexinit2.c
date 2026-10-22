@@ -1520,7 +1520,8 @@ void fe_reorder(edge_id e_id)
   if ( valid_id(fe) ) 
   do { fcount++; 
        fe = get_next_facet(fe);
-     } while ( valid_id(fe) && !equal_id(fe,first_fe) );
+     } while ( valid_id(fe) && !equal_id(fe,first_fe)
+               && fcount <= FSORTMAX );  /* pySE: a ring that never closes */
   if ( fcount <= 2 ) return;
 
   if ( fcount > FSORTMAX )
@@ -1727,7 +1728,8 @@ void raw_fe_reorder(edge_id e_id)
   if ( valid_id(fe) ) 
   do { fcount++; 
        fe = get_next_facet(fe);
-     } while ( valid_id(fe) && !equal_id(fe,first_fe) );
+     } while ( valid_id(fe) && !equal_id(fe,first_fe)
+               && fcount <= FSORTMAX );  /* pySE: a ring that never closes */
   if ( fcount <= 2 ) return;
 
   if ( fcount > FSORTMAX )

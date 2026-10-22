@@ -228,6 +228,9 @@ void local_refine()
     { vertex_id headv,midv;
       edge_id next_e;
 
+      /* pySE: round a facet's divided edges more often than they can be
+         (a loop that isn't three divided edges, which never ends) */
+      if ( n > 8*FACET_EDGES ) walk_overrun("local_refine");
       next_fe = get_next_edge(fe);
       headv = get_fe_headv(fe);
       if ( get_vattr(headv) & NEWVERTEX )
@@ -1176,17 +1179,21 @@ void edge_histogram()
    the same neighbour) have the same third vertex */
 static int facets_share_third(edge_id a, edge_id b)
 { facetedge_id fa,fb,firsta,firstb;
+  int na = 0, nb;    /* pySE: rings that never close count as shared: refused */
   firsta = fa = get_edge_fe(a);
   if ( !valid_id(fa) ) return 0;
   do
   { vertex_id wa = get_fe_headv(get_next_edge(fa));
     firstb = fb = get_edge_fe(b);
+    nb = 0;
     if ( valid_id(fb) )
       do
       { if ( equal_id(get_fe_headv(get_next_edge(fb)),wa) ) return 1;
         fb = get_next_facet(fb);
+        if ( ++nb > 100000 ) return 1;
       } while ( valid_id(fb) && !equal_id(fb,firstb) );
     fa = get_next_facet(fa);
+    if ( ++na > 100000 ) return 1;
   } while ( valid_id(fa) && !equal_id(fa,firsta) );
   return 0;
 }
@@ -1207,7 +1214,9 @@ static int collapse_keeps_manifold(edge_id short_edge)
     do
     { if ( nthird < 64 ) third[nthird++] = get_fe_headv(get_next_edge(fe));
       fe = get_next_facet(fe);
+      if ( ++guard1 > 100000 ) return 0;   /* pySE: a ring that never closed */
     } while ( valid_id(fe) && !equal_id(fe,first) );
+  guard1 = 0;
   /* pySE: an edge of the surface's border (one facet: a contact line) keeps
      the strict link condition. Merging its ends where they share another
      neighbour pinches the border into a figure eight; a contact line's spike
@@ -1235,10 +1244,11 @@ static int collapse_keeps_manifold(edge_id short_edge)
           }
           e2 = get_next_tail_edge(e2);
         } while ( !equal_id(e2,get_vertex_edge(v2)) && ++guard2 < 100000 );
+      if ( guard2 >= 100000 ) return 0;   /* pySE: a star that never closed: refused */
     }
     e1 = get_next_tail_edge(e1);
   } while ( !equal_id(e1,get_vertex_edge(v1)) && ++guard1 < 100000 );
-  return 1;
+  return guard1 < 100000;
 } // end collapse_keeps_manifold()
 
 /*******************************************************************
@@ -1321,9 +1331,11 @@ static int collapse_keeps_shape(vertex_id keep_v, vertex_id elim_v, int midpoint
             }
             fe = get_next_facet(fe);
           } while ( valid_id(fe) && !equal_id(fe,fe0) && (++guard2 < 100000) );
+        if ( guard2 >= 100000 ) return 0;   /* pySE: a ring that never closed: refused */
       }
       e = get_next_tail_edge(e);
     } while ( !equal_id(e,e0) && (++guard < 100000) );
+    if ( guard >= 100000 ) return 0;
   }
   return 1;
 } // end collapse_keeps_shape()
@@ -1357,6 +1369,7 @@ int delete_edge(edge_id short_edge)
   facet_id f_id;
   facetedge_id first_fe;
   int retval = 0;
+  long walks, max_walk;  /* pySE: the main loop's steps (walk_limit) */
 
   if ( web.representation == SIMPLEX )
      kb_error(1341,"Cannot eliminate edge in simplex model.\n",RECOVERABLE);
@@ -1420,6 +1433,26 @@ int delete_edge(edge_id short_edge)
              outstring(msg);
     }
     return 0; /* can't safely eliminate edge */
+  }
+
+  /* pySE: rings that don't come back to their start (a corrupt or unusual
+     mesh) refused before anything changes: every walk below, and Evolver's
+     unstarring, goes round the edge's facets, the edges merged into others,
+     and the ends' edges until it is back where it began */
+  if ( web.representation == SOAPFILM )
+  { facetedge_id fe,first;
+    long n = 0, max = walk_limit();
+    if ( !edge_ring_closes(short_edge) || !vertex_star_closes(get_edge_tailv(short_edge))
+         || !vertex_star_closes(get_edge_headv(short_edge)) )
+      return 0;
+    first = fe = get_edge_fe(short_edge);
+    if ( valid_id(fe) )
+      do
+      { if ( !edge_ring_closes(get_fe_edge(get_prev_edge(fe)))
+             || !edge_ring_closes(get_fe_edge(get_next_edge(fe))) || ++n > max )
+          return 0;
+        fe = get_next_facet(fe);
+      } while ( valid_id(fe) && !equal_id(fe,first) );
   }
 
   /* check edges that would be merged */
@@ -1502,6 +1535,7 @@ int delete_edge(edge_id short_edge)
      triangulated triangle) and unstarring if found.              */
   if ( web.representation == SOAPFILM )
   { int bad_flag = 0;
+    long n = 0, max = walk_limit();
   
     base_fe = first_fe = get_edge_fe(short_edge);
     while ( valid_id(base_fe) )
@@ -1511,6 +1545,7 @@ int delete_edge(edge_id short_edge)
 
       base_fe = get_next_facet(base_fe);
       if ( equal_id(base_fe,first_fe) ) base_fe = NULLID;
+      if ( ++n > max ) { bad_flag = 1; break; }  /* pySE: unstarring left a ring open */
     } /* end base_fe loop */
     
     /* extra checks for bad configurations */
@@ -1608,6 +1643,7 @@ int delete_edge(edge_id short_edge)
   /* Go through facets around edge, adjusting facet loops
       of the merged edges, deleting facetedges, and facets */
   base_fe = first_fe = get_edge_fe(short_edge);
+  walks = 0; max_walk = walk_limit();
   while ( valid_id(base_fe) )
   {
     facetedge_id next_base;  /* to get before freeing base_fe */
@@ -1761,6 +1797,7 @@ int delete_edge(edge_id short_edge)
           set_prev_edge(rnext,rprev);
           free_element(rfe);
           rfe = get_next_facet(rfe);
+          if ( ++walks > max_walk ) walk_overrun("delete_edge");  /* pySE */
         } while ( !equal_element(a,rfe) );
         goto wasloop;   
       }
@@ -1808,6 +1845,7 @@ int delete_edge(edge_id short_edge)
         do
         { set_fe_edge(next_fea,keep_edge);
           next_fea = get_next_facet(next_fea);
+          if ( ++walks > max_walk ) walk_overrun("delete_edge");  /* pySE */
         }
         while ( next_fea != get_edge_fe(keep_edge) );
 
@@ -1896,6 +1934,7 @@ wasloop:
    free_element(base_fe);
    base_fe = next_base;
    if ( equal_id(base_fe,first_fe) ) base_fe = NULLID;
+   if ( ++walks > max_walk ) walk_overrun("delete_edge");  /* pySE */
   }  /* end facets around short edge loop */
 
   if ( !equal_id(elim_v,keep_v) )    /* see note above */
@@ -2101,15 +2140,22 @@ edge_id edge_refine(edge_id e_id)
   if ( web.modeltype == LAGRANGE )
   kb_error(2199,"Cannot refine an edge in Lagrange model. Suggest reverting to quadratic.\n",RECOVERABLE);
 
+  /* pySE: an edge whose facets don't come back round to the first not
+     divided (the walks round them in edge_divide and below never end) */
+  if ( web.representation == SOAPFILM && !edge_ring_closes(e_id) )
+    return NULLID;
+
   ENTER_GRAPH_MUTEX;
   new_e = edge_divide(e_id);  /* e_id now tail half of old edge */
 
   if ( web.representation == SOAPFILM )
   { facetedge_id first_fe;
+    long n = 0, max = walk_limit();
     /* now go around facet loop of edge dividing facets */
     fe = first_fe = get_edge_fe(e_id);
     if ( valid_id(fe) ) do
-    { if ( get_vattr(get_edge_tailv(e_id)) & AXIAL_POINT )
+    { if ( ++n > max ) walk_overrun("edge_refine");  /* pySE */
+      if ( get_vattr(get_edge_tailv(e_id)) & AXIAL_POINT )
       { facetedge_id ffe = get_next_edge(fe);
         facet_id f_id = get_fe_facet(fe);
         cross_cut(ffe,get_next_edge(ffe));
@@ -2293,19 +2339,21 @@ static void mark_near_swap(edge_id e_id, unsigned char *marks)
   v[3] = get_fe_headv(get_next_edge(get_next_facet(fe)));
   for ( i = 0 ; i < 4 ; i++ )
   { edge_id ee, start;
+    int n = 0, m;   /* pySE: rings that never close: as far as this many */
     ee = start = get_vertex_edge(v[i]);
     if ( !valid_id(ee) ) continue;
     do
     { facetedge_id f0 = get_edge_fe(ee), ff = f0;
       marks[loc_ordinal(ee)] = 1;
+      m = 0;
       if ( valid_id(f0) )
         do
         { marks[loc_ordinal(get_fe_edge(get_next_edge(ff)))] = 1;
           marks[loc_ordinal(get_fe_edge(get_prev_edge(ff)))] = 1;
           ff = get_next_facet(ff);
-        } while ( !equal_id(ff,f0) );
+        } while ( !equal_id(ff,f0) && ++m < 100000 );
       ee = get_next_tail_edge(ee);
-    } while ( !equal_id(ee,start) );
+    } while ( !equal_id(ee,start) && ++n < 100000 );
   }
 }
 
@@ -2405,12 +2453,14 @@ void thread_calc_edges()
    cone_analyze's ERROR 1303); eartest() only refuses a doubled facet. */
 static int vertices_joined(vertex_id v1, vertex_id v2)
 { edge_id e_id,start_id;
+  int n = 0;
 
   e_id = start_id = get_vertex_edge(v1);
   if ( !valid_id(e_id) ) return 0;
   do
   { if ( equal_id(v2,get_edge_headv(e_id)) ) return 1;
     e_id = get_next_tail_edge(e_id);
+    if ( ++n > 100000 ) return 1;   /* pySE: a star that never closes: no swap */
   } while ( !equal_id(e_id,start_id) );
   return 0;
 }
@@ -2446,14 +2496,18 @@ int eartest(
   vertex_id v3, vertex_id v4
 )
 { edge_id e_id,start_id;
+  int n = 0, m;   /* pySE: rings that never close count as an ear (no swap;
+                     these run in parallel threads too: no error) */
 
   e_id = start_id = get_vertex_edge(v1);
+  if ( !valid_id(e_id) ) return 1;
   do
   { if ( equal_id(v2,get_edge_headv(e_id)) )
     { /* see if facets on edge have third vertex equal to v3 or v4 */
       facetedge_id fe,start_fe,next_fe;
       vertex_id other_v;
       fe = start_fe = get_edge_fe(e_id);
+      m = 0;
       if ( valid_id(start_fe) )
       do
       {
@@ -2462,9 +2516,11 @@ int eartest(
         if ( equal_id(other_v,v3) || equal_id(other_v,v4) ) 
           return 1; 
         fe = get_next_facet(fe); 
+        if ( ++m > 100000 ) return 1;
       } while ( !equal_id(fe,start_fe) );
     }
     e_id = get_next_tail_edge(e_id);
+    if ( ++n > 100000 ) return 1;
   } while ( e_id != start_id );
   return 0;
 } // end eartest()

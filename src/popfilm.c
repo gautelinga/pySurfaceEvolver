@@ -226,6 +226,7 @@ int pop_one_edge(edge_id e_id)
     else if ( ffree == maxffree ) maxffreen ++;
     facet_count++;
     fe_id = get_next_facet(fe_id);
+    if ( facet_count > 100000 ) return 0;  /* pySE: a ring that never closes */
   } while ( valid_id(fe_id) && !equal_id(fe_id,first_fe) );
 
   /* only pop if more than 3 facets, or a wall or wire */
@@ -473,6 +474,7 @@ int try_prop(
   facetedge_id key_fe = *pass_key;
   edge_id e_id = get_fe_edge(key_fe);
   edge_id next_e=0;
+  long swings = 0, max_swing = walk_limit();  /* pySE: the wings' walks */
 
   if ( !valid_id(*pass_key) ) return 0;
 
@@ -485,6 +487,7 @@ int try_prop(
   flip_fe = inverse_id(key_fe);
   for (;;)
   {
+    if ( ++swings > max_swing ) return 0;  /* pySE: round a fan that never closes */
     wing_fe = get_next_edge(inverse_id(flip_fe));
     if ( equal_id(wing_fe,start_key) )
     { /* have made complete loop around */
@@ -533,6 +536,7 @@ int try_prop(
   flip_fe = inverse_id(get_prev_facet(key_fe));
   for (;;)
   {
+    if ( ++swings > max_swing ) return 0;  /* pySE: no check for a full loop here */
     wing_fe = get_next_edge(inverse_id(flip_fe));
     flip_fe = get_next_facet(wing_fe);
     if ( equal_id(wing_fe,flip_fe) )
@@ -705,14 +709,17 @@ void versplit(
             !equal_id(fe,inverse_id(fe_bb)) )
       {
         facetedge_id start_fe = fe;
+        int walks = 0;  /* pySE: a ring that never closes, or past the stack */
         do
         { facetedge_id next_fe = inverse_id(get_next_edge(fe));
           edge_id next_e = get_fe_edge(next_fe);
           if ( !equal_id(get_edge_headv(next_e),new_v) )
           { // add to stack
+            if ( stackcount >= FESTACKSIZE ) walk_overrun("versplit");
             fe_stack[stackcount++] = next_fe;
           }
           fe = get_next_facet(fe);
+          if ( ++walks > web.skel[FACETEDGE].count ) walk_overrun("versplit");
         } while ( !equal_id(fe,start_fe) );
       }
     } 
@@ -1126,6 +1133,7 @@ int two_split(
     if ( (i > 0) || tailsplitflag )
     { vertex_id old_tail = get_edge_tailv(old_e);
       vertex_id new_tail = dup_vertex(old_tail);
+      long walks = 0, max_walk = walk_limit();  /* pySE */
       fe_b = fe;
       fe_c = NULLID;
  
@@ -1138,6 +1146,7 @@ int two_split(
 
         fe_c = inverse_id(get_prev_edge(fe_b));
         fe_b = get_next_facet(fe_c);
+        if ( ++walks > max_walk ) walk_overrun("two_split");  /* pySE */
 
       }
     }
@@ -1145,6 +1154,7 @@ int two_split(
     if ( (i == splitcount-1) && headsplitflag )
     { vertex_id old_head = get_edge_headv(old_e);
       vertex_id new_head = dup_vertex(old_head);
+      long walks = 0, max_walk = walk_limit();  /* pySE */
       fe_b = fe;
       fe_c = NULLID;
  
@@ -1157,6 +1167,7 @@ int two_split(
 
         fe_c = inverse_id(get_next_edge(fe_b));
         fe_b = get_next_facet(fe_c);
+        if ( ++walks > max_walk ) walk_overrun("two_split");  /* pySE */
 
       }
     }
@@ -1560,6 +1571,7 @@ ARCRESTART:
       for ( valence = 1 ; ; valence++ )
       { nextray = get_next_facet(nextray);
         if ( equal_id(nextray,ray) ) break;
+        if ( valence > web.skel[FACETEDGE].count ) walk_overrun("cone_analyze");  /* pySE */
       }
       nextray = get_next_facet(ray);
       nextfe = get_next_edge(inverse_id(nextray));

@@ -43,6 +43,16 @@ void face_triangulate(
      kb_error(1237,"Can't face_triangulate() in Lagrange model.\n",RECOVERABLE);
 
   f_id = positive_id(f_id);  /* axial points like positive orientation here */
+
+  /* pySE: a facet whose edges don't come back round to the first, before
+     anything changes (every walk below goes round them until it is back) */
+  { long n = 0, max = walk_limit();
+    fe = first_fe = get_facet_fe(f_id);
+    if ( valid_id(fe) ) do
+    { fe = get_next_edge(fe);
+      if ( ++n > max ) walk_overrun("face_triangulate");
+    } while ( valid_id(fe) && !equal_id(fe,first_fe) );
+  }
   
   /* put a new vertex in the center */
   center = new_vertex(NULL,f_id);
@@ -186,11 +196,14 @@ void face_triangulate(
 
   /* now go around cutting off triangles */
   fe_in = get_edge_fe(spoke);
-  while ( !equal_id(get_next_edge(fe),fe_in) )
-  { next_fe = get_next_edge(fe);
-    cross_cut(get_prev_edge(fe),fe);
-    fe = next_fe;
-  }    
+  { long n = 0, max = walk_limit();  /* pySE */
+    while ( !equal_id(get_next_edge(fe),fe_in) )
+    { next_fe = get_next_edge(fe);
+      cross_cut(get_prev_edge(fe),fe);
+      fe = next_fe;
+      if ( ++n > max ) walk_overrun("face_triangulate");
+    }    
+  }
 
  if ( web.symmetry_flag ) /* check for axial vertices */
  { fe = get_facet_fe(f_id);
@@ -358,6 +371,7 @@ int simple_unstar(facetedge_id base_fe)
       edge_id  b_edge=0; /* edge of side b */
       facet_id  facet;  /* facet to be eliminated */ 
       int retval = 1;
+      int passes = 0;   /* pySE */
 
       /* check we really have a facet */
       facet = get_fe_facet(base_fe);
@@ -369,6 +383,10 @@ int simple_unstar(facetedge_id base_fe)
       for(;;)  /* may take multiple passes for total unstarring */
       { 
         int unstar_count = 0;
+
+          /* pySE: each pass unstars a vertex; past this many the stars go
+             round in a ring that doesn't close: the edge not deleted */
+          if ( ++passes > 1000 ) return -1;
 
           a = get_next_edge(base_fe);
           a_edge = get_fe_edge(a);
@@ -594,6 +612,7 @@ edge_id edge_divide(edge_id e_id)
   REAL prod1[MAXLAGRANGE+1],prod2;
   facetedge_id first_fe;
   vertex_id allv[2*MAXLAGRANGE+1];
+  long walks = 0, max_walk = walk_limit();  /* pySE: the rings' steps */
   
 
   if ( extra_bdry_attr && !extra_bdry_param_attr )
@@ -1044,6 +1063,7 @@ edge_id edge_divide(edge_id e_id)
          set_facet_fe(ff_id,new_fe);
     }
     old_fe = get_next_facet(old_fe);
+    if ( ++walks > max_walk ) walk_overrun("edge_divide");  /* pySE */
   } while ( valid_id(old_fe) && !equal_id(old_fe,first_fe) );
   set_edge_fe(new_e,new_fe);
 
@@ -1058,6 +1078,7 @@ edge_id edge_divide(edge_id e_id)
       nfe = get_prev_facet(old_fe);
         set_prev_facet(fe,get_next_edge(nfe));
       old_fe = get_next_facet(old_fe);
+      if ( ++walks > max_walk ) walk_overrun("edge_divide");  /* pySE */
     } while ( valid_id(old_fe) && !equal_id(old_fe,first_fe) );
 
   /* check for dangling ends with loopback fe */
@@ -1067,6 +1088,7 @@ edge_id edge_divide(edge_id e_id)
       if ( !equal_id(get_prev_edge(get_next_edge(new_fe)),new_fe ) )
          set_next_edge(new_fe,get_prev_edge(get_next_edge(new_fe)));
     new_fe = get_next_facet(new_fe);
+    if ( ++walks > max_walk ) walk_overrun("edge_divide");  /* pySE */
   } while (  valid_id(new_fe) &&!equal_id(new_fe,first_fe) );
 
  #ifdef MPI_EVOLVER
@@ -1117,6 +1139,7 @@ void cross_cut(
   ATTR attr;
   vertex_id headv,tailv;
   int i,k;
+  long walks = 0, max_walk = walk_limit();  /* pySE */
 
   old_f = get_fe_facet(first_fe);
   attr = get_fattr(old_f);
@@ -1167,6 +1190,7 @@ void cross_cut(
        wrap = (*sym_compose)(wrap,get_fe_wrap(fe));
     if ( equal_id(fe,last_fe) ) break;
     fe = get_next_edge(fe);
+    if ( ++walks > max_walk ) walk_overrun("cross_cut");  /* pySE */
   }
   if ( wrap )
   { set_edge_wrap(new_e,(*sym_inverse)(wrap));
@@ -2392,6 +2416,18 @@ int dissolve_facet(facet_id f_id)
   }
 
   if ( web.representation != SIMPLEX )
+  { /* pySE: a facet whose edges don't come back round to the first not
+       dissolved (the walk below frees them as it goes, never ending) */
+    long n = 0, max = walk_limit();
+    fe = get_facet_fe(f_id);
+    for ( fe_id = fe ; valid_id(fe_id) ; )
+    { fe_id = get_next_edge(fe_id);
+      if ( equal_id(fe_id,fe) ) break;
+      if ( ++n > max ) return 0;
+    }
+  }
+
+  if ( web.representation != SIMPLEX )
   { /* Identify the edges, but not the facets yet.
        delete_facet() will take care of the second 
        facet and patch up its facetedges. */
@@ -3299,6 +3335,10 @@ void reverse_orientation_edge(edge_id e_id)
   facetedge_id start_fe;
   int i;
   struct edge *e_ptr;
+
+  /* pySE: an edge whose facets don't come back round, before it changes
+     (the walk below turns them round as it goes, never ending) */
+  if ( !edge_ring_closes(e_id) ) walk_overrun("reverse_orientation_edge");
 
   v_id[0] = get_edge_tailv(e_id);
   v_id[1] = get_edge_headv(e_id);

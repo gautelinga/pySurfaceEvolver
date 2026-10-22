@@ -346,6 +346,19 @@
 
 ### Fixes
 
+- Evolver's walks round the mesh's rings (an edge's facets, a vertex's edges, a
+  facet's edges) on the paths the topology runs take are bounded, as pySE's own
+  are: edge deletion, its unstarring and link checks, edge refinement and
+  division, facet triangulation and dissolving, edge reversal, equiangulation's
+  ear and doubled-edge tests, vertex averaging, popping (`pop_one_edge`,
+  `try_prop`, `versplit`, `two_split`, `cone_analyze`), facet ordering round an
+  edge, and the vertex-normal and vertex-facet walks every step takes. A ring that
+  doesn't come back to its start is refused before anything changes (the edge not
+  deleted, refined or swapped, the vertex not moved), or, mid-change, stops with a
+  recoverable error (6370) instead of spinning: a 16-bead pack's remeshing spun in
+  one for half an hour (pySE's `link_kept()`, guarded since). Where the guards in
+  edge deletion's checks ran out they let the deletion go on; they refuse it.
+
 - Topology runs at a box's side walls (16-bead packs drained to breakthrough):
   - The descents' guards: each vertex on the walls nearest it, as many as make
     three with the walls it is on (not two, planes first: free vertices in a
