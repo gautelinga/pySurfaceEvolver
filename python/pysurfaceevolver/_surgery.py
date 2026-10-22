@@ -3498,7 +3498,7 @@ def _sizes(ev, h0: float) -> np.ndarray:
     edges = np.asarray(m.edges)
     if not len(edges):
         return size
-    x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
+    x = np.asarray(m.vertices, float)
     # (events() measures in local edges, the finest _FINE h0: so out to h0;
     # the surface close to itself within an edge, necks NECK times that)
     from ._events import find, _base as base_of
