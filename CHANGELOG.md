@@ -226,6 +226,13 @@
 
 ### Speed
 
+- Topology runs: the guards go on and off the vertices in one call
+  (`_core.set_vertex_constraints`, one recalc) instead of a command per guard, each
+  with its recalc, and only where they change; and writing pySE's scratch
+  attributes (`pyse_..._mark`) no longer recalculates. A 16-bead pack's `guard()` at
+  2k facets 736 -> 108 million instructions (one that changes nothing 33), the same
+  guards and surface bit for bit; it was 16% of a descent.
+
 - Evolver's volume projection (project_all) evaluates the energy with the content
   only in its first pass after a restore, where that is likely the last; each pass
   did, and only the last one's was used: 16% fewer instructions in the projection

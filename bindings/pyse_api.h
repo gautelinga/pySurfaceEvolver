@@ -73,6 +73,11 @@ int pyse_set_vertex_coords(const double *xyz, long n, int sdim);
 int pyse_fast_attribute(int type, const char *attribute);
 int pyse_set_values(int type, const char *attribute, const double *values,
                     const unsigned char *mask, long n);
+/* Put vertices on constraints (on != 0; projected there as Evolver's set
+   vertex constraint does) or take them off: vertex i (pyse_get_* order) and
+   constraint nums[j] where mask[i*k + j] is nonzero; one recalc after. */
+int pyse_set_vertex_constraints(const int *nums, int k, const unsigned char *mask, long n,
+                                int on);
 
 int pyse_get_vertices(double *xyz, int64_t *ids, unsigned char *fixed, long n,
                       int sdim);

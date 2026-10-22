@@ -1277,6 +1277,26 @@ def test_the_guards_keep_vertices_from_every_wall_near_them():
     assert np.array_equal(ev.vertices, x)
 
 
+def test_vertices_go_on_and_off_constraints_in_one_call():
+    # (guard()'s and _unguard()'s: several constraints, a mask column each)
+    from pysurfaceevolver import _core
+    ev = _corner()
+    nums, _, _, names = ev._constraint_gaps()
+    names = [str(n) for n in names]
+    cols = [int(nums[names.index(k)]) for k in ("bead", "wallxlo")]
+    mask = np.zeros((ev.counts["vertices"], 2), dtype=np.uint8)
+    mask[0, 0] = mask[1, 1] = 1
+    ev._call(_core.set_vertex_constraints, np.array(cols, dtype=np.int32), mask, True)
+    assert list(np.flatnonzero(ev.on_constraint("bead"))) == [0]
+    assert list(np.flatnonzero(ev.on_constraint("wallxlo"))) == [1, 2, 4, 5]
+    # (projected onto them, as Evolver's set does)
+    assert abs(np.linalg.norm(ev.vertices[0] - [1.015, 1.015, 1.0]) - 1.0) < 1e-9
+    assert abs(ev.vertices[1, 0]) < 1e-12
+    ev._call(_core.set_vertex_constraints, np.array(cols, dtype=np.int32), mask, False)
+    assert not ev.on_constraint("bead").any()
+    assert list(np.flatnonzero(ev.on_constraint("wallxlo"))) == [2, 4, 5]
+
+
 def test_a_contact_lines_split_takes_its_ends_guards():
     # (the contact-line edges split as gradient steps go, _core.line_chop: a
     # midpoint without its ends' guards went out through the side wall at

@@ -133,7 +133,6 @@ def guard(ev) -> None:
         ev._register_native_formulas()      # (theirs in closed form too)
         nums, _, dist, names = ev._constraint_gaps(guards=True)
         names = [str(n) for n in names]
-    _unguard(ev, names)
     m = ev.mesh()
     real = [i for i, n in enumerate(names) if not n.startswith(GUARD_PREFIX)]
     on = np.isnan(dist[:, real]) if real else np.zeros((len(m.vertices), 0), dtype=bool)
@@ -169,48 +168,62 @@ def guard(ev) -> None:
     # 0.015 gap where a bead touches a side wall, on both guards, left
     # Evolver's constraint projection singular, ERROR 3005; the nearer one
     # only, the wall it is on first)
-    normals: dict = {}
     # (only at the vertices that can have two: on a wall and guarded, or
-    # guarded twice)
-    need = np.ascontiguousarray(np.flatnonzero(
-        (chosen.any(axis=1) & on.any(axis=1)) | (chosen.sum(axis=1) >= 2)), dtype=np.int64)
+    # guarded twice; per vertex, the normals of the walls it is on and of
+    # its guards' walls, each constraint's at the vertices that have it, in
+    # one call: a loop over the walls and the guards, the normals gathered a
+    # vertex at a time, was most of a guard() that changed nothing)
+    need = np.flatnonzero((chosen.any(axis=1) & on.any(axis=1)) | (chosen.sum(axis=1) >= 2))
+    if len(need):
+        # the walls each is on (columns of the table; -1: none), at most _GUARDS
+        on_cols = np.full((len(need), _GUARDS), -1)
+        r_, c_ = np.nonzero(on[need])
+        k_ = np.arange(len(r_)) - np.searchsorted(r_, r_)
+        keep = k_ < _GUARDS
+        on_cols[r_[keep], k_[keep]] = np.asarray(real)[c_[keep]]
+        g_cols = np.asarray(cols)[order[need]]                  # its guards' walls, nearest first
+        unit = np.zeros((len(names), len(need), 3))
+        for q in np.unique(np.r_[on_cols[on_cols >= 0], g_cols[chosen[need[:, None], order[need]]]]):
+            at = np.flatnonzero((on_cols == q).any(axis=1) | (g_cols == q).any(axis=1))
+            _, grad = ev._call(_core.constraint_normals_at, int(nums[q]),
+                               np.ascontiguousarray(need[at], dtype=np.int64))
+            grad = np.asarray(grad.data)
+            unit[q, at] = grad/np.maximum(np.linalg.norm(grad, axis=1), 1e-300)[:, None]
 
-    def normal(num: int) -> np.ndarray:
-        if num not in normals:
-            normals[num] = np.zeros((len(gap), 3))
-            if len(need):
-                _, grad = ev._call(_core.constraint_normals_at, num, need)
-                normals[num][need] = np.asarray(grad.data)
-        return normals[num]
+        def tangent(at, qa, qb) -> np.ndarray:
+            """Rows at whose normals of columns qa and qb are within 10 degrees."""
+            return at[np.abs(np.einsum("ij,ij->i", unit[qa[at], at], unit[qb[at], at])) > 0.985]
 
-    def tangent(rows_, a, b) -> np.ndarray:
-        cos = np.abs(np.einsum("ij,ij->i", a, b)) / np.maximum(
-            np.linalg.norm(a, axis=1)*np.linalg.norm(b, axis=1), 1e-300)
-        return rows_[cos > 0.985]
-
-    guarded = chosen.any(axis=1)
-    for c, col in enumerate(real):
+        picked = chosen[need[:, None], order[need]]
         for far in range(order.shape[1]):
-            pair = np.flatnonzero(on[:, c] & guarded)
-            pair = pair[chosen[pair, order[pair, far]]]
-            if len(pair):
-                b = np.array([normal(int(nums[cols[int(order[i, far])]]))[i] for i in pair])
-                drop = tangent(pair, normal(int(nums[col]))[pair], b)
-                chosen[drop, order[drop, far]] = False
-    several = np.flatnonzero(chosen.sum(axis=1) >= 2)
-    for near in range(order.shape[1]):
-        for far in range(near + 1, order.shape[1]):
-            pair = several[chosen[several, order[several, near]]
-                           & chosen[several, order[several, far]]]
-            if not len(pair):
-                continue
-            a = np.array([normal(int(nums[cols[int(order[i, near])]]))[i] for i in pair])
-            b = np.array([normal(int(nums[cols[int(order[i, far])]]))[i] for i in pair])
-            drop = tangent(pair, a, b)
-            chosen[drop, order[drop, far]] = False
-    for j, key in enumerate(walls):
-        if chosen[:, j].any():
-            ev.set_constraint("vertex", f"{GUARD_PREFIX}{key}", where=chosen[:, j])
+            for k in range(_GUARDS):
+                picked[tangent(np.flatnonzero(picked[:, far] & (on_cols[:, k] >= 0)),
+                               on_cols[:, k], g_cols[:, far]), far] = False
+        for near in range(order.shape[1]):
+            for far in range(near + 1, order.shape[1]):
+                picked[tangent(np.flatnonzero(picked[:, near] & picked[:, far]),
+                               g_cols[:, near], g_cols[:, far]), far] = False
+        chosen[need[:, None], order[need]] = picked
+    # only what changed from the guards the vertices are on (those of walls
+    # gone taken off), all at once, one recalc: unguarded and guarded again a
+    # command per guard, each with its recalc, guard() was 0.7 G instructions
+    # at 2k facets, six gradient steps' worth; a surface guarded as it was
+    # makes no change at all
+    gcols = [_column(nums, names, f"{GUARD_PREFIX}{key}") for key in walls]
+    gone = [i for i, n in enumerate(names) if n.startswith(GUARD_PREFIX) and i not in gcols]
+    now = np.isnan(dist[:, gcols])
+    _set_guards(ev, [int(nums[i]) for i in gone + gcols],
+                np.c_[np.isnan(dist[:, gone]), now & ~chosen], False)
+    _set_guards(ev, [int(nums[i]) for i in gcols], chosen & ~now, True)
+
+
+def _set_guards(ev, nums: list, mask: np.ndarray, on: bool) -> None:
+    """Vertices (mask rows) onto or off guards nums (mask columns), the
+    columns with any, in one call."""
+    used = np.flatnonzero(mask.any(axis=0))
+    if len(used):
+        ev._call(_core.set_vertex_constraints, np.asarray(nums, dtype=np.int32)[used],
+                 np.ascontiguousarray(mask[:, used], dtype=np.uint8), on)
 
 
 def _pole_lines(ev):
@@ -612,19 +625,17 @@ def _guarded(ev) -> bool:
     return bool(cols) and bool(np.isnan(dist[:, cols]).any())
 
 
-def _unguard(ev, names=None) -> None:
+def _unguard(ev) -> None:
     """Take the guards off every vertex (guard() puts them back): Evolver
     deletes an edge only if one end's constraints are among the other's or
     the edge's, and a guarded vertex next to a contact line's (a guard, a
     wall) is neither, so the edges there didn't go and their facets
     degenerated (0.3 degrees). (Only the guards some vertex is on, in one
-    command: a command per guard, 21 a call, took 6% of a 16-bead run.)"""
-    _, _, dist, all_names = ev._constraint_gaps(guards=True)
-    used = [str(n) for c, n in enumerate(all_names)
-            if str(n).startswith(GUARD_PREFIX) and np.isnan(dist[:, c]).any()
-            and (names is None or n in names)]
-    if used:
-        ev.command("; ".join(f"unset vertex constraint {n}" for n in used))
+    call: a command per guard, 21 a call, took 6% of a 16-bead run.)"""
+    nums, _, dist, all_names = ev._constraint_gaps(guards=True)
+    used = [c for c, n in enumerate(all_names)
+            if str(n).startswith(GUARD_PREFIX) and np.isnan(dist[:, c]).any()]
+    _set_guards(ev, [int(nums[c]) for c in used], np.isnan(dist[:, used]), False)
 
 
 def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int]:

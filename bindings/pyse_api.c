@@ -656,7 +656,8 @@ int pyse_fast_attribute(int type, const char *attribute)
 }
 
 struct set_values_args
-{ int type; struct fast_target t; const double *values; const unsigned char *mask; long n; };
+{ int type; struct fast_target t; const double *values; const unsigned char *mask; long n;
+  int recalc; };
 
 static void set_values_body(void *arg)
 { struct set_values_args *a = (struct set_values_args *)arg;
@@ -679,7 +680,7 @@ static void set_values_body(void *arg)
   /* moved vertices move the clock (what it stamps, a gradient step's
      record of where the last one ended among them, is stale) */
   if ( a->t.coord >= 0 ) global_timestamp++;
-  if ( autorecalc_flag ) recalc();
+  if ( autorecalc_flag && a->recalc ) recalc();
 }
 
 int pyse_set_values(int type, const char *attribute, const double *values,
@@ -694,8 +695,76 @@ int pyse_set_values(int type, const char *attribute, const double *values,
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
                       "Value array does not match the element count.");
   a.type = type; a.values = values; a.mask = mask; a.n = n;
+  /* (the glue's own scratch attributes, pyse_..., a selection for the
+     command that follows, are in no energy: no recalc for them, which a
+     command's set ... where pyse_..._mark then did a second time) */
+  a.recalc = strncmp(attribute,"pyse_",5) != 0;
   surface_version++;
   return surface_call(set_values_body,&a);
+}
+
+/* Vertices onto (or off) several constraints at once, as Evolver's
+   set/unset vertex constraint does each (onto: projected there, one-sided
+   ones only if on the wrong side), one recalc for them all: a command per
+   constraint, each with its recalc, was 0.7 G instructions of a 16-bead
+   pack's guard() at 2k facets, where it puts 16 walls' guards on. */
+struct set_constraints_args
+{ const int *nums; int k; const unsigned char *mask; long n; int on; };
+
+static void set_constraints_body(void *arg)
+{ struct set_constraints_args *a = (struct set_constraints_args *)arg;
+  vertex_id v_id;
+  long row = 0;
+  int j, changed = 0, integrals = 0;
+  for ( j = 0 ; j < a->k ; j++ )
+  { int con = a->nums[j];
+    if ( con < 0 || con >= web.maxcon || !(get_constraint(con)->attr & IN_USE) )
+    { sprintf(errmsg,"Illegal constraint number: %d.\n",con);
+      kb_error(PYSE_ERR_BAD_ARGUMENT,errmsg,RECOVERABLE);
+    }
+    if ( get_constraint(con)->attr & (CON_ENERGY|CON_CONTENT) ) integrals = 1;
+  }
+  FOR_ALL_VERTICES(v_id)
+  { const unsigned char *m = a->mask + (size_t)row*a->k;
+    if ( row >= a->n ) inconsistent("vertex count changed");
+    for ( j = 0 ; j < a->k ; j++ )
+    { int con = a->nums[j];
+      struct constraint *constr = get_constraint(con);
+      if ( !m[j] ) continue;
+      changed = 1;
+      if ( !a->on ) { unset_v_constraint_map(v_id,con); continue; }
+      if ( get_vattr(v_id) & BOUNDARY )
+      { sprintf(errmsg,"Cannot set constraint on vertex %s since it is on a boundary.\n",
+                ELNAME(v_id));
+        kb_error(PYSE_ERR_BAD_ARGUMENT,errmsg,RECOVERABLE);
+      }
+      set_attr(v_id,CONSTRAINT);
+      if ( constr->attr & CON_ENERGY ) set_attr(v_id,BDRY_ENERGY);
+      if ( constr->attr & CON_CONTENT ) set_attr(v_id,BDRY_CONTENT);
+      set_v_constraint_map(v_id,con);
+      project_v_constr(v_id,ACTUAL_MOVE,RESET_ONESIDEDNESS);
+    }
+    row++;
+  }
+  expect_rows(row,a->n);
+  /* (off: nothing moves, and the energy changes only with integrals) */
+  if ( changed && (a->on || integrals) )
+  { global_timestamp++;
+    if ( autorecalc_flag ) recalc();
+  }
+}
+
+int pyse_set_vertex_constraints(const int *nums, int k, const unsigned char *mask, long n,
+                                int on)
+{ struct set_constraints_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( n != web.skel[VERTEX].count || k < 0 )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Mask does not match the vertex count.");
+  a.nums = nums; a.k = k; a.mask = mask; a.n = n; a.on = on;
+  surface_version++;
+  return surface_call(set_constraints_body,&a);
 }
 
 /**************************************************************************

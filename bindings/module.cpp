@@ -481,6 +481,20 @@ NB_MODULE(_core, m) {
           });
         }, "type"_a, "attribute"_a, "values"_a, "mask"_a.none(), CALLBACK_NAMES);
 
+  m.def("set_vertex_constraints",
+        [](In<int32_t, 1> nums,
+           nb::ndarray<const uint8_t, nb::ndim<2>, nb::c_contig, nb::device::cpu> mask,
+           bool on, CALLBACK_ARGS) {
+          CALL_SCOPE;
+          if (mask.shape(1) != nums.shape(0))
+            throw nb::value_error("set_vertex_constraints: a mask column per constraint");
+          return run_guarded([&] {
+            return pyse_set_vertex_constraints(nums.data(), int(nums.shape(0)), mask.data(),
+                                               long(mask.shape(0)), on ? 1 : 0);
+          });
+        }, "nums"_a, "mask"_a, "on"_a, CALLBACK_NAMES,
+        "vertices (mask rows) onto (on) or off the constraints nums (mask columns), one recalc");
+
   // ---- surface snapshots (guarded) -------------------------------------------
   m.def("vertices", [](CALLBACK_ARGS) {
     CALL_SCOPE;
