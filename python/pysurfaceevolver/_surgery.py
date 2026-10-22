@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import warnings
-from typing import Any, List, Optional
+from typing import Any, List, NamedTuple, Optional
 
 import numpy as np
 
@@ -627,8 +627,11 @@ def _unguard(ev, names=None) -> None:
         ev.command("; ".join(f"unset vertex constraint {n}" for n in used))
 
 
-def pinch_off(ev, event, relax: bool = True) -> List[int]:
-    """Cut the surface at a neck: see :meth:`Evolver.pinch_off`."""
+def pinch_off(ev, event, relax: bool = True, at_wall: bool = True) -> List[int]:
+    """Cut the surface at a neck: see :meth:`Evolver.pinch_off`. Without
+    ``at_wall``, a sheet thinnest at a wall ruptures by a hole beside its
+    contact line, not by its footprint dried (_descend: where a footprint
+    was dried at the same place already)."""
     if ev.model != "linear":
         raise ValueError("pinch_off() needs the linear model (Evolver deletes edges only there)")
     if event is None:
@@ -651,7 +654,7 @@ def pinch_off(ev, event, relax: bool = True) -> List[int]:
         reach = 2*float(event.gap) + float(event.scale)
         start = ev._save()
         try:
-            at_wall = _sheet_at_wall(ev, m, x, event)
+            at_wall = at_wall and _sheet_at_wall(ev, m, x, event)
         except ValueError as error:
             ev.restore(start)
             at_wall = False
@@ -2254,6 +2257,8 @@ _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest i
 _PINCHED = 0.05         # a neck three edges round, each under this times the edge scale: collapsed
 _GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient steps
 _STALLED = 2            # runs in a row leaving the state as it was: the descent stalled
+_PLACE = 3.0            # changes at one place: on one solid, within this many of their edges
+_MARGIN = 0.5           # ... made again there (or undone) only at under this share of the gap
 
 
 def _median_edge(m) -> float:
@@ -2274,12 +2279,13 @@ def _edge_scale(ev) -> float:
     return float(surface.edge_scale)
 
 
-def apply(ev, event, keep=None) -> None:
+def apply(ev, event, keep=None, other: bool = False) -> None:
     """Make the change an event announces (without relaxing; the guards
-    off, see _unguard)."""
+    off, see _unguard). ``other``: a sheet's neck at a wall cut by a hole,
+    not by drying its footprint (see pinch_off)."""
     _unguard(ev)
     if event.kind == "neck":
-        pinch_off(ev, event, relax=False)
+        pinch_off(ev, event, relax=False, at_wall=not other)
     elif event.kind == "touch":
         merge(ev, event, keep)
     else:
@@ -2365,6 +2371,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     undo: list = []                     # (that state, the change) for the last one made
 
     refused_at: list = []               # changes refused in it: (kind, solid, place)
+    history: list = []                  # changes made, undone or refused in it, by place (_Tried)
+    told: list = []                     # ... and those put off, told of
     unsound: Any = None                 # the state the last "relaxed, but" round left
     last: Any = None                    # the state the last unconverged run left
     stalled = 0                         # runs in a row that left it as it was
@@ -2385,12 +2393,37 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
 
     def note_refused(e) -> None:
         refused_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
+        history.append(_tried(ev, e, "refused"))
+
+    def later(e) -> bool:
+        """Whether e's change is put off (_put_off), told of once a place."""
+        if not _put_off(ev, e, history):
+            return False
+        here = _tried(ev, e, "")
+        if not any(_same_place(here, t) for t in told):
+            told.append(here)
+            _log.debug("change put off: %s (made, undone or refused at its place in this "
+                       "descent, and no nearer now)", e)
+        return True
+
+    def other(e) -> bool:
+        """Whether e is a neck where one was cut in this descent already: a
+        sheet at a wall then ruptures by a hole beside its contact line (its
+        footprint dried there, a pack's sheet thinned there again, its
+        footprint dried four times and its lines joined back, until the
+        descent ran away)."""
+        if e.kind != "neck":
+            return False
+        here = _tried(ev, e, "")
+        return any(t.kind == "neck" and t.what == "made" and _same_place(here, t)
+                   for t in history)
 
     def made_change(e) -> None:
         """A change made: noted, the mesh remeshed, and down from there."""
         nonlocal way, before, tried, since, stuck, falling, remeshing, stalled
         _checked(ev, f"the change: {e}")
         made_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
+        history.append(_tried(ev, e, "made"))
         undo[:] = [(pre.pop(), e)] if pre else []
         pre.clear()
         _remesh_now(ev, h0, near=[e.where])
@@ -2435,7 +2468,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 _drop_crushed(ev)
                 if _steps_uncrossed(ev, _FALL_GRADIENT):
                     _unguard(ev)
-                    forced = _change_nearest(ev, factor, keep, again, pre, note_refused)
+                    forced = _change_nearest(ev, factor, keep, again, pre, note_refused, later, other)
                     if forced is not None:
                         made_change(forced)
                         continue
@@ -2480,7 +2513,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     if _implausible(ev, energy, getattr(chunk, "energy", None)) == "crossings":
                         ev.restore(start)
                         _unguard(ev)
-                        forced = _change_nearest(ev, factor, keep, again, pre, note_refused)
+                        forced = _change_nearest(ev, factor, keep, again, pre, note_refused, later, other)
                         if forced is not None:
                             made_change(forced)
                             continue
@@ -2497,7 +2530,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                         # the change coming made, else the mesh evened out and
                         # once more)
                         _unguard(ev)
-                        forced = _change_nearest(ev, factor, keep, again, pre, note_refused)
+                        forced = _change_nearest(ev, factor, keep, again, pre, note_refused, later, other)
                         if forced is not None:
                             made_change(forced)
                             continue
@@ -2520,10 +2553,15 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             neck = None
             for e in _coming(found, before):
                 if e.kind == "neck":
+                    # (not again where a change was made, undone or refused
+                    # in this descent, unless nearer than then: _put_off)
+                    if again(e) or later(e):
+                        refused = f"{e}: put off (made, undone or refused at its place)"
+                        continue
                     crossed, here = _crossings(ev), ev._save()
                     try:
                         _unguard(ev)
-                        pinch_off(ev, e, relax=False)
+                        pinch_off(ev, e, relax=False, at_wall=not other(e))
                         if _crossings(ev) > crossed:
                             # (as every other change is checked: a pack's sheet
                             # ruptured at a wall left the surface through
@@ -2535,9 +2573,12 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     except ValueError as error:
                         refused = f"{e}: {error}"
                         _log.debug("change refused: %s", refused)
+                        note_refused(e)
             if neck is not None:
                 _log.debug("change made: %s", neck)
                 _checked(ev, f"pinch_off: {neck}")
+                made_at.append((neck.kind, str(neck.constraint), np.asarray(neck.where, float)))
+                history.append(_tried(ev, neck, "made"))
                 changes.append(neck)
                 undo.clear()
                 way, before, since = None, [], 0
@@ -2590,7 +2631,10 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 if again(e):
                     refused = f"{e}: made or refused {_AGAIN} times here already"
                     continue
-                why = _try_change(ev, e, keep, pre)
+                if later(e):
+                    refused = f"{e}: put off (made, undone or refused at its place)"
+                    continue
+                why = _try_change(ev, e, keep, pre, other(e))
                 if not why:
                     made = e
                     break
@@ -2716,7 +2760,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             else:
                 ev.vertices = x
                 _log.debug("step along the mode not taken: the surface through itself")
-                forced = _change_nearest(ev, factor, keep, again, pre, note_refused)
+                forced = _change_nearest(ev, factor, keep, again, pre, note_refused, later, other)
                 if forced is not None:
                     made_change(forced)
                     continue
@@ -2746,6 +2790,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     del changes[k]
                     break
             made_at.extend([(e.kind, str(e.constraint), np.asarray(e.where, float))]*_AGAIN)
+            history.append(_tried(ev, e, "undone"))
             refused = f"{e}: Evolver failed after it ({str(error).splitlines()[0]})"
             _log.debug("change undone: %s", refused)
             way, before, since = None, [], 0
@@ -3013,7 +3058,8 @@ def _crossings(ev) -> int:
 _CROSSINGS: list = [None, 0]       # (the state's key, its crossings)
 
 
-def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None) -> Any:
+def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None, later=None,
+                    other=None) -> Any:
     """Where the descent would pass the surface through itself (a run, a
     fall's steps or a step along the mode held back for it), the change
     nearest to coming made instead: of the events here, nearest first (gap
@@ -3024,8 +3070,10 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
     events there come first, nearest the place first (the changes made
     instead had been elsewhere). (Within factor's gaps only: taken out to
     two edges there, a pack's descent made contacts 0.35 from beads;
-    runs that cross are followed in shorter ones first, see _descend.) The
-    event made, or None."""
+    runs that cross are followed in shorter ones first, see _descend.)
+    ``later``: whether an event's change is put off (_put_off), tried after
+    the others there or elsewhere; ``other``: whether to make its other
+    change (apply). The event made, or None."""
     found = sorted(ev.events(factor), key=lambda e: e.gap/float(e.scale))
     places = _CROSSED_AT.pop() if _CROSSED_AT else np.empty((0, 3))
     if len(places):
@@ -3039,10 +3087,16 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
         there.sort(key=lambda t: t[0])
         first = {key(e) for _, e in there}
         found = [e for _, e in there] + [e for e in found if key(e) not in first]
+    else:
+        there = []
+    if later is not None:
+        # (each group, there and elsewhere, the changes not put off first)
+        n = len(there)
+        found = sorted(found[:n], key=later) + sorted(found[n:], key=later)
     for e in found:
         if skip is not None and skip(e):
             continue
-        why = _try_change(ev, e, keep, saved)
+        why = _try_change(ev, e, keep, saved, other is not None and other(e))
         if why:
             _log.debug("change refused: %s: %s", e, why)
             if refused is not None:
@@ -3053,7 +3107,7 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
     return None
 
 
-def _try_change(ev, e, keep, saved=None) -> str:
+def _try_change(ev, e, keep, saved=None, other: bool = False) -> str:
     """The change for event e made (apply), unless it passes the surface
     through itself or leaves a surface Evolver can't take a gradient step
     from (a pack's merge made by facet_merge left a constraint matrix
@@ -3061,7 +3115,7 @@ def _try_change(ev, e, keep, saved=None) -> str:
     ("" if made)."""
     crossed, start, energy = _crossings(ev), ev._save(), ev.energy
     try:
-        apply(ev, e, keep)
+        apply(ev, e, keep, other)
         if _crossings(ev) > crossed:
             raise ValueError("the change passed the surface through itself")
         why = _unsteppable(ev, energy)
@@ -3473,6 +3527,74 @@ def _reopening(e, shut: list, h: float) -> bool:
     return e.kind == "solid" and e.between == "body" and any(
         str(key) == str(e.constraint) and np.linalg.norm(np.asarray(e.where) - middle) < 3*h
         for key, middle in shut)
+
+
+class _Tried(NamedTuple):
+    """A change a descent made, undid or refused (``what``): its event's
+    kind, the solids it is on or against (_solids_at), where, its edges
+    there and its gap in them."""
+    kind: str
+    solids: frozenset
+    where: np.ndarray
+    scale: float
+    gap: float
+    what: str
+
+
+def _tried(ev, e, what: str) -> _Tried:
+    return _Tried(e.kind, _solids_at(ev, e), np.asarray(e.where, float), float(e.scale),
+                  float(e.gap)/max(float(e.scale), 1e-300), what)
+
+
+def _solids_at(ev, e) -> frozenset:
+    """The solids an event is on or against: a solid's or contact lines'
+    own (its base, for a copy of a sphere: _base); a neck's or touch's,
+    those with a vertex on them within its gap and two edges of its middle
+    (a sheet thinnest at a side wall, a neck in the wedge between a bead and
+    a wall)."""
+    if e.kind in ("solid", "contact lines"):
+        return frozenset([_base(e.constraint)])
+    nums, _, dist, names = ev._constraint_gaps()
+    if not dist.size:
+        return frozenset()
+    reach = abs(float(e.gap)) + 2*float(e.scale)
+    near = np.linalg.norm(ev.vertices - np.asarray(e.where, float), axis=1) < reach
+    on = np.isnan(dist[near]).any(axis=0)
+    return frozenset(_base(names[c] or int(nums[c])) for c in np.flatnonzero(on))
+
+
+def _same_place(a: _Tried, b: _Tried) -> bool:
+    """Whether two changes are at one place: on (or against) the same solid,
+    or both on none, within _PLACE of the larger of their edges."""
+    return (bool(a.solids & b.solids) or not (a.solids or b.solids)) \
+        and float(np.linalg.norm(a.where - b.where)) < _PLACE*max(a.scale, b.scale)
+
+
+def _put_off(ev, e, history: list) -> bool:
+    """Whether a descent puts e's change off: one was made or undone at its
+    place in this descent (the same change, which didn't take, or the
+    opposite: cut and joined, dried and wetted), or one of its kind refused
+    there, and e isn't nearer than _MARGIN of that one's gap (in their
+    edges; through the solid deeper than 1/_MARGIN of it, where that one
+    was at it or through; a neck, touch or contact lines met). Made at the
+    same gap, a change and its opposite take
+    turns: a pack's sheet at a side wall had its footprint dried three
+    times and its lines joined back, the runs between crossing there, until
+    the descent ran away. The guards and the descent's runs hold the
+    surface meanwhile; a neck that pinches, a film that thins, comes nearer
+    and is made then (and where a run would cross, _change_nearest still
+    makes it, after the others)."""
+    if not history:
+        return False
+    here = _tried(ev, e, "")
+    gaps = [t.gap for t in history if _same_place(here, t)
+            and (t.what != "refused" or t.kind == e.kind)]
+    if not gaps:
+        return False
+    g = min(gaps)
+    # (a neck, touch or contact lines can't come nearer than 0: there, met)
+    return not (here.gap < (g*_MARGIN if g > 0 else g/_MARGIN)
+                or (e.kind != "solid" and here.gap <= 0))
 
 
 def _coming(found: list, before: list) -> list:

@@ -1408,6 +1408,35 @@ def test_a_stalled_descent_is_told_by_its_state():
     assert not _surgery._mesh_only(None)
 
 
+def test_a_change_where_one_was_made_is_put_off_till_nearer():
+    # (_surgery._put_off) within a descent: the same change or its opposite
+    # at the place one was made (on its solid, within three of its edges)
+    # waits until it is nearer than half that one's gap; a refusal puts off
+    # its own kind only
+    from pysurfaceevolver import _surgery
+    from pysurfaceevolver._events import Event
+
+    def event(kind, gap, x, solid="bead1", between="body"):
+        return Event(kind, gap, 0.1, np.array([x, 0.0, 0.0]), np.array([0]), solid, between)
+
+    def put_off(e, history):
+        return _surgery._put_off(None, e, history)
+    made = [_surgery._tried(None, event("solid", 0.01, 0.0), "made")]
+    assert put_off(event("solid", 0.01, 0.2, between="outside"), made)     # wetted back
+    assert put_off(event("contact lines", 0.02, 0.1), made)
+    assert not put_off(event("solid", 0.004, 0.2), made)                   # nearer
+    assert not put_off(event("contact lines", 0.0, 0.1), made)             # met
+    assert not put_off(event("solid", 0.01, 0.4), made)                    # elsewhere
+    assert not put_off(event("solid", 0.01, 0.2, solid="bead2"), made)
+    refused = [_surgery._tried(None, event("solid", 0.01, 0.0), "refused")]
+    assert put_off(event("solid", 0.01, 0.1), refused)
+    assert not put_off(event("contact lines", 0.02, 0.1), refused)
+    through = [_surgery._tried(None, event("solid", -0.01, 0.0), "made")]
+    assert put_off(event("solid", -0.015, 0.0), through)
+    assert not put_off(event("solid", -0.025, 0.0), through)
+    assert not put_off(event("solid", 0.01, 0.0), [])
+
+
 def test_a_drop_on_a_flux_sphere_is_the_exact_cap():
     # (refined, its pressure 1.3%, 0.32%, 0.08% off: second order)
     ev = _drop_on_ball_flux()
