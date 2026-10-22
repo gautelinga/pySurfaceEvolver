@@ -1390,6 +1390,24 @@ def test_a_chord_through_a_bead_is_lifted_out_of_it():
     assert _surgery._lift_chords(ev) == 0
 
 
+def test_a_stalled_descent_is_told_by_its_state():
+    # (_surgery._descend: runs that leave the counts and the energy as they
+    # were go to the remeshing at once; a relaxed state that comes back to
+    # itself is taken where only its mesh is wanting)
+    from types import SimpleNamespace
+    from pysurfaceevolver import _surgery
+    state = ((100, 290, 190, 1), -93.119278)
+    assert not _surgery._same_state(state, None)
+    assert _surgery._same_state(state, ((100, 290, 190, 1), -93.119281))
+    assert not _surgery._same_state(state, ((100, 290, 190, 1), -93.1193))
+    assert not _surgery._same_state(state, ((101, 290, 190, 1), -93.119278))
+    issues = ["degenerate facets (smallest angle 0.14 degrees, 27 below 5)",
+              "the surface nearly touches itself (0.037 edge lengths)"]
+    assert _surgery._mesh_only(SimpleNamespace(issues=issues))
+    assert not _surgery._mesh_only(SimpleNamespace(issues=issues + ["not in equilibrium (residual 2.6)"]))
+    assert not _surgery._mesh_only(None)
+
+
 def test_a_drop_on_a_flux_sphere_is_the_exact_cap():
     # (refined, its pressure 1.3%, 0.32%, 0.08% off: second order)
     ev = _drop_on_ball_flux()

@@ -2253,6 +2253,7 @@ _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
 _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
 _PINCHED = 0.05         # a neck three edges round, each under this times the edge scale: collapsed
 _GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient steps
+_STALLED = 2            # runs in a row leaving the state as it was: the descent stalled
 
 
 def _median_edge(m) -> float:
@@ -2364,6 +2365,9 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     undo: list = []                     # (that state, the change) for the last one made
 
     refused_at: list = []               # changes refused in it: (kind, solid, place)
+    unsound: Any = None                 # the state the last "relaxed, but" round left
+    last: Any = None                    # the state the last unconverged run left
+    stalled = 0                         # runs in a row that left it as it was
 
     def again(e) -> bool:
         """Whether e's change was made _AGAIN times here already (a pack's
@@ -2384,7 +2388,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
 
     def made_change(e) -> None:
         """A change made: noted, the mesh remeshed, and down from there."""
-        nonlocal way, before, tried, since, stuck, falling, remeshing
+        nonlocal way, before, tried, since, stuck, falling, remeshing, stalled
         _checked(ev, f"the change: {e}")
         made_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
         undo[:] = [(pre.pop(), e)] if pre else []
@@ -2394,7 +2398,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         changes.append(e)
         guard(ev)
         way, before, tried, since, stuck = None, [], 0, 0, False
-        falling, remeshing = False, True
+        falling, remeshing, stalled = False, True, 0
 
     for _ in range(_FALL_TOTAL*_FALL_ITERATIONS):
         try:
@@ -2406,7 +2410,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 if stuck:
                     break
                 stuck, since = True, 0
-                _log.debug("descent remeshed: no stable state within %d steps", _FALL_ITERATIONS)
+                if stalled > _STALLED:
+                    _log.debug("descent remeshed: its runs left the state as it was")
+                else:
+                    _log.debug("descent remeshed: no stable state within %d steps", _FALL_ITERATIONS)
+                stalled = 0
                 _remesh_now(ev, h0)
                 _checked(ev, "remeshing a descent that got nowhere")
                 way, before = None, []
@@ -2606,6 +2614,16 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             tried += 1
             if chunk is not None:
                 if not chunk.converged:
+                    # (and where runs leave the state as it was, on to the
+                    # budget's remeshing now: a 16-bead pack's runs stopped
+                    # moving at residual 2, the energy the same to 1e-10,
+                    # and the descent went on so 200 times, 215 s)
+                    state = (tuple(ev.counts.values()), ev.energy)
+                    stalled = stalled + 1 if _same_state(state, last) else 0
+                    last = state
+                    if stalled == _STALLED:
+                        stalled += 1
+                        since = max(since, _FALL_ITERATIONS)
                     continue
                 if chunk.stable is not False and not _sound(chunk.health):
                     # (a facet squashed in the change, a patch shrunk to nothing,
@@ -2629,7 +2647,22 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     # (on down, within the descent's budget: a pack's relax()
                     # ended at residual 7e-6, not quite in equilibrium, and the
                     # run stopped there)
-                    _log.debug("relaxed, but %s: on down", chunk.health)
+                    state = (tuple(ev.counts.values()), ev.energy)
+                    if not _same_state(state, unsound):
+                        unsound = state
+                        _log.debug("relaxed, but %s: on down", chunk.health)
+                        continue
+                    # (but not where the tidying and relaxing came back to
+                    # the state they began from: each round remeshed it twice
+                    # more, to the end of the budget, 400 rounds. Settled
+                    # there if only its mesh is wanting; else the budget's
+                    # remeshing now, and where that comes back again, the end)
+                    if chunk.converged and _mesh_only(chunk.health):
+                        _log.debug("relaxed, but %s, as the last round left it: settled there",
+                                   chunk.health)
+                        return chunk, changes, ""
+                    _log.debug("relaxed, but %s, as the last round left it", chunk.health)
+                    since, stalled = max(since, _FALL_ITERATIONS), _STALLED + 1
                     continue
                 remeshing = False           # an unstable equilibrium: down along its mode
             modes = ev.modes(1)
@@ -2716,7 +2749,9 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             refused = f"{e}: Evolver failed after it ({str(error).splitlines()[0]})"
             _log.debug("change undone: %s", refused)
             way, before, since = None, [], 0
-    return None, changes, (f"no stable state within {_FALL_ITERATIONS} steps of the last "
+    return None, changes, ("the descent stalled (its runs left the state as it was), and again "
+                           "after remeshing" if since > _FALL_ITERATIONS and stalled > _STALLED else
+                           f"no stable state within {_FALL_ITERATIONS} steps of the last "
                            f"change, and as many after remeshing" if since > _FALL_ITERATIONS else
                            f"no stable state within {_FALL_TOTAL*_FALL_ITERATIONS} steps") \
         + (f" (the last change not made: {refused})" if refused else "")
@@ -3151,6 +3186,20 @@ def _even_out(ev, smooth: bool = True, edges=None) -> None:
     for _ in range(3):
         if not (edit(ev, "flip", ids, mode=1) == 0).any():
             break
+
+
+def _same_state(state: tuple, last: Any) -> bool:
+    """Whether a state (the counts, the energy) is the one before, the
+    energy within 1e-7 of itself (a stalled pack's runs moved it by 3e-8)."""
+    return last is not None and state[0] == last[0] \
+        and abs(state[1] - last[1]) <= 1e-7*max(1.0, abs(last[1]))
+
+
+def _mesh_only(health) -> bool:
+    """Whether all a relaxed state lacks is a better mesh: its facets
+    degenerate, or it comes near a wall or itself (as _sound)."""
+    return health is not None and all(
+        i.startswith(("the surface nearly touches", "degenerate facets")) for i in health.issues)
 
 
 def _sound(health) -> bool:
