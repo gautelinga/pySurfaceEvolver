@@ -2497,6 +2497,18 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         try:
             since += 1
             if since > _FALL_ITERATIONS:
+                # (first, after a change, the change nearest to coming,
+                # those put off too: a descent whose runs stopped moving had
+                # a pack's surface pressed against a bead by its guard, a dry
+                # patch there put off, and gave up)
+                if not falling:
+                    _unguard(ev)
+                    forced = _change_nearest(ev, factor, keep, again, pre, note_refused, later,
+                                             other, why="the descent getting nowhere without it")
+                    if forced is not None:
+                        made_change(forced)
+                        continue
+                    guard(ev)
                 # (once, the mesh remeshed and as many again: a pack's fall,
                 # held back by folds or crawling past squashed facets, went
                 # 200 steps without a change or a stable state)
@@ -3124,7 +3136,7 @@ _CROSSINGS: list = [None, 0]       # (the state's key, its crossings)
 
 
 def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None, later=None,
-                    other=None) -> Any:
+                    other=None, why: str = "the surface about to pass through itself") -> Any:
     """Where the descent would pass the surface through itself (a run, a
     fall's steps or a step along the mode held back for it), the change
     nearest to coming made instead: of the events here, nearest first (gap
@@ -3138,7 +3150,8 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
     runs that cross are followed in shorter ones first, see _descend.)
     ``later``: whether an event's change is put off (_put_off), tried after
     the others there or elsewhere; ``other``: whether to make its other
-    change (apply). The event made, or None."""
+    change (apply); ``why``: what the log gives as the reason. The event
+    made, or None."""
     found = sorted(ev.events(factor), key=lambda e: e.gap/float(e.scale))
     places = _CROSSED_AT.pop() if _CROSSED_AT else np.empty((0, 3))
     if len(places):
@@ -3161,13 +3174,13 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
     for e in found:
         if skip is not None and skip(e):
             continue
-        why = _try_change(ev, e, keep, saved, other is not None and other(e))
-        if why:
-            _log.debug("change refused: %s: %s", e, why)
+        no = _try_change(ev, e, keep, saved, other is not None and other(e))
+        if no:
+            _log.debug("change refused: %s: %s", e, no)
             if refused is not None:
                 refused(e)
             continue
-        _log.debug("change made (the nearest, the surface about to pass through itself): %s", e)
+        _log.debug("change made (the nearest, %s): %s", why, e)
         return e
     return None
 

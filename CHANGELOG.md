@@ -399,7 +399,11 @@
   didn't take), or one of its kind refused within three, the next is put off until
   it is nearer than half that one's gap (through a solid twice as deep; a neck,
   touch or contact lines met). The guards and the runs hold the surface meanwhile;
-  where a run would cross, the changes not put off are tried first, then these.
+  where a run would cross, the changes not put off are tried first, then these;
+  and where the descent gets nowhere (its runs stall, or its budget runs out), the
+  change nearest to coming is made, these included, before it remeshes or gives up
+  (a 16-bead replay's runs stopped against a bead, a dry patch there put off, and
+  the descent gave up).
   (The same change beside one made is no repeat: a film drying in patches over a
   bead, the next two edges from the last, put off, left the descent wandering.) A sheet's neck at a wall where one was cut in
   the descent ruptures by a hole beside its contact line instead of its footprint
