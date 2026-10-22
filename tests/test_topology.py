@@ -1161,6 +1161,33 @@ def test_a_neck_against_a_wall_is_cut_into_two_bodies(nz):
     assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
 
 
+def test_a_neck_against_a_wall_whose_ring_wont_collapse_has_its_footprint_dried(monkeypatch):
+    # (Evolver's deletion refusing the ring's edges, "the ring didn't
+    # collapse to one vertex (3 left)": the footprint under the neck dried
+    # across instead, the liquid parted at the wall into two bodies; where
+    # that leaves the neck, the refusal stands and the surface is as it was)
+    from pysurfaceevolver import _surgery
+
+    def refused(*args, **kwargs):
+        raise ValueError("pinch_off(): the ring didn't collapse to one vertex (3 left)")
+    monkeypatch.setattr(_surgery, "_pinch_ring", refused)
+    ev = _half_neck(nz=11)
+    v0 = ev.body(1).volume
+    neck = [e for e in ev.events() if e.kind == "neck"]
+    ev.pinch_off(neck[0], relax=False)
+    assert list(ev.bodies().ids) == [1, 2]
+    volumes = [ev.body(i).volume for i in (1, 2)]
+    assert sum(volumes) == pytest.approx(v0, rel=0.01) and min(volumes) > 0.45*v0
+    assert len(ev.contact_lines("wall")) == 2 and len(_pieces(ev)) == 2
+    assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
+    ev = _half_neck(nz=10)
+    x = ev.vertices
+    neck = [e for e in ev.events() if e.kind == "neck"]
+    with pytest.raises(ValueError, match="didn't collapse"):
+        ev.pinch_off(neck[0], relax=False)
+    assert np.array_equal(ev.vertices, x) and list(ev.bodies().ids) == [1]
+
+
 def test_two_fans_joined_along_an_edge_on_a_wall_are_unzipped():
     # (a neck against a wall collapsed to its two ends on the wall, the edge
     # between them kept by Evolver: the checked unzip makes it two

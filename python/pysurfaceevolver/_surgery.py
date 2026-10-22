@@ -739,6 +739,18 @@ def pinch_off(ev, event, relax: bool = True, at_wall: bool = True) -> List[int]:
                              "or the surface's free border")
         at_wall = ring[on[ring, walls[0]]]
         centre = x[at_wall[np.argmin(np.linalg.norm(x[at_wall] - centre, axis=1))]]
+        try:
+            made = _pinch_ring(ev, m, x, f, ring, centre, side, float(event.scale))
+        except ValueError as error:
+            # (Evolver's deletion refusing the ring's edges, its vertices left
+            # apart at the centre: a 4-bead pack's neck on a bead refused so
+            # at every look, "4 left", "5 left", the runs crossing beside it;
+            # a 16-bead pack's on a side wall until the descent ran away)
+            made = _dry_neck(ev, m, x, f, ring, walls, gaps, event, side, error)
+        if relax and _settle(ev) is None:
+            warnings.warn("pinch_off(): the pieces didn't relax after the cut (the surface is "
+                          "left cut, out of equilibrium)", UserWarning, stacklevel=3)
+        return made
     made = _pinch_ring(ev, m, x, f, ring, centre, side, float(event.scale))
     if relax and _settle(ev) is None:
         warnings.warn("pinch_off(): the pieces didn't relax after the cut (the surface is "
@@ -782,6 +794,42 @@ def _pinch_ring(ev, m, x, f, ring, centre, side, scale: float) -> List[int]:
     except Exception:
         ev.restore(snapshot)
         raise
+    return made
+
+
+def _dry_neck(ev, m, x, f, ring, walls, gaps, event, side, error) -> List[int]:
+    """A neck against one wall whose ring Evolver won't collapse (``error``):
+    its footprint on the wall dried across instead (_dry_footprint), as a
+    neck against two solids is cut, which parts the liquid at the wall, and
+    the pieces made bodies as a cut's are (_split_body; the drying moves no
+    volume). Where the footprint can't be dried, or the neck is still there
+    after it (the surface over the strip not parted), the error raised, the
+    surface as it was. The bodies made."""
+    from ._analysis import EVENT_FACTOR
+    touching = np.isin(f, ring).any(axis=1)
+    bodies = np.unique(np.asarray(m.facet_bodies)[touching])
+    bodies = bodies[bodies > 0]
+    if len(bodies) != 1:
+        raise error
+    body = int(bodies[0])
+    corners = side[f[touching]]
+    facet_side = np.sign(np.where(np.isin(f[touching], ring), 0.0, corners).sum(axis=1))
+    ids = np.asarray(m.facet_ids)[touching]
+    near = {s: ids[facet_side == s] for s in (-1.0, 1.0)}
+    before = _body_state(ev, body)
+    where, scale = np.asarray(event.where, float), float(event.scale)
+    start = ev._save()
+    try:
+        _dry_footprint(ev, m, x, ring, walls, gaps, event, "neck against a wall")
+        if any(e.kind == "neck" and np.linalg.norm(np.asarray(e.where) - where) < _PLACE*scale
+               for e in ev.events(EVENT_FACTOR)):
+            raise ValueError("the neck still there")
+        made = _split_body(ev, body, before, near, {-1.0: 0.0, 1.0: 0.0})
+    except ValueError:
+        ev.restore(start)
+        raise error from None
+    _log.debug("the neck's ring not collapsed (%s): its footprint dried instead",
+               str(error).split(": ", 1)[-1])
     return made
 
 

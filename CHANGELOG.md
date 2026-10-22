@@ -404,6 +404,13 @@
   times and its lines joined back, the runs crossing between, until the descent
   ran away.
 
+- A neck against one wall whose ring Evolver's deletion won't collapse ("the ring
+  didn't collapse to one vertex (3 left)": a 4-bead pack's neck on a bead refused
+  so at every look, a 16-bead pack's on a side wall until its descent ran away) has
+  its footprint on the wall dried across instead, as a neck against two solids is
+  cut: the liquid parts at the wall, the pieces made bodies as a cut's are. Where
+  the neck is still there after it, the refusal stands.
+
 - Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
   was dissolved and another made: Evolver gives the freed volume quantity's and
   method instance's slots to the next ones, and the restore copied flags back slot
