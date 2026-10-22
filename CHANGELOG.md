@@ -389,7 +389,8 @@
   descent went on so 200 times (215 s). Likewise a relaxed but unsound state that
   the tidying and relaxing bring back to itself (it went round, remeshed twice a
   round, to the end of the budget), which is taken as the descent's end where all
-  it lacks is a better mesh (degenerate facets, the surface near a wall or itself).
+  it lacks is a better mesh (degenerate facets, but none under the degree
+  `arclength` stops at; the surface near a wall or itself).
 
 - A descent doesn't make a change where it just made, undid or refused one: where
   the opposite change was made or undone (a cut and a merge, drying and wetting, a
