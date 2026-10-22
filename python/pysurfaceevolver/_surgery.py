@@ -1885,7 +1885,9 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
     x = np.asarray(m.vertices)
     valence = m.edge_valence()
     closed = 0
-    for key, on_wall in _edges_on(ev, list(surface.walls)).items():
+    ons = _edges_on(ev, list(surface.walls))
+    for key in list(ons):
+        on_wall = ons[key]
         line = np.flatnonzero(on_wall & (valence == 1))
         degree = np.bincount(edges[line].ravel(), minlength=len(x))
         after = {int(edges[i, 0]): i for i in line if degree[edges[i]].max() == 2}
@@ -1928,9 +1930,14 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
             if out is not None:
                 out.append((key, x[corners].mean(axis=0)))
             _log.debug("patch closed on %s (%d edges)", key, len(loop))
+            # (and the walls' edges again: a loop of 4 to 6 edges is
+            # covered by facets round a new vertex, new edges, and the next
+            # wall's rows, from before, no longer matched the mesh's: a
+            # 16-bead pack's replay stopped there)
             m = ev.mesh()
             f, edges, x = np.asarray(m.facets), np.asarray(m.edges), np.asarray(m.vertices)
             valence = m.edge_valence()
+            ons = _edges_on(ev, list(surface.walls))
             break
     return closed
 
