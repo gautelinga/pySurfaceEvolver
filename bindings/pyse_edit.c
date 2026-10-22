@@ -2092,13 +2092,19 @@ static int one(struct ctx *c, struct edit_args *a, int k)
    splits, a dozen undone, replayed thousands: 11 s, 4 in chunks of 100) */
 #define BATCH_CHECKPOINT 32
 
+/* ... and on a large surface every facets/BATCH_SPAN of them until one is
+   undone in the batch: a snapshot copies the whole surface, and every 32
+   edits made they were a quarter of a remesh of 58k facets, quadratic in
+   the facets (a refused edit then replays at most that many, once) */
+#define BATCH_SPAN 64
+
 /* the grids' padding in a smoothing batch, times h: its moves are a
    quarter edge at most before they are projected (none of a 16-bead pack's
    remesh's 90k went further; one that does puts its elements in again) */
 #define SMOOTH_PAD 0.3
 
 static void run_batch(struct ctx *c, struct edit_args *a)
-{ int k, j, base, made = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
+{ int k, j, base, made = 0, undone = 0, count = a->op == PYSE_OP_PATCH ? 1 : paired(a->op) ? a->n/2 : a->n;
   a->keys = (long *)temp_calloc(a->n ? a->n : 1,sizeof(long));
   for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
   c->in_cells = a->op == PYSE_OP_SMOOTH;
@@ -2124,7 +2130,8 @@ static void run_batch(struct ctx *c, struct edit_args *a)
   for ( k = 0 ; k < count ; k++ )
   { int r;
     c->cur_k = k;
-    if ( c->snap && made >= BATCH_CHECKPOINT )
+    if ( c->snap && made >= (undone || web.skel[FACET].count < BATCH_SPAN*BATCH_CHECKPOINT
+                             ? BATCH_CHECKPOINT : web.skel[FACET].count/BATCH_SPAN) )
     { /* (the edits before k kept: replays start at the next one's
          snapshot; edits made, not candidates, counted: a snapshot is the
          whole surface, and every 32 candidates a pass over all edges took
@@ -2137,6 +2144,7 @@ static void run_batch(struct ctx *c, struct edit_args *a)
     r = one(c,a,k);
     if ( r >= 0 ) { a->results[k] = r; made += r == PYSE_EDIT_DONE; continue; }
     a->results[k] = -r;
+    undone = 1;
     if ( !c->snap )
       kb_error(PYSE_ERR_BAD_ARGUMENT,"Internal error: an edit changed the surface before "
                "its checks.\n",RECOVERABLE);
