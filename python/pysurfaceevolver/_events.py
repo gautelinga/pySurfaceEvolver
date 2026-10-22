@@ -223,11 +223,27 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
             k = nearest.get(group)
             if k is None or 2*len(members) > size[piece[members]].max():
                 continue
-            if kind == "neck" and g[k] >= r[a[k]] and sheet(normal[members]):
+            if kind == "neck" and g[k] >= r[a[k]] and sheet(
+                    normal[waist(x, members, (x[a[k]] + cc[k])/2, g[k], h[a[k]])]):
                 continue
             events.append(Event(kind, float(g[k]), float(h[a[k]]), (x[a[k]] + cc[k])/2,
                                 np.asarray(members)))
     return events
+
+
+def waist(x, members, where, gap: float, scale: float) -> np.ndarray:
+    """A neck's waist: its vertices (members) within its gap and two edges of
+    its narrowest point (where), as many as three of them; else all of them.
+    (All of them, a pack's neck 0.008 across on edges of 0.04 was 344
+    vertices of a thin film curving between three beads: their normals
+    turned enough to be a tube's, the tube's ring came out in two pieces,
+    its collapse left two vertices, refused nine times in a descent that
+    then ran away; at the narrowest point the film's two faces are a sheet's,
+    which ruptures by a hole.)"""
+    members = np.asarray(members, int)
+    near = members[np.linalg.norm(x[members] - np.asarray(where, float), axis=1)
+                   < max(float(gap), 2*float(scale))]
+    return near if len(near) >= 3 else members
 
 
 def sheet(normals: np.ndarray) -> bool:

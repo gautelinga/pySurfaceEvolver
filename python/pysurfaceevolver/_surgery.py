@@ -921,7 +921,7 @@ def _sheet_hole(ev, m, x, f, p, reach: float, allowed=None) -> bool:
             a, b = _facing_facets(x, f, p, behind=True, reach=reach, allowed=ok)
         except ValueError:
             return False
-        if _tube(ev, m, a, b, None) is not None:
+        if _tube(ev, m, a, b, None, sheet=True) is not None:
             return True
         ok[a] = False
     return False
@@ -973,8 +973,9 @@ def _join_across(ev, event) -> None:
 
 
 def _waist_normals(x, f, event) -> np.ndarray:
-    """The unit vertex normals at a neck's waist (its vertices, else those
-    near its middle)."""
+    """The unit vertex normals at a neck's waist: its vertices within its
+    gap and two edges of its narrowest point (_events.waist), else those
+    near it."""
     p = np.asarray(event.where, float)
     cross = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
     normal = np.zeros_like(x)
@@ -983,7 +984,9 @@ def _waist_normals(x, f, event) -> np.ndarray:
     length = np.linalg.norm(normal, axis=1)
     normal = np.divide(normal, length[:, None], out=np.zeros_like(normal),
                        where=length[:, None] > 0)
-    waist = np.asarray(event.vertices, int)
+    from ._events import waist as near_waist
+    waist = near_waist(x, np.asarray(event.vertices, int), p, float(event.gap),
+                       float(event.scale))
     if len(waist) < 3:
         waist = np.flatnonzero(np.linalg.norm(x - p, axis=1) < max(event.gap, 2*event.scale))
     return normal[waist]
@@ -1369,18 +1372,20 @@ def merge(ev, event, keep=None) -> int:
     return _glue(ev, m, a, b, keep)
 
 
-def _tube(ev, m, a: int, b: int, keep) -> "int | None":
+def _tube(ev, m, a: int, b: int, keep, sheet: bool = False) -> "int | None":
     """merge() by the checked edits (_edits): facet rows a and b taken out
     and a short tube of facets joining their edges; the bodies either side
     made one as _glue makes them. None where the edit is refused (then
-    _glue's Evolver facet_merge is tried)."""
+    _glue's Evolver facet_merge is tried). ``sheet``: a sheet's hole, folds
+    allowed (the edit's mode 1: between faces closer than a fifth of the
+    facets the tube folds back on them whatever the pair)."""
     from ._edits import REASONS, edit
     fb = np.asarray(m.facet_bodies)
     bodies = sorted({int(v) for v in fb[[a, b]].ravel() if v > 0})
     if len(bodies) > 2:
         return None
     states = {i: _body_state(ev, i) for i in bodies}
-    r = edit(ev, "merge", [int(m.facet_ids[a]), int(m.facet_ids[b])])
+    r = edit(ev, "merge", [int(m.facet_ids[a]), int(m.facet_ids[b])], mode=1 if sheet else 0)
     if r[0] != 0:
         _log.debug("fallback: merge by facet_merge (the tube refused: %s)", REASONS[int(r[0])])
         return None
@@ -1470,7 +1475,10 @@ def _facing_facets(x, f, p, behind: bool = False, reach: float = np.inf, allowed
     """The two facets either side of a touch: the facet nearest its middle,
     and on the side its normal points to, the nearest facet facing back.
     With ``behind`` (a sheet's two faces, across the body: the normals point
-    out of it), on the side it points from, within ``reach``."""
+    out of it), on the side it points from, within ``reach``: the one most
+    nearly straight across (a sheet 0.002 thin on facets of 0.05, the facet
+    across nearest the middle was offset along the sheet, the tube joining
+    the two lay all but flat and folded the mesh, refused at every pair)."""
     centre = x[f].mean(axis=1)
     normal = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
     normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-300)[:, None]
@@ -1486,7 +1494,9 @@ def _facing_facets(x, f, p, behind: bool = False, reach: float = np.inf, allowed
             facing &= allowed
         if not facing.any():
             raise ValueError("pinch_off(): no facet across the sheet from its nearest one")
-        b = int(np.flatnonzero(facing)[np.argmin(dist[facing])])
+        offset = centre - centre[a]
+        aside = np.linalg.norm(offset - np.outer(offset @ normal[a], normal[a]), axis=1)
+        b = int(np.flatnonzero(facing)[np.argmin(aside[facing])])
         return a, b
     facing = (normal @ normal[a] < -0.5) & (across > 0)
     if not facing.any():
@@ -3496,14 +3506,13 @@ def _sizes(ev, h0: float) -> np.ndarray:
             rows = np.asarray(e.vertices, int)
             rows = rows[(rows >= 0) & (rows < len(size))]
             if e.kind == "neck":
-                # (a neck's waist only, within h0 of its narrowest point; not
-                # a sheet's: its faces are two surfaces, and a sheet as thin
-                # all over needs nothing finer, it ruptures by a hole. Its
-                # event's vertices were the whole sheet's, and a pack's
-                # 1423 of them refined to its thickness took the mesh from
-                # 2.1k facets to 6.1k, the median edge to a third)
-                if _sheet(x, f, e):
-                    continue
+                # (a neck's waist only, within h0 of its narrowest point: its
+                # event's vertices were a whole sheet's, and a pack's 1423 of
+                # them refined to its thickness took the mesh from 2.1k
+                # facets to 6.1k, the median edge to a third. A sheet's too,
+                # where its hole opens: left at edges of 0.19 over a gap of
+                # 0.0014, the facing facets' merge folded the mesh, refused
+                # at every pair, and the descent ran away)
                 near = np.linalg.norm(x[rows] - np.asarray(e.where, float), axis=1) < h0
                 rows = rows[near]
             size[rows] = np.minimum(size[rows], abs(float(e.gap)))

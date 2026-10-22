@@ -338,6 +338,13 @@
     along a box's edge) are taken away as crumbs.
   - The checked edits count each vertex of a patch once (a separation beside
     another pinched vertex was refused as worse).
+  - A neck's waist (whose normals tell a sheet from a tube and set the cut's
+    axis) is its vertices near its narrowest point, not all of the event's: a
+    thin film curving between three beads, 344 vertices, passed for a tube
+    whose ring came out in two pieces and was refused at every look. A sheet's
+    hole: the mesh refined where it opens, the facet straight across taken,
+    and folds allowed in the checked merge when the faces are closer than
+    their facets are wide (the tube between them can't but fold back).
 
 - Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
   was dissolved and another made: Evolver gives the freed volume quantity's and

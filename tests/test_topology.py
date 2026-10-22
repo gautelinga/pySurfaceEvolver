@@ -1281,6 +1281,38 @@ def test_a_patch_is_closed_as_shrunk_against_the_edges_round_it():
     assert S.close_patches(_hole(0.03, 0.3), 0.165) == 1
 
 
+def test_a_sheet_thinner_than_its_facets_opens_a_hole():
+    # a slab of liquid 0.003 thick on facets of 0.1, its faces' grids offset:
+    # the tube between facing facets lies all but flat and folds back on the
+    # faces whatever the pair (refused at every pair, and a pack's descent
+    # ran away round such a sheet); allowed for a sheet's hole, it opens,
+    # nothing through itself, and gradient steps go on from it
+    from pysurfaceevolver import _surgery as S
+    t = 0.003
+    box = shapes.box(size=(1.0, 1.0, t), n=10)
+    v = np.asarray(box.vertices, float).copy()
+    top = (v[:, 2] > t/2) & (np.abs(v[:, :2] - 0.5) < 0.45).all(axis=1)
+    v[top] += [0.035, 0.02, 0.0]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, box.faces, bodies=[pyse.Body(faces=range(len(box.faces)))])
+    m = ev.mesh()
+    n = ev.counts["facets"]
+    assert S._sheet_hole(ev, m, np.asarray(m.vertices), np.asarray(m.facets),
+                         np.array([0.5, 0.5, t/2]), 0.2)
+    assert ev.counts["facets"] == n + 4
+    assert [p for p in S.check_topology(ev) if p[0] < 8] == [] and S._crossings(ev) == 0
+
+
+def test_a_necks_waist_is_its_narrowest_point():
+    # (a neck's event vertices can be a whole thin film; its waist, whose
+    # normals tell a sheet from a tube and set the cut's axis, is those
+    # within its gap and two edges of its narrowest point)
+    from pysurfaceevolver._events import waist
+    x = np.array([[0, 0, 0], [0.05, 0, 0], [0, 0.05, 0], [1, 0, 0], [0, 1, 0]], float)
+    assert list(waist(x, np.arange(5), [0, 0, 0], 0.01, 0.04)) == [0, 1, 2]
+    assert list(waist(x, np.arange(5), [0, 0, 0], 0.01, 0.01)) == [0, 1, 2, 3, 4]
+
+
 def test_a_footprint_under_a_dome_is_told_from_a_sheets():
     # (a neck lying against a wall domes over its footprint, the liquid under
     # it, dried by laying the dome onto the wall; a sheet's faces rise off the

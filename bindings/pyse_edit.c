@@ -92,6 +92,7 @@ struct ctx
   int manifold;
   double h, tol, cos_turn, max_volume, max_len, lambda, offset, flat;
   int mode;
+  int fold_ok;                     /* (a sheet's hole: folds may grow, see merge_facets) */
   int *stamp[NUMELEMENTS];
   long stamp_size[NUMELEMENTS];
   int stamp_now;
@@ -1253,6 +1254,7 @@ static int after(struct ctx *c, struct ids *verts, struct counts *was, int pinch
   struct ids E = {0,0,0}, F = {0,0,0};
   int why;
   patch(c,verts,&now,PATCH_AFTER,&E,&F);
+  if ( c->fold_ok && now.fold > was->fold ) now.fold = was->fold;
   why = worse(was,&now,pinch_ok);
   /* (a smoothing move, once a vertex in a batch, by no more than the
      grids' padding, leaves its elements in their items' boxes: added
@@ -2082,7 +2084,14 @@ static int merge_facets(struct ctx *c, facet_id f1, facet_id f2)
     make_facet(t1,front,back,f1);
     make_facet(t2,front,back,f1);
   }
+  /* (mode 1, a sheet's hole: its faces closer than about a fifth of the
+     facets' size, the tube between them lies all but flat and its facets
+     fold back on the faces' (normals over 162 degrees apart) whatever the
+     pair: a pack's sheet 0.003 thin on facets of 0.04 refused every pair,
+     and the descent ran away; the hole's rim opens as it relaxes) */
+  c->fold_ok = c->mode == 1;
   why = after(c,&verts,&was,0);
+  c->fold_ok = 0;
   if ( verts.a ) temp_free((char *)verts.a);
   return why ? -why : PYSE_EDIT_DONE;
 }
