@@ -99,8 +99,8 @@ struct ctx
   long moved_size;
   struct sig *sigs;                /* the patch before the edit: see before() */
   int nsigs, maxsigs, sig_now;
-  int *sig_at[NUMELEMENTS];        /* per edge, facet: its sig + 1 when sig_now's */
-  int *sig_ep[NUMELEMENTS];
+  int *sig_at[NUMELEMENTS];        /* per edge, facet: its sig's place in sigs, */
+  int *sig_ep[NUMELEMENTS];        /* when this is sig_now */
   long sig_size[NUMELEMENTS];
   REAL *gaps;                      /* per vertex and wall: x, y, z, the gap there */
   long gaps_size;                  /* vertex ordinals it has room for */
@@ -110,12 +110,12 @@ struct ctx
   int clean;                       /* no crossings when the remesh began: see patch() */
   int in_cells;                    /* a smoothing batch: its moves leave elements in their cells */
   int fresh;                       /* its grids built for it (else its moves put their elements in) */
+  int readd;                       /* this move's elements put in again all the same */
   struct snapshot *snap;           /* the batch's: see before() */
   int snapping, snap_k, cur_k;     /* the batch takes them; the edit it was taken for; now */
   struct edit_args *batch;         /* the batch's, its keys taken when its first edit is made */
   int grids_due;                   /* the grids to be built when first needed, padded so */
   REAL due_pad;
-  int readd;                       /* this move doesn't: its elements put in again */
 };
 
 /* a fresh mark for this pass; 1 if id wasn't marked yet */
@@ -2529,7 +2529,7 @@ static int surface_clean(struct ctx *c)
   edge_id e;
   memset(&a,0,sizeof(a));
   far_only = 0;
-  grids_build(c);                  /* (each batch builds them again) */
+  grids_build(c);                  /* (the first batch keeps them) */
   FOR_ALL_EDGES(e)
     if ( crossings_of(c,e,&none) ) return 0;
   line_crossings(c,&a);
