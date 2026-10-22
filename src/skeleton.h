@@ -30,6 +30,8 @@ struct expnode {
                  char name[EXPNAMESIZE];  /* for error messages */
                  REAL elapsed_time;  // for profiling
                  int call_count;  // for profiling
+                 int pyse_pressure; /* pySE: 1 reads no pressure, 2 reads one,
+                                       0 not known (set by stack_usage()) */
                };
 
 /* flags, also used for treenode? */

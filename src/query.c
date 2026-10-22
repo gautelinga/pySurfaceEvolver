@@ -288,8 +288,15 @@ void stack_usage(struct expnode *ex)
 #endif
   
   ex->stack_max = 0;
+  ex->pyse_pressure = 1;
   for ( node = ex->start+1 ; node->type != FINISHED_NODE ; node++ )
   { usage += node->stack_delta;
+    /* pySE: whether it reads a pressure or multiplier, for
+       calc_content_and_energy() (it scanned every energy expression at
+       every call, a fifth of a 64-bead pack's gradient step) */
+    if ( node->type == GET_PRESSURE_NODE || node->type == PUSHQPRESSURE_NODE
+          || node->type == AMBIENT_PRESSURE_NODE )
+      ex->pyse_pressure = 2;
     if ( usage > ex->stack_max ) ex->stack_max = usage;
 #ifdef _DEBUG
     if ( (usage < 0) && (!didwarn) ) 

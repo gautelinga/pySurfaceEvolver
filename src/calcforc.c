@@ -795,6 +795,7 @@ REAL calc_content (
 static int expr_reads_pressure(struct expnode *e)
 { struct treenode *n;
   if ( !e || !e->start || !e->root ) return 0;
+  if ( e->pyse_pressure ) return e->pyse_pressure == 2;   /* (stack_usage() looked) */
   for ( n = e->start ; n <= e->root ; n++ )
     if ( n->type == GET_PRESSURE_NODE || n->type == PUSHQPRESSURE_NODE
           || n->type == AMBIENT_PRESSURE_NODE )
