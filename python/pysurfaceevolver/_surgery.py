@@ -627,9 +627,9 @@ def _unguard(ev, names=None) -> None:
         ev.command("; ".join(f"unset vertex constraint {n}" for n in used))
 
 
-def pinch_off(ev, event, relax: bool = True, at_wall: bool = True) -> List[int]:
+def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int]:
     """Cut the surface at a neck: see :meth:`Evolver.pinch_off`. Without
-    ``at_wall``, a sheet thinnest at a wall ruptures by a hole beside its
+    ``footprint``, a sheet thinnest at a wall ruptures by a hole beside its
     contact line, not by its footprint dried (_descend: where a footprint
     was dried at the same place already)."""
     if ev.model != "linear":
@@ -654,7 +654,7 @@ def pinch_off(ev, event, relax: bool = True, at_wall: bool = True) -> List[int]:
         reach = 2*float(event.gap) + float(event.scale)
         start = ev._save()
         try:
-            at_wall = at_wall and _sheet_at_wall(ev, m, x, event)
+            at_wall = footprint and _sheet_at_wall(ev, m, x, event)
         except ValueError as error:
             ev.restore(start)
             at_wall = False
@@ -2333,7 +2333,7 @@ def apply(ev, event, keep=None, other: bool = False) -> None:
     not by drying its footprint (see pinch_off)."""
     _unguard(ev)
     if event.kind == "neck":
-        pinch_off(ev, event, relax=False, at_wall=not other)
+        pinch_off(ev, event, relax=False, footprint=not other)
     elif event.kind == "touch":
         merge(ev, event, keep)
     else:
@@ -2622,7 +2622,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     crossed, here = _crossings(ev), ev._save()
                     try:
                         _unguard(ev)
-                        pinch_off(ev, e, relax=False, at_wall=not other(e))
+                        pinch_off(ev, e, relax=False, footprint=not other(e))
                         if _crossings(ev) > crossed:
                             # (as every other change is checked: a pack's sheet
                             # ruptured at a wall left the surface through
@@ -2898,9 +2898,10 @@ def _lift_chords(ev) -> int:
     midpoint is inside the solid), and every run after crossed there, 70
     changes made instead in 900 s. How many were split."""
     h = _edge_scale(ev)
-    walls = [(k, w.shape) for k, w in surface.walls.items()
-             if getattr(w, "shape", None) is not None and w.shape[0] in ("sphere", "cylinder")
-             and not any(isinstance(c, str) for c in w.shape[1])]
+    shapes_of = {k: getattr(w, "shape", None) for k, w in surface.walls.items()}
+    walls = [(k, s) for k, s in shapes_of.items()
+             if s is not None and s[0] in ("sphere", "cylinder")
+             and not any(isinstance(c, str) for c in s[1])]
     if not walls:
         return 0
     lifted = 0
@@ -2941,9 +2942,9 @@ def _lift_chords(ev) -> int:
         # the new vertices, each at the middle of its chord, out to the wall
         m = ev.mesh()
         x = np.array(m.vertices, dtype=float)
-        mids = np.asarray(mids)
+        middles = np.asarray(mids)
         for v in np.flatnonzero([i not in old for i in np.asarray(m.vertex_ids).tolist()]):
-            k = int(np.argmin(np.linalg.norm(mids - x[v], axis=1)))
+            k = int(np.argmin(np.linalg.norm(middles - x[v], axis=1)))
             axis, R = _axis_of(shapes[k])
             r = _radial(x[v][None, :], shapes[k], axis)[0]
             if np.linalg.norm(r) > 0:
@@ -3648,7 +3649,7 @@ def _sense(ev, e) -> int:
         return 0
 
 
-def _same_place(a: _Tried, b: _Tried, reach: float = None) -> bool:
+def _same_place(a: _Tried, b: _Tried, reach: Optional[float] = None) -> bool:
     """Whether two changes are at one place: on (or against) the same solid,
     or both on none, within ``reach`` (default _PLACE) of the larger of
     their edges."""
