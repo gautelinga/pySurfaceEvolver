@@ -2491,6 +2491,26 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         return any(t.kind == "neck" and t.what == "made" and _same_place(here, t)
                    for t in history)
 
+    def undo_last(why: str) -> bool:
+        """The last change made undone (back to the state before it), and
+        not made again here (_AGAIN times over, and noted undone): whether
+        there was one to undo."""
+        nonlocal way, before, since, refused
+        if not undo:
+            return False
+        saved, e = undo.pop()
+        ev.restore(saved)
+        for k, c in enumerate(changes):
+            if c is e:
+                del changes[k]
+                break
+        made_at.extend([(e.kind, str(e.constraint), np.asarray(e.where, float))]*_AGAIN)
+        note(e, "undone")
+        refused = f"{e}: {why}"
+        _log.debug("change undone: %s", refused)
+        way, before, since = None, [], 0
+        return True
+
     def made_change(e) -> None:
         """A change made: noted, the mesh remeshed, and down from there."""
         nonlocal way, before, tried, since, stuck, falling, remeshing, stalled
@@ -2625,6 +2645,15 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                         _checked(ev, "remeshing a descent gone wrong")
                         chunk = _gradient_run(ev, tol)
                     if chunk is None:
+                        # (the last change undone first, if there is one to
+                        # undo, and not made again here: after a pack's
+                        # contact lines were joined in a box's corner, every
+                        # run and step went wrong and every change there was
+                        # refused)
+                        if undo_last("the descent ran away after it"):
+                            if not falling:
+                                guard(ev)
+                            continue
                         return None, changes, "the descent ran away (volumes or energy)"
                 guard(ev)
                 _checked(ev, "a relax run")
@@ -2872,17 +2901,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                            str(error).splitlines()[0])
                 way, before, since = None, [], 0
                 continue
-            saved, e = undo.pop()
-            ev.restore(saved)
-            for k, c in enumerate(changes):
-                if c is e:
-                    del changes[k]
-                    break
-            made_at.extend([(e.kind, str(e.constraint), np.asarray(e.where, float))]*_AGAIN)
-            note(e, "undone")
-            refused = f"{e}: Evolver failed after it ({str(error).splitlines()[0]})"
-            _log.debug("change undone: %s", refused)
-            way, before, since = None, [], 0
+            undo_last(f"Evolver failed after it ({str(error).splitlines()[0]})")
     return None, changes, ("the descent stalled (its runs left the state as it was), and again "
                            "after remeshing" if since > _FALL_ITERATIONS and stalled > _STALLED else
                            f"no stable state within {_FALL_ITERATIONS} steps of the last "

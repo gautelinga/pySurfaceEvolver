@@ -410,6 +410,12 @@
   from one descent to the next until the branch steps on: a sheet's footprint on
   a side wall dried in a fall, and the next descent began by gluing the sheet back
   there, its first event, and ran away.
+
+- A descent that would run away (its runs, then single gradient steps, going wrong,
+  and every change near refused) undoes the change it made last instead, if any,
+  and goes on without it, as it does where Evolver fails after one: after a
+  16-bead replay's contact lines were joined in a box's corner, every run and step
+  went wrong and every change there was refused.
   (The same change beside one made is no repeat: a film drying in patches over a
   bead, the next two edges from the last, put off, left the descent wandering.) A sheet's neck at a wall where one was cut in
   the descent ruptures by a hole beside its contact line instead of its footprint
