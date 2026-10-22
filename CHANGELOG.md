@@ -374,6 +374,15 @@
   16-bead replay spent half an hour in a ring that never came back to its start;
   the collapse is now refused.
 
+- The descents lift chords through a curved wall: an edge between two contact-line
+  vertices of one bead (on two facets, off the bead itself) whose middle lies more
+  than a tenth of an edge inside it is split, its new vertex put out on the bead,
+  free. A band of facets with every corner on a bead's lines has nothing to hold it
+  off the bead, and the remeshing can't split its edges (their middles are inside
+  the solid): a 4-bead run's fall left one, its lines moved apart and its chords
+  were stretched to 1.3 (edges of 0.2), 0.24 deep in the bead; every run after
+  crossed there, and the descent made 70 changes in 900 s round it, now 22 in 21 s.
+
 - Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
   was dissolved and another made: Evolver gives the freed volume quantity's and
   method instance's slots to the next ones, and the restore copied flags back slot

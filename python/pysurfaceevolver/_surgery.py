@@ -2745,6 +2745,92 @@ def _split_lines(ev, h0: float) -> bool:
     return split
 
 
+def _lift_chords(ev) -> int:
+    """Edges across a curved wall between two of its contact-line vertices
+    (off the wall themselves, on two facets) whose middle lies more than a
+    tenth of an edge inside it, split, the new vertex put out on the wall's
+    surface, free (and guarded where the surface is). A band of facets with
+    every corner on a bead's contact lines has nothing to hold it off the
+    bead: a 4-bead pack's fall left 18 such facets on one, its contact lines
+    moved apart and the band was stretched along chords up to 1.3 long, 0.24
+    deep in a bead of radius 1; the remeshing can't split them (the
+    midpoint is inside the solid), and every run after crossed there, 70
+    changes made instead in 900 s. How many were split."""
+    h = _edge_scale(ev)
+    walls = [(k, w.shape) for k, w in surface.walls.items()
+             if getattr(w, "shape", None) is not None and w.shape[0] in ("sphere", "cylinder")
+             and not any(isinstance(c, str) for c in w.shape[1])]
+    if not walls:
+        return 0
+    lifted = 0
+    guarded = None
+    for _ in range(4):
+        m = ev.mesh()
+        edges = np.asarray(m.edges)
+        if not len(edges):
+            break
+        nums, _, dist, names = ev._constraint_gaps()
+        on = np.isnan(dist)
+        x = np.asarray(m.vertices, float)
+        free = (m.edge_valence() == 2) & ~_on_walls(ev)
+        cut = np.zeros(len(edges), dtype=bool)
+        mids, shapes = [], []
+        for key, shape in walls:
+            try:
+                c = _column(nums, names, key)
+            except ValueError:
+                continue
+            chord = free & ~cut & on[edges[:, 0], c] & on[edges[:, 1], c]
+            if not chord.any():
+                continue
+            mid = x[edges[chord]].mean(axis=1)
+            axis, R = _axis_of(shape)
+            inside = R - np.linalg.norm(_radial(mid, shape, axis), axis=1) > 0.1*h
+            cut[np.flatnonzero(chord)[inside]] = True
+            mids += list(mid[inside])
+            shapes += [shape]*int(inside.sum())
+        if not cut.any():
+            break
+        if guarded is None:
+            guarded = _guarded(ev)
+            _unguard(ev)
+        old = set(np.asarray(m.vertex_ids).tolist())
+        ev.command(f"refine edge{ev._mark(_core.EDGE, cut)}")
+        lifted += int(cut.sum())
+        # the new vertices, each at the middle of its chord, out to the wall
+        m = ev.mesh()
+        x = np.array(m.vertices, dtype=float)
+        mids = np.asarray(mids)
+        for v in np.flatnonzero([i not in old for i in np.asarray(m.vertex_ids).tolist()]):
+            k = int(np.argmin(np.linalg.norm(mids - x[v], axis=1)))
+            axis, R = _axis_of(shapes[k])
+            r = _radial(x[v][None, :], shapes[k], axis)[0]
+            if np.linalg.norm(r) > 0:
+                x[v] += r/np.linalg.norm(r)*(R + 1e-3*h - np.linalg.norm(r))
+        ev.vertices = x
+    if lifted:
+        if guarded:
+            guard(ev)
+        _log.debug("chords through a wall lifted: %d edges split", lifted)
+    return lifted
+
+
+def _axis_of(shape) -> tuple:
+    """A sphere's or cylinder's axis (None for a sphere) and radius."""
+    if shape[0] == "sphere":
+        return None, float(shape[2])
+    d = np.asarray(shape[2], float)
+    return d/np.linalg.norm(d), float(shape[3])
+
+
+def _radial(points, shape, axis) -> np.ndarray:
+    """The points' offsets from a sphere's centre or a cylinder's axis."""
+    r = np.asarray(points, float) - np.asarray(shape[1], float)
+    if axis is not None:
+        r = r - np.outer(r @ axis, axis)
+    return r
+
+
 def _run(ev, tol: float, n: int) -> Any:
     """A descent's relax() run of up to n gradient steps; its Newton steps
     (and relax()'s conjugate-gradient pass) only once the residual is under
@@ -3089,7 +3175,9 @@ def _tidy(ev, h0: float, shut: list, close: bool = True) -> None:
     (close_patches), poles moved off the lines (move_poles); where that
     leaves a surface Evolver can't take a gradient step from (a pack's patch
     closed, then a pole moved, and the constraint matrix was singular at the
-    next step), undone and done without the patches closed, else not done."""
+    next step), undone and done without the patches closed, else not done.
+    Chords through a wall lifted first (_lift_chords)."""
+    _lift_chords(ev)
     _pinch_collapsed(ev)
     _drop_empty(ev)
     good = ev._save()

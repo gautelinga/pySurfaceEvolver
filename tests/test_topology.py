@@ -1354,6 +1354,42 @@ def _drop_on_ball_flux():
     return ev
 
 
+def _deepest_chord(ev, wall="ball"):
+    """How deep the middle of an edge between two vertices on the unit ball
+    (on two facets, not a contact line's) lies inside it."""
+    m = ev.mesh()
+    on, e = ev.on_constraint(wall), np.asarray(m.edges)
+    chord = (m.edge_valence() == 2) & on[e[:, 0]] & on[e[:, 1]]
+    if not chord.any():
+        return 0.0
+    return 1 - float(np.linalg.norm(np.asarray(m.vertices)[e[chord]].mean(axis=1), axis=1).min())
+
+
+def test_a_chord_through_a_bead_is_lifted_out_of_it():
+    # (_surgery._lift_chords) the drop's row next to its contact line put on
+    # the ball: the facets between have every corner on it, their edges
+    # across it are chords through it, which nothing holds off the ball and
+    # the remeshing can't split (their middles are inside it). Split, each
+    # middle put out on the ball, free
+    from pysurfaceevolver import _surgery
+    from pysurfaceevolver._engine import surface
+    ev = _drop_on_ball_flux()
+    m = ev.mesh()
+    rim, edges = ev.on_constraint("ball"), np.asarray(m.edges)
+    row = np.unique(edges[rim[edges[:, 0]] != rim[edges[:, 1]]].ravel())
+    for v in np.asarray(m.vertex_ids)[row[~rim[row]]]:
+        ev.command(f"set vertex[{int(v)}] constraint ball")
+    ev.command("recalc")
+    surface.edge_scale = 0.01           # (a chord counts from a tenth of an edge deep)
+    assert _deepest_chord(ev) > 0.001
+    facets = ev.counts["facets"]
+    lifted = _surgery._lift_chords(ev)
+    assert lifted > 0 and ev.counts["facets"] == facets + 2*lifted
+    assert _deepest_chord(ev) <= 0.001
+    assert np.linalg.norm(ev.vertices, axis=1).min() > 1 - 1e-9
+    assert _surgery._lift_chords(ev) == 0
+
+
 def test_a_drop_on_a_flux_sphere_is_the_exact_cap():
     # (refined, its pressure 1.3%, 0.32%, 0.08% off: second order)
     ev = _drop_on_ball_flux()
