@@ -383,10 +383,11 @@
   were stretched to 1.3 (edges of 0.2), 0.24 deep in the bead; every run after
   crossed there, and the descent made 70 changes in 900 s round it, now 22 in 21 s.
 
-- A descent whose runs leave the state as it was (the counts, and the energy within
-  1e-7 of itself) goes to its budget's remeshing at once, and ends if it stalls
-  again after it: a 16-bead replay's runs stopped moving at residual 2 and the
-  descent went on so 200 times (215 s). Likewise a relaxed but unsound state that
+- A descent whose runs leave the state as it was (the counts the same, the energy
+  within 1e-6 of itself, the residual not halved) goes to its budget's end at once
+  (the change nearest to coming, else the remeshing), and ends if it stalls again
+  after it: a 16-bead replay's runs stopped moving at residual 2 and the descent
+  went on so 200 times (215 s); another's crept at residual 3.9 for 75 runs. Likewise a relaxed but unsound state that
   the tidying and relaxing bring back to itself (it went round, remeshed twice a
   round, to the end of the budget), which is taken as the descent's end where all
   it lacks is a better mesh (degenerate facets, but none under the degree

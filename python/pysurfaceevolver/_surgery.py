@@ -2774,11 +2774,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             if chunk is not None:
                 if not chunk.converged:
                     # (and where runs leave the state as it was, on to the
-                    # budget's remeshing now: a 16-bead pack's runs stopped
-                    # moving at residual 2, the energy the same to 1e-10,
-                    # and the descent went on so 200 times, 215 s)
-                    state = (tuple(ev.counts.values()), ev.energy)
-                    stalled = stalled + 1 if _same_state(state, last) else 0
+                    # budget's end now: a 16-bead pack's runs stopped moving
+                    # at residual 2, the energy the same to 3e-8, and the
+                    # descent went on so 200 times, 215 s)
+                    state = (tuple(ev.counts.values()), ev.energy, residual)
+                    stalled = stalled + 1 if _stalled_run(state, last) else 0
                     last = state
                     if stalled == _STALLED:
                         stalled += 1
@@ -3350,6 +3350,16 @@ def _even_out(ev, smooth: bool = True, edges=None) -> None:
     for _ in range(3):
         if not (edit(ev, "flip", ids, mode=1) == 0).any():
             break
+
+
+def _stalled_run(state: tuple, last: Any) -> bool:
+    """Whether a descent's run left the state (the counts, the energy, the
+    residual) as the run before did: the energy within 1e-6 of itself, the
+    residual not halved (a pack's runs crept at residual 3.9, the energy
+    down by 1e-7 to 1e-6 a run, 75 runs; a converging descent's residual
+    falls)."""
+    return last is not None and state[0] == last[0] \
+        and abs(state[1] - last[1]) <= 1e-6*max(1.0, abs(last[1])) and state[2] > 0.5*last[2]
 
 
 def _same_state(state: tuple, last: Any) -> bool:

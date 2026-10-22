@@ -1448,6 +1448,10 @@ def test_a_stalled_descent_is_told_by_its_state():
     assert _surgery._same_state(state, ((100, 290, 190, 1), -93.119281))
     assert not _surgery._same_state(state, ((100, 290, 190, 1), -93.1193))
     assert not _surgery._same_state(state, ((101, 290, 190, 1), -93.119278))
+    run = ((100, 290, 190, 1), -97.967412, 3.85)
+    assert _surgery._stalled_run(run, ((100, 290, 190, 1), -97.9674, 3.88))
+    assert not _surgery._stalled_run(run, ((100, 290, 190, 1), -97.9674, 9.0))   # converging
+    assert not _surgery._stalled_run(run, ((100, 290, 190, 1), -97.966, 3.88))
     issues = ["degenerate facets (smallest angle 0.14 degrees, 27 below 5)",
               "the surface nearly touches itself (0.037 edge lengths)"]
     assert _surgery._mesh_only(SimpleNamespace(issues=issues))
