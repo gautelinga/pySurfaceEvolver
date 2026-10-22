@@ -3758,9 +3758,10 @@ def _same_place(a: _Tried, b: _Tried, reach: Optional[float] = None) -> bool:
 def _put_off(here: _Tried, history: list) -> bool:
     """Whether a descent puts a change (``here``, as _tried takes it) off:
     at its place in this descent the opposite was made or undone (cut and
-    merged, dried and wetted, a footprint dried and its lines joined back),
-    the same was made within an edge (it came back: it didn't take), or one
-    of its kind refused; and it isn't nearer than _MARGIN of that one's gap
+    merged, dried and wetted, a footprint dried and its lines joined back;
+    a direction not known is a known one's opposite), the same (its kind, its way)
+    made within an edge (it came back: it didn't take), or one of its kind
+    refused; and it isn't nearer than _MARGIN of that one's gap
     (in their edges; through the solid deeper than 1/_MARGIN of it, where
     that one was at it or through; a neck, touch or contact lines met).
     Made at the same gap, a change and its opposite take turns: a pack's
@@ -3768,14 +3769,16 @@ def _put_off(here: _Tried, history: list) -> bool:
     joined back, the runs between crossing there, until the descent ran
     away. (The same change beside one made is no repeat: a film drying in
     patches over a bead, the next one two edges from the last, was put off
-    and the descent wandered 200 runs.) The guards and the runs hold the
-    surface meanwhile; a neck that pinches, a film that thins, comes nearer
-    and is made then (and where a run would cross, _change_nearest still
-    makes it, after the others)."""
+    and the descent wandered 200 runs; nor is another change the same way,
+    the contact lines joined after a merge on a plane.) The guards and the
+    runs hold the surface meanwhile; a neck that pinches, a film that thins,
+    comes nearer and is made then (and where a run would cross,
+    _change_nearest still makes it, after the others)."""
     gaps = [t.gap for t in history
             if (t.what == "refused" and t.kind == here.kind and _same_place(here, t))
-            or (t.what != "refused" and (_same_place(here, t, 1.0) if t.sense == here.sense != 0
-                                         else _same_place(here, t)))]
+            or (t.what != "refused" and t.sense != here.sense and _same_place(here, t))
+            or (t.what != "refused" and t.sense == here.sense and t.kind == here.kind
+                and _same_place(here, t, 1.0))]
     if not gaps:
         return False
     g = min(gaps)

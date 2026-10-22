@@ -395,33 +395,32 @@
 - A descent doesn't make a change where it just made, undid or refused one: where
   the opposite change was made or undone (a cut and a merge, drying and wetting, a
   footprint dried and its lines joined back) on the same solid (or both on none)
-  within three of the local edges, the same change within one (it came back: it
-  didn't take), or one of its kind refused within three, the next is put off until
-  it is nearer than half that one's gap (through a solid twice as deep; a neck,
-  touch or contact lines met), or for 20 of the descent's iterations at most (a
-  sheet at a side wall, its lines joined, thinned again at the joint and was held
-  there until the descent's budget ran out). The guards and the runs hold the
-  surface meanwhile;
-  where a run would cross, the changes not put off are tried first, then these;
-  and where the descent gets nowhere (its runs stall, or its budget runs out), the
-  change nearest to coming is made, these included, before it remeshes or gives up
-  (a 16-bead replay's runs stopped against a bead, a dry patch there put off, and
-  the descent gave up). In `arclength(topology=True)` the changes are remembered
-  from one descent to the next until the branch steps on: a sheet's footprint on
-  a side wall dried in a fall, and the next descent began by gluing the sheet back
-  there, its first event, and ran away.
+  within three of the local edges, the same change (its kind, its way) within one
+  (it came back: it didn't take), or one of its kind refused within three, the next
+  is put off until it is nearer than half that one's gap (through a solid twice as
+  deep; a neck, touch or contact lines met), or for 20 of the descent's iterations
+  at most (a sheet at a side wall, its lines joined, thinned again at the joint and
+  was held there until the descent's budget ran out). The guards and the runs hold
+  the surface meanwhile; where a run would cross, the changes not put off are tried
+  first, then these; and where the descent gets nowhere (its runs stall, or its
+  budget runs out), the change nearest to coming is made, these included, before it
+  remeshes or gives up (a 16-bead replay's runs stopped against a bead, a dry patch
+  there put off, and the descent gave up). In `arclength(topology=True)` the changes
+  are remembered from one descent to the next until the branch steps on: a sheet's
+  footprint on a side wall dried in a fall, and the next descent began by gluing the
+  sheet back there, its first event, and ran away. (The same change beside one made
+  is no repeat: a film drying in patches over a bead, the next two edges from the
+  last, put off, left the descent wandering.) A sheet's neck at a wall where one was
+  cut in the descent ruptures by a hole beside its contact line instead of its
+  footprint dried again. 16-bead replays had a sheet's footprint on a side wall
+  dried three times and its lines joined back, the runs crossing between, until the
+  descent ran away.
 
 - A descent that would run away (its runs, then single gradient steps, going wrong,
-  and every change near refused) undoes the change it made last instead, if any,
-  and goes on without it, as it does where Evolver fails after one: after a
-  16-bead replay's contact lines were joined in a box's corner, every run and step
-  went wrong and every change there was refused.
-  (The same change beside one made is no repeat: a film drying in patches over a
-  bead, the next two edges from the last, put off, left the descent wandering.) A sheet's neck at a wall where one was cut in
-  the descent ruptures by a hole beside its contact line instead of its footprint
-  dried again. 16-bead replays had a sheet's footprint on a side wall dried three
-  times and its lines joined back, the runs crossing between, until the descent
-  ran away.
+  and every change near refused) undoes the change it made last instead, if any, and
+  goes on without it, as it does where Evolver fails after one: after a 16-bead
+  replay's contact lines were joined in a box's corner, every run and step went
+  wrong and every change there was refused.
 
 - A neck against one wall whose ring Evolver's deletion won't collapse ("the ring
   didn't collapse to one vertex (3 left)": a 4-bead pack's neck on a bead refused

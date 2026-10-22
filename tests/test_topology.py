@@ -1476,6 +1476,7 @@ def test_a_change_where_one_was_made_is_put_off_till_nearer():
     assert not put_off(tried("contact lines", 0.0, 0.1, 1), made)     # met
     assert not put_off(tried("solid", 0.01, 0.4, 1), made)        # elsewhere
     assert not put_off(tried("solid", 0.01, 0.2, 1, solid="bead2"), made)
+    assert not put_off(tried("contact lines", 0.02, 0.05, -1), made)     # the same way on
     refused = [tried("solid", 0.01, 0.0, -1, "refused")]
     assert put_off(tried("solid", 0.01, 0.2, -1), refused)
     assert not put_off(tried("contact lines", 0.02, 0.1, 1), refused)
