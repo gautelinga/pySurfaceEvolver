@@ -2342,9 +2342,11 @@ def apply(ev, event, keep=None, other: bool = False) -> None:
 
 
 def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=None,
-            h0=None) -> "tuple[Any, list, str]":
+            h0=None, history: Optional[list] = None) -> "tuple[Any, list, str]":
     """See _descend; an EvolverError on the way (a mesh the changes left
-    broken) ends it, the reason the error's."""
+    broken) ends it, the reason the error's. ``history``: the changes made,
+    undone or refused (_Tried) that the descent puts off repeating
+    (_put_off), its own added; a fresh one if not given."""
     from ._errors import EvolverError
     changes: list = []
     if h0 is None:
@@ -2377,7 +2379,8 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     # search, which relax() and Evolver.command("g") otherwise keep)
     fast = _core.set_fast_steps(True) if hasattr(_core, "set_fast_steps") else None
     try:
-        result = _descend(ev, factor, tol, falling=falling, keep=keep, h0=h0, changes=changes)
+        result = _descend(ev, factor, tol, falling=falling, keep=keep, h0=h0, changes=changes,
+                          history=[] if history is None else history)
         if result[2]:
             _log.debug("descent stopped: %s", result[2])
         return result
@@ -2394,7 +2397,7 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
 
 
 def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
-             changes: list) -> "tuple[Any, list, str]":
+             changes: list, history: list) -> "tuple[Any, list, str]":
     """Down to a stable state at the same value (see arclength's topology=),
     making the changes of topology that come on the way. ``falling``: from a
     point that has lost its stability (steps along its unstable mode); else
@@ -2420,7 +2423,6 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     undo: list = []                     # (that state, the change) for the last one made
 
     refused_at: list = []               # changes refused in it: (kind, solid, place)
-    history: list = []                  # changes made, undone or refused in it, by place (_Tried)
     told: list = []                     # ... and those put off: (_Tried, the iteration it began)
     turn = 0                            # the iteration
     seen: dict = {}                     # this iteration's events as tried (place)

@@ -406,7 +406,10 @@
   and where the descent gets nowhere (its runs stall, or its budget runs out), the
   change nearest to coming is made, these included, before it remeshes or gives up
   (a 16-bead replay's runs stopped against a bead, a dry patch there put off, and
-  the descent gave up).
+  the descent gave up). In `arclength(topology=True)` the changes are remembered
+  from one descent to the next until the branch steps on: a sheet's footprint on
+  a side wall dried in a fall, and the next descent began by gluing the sheet back
+  there, its first event, and ran away.
   (The same change beside one made is no repeat: a film drying in patches over a
   bead, the next two edges from the last, put off, left the descent wandering.) A sheet's neck at a wall where one was cut in
   the descent ruptures by a hole beside its contact line instead of its footprint

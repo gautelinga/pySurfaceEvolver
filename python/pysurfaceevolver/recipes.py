@@ -752,6 +752,11 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     run_remesh = remesh
     last: List[Step] = []
     moves: List[float] = []             # (the value's steps along the branch)
+    # (the changes made, undone or refused since the branch last stepped on,
+    # which the descents put off repeating: a pack's sheet at a side wall
+    # had its footprint dried in a fall, and the descent after it began by
+    # gluing it back, the next fall's first event, until it ran away)
+    history: list = []
     while index < steps:
         last = last[-1:]                # (the state a change ended in: events coming from it)
         seen: List[np.ndarray] = []
@@ -789,6 +794,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             return
         if moved:
             quiet = stuck = 0           # (falls without a change between steps aren't a stall)
+            history.clear()
         stalled = not (lost or event is not None)
         if stalled and not start and not moved:
             # not a step from where a change or fall ended: the change
@@ -832,9 +838,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 push = min(typical*2**min(quiet - 1, 3), 0.1*abs(value) or typical)
                 set_value(ev, value + way*push)
                 ev.command("recalc")
-            result, cut, why = descend(ev, factor, tol, falling=False, keep=keep)
+            result, cut, why = descend(ev, factor, tol, falling=False, keep=keep,
+                                       history=history)
         elif event is not None:
-            result, cut, why = _change(ev, event, factor, tol, keep)
+            result, cut, why = _change(ev, event, factor, tol, keep, history)
         elif len(last) == 3 and last[-2].value != last[-3].value and _at_fold(ev, *seen):
             # past a fold, the stable state is still there at the unstable
             # point's value (a catenoid's at 1.3241, its fold at 1.3255): the
@@ -845,9 +852,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             far = max(stable*way, last[-1].value*way)*way
             set_value(ev, far + (stable - previous))
             ev.command("recalc")
-            result, cut, why = _fall(ev, factor, tol, keep)
+            result, cut, why = _fall(ev, factor, tol, keep, history)
         else:
-            result, cut, why = _fall(ev, factor, tol, keep)
+            result, cut, why = _fall(ev, factor, tol, keep, history)
         if result is None:
             what_ = (f"{event}" if event is not None else
                      f"relaxing where the branch stopped short ({_current(ev, what):.6g})"
@@ -912,14 +919,25 @@ def _nearest(found: list) -> Any:
                key=lambda e: e.gap/float(e.scale), default=None)
 
 
-def _change(ev, event, factor: float, tol: float, keep) -> "tuple[Any, list, str]":
+def _change(ev, event, factor: float, tol: float, keep,
+            history: Optional[list] = None) -> "tuple[Any, list, str]":
     """Make the change a coming event announces, then down to a stable state
     (as _fall). The cut of a neck settles as pinch_off's does; a merge or a
     contact relaxes from there. A change refused (ValueError: the surface is
     left as it was) is passed over, as the descent passes over one: down
-    from here, the changes coming on the way made."""
+    from here, the changes coming on the way made; so is one ``history``
+    (the changes since the branch last stepped on) puts off repeating
+    (_surgery._put_off), which the descent makes if it comes nearer or waits
+    long."""
     from ._errors import EvolverError
-    from ._surgery import _crossings, _settle, apply, descend, guard
+    from ._surgery import _crossings, _log, _put_off, _settle, _tried, apply, descend, guard
+    if history is None:
+        history = []
+    here = _tried(ev, event, "")
+    if history and _put_off(here, history):
+        _log.debug("change put off: %s (made, undone or refused at its place since the "
+                   "branch last stepped on)", event)
+        return descend(ev, factor, tol, falling=False, keep=keep, history=history)
     crossed, start = _crossings(ev), ev._save()
     try:
         apply(ev, event, keep)
@@ -927,22 +945,25 @@ def _change(ev, event, factor: float, tol: float, keep) -> "tuple[Any, list, str
             ev.restore(start)
             raise ValueError("the change passed the surface through itself")
     except ValueError:
-        return descend(ev, factor, tol, falling=False, keep=keep)
+        history.append(here._replace(what="refused"))
+        return descend(ev, factor, tol, falling=False, keep=keep, history=history)
     except EvolverError as error:
         return None, [], str(error)
+    history.append(here._replace(what="made"))
     if event.kind == "neck":
         guard(ev)
         r = _settle(ev, tol)
         if r is None:
             # (down from the cut in the descent's runs instead, as the
             # descent does: a 16-bead pack's pieces, other changes coming)
-            result, more, why = descend(ev, factor, tol, falling=False, keep=keep)
+            result, more, why = descend(ev, factor, tol, falling=False, keep=keep,
+                                        history=history)
             return result, [event] + more, why
         if r.stable is not False:
             return r, [event], ""
-        result, more, why = descend(ev, factor, tol, falling=True, keep=keep)
+        result, more, why = descend(ev, factor, tol, falling=True, keep=keep, history=history)
     else:
-        result, more, why = descend(ev, factor, tol, falling=False, keep=keep)
+        result, more, why = descend(ev, factor, tol, falling=False, keep=keep, history=history)
     return result, [event] + more, why
 
 
@@ -966,12 +987,13 @@ def _negative(step: Step) -> int:
     return int(getattr(step.result, "negative_modes", 0) or 0)
 
 
-def _fall(ev, factor: float, tol: float = 1e-8, keep=None) -> "tuple[Any, list, str]":
+def _fall(ev, factor: float, tol: float = 1e-8, keep=None,
+          history: Optional[list] = None) -> "tuple[Any, list, str]":
     """From a point that has lost its stability, down to a stable state at
     the same value, making the changes of topology that come on the way
-    (_surgery.descend)."""
+    (_surgery.descend; ``history``, see _change)."""
     from ._surgery import descend
-    return descend(ev, factor, tol, falling=True, keep=keep)
+    return descend(ev, factor, tol, falling=True, keep=keep, history=history)
 
 
 def _branch(ev, what: Any, ds: float, steps: int, *,
