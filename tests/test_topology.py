@@ -1297,6 +1297,24 @@ def test_vertices_go_on_and_off_constraints_in_one_call():
     assert list(np.flatnonzero(ev.on_constraint("wallxlo"))) == [2, 4, 5]
 
 
+def test_unguarding_keeps_the_mesh_and_the_gaps_without_guards():
+    # (nothing moves: kept for the new surface version, not taken again)
+    from pysurfaceevolver import _engine, _surgery as S
+    from pysurfaceevolver._engine import surface
+    ev = _corner()
+    surface.edge_scale = 0.2
+    S.guard(ev)
+    m = ev.mesh()
+    _, _, dist, _ = ev._constraint_gaps()
+    S._unguard(ev)
+    assert ev.mesh() is m
+    kept = ev._constraint_gaps()[2]
+    _engine._gaps_cache = None
+    assert np.array_equal(kept, ev._constraint_gaps()[2], equal_nan=True)
+    assert np.array_equal(kept, dist, equal_nan=True)
+    assert not S._guarded(ev)
+
+
 def test_a_contact_lines_split_takes_its_ends_guards():
     # (the contact-line edges split as gradient steps go, _core.line_chop: a
     # midpoint without its ends' guards went out through the side wall at

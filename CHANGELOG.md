@@ -235,6 +235,14 @@
   240 at one thread 4.95e12 -> 3.53e12 instructions (867 -> 637 s), the same run
   line for line.
 
+- Remeshing: the checked edits read each vertex's kept wall gap inline and look at
+  whether an edge is on a wall only where it comes near it: a 16-bead pack's whole
+  remeshing at 14k facets 3.96e9 -> 3.33e9 instructions, the same mesh bit for bit.
+  Taking the guards off keeps the mesh and the gap table without them (nothing
+  moves), which a remeshing then needn't take again (75 million instructions at 28k
+  facets); `events()` takes the border edges once, not the whole edge list per
+  solid.
+
 - `events()`' search for the surface close to itself (and `_sizes`' at an edge
   across) keeps a grid of the facets per way they face (the axis of their side's
   largest component, and its sign) and leaves out, for each vertex, the grids whose

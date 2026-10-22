@@ -639,7 +639,7 @@ static int unchanged(struct ctx *c, element_id id)
 /* wall w's gap at vertex v (pyse_wall_gap), kept while v stays where it was
    (a checked edit looks at each vertex round it before and after, most of
    them unmoved: the walls' formulas took 19% of a checked smoothing) */
-static double vertex_gap(struct ctx *c, int w, vertex_id v)
+static double vertex_gap_fill(struct ctx *c, int w, vertex_id v)
 { long ord = ordinal(v), i;
   REAL *x = get_coord(v), *g;
   if ( ord >= c->gaps_size )
@@ -655,6 +655,18 @@ static double vertex_gap(struct ctx *c, int w, vertex_id v)
     g[3] = pyse_wall_gap(c->walls[w],x);
   }
   return (double)g[3];
+}
+
+/* (the kept gap read inline, the rest out of line: the checks ask it for
+   every wall at both ends of every edge of every patch, a sixth of a
+   remesh's instructions spent in the call) */
+static inline double vertex_gap(struct ctx *c, int w, vertex_id v)
+{ long ord = ordinal(v);
+  if ( ord < c->gaps_size )
+  { const REAL *g = c->gaps + (ord*c->nwalls + w)*4, *x = get_coord(v);
+    if ( g[0] == x[0] && g[1] == x[1] && g[2] == x[2] ) return (double)g[3];
+  }
+  return vertex_gap_fill(c,w,v);
 }
 
 struct counts { int structure, pinched, degenerate, fold, solid, crossing; };
@@ -1017,19 +1029,22 @@ static int vertex_solid(struct ctx *c, int w, vertex_id v)
   return -side*vertex_gap(c,w,v) > c->tol*c->h;
 }
 
-/* whether edge e's middle is in wall w's solid */
-static int edge_solid(struct ctx *c, int w, edge_id e)
+/* whether the middle of the edge from t (at p) to hh (at q), len long, is
+   in wall w's solid */
+static int edge_solid(struct ctx *c, int w, vertex_id t, vertex_id hh, REAL *p, REAL *q,
+                      double len)
 { int wc = c->walls[w], d;
-  double side = c->sides[w] < 0 ? -1.0 : 1.0, deep;
-  vertex_id t = get_edge_tailv(e), hh = get_edge_headv(e);
-  REAL *p = get_coord(t), *q = get_coord(hh), mid[3];
-  if ( v_on_constraint(t,wc) && v_on_constraint(hh,wc) ) return 0;
+  double side = c->sides[w] < 0 ? -1.0 : 1.0, deep, dh;
+  REAL mid[3];
   /* (the midpoint can't be in deeper than its ends by more than about
      half the edge, the gap growing about as the distance does: with
-     twice that to spare, not evaluated) */
+     twice that to spare, not evaluated; looked at before whether the
+     edge is on the wall, which most edges are far from) */
   deep = -side*vertex_gap(c,w,t);
-  if ( -side*vertex_gap(c,w,hh) > deep ) deep = -side*vertex_gap(c,w,hh);
-  if ( deep + dist3(p,q) < c->tol*c->h ) return 0;
+  dh = -side*vertex_gap(c,w,hh);
+  if ( dh > deep ) deep = dh;
+  if ( deep + len < c->tol*c->h ) return 0;
+  if ( v_on_constraint(t,wc) && v_on_constraint(hh,wc) ) return 0;
   for ( d = 0 ; d < 3 ; d++ ) mid[d] = (p[d] + q[d])/2;
   return -side*pyse_wall_gap(wc,mid) > c->tol*c->h;
 }
@@ -1076,12 +1091,13 @@ static int vertex_solids(struct ctx *c, vertex_id v)
 
 static int edge_solids(struct ctx *c, edge_id e)
 { vertex_id t = get_edge_tailv(e), hh = get_edge_headv(e);
-  double deep = vertex_reach(c,t);
+  REAL *p = get_coord(t), *q = get_coord(hh);
+  double deep = vertex_reach(c,t), len = dist3(p,q);
   int w, n = 0;
   if ( vertex_reach(c,hh) > deep ) deep = vertex_reach(c,hh);
   /* (as edge_solid skips each wall: deeper in none) */
-  if ( deep + dist3(get_coord(t),get_coord(hh)) < c->tol*c->h ) return 0;
-  for ( w = 0 ; w < c->nwalls ; w++ ) n += edge_solid(c,w,e);
+  if ( deep + len < c->tol*c->h ) return 0;
+  for ( w = 0 ; w < c->nwalls ; w++ ) n += edge_solid(c,w,t,hh,p,q,len);
   return n;
 }
 

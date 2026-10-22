@@ -80,6 +80,21 @@ _mesh_cache_lock = threading.Lock()
 _gaps_cache: "tuple[int, dict] | None" = None
 
 
+def _guards_only_changed(before: int) -> None:
+    """After a call that only took vertices off guards (_surgery._unguard:
+    nothing moved, no element or other constraint changed), the mesh and
+    the gap tables without the guards of surface version ``before`` kept
+    for the version now: a remeshing unguards first, and at a 16-bead pack's
+    28k facets the table alone was 75 million instructions to take again."""
+    global _mesh_cache, _gaps_cache
+    now = _core.surface_version()
+    with _mesh_cache_lock:
+        if _mesh_cache is not None and _mesh_cache[0] == before:
+            _mesh_cache = (now, _mesh_cache[1])
+        if _gaps_cache is not None and _gaps_cache[0] == before:
+            _gaps_cache = (now, {k: v for k, v in _gaps_cache[1].items() if not k[0]})
+
+
 
 # the names of the one-sided copies of walls that keep free vertices out of
 # solids during changes of topology (_surgery.guard)

@@ -291,6 +291,10 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
     from ._engine import surface
     events: List[Event] = []
     edges, valence = np.asarray(m.edges), m.edge_valence()
+    # (the border edges once, each solid's contact lines among them: the
+    # whole edge list masked per solid was a tenth of a 28k-facet pack's
+    # search at 4 edges)
+    border = edges[valence == 1]
     # all the constraints' columns at once, then a loop over those with
     # vertices close (a loop over all of them, each through the whole
     # column, was a third of a 15k-facet pack's search at 0.5 edges)
@@ -336,7 +340,7 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
         flag = (label >= 0) & ~wet[np.maximum(label, 0)]
         angle = _contact_angle(ev, surface.walls.get(key))
         near = np.flatnonzero(band & ~flag)
-        lines = edges[on[edges[:, 0]] & on[edges[:, 1]] & (valence == 1)]
+        lines = border[on[border[:, 0]] & on[border[:, 1]]]
         if angle is not None and len(near) and len(lines):
             # (each vertex's distance to the nearest of the contact line's
             # edges, in C: in NumPy, in blocks of vertices, it was 4 ms of a

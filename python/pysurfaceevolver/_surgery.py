@@ -11,7 +11,7 @@ from typing import Any, List, NamedTuple, Optional
 import numpy as np
 
 from . import _core
-from ._engine import GUARD_PREFIX, surface
+from ._engine import GUARD_PREFIX, _guards_only_changed, surface
 from ._errors import _num
 
 _SEAM = 3.0     # the cut's tips are tidied within this many median edges
@@ -655,7 +655,10 @@ def _unguard(ev) -> None:
     nums, _, dist, all_names = ev._constraint_gaps(guards=True)
     used = [c for c, n in enumerate(all_names)
             if str(n).startswith(GUARD_PREFIX) and np.isnan(dist[:, c]).any()]
+    before = _core.surface_version()
     _set_guards(ev, [int(nums[c]) for c in used], np.isnan(dist[:, used]), False)
+    if used and _core.surface_version() == before + 1:
+        _guards_only_changed(before)
 
 
 def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int]:
