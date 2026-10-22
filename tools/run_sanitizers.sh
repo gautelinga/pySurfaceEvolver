@@ -37,7 +37,7 @@ run() {
     # SIGKILL on timeout: SIGTERM runs Evolver's handler, which dumps the
     # surface from inside the signal handler and can trip ASan by itself
     local status=0
-    printf "$script" | timeout -s KILL 1500 "$dir/evolver" "$f" >"$log" 2>&1 || status=$?
+    printf "$script" | timeout -s KILL ${SANITIZER_TIMEOUT:-1500} "$dir/evolver" "$f" >"$log" 2>&1 || status=$?
     if [ "$status" = 137 ]; then
       echo "FAIL $f ($label): timed out after 1500 s"
       failures=$((failures + 1))
@@ -77,8 +77,8 @@ if [ "$quick" = 1 ]; then
 else
   samples=(cube.fe mound.fe catbody.fe column.fe sphere.fe twointor.fe phelanc.fe)
 fi
-OMP_NUM_THREADS=8 run "$build/openmp" "$omp_script" "openmp" "${samples[@]}"
-OMP_NUM_THREADS=8 run "$build/openmp" "$omp_quantities" "openmp-quantities" "${samples[@]::3}"
+OMP_NUM_THREADS=${OMP_NUM_THREADS:-4} run "$build/openmp" "$omp_script" "openmp" "${samples[@]}"
+OMP_NUM_THREADS=${OMP_NUM_THREADS:-4} run "$build/openmp" "$omp_quantities" "openmp-quantities" "${samples[@]::3}"
 
 echo "$failures sanitizer failure(s)"
 [ "$failures" -eq 0 ]
