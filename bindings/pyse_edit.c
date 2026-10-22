@@ -1415,12 +1415,16 @@ static int link_kept(edge_id e)
 { vertex_id a = get_edge_tailv(e), b = get_edge_headv(e), third[64], x;
   facetedge_id fe, fe0;
   edge_id d, d0;
-  int n = 0, k, guard;
+  int n = 0, k, guard, round = 0;
   fe0 = fe = get_edge_fe(e);
   if ( valid_id(fe) )
     do
     { if ( n < 64 ) third[n++] = get_fe_headv(get_next_edge(fe));
       fe = get_next_facet(fe);
+      /* (a ring that doesn't come back to its start: refused; unguarded,
+         a 16-bead pack's remeshing after a change spun here for half an
+         hour) */
+      if ( ++round > 1000 ) return 0;
     } while ( valid_id(fe) && !equal_id(fe,fe0) );
   EACH_EDGE_AT(a,d,d0,guard)
   { x = get_edge_headv(d);
