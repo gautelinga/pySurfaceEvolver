@@ -2760,9 +2760,12 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     # (but not where the tidying and relaxing came back to
                     # the state they began from: each round remeshed it twice
                     # more, to the end of the budget, 400 rounds. Settled
-                    # there if only its mesh is wanting; else the budget's
-                    # remeshing now, and where that comes back again, the end)
-                    if chunk.converged and _mesh_only(chunk.health):
+                    # there if only its mesh is wanting, its facets no
+                    # flatter than arclength() goes on from (1 degree); else
+                    # the budget's remeshing now, and where that comes back
+                    # again, the end)
+                    if chunk.converged and _mesh_only(chunk.health) \
+                            and ev.mesh_quality().angle_min >= 1.0:
                         _log.debug("relaxed, but %s, as the last round left it: settled there",
                                    chunk.health)
                         return chunk, changes, ""
