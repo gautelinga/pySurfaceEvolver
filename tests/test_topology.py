@@ -1185,6 +1185,83 @@ def test_the_flux_gauge_in_c_is_the_datafiles():
     assert np.allclose(native, interpreted, rtol=1e-10, atol=1e-10)
 
 
+def _drop_among_flux_spheres(radii, angle=60.0):
+    """_drop_on_ball_flux's drop with more flux spheres below the ball, apart
+    from the liquid (radii: theirs, in a row of rows): every facet integrand
+    has their point sources, the ball's contact line their monopoles."""
+    cap = shapes.cap(0.5, 0.25, nr=4, nt=12)
+    v = cap.vertices + [0, 0, 1.0]
+    rim = np.asarray(cap.rims["rim"])
+    v[rim] /= np.linalg.norm(v[rim], axis=1)[:, None]
+    cons = {"ball": C.sphere((0, 0, 0), 1.0, contact_angle=angle, gauge="flux")}
+    for i, R in enumerate(radii):
+        cons[f"s{i}"] = C.sphere((0.6*(i % 9) - 2.4, 0.6*(i//9) - 2.4, -2.0 - 0.1*(i % 3)), R,
+                                 contact_angle=angle, gauge="flux")
+    ev = pyse.Evolver()
+    ev.load_arrays(v, cap.faces, constraints=cons, vertex_constraints={"ball": rim},
+                   bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.command("convert_to_quantities")
+    return ev
+
+
+@pytest.mark.parametrize("radii", [[0.2]*70, list(np.linspace(0.1, 0.25, 70))])
+def test_the_flux_gauge_in_c_is_the_datafiles_with_many_spheres(radii):
+    # (71 spheres: past the 64 terms C once took, the rest went to the
+    # interpreter; equal spheres' sums are taken once for the volume's and
+    # the wetting's integrands, unequal ones' column by column; the contact
+    # line's monopoles, with the angle floor raised past the angle too)
+    from pysurfaceevolver import _core
+    ev = _drop_among_flux_spheres(radii, angle=15.0)
+    m = ev.mesh()
+    vid = int(m.vertex_ids[int(np.argmax(np.asarray(m.vertices)[:, 2]))])
+    saved = ev._save()
+    found = []
+    for native in (True, False):
+        _core.native_enable(native)
+        try:
+            for floor in (0.0, 17.0):
+                ev.restore(saved)
+                ev.command(f"pyse_angle_floor := {floor}; recalc")
+                out = list(_vertex_through_the_ball(ev, n=5, vid=vid).ravel())
+                ev.restore(saved)
+                ev.command(f"pyse_angle_floor := {floor}; recalc")
+                ev.command("g 2")                # (the gradient: first derivatives)
+                out += list(np.asarray(ev.vertices).ravel()) + [ev.energy]
+                found.append(out)
+        finally:
+            _core.native_enable(True)
+    assert np.allclose(found[:2], found[2:], rtol=1e-10, atol=1e-10)
+    # second derivatives: Newton steps converge as with C's 40 spheres, 0.29
+    # to 6.5e-11 in six (the interpreter's second derivatives of these powers
+    # are wrong: 2e-6)
+    ev.restore(saved)
+    ev.command("pyse_angle_floor := 0; recalc")
+    ev.command("g 10")
+    for _ in range(6):
+        ev.command("hessian")
+    assert ev.residual() < 1e-9
+
+
+@pytest.mark.parametrize("radii", [[0.2]*70, list(np.linspace(0.1, 0.25, 70))])
+def test_the_flux_gauge_kernels_scalar_and_simd_agree(radii):
+    # (the same operations in the same order, lane by lane: to the bit)
+    from pysurfaceevolver import _core
+    ev = _drop_among_flux_spheres(radii)
+    saved = ev._save()
+    found = []
+    for simd in (True, False):
+        was = _core.native_simd(simd)
+        try:
+            ev.restore(saved)
+            ev.command("g 3; hessian")
+            found.append((ev.energy, list(ev.bodies().volume), np.asarray(ev.vertices).copy()))
+        finally:
+            _core.native_simd(was)
+    assert found[0][0] == found[1][0] and found[0][1] == found[1][1]
+    assert np.array_equal(found[0][2], found[1][2])
+
+
 def test_fast_gradient_steps_reach_the_stock_searchs_equilibrium():
     # (a topology descent's steps: no move at scale 0 where nothing changed,
     # the scale from a parabola with the energy's slope; off by default)

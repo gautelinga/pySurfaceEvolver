@@ -144,6 +144,10 @@ void pyse_native_enable(int on);
    spare). 0 if it can't be registered. */
 int pyse_native_flux(const char *method, int con, int which, int base, const double *bc,
                      int nbc, const double *terms, int nterm);
+/* the flux gauge's sums over the spheres with AVX2 where the processor has
+   it (1, the default) or the scalar kernels (0), which agree to the bit;
+   returns the previous setting */
+int pyse_native_simd(int on);
 /* constraint con's formula evaluated in closed form, a plane (kind 0: p = n,
    d) or a sphere (kind 1: p = c, R^2), where that matches the interpreter at
    test points (1; else 0). */

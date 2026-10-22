@@ -188,12 +188,31 @@ int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
  * ANGLE_FLOOR_TOP, else tension cos(angle)) or -R/3 (the volume). Plus the
  * wall's own terms: (0, 0, z) for the volume's facets, a flux sphere's exact
  * content part (Z/3 Y, -(c_z + Z/3) X, 0) with Z = z - c_z etc. Registered
- * by the integrand's first expression node, as the spheres above. */
+ * by the integrand's first expression node, as the spheres above.
+ *
+ * Every sphere's term at every Gauss point, exactly: the field's far part
+ * has no cheaper smooth stand-in at these sizes. A multipole or Taylor
+ * expansion of the far spheres converges as (a/D)^p, a the evaluation
+ * cell's radius and D the distance to its nearest far sphere: to 1e-10 of
+ * the field with a 3 x 3 x 3 block of cells near (a/D up to 0.6) p is over
+ * 40, with 5 x 5 x 5 (0.35) over 20, a polynomial of 1771 terms and its
+ * derivatives at each point, against the 64 sources of the 64-bead pack's
+ * whole box; and the switch between near and far, as a vertex moves, must
+ * be blended (an energy's jump or kink there broke Evolver's line search
+ * and Newton). So the direct sum, made cheap: the terms of a field put in
+ * a group (their centres, directions and caps as arrays), four at a time
+ * with AVX2; a group's sum shared by the fields that differ only in the
+ * coefficients (the volume's and the wetting's integrands, each body's
+ * copy of the volume's), once a Gauss point; second derivatives in closed
+ * form. */
 
-#define FLUX_FIELDS 512
-#define FLUX_TERMS 64
 #define FLUX_FLOOR_TOP 20.0       /* constraints.ANGLE_FLOOR_TOP */
 #define FLUX_CORE 0.5             /* _flux.CORE: the field's cap radius, of R */
+#define FLUX_LANES 4              /* terms at a time, a group padded to it */
+#define FLUX_PAD 1e8              /* a padding term's centre (its coefficient 0) */
+#define FLUX_COLS 2               /* coefficient columns a group evaluates at once */
+#define FLUX_OUT 30               /* a kernel's results, at most (flux_kernel) */
+#define FLUX_CACHE 16             /* a thread's last Gauss points' sums */
 
 struct flux_term
 { REAL c[3], R2, d[3];           /* d zero: a point source */
@@ -203,6 +222,22 @@ struct flux_term
   REAL coef;                     /* the coefficient with the floor below the angle */
 };
 
+/* a field's terms as arrays: point sources (kind 0, a facet integrand) or
+   monopoles (kind 1, a contact line's), padded to FLUX_LANES with terms of
+   coefficient 0; and up to FLUX_COLS columns of coefficients, the fields'
+   (c0, raised to kc cos(floor) where the floor is over athr, the angle).
+   Uniform where every column's coefficients are the same for all its terms
+   (equal spheres at one angle, a pack's): the sum is then taken once with
+   coefficients 1 (one: 1, 0 for the padding) and each column is it times
+   its coefficient (the volume's projection takes the volume alone at most
+   Gauss points, where the wetting's column cost half as much again). */
+struct flux_group
+{ int kind, n, np;
+  REAL *cx, *cy, *cz, *dx, *dy, *dz, *K2, *iK3, *one;
+  int ncol, uniform;
+  REAL *c0[FLUX_COLS], *kc[FLUX_COLS], *athr[FLUX_COLS], amin[FLUX_COLS];
+};
+
 struct flux_field
 { struct expnode *key;
   int base;                      /* 0 none, 1 (0,0,z), 2 a sphere's content part,
@@ -210,16 +245,75 @@ struct flux_field
   REAL bc[12];                   /* 2: the sphere's centre; 3: n_z, o, u, v;
                                     4: angle, tension, o, u, v */
   int nterm;
-  struct flux_term term[FLUX_TERMS];
-  /* point sources only (a facet integrand): their centres, R^2 and R^3 as
-     arrays, for flux_points */
-  int points;
-  REAL pc[3][FLUX_TERMS], pR2[FLUX_TERMS], pR3[FLUX_TERMS];
+  struct flux_term *term;
+  int group, col;                /* its group and column (-1: term by term) */
 };
 
-static struct flux_field fluxes[FLUX_FIELDS];
-static int flux_count = 0;
+/* (as many as registered: a 256-bead pack has 522 line integrands of 255
+   terms each; capped at 512 fields of 64 terms, the rest went to the
+   interpreter, a gradient step 2.2 ms a facet against 0.9 with poles) */
+static struct flux_field *fluxes = NULL;
+static int flux_count = 0, flux_cap = 0;
+static struct flux_group *flux_groups = NULL;
+static int flux_ngroups = 0, flux_gcap = 0;
+static int *flux_hash = NULL;    /* key -> field index + 1, open addressing */
+static int flux_hash_size = 0;
 static long flux_load = -1;
+static long flux_gen = 0;        /* bumped at each registration: the caches' */
+
+static void flux_group_free(struct flux_group *g)
+{ int c;
+  free(g->cx); free(g->cy); free(g->cz); free(g->dx); free(g->dy); free(g->dz);
+  free(g->K2); free(g->iK3); free(g->one);
+  for ( c = 0 ; c < g->ncol ; c++ ) { free(g->c0[c]); free(g->kc[c]); free(g->athr[c]); }
+  memset(g,0,sizeof(*g));
+}
+
+static void flux_reset(void)
+{ int i;
+  for ( i = 0 ; i < flux_count ; i++ ) free(fluxes[i].term);
+  for ( i = 0 ; i < flux_ngroups ; i++ ) flux_group_free(flux_groups + i);
+  flux_count = flux_ngroups = 0;
+  for ( i = 0 ; i < flux_hash_size ; i++ ) flux_hash[i] = 0;
+  flux_gen++;
+}
+
+static unsigned flux_slot(const struct expnode *key, int size)
+{ unsigned long long h = (unsigned long long)(size_t)key*0x9E3779B97F4A7C15ULL;
+  return (unsigned)(h >> 32) & (unsigned)(size - 1);
+}
+
+/* the field of key, or NULL (read only: called from the OpenMP threads; a
+   linear search over the fields, 10 kB apart, was an eighth of the time in
+   flux_eval on a 4-bead pack) */
+static struct flux_field *flux_find(const struct expnode *key)
+{ unsigned s;
+  if ( !flux_hash_size ) return NULL;
+  for ( s = flux_slot(key,flux_hash_size) ; flux_hash[s] ; s = (s + 1) & (flux_hash_size - 1) )
+    if ( fluxes[flux_hash[s]-1].key == key ) return fluxes + flux_hash[s] - 1;
+  return NULL;
+}
+
+static int flux_hash_put(int index)
+{ unsigned s;
+  if ( 2*(index + 1) > flux_hash_size )
+  { int size = flux_hash_size ? 2*flux_hash_size : 64, i;
+    int *h = (int*)calloc(size,sizeof(int));
+    if ( !h ) return 0;
+    free(flux_hash);
+    flux_hash = h;
+    flux_hash_size = size;
+    for ( i = 0 ; i < index ; i++ )
+    { s = flux_slot(fluxes[i].key,size);
+      while ( h[s] ) s = (s + 1) & (size - 1);
+      h[s] = i + 1;
+    }
+  }
+  s = flux_slot(fluxes[index].key,flux_hash_size);
+  while ( flux_hash[s] ) s = (s + 1) & (flux_hash_size - 1);
+  flux_hash[s] = index + 1;
+  return 1;
+}
 
 static dual d_pow(dual a, REAL p)
 { dual r;
@@ -258,6 +352,89 @@ static REAL plane_coefficient(const struct flux_field *f, REAL floor)
   return tension*cos(angle*M_PI/180.0);
 }
 
+static REAL *flux_array(int n)
+{ return (REAL*)malloc((size_t)(n > 0 ? n : 1)*sizeof(REAL));
+}
+
+/* field f's group and column (kind 0 or 1): one with the same terms but
+   for their coefficients, its column the same coefficients or a new one;
+   else a new group. 0 if out of memory. */
+static int flux_group_for(struct flux_field *f, int kind)
+{ int n = f->nterm, np = (n + FLUX_LANES - 1)/FLUX_LANES*FLUX_LANES, i, c, gi;
+  struct flux_group t, *g = NULL;
+  REAL *c0 = flux_array(np), *kc = flux_array(np), *athr = flux_array(np), amin = HUGE_VAL;
+  size_t bytes = (size_t)np*sizeof(REAL);
+  memset(&t,0,sizeof(t));
+  t.kind = kind; t.n = n; t.np = np;
+  t.cx = flux_array(np); t.cy = flux_array(np); t.cz = flux_array(np);
+  t.dx = flux_array(np); t.dy = flux_array(np); t.dz = flux_array(np);
+  t.K2 = flux_array(np); t.iK3 = flux_array(np); t.one = flux_array(np);
+  if ( !c0 || !kc || !athr || !t.cx || !t.cy || !t.cz || !t.dx || !t.dy || !t.dz || !t.K2
+       || !t.iK3 || !t.one )
+    goto fail;
+  for ( i = 0 ; i < np ; i++ )
+  { if ( i < n )
+    { const struct flux_term *u = f->term + i;
+      int floored = u->energy && u->angle > 0 && u->angle < FLUX_FLOOR_TOP;
+      t.cx[i] = u->c[0]; t.cy[i] = u->c[1]; t.cz[i] = u->c[2];
+      t.dx[i] = kind ? u->d[0] : 0.0; t.dy[i] = kind ? u->d[1] : 0.0;
+      t.dz[i] = kind ? u->d[2] : 0.0;
+      t.K2[i] = kind ? 0.0 : u->K2; t.iK3[i] = kind ? 0.0 : 1.0/u->K3;
+      t.one[i] = 1.0;
+      c0[i] = u->coef;
+      kc[i] = floored ? -u->tension*u->R2 : 0.0;
+      athr[i] = floored ? u->angle : HUGE_VAL;
+      if ( athr[i] < amin ) amin = athr[i];
+    }
+    else
+    { t.cx[i] = t.cy[i] = t.cz[i] = FLUX_PAD;
+      t.dx[i] = t.dy[i] = 0.0; t.dz[i] = kind ? 1.0 : 0.0;
+      t.K2[i] = t.iK3[i] = t.one[i] = c0[i] = kc[i] = 0.0;
+      athr[i] = HUGE_VAL;
+    }
+  }
+  for ( gi = 0 ; gi < flux_ngroups ; gi++ )
+  { struct flux_group *h = flux_groups + gi;
+    if ( h->kind != kind || h->n != n || memcmp(h->cx,t.cx,bytes) || memcmp(h->cy,t.cy,bytes)
+         || memcmp(h->cz,t.cz,bytes) || memcmp(h->dx,t.dx,bytes) || memcmp(h->dy,t.dy,bytes)
+         || memcmp(h->dz,t.dz,bytes) || memcmp(h->K2,t.K2,bytes) )
+      continue;
+    for ( c = 0 ; c < h->ncol ; c++ )
+      if ( !memcmp(h->c0[c],c0,bytes) && !memcmp(h->kc[c],kc,bytes)
+           && !memcmp(h->athr[c],athr,bytes) )
+      { f->group = gi; f->col = c;
+        flux_group_free(&t);
+        free(c0); free(kc); free(athr);
+        return 1;
+      }
+    if ( h->ncol < FLUX_COLS ) { g = h; break; }
+  }
+  if ( g ) flux_group_free(&t);
+  else
+  { if ( flux_ngroups >= flux_gcap )
+    { int cap = flux_gcap ? 2*flux_gcap : 8;
+      struct flux_group *ng = (struct flux_group*)realloc(flux_groups,cap*sizeof(*ng));
+      if ( !ng ) goto fail;
+      flux_groups = ng;
+      flux_gcap = cap;
+    }
+    g = flux_groups + flux_ngroups++;
+    *g = t;
+    g->uniform = 1;
+  }
+  for ( i = 1 ; i < n ; i++ )
+    if ( c0[i] != c0[0] || kc[i] != kc[0] || athr[i] != athr[0] ) g->uniform = 0;
+  c = g->ncol++;
+  g->c0[c] = c0; g->kc[c] = kc; g->athr[c] = athr; g->amin[c] = amin;
+  f->group = (int)(g - flux_groups);
+  f->col = c;
+  return 1;
+fail:
+  flux_group_free(&t);
+  free(c0); free(kc); free(athr);
+  return 0;
+}
+
 /* register a field: target a method instance (its name) or a constraint's
    energy (which 0) or content (1) integrand; terms 11 numbers each (c, R,
    d, energy flag, angle, tension, and a spare); 0 if it can't be */
@@ -265,9 +442,9 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
                      int nbc, const double *terms, int nterm)
 { struct expnode *key = NULL;
   struct flux_field *f = NULL;
-  int i, k;
-  if ( flux_load != pyse_load_serial() ) { flux_count = 0; flux_load = pyse_load_serial(); }
-  if ( nterm > FLUX_TERMS || SDIM != 3 || nbc > 12 ) return 0;
+  int i, k, points, poles;
+  if ( flux_load != pyse_load_serial() ) { flux_reset(); flux_load = pyse_load_serial(); }
+  if ( nterm < 0 || SDIM != 3 || nbc > 12 ) return 0;
   if ( method && method[0] )
   { int m = find_method_instance((char *)method);
     if ( m < 0 ) return 0;
@@ -281,16 +458,34 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
     key = which ? cn->convect[0] : cn->envect[0];
   }
   if ( !key ) return 0;
-  for ( i = 0 ; i < flux_count ; i++ )
-    if ( fluxes[i].key == key ) f = fluxes + i;
-  if ( !f )
-  { if ( flux_count >= FLUX_FIELDS ) return 0;
-    f = fluxes + flux_count++;
+  flux_gen++;
+  f = flux_find(key);
+  if ( f )
+  { free(f->term);
+    f->term = NULL;
   }
-  f->key = key;
+  else
+  { if ( flux_count >= flux_cap )
+    { int cap = flux_cap ? 2*flux_cap : 64;
+      struct flux_field *nf = (struct flux_field*)realloc(fluxes,cap*sizeof(*nf));
+      if ( !nf ) return 0;
+      fluxes = nf;
+      flux_cap = cap;
+    }
+    f = fluxes + flux_count;
+    memset(f,0,sizeof(*f));
+    f->key = key;
+    if ( !flux_hash_put(flux_count) ) return 0;
+    flux_count++;
+  }
+  f->group = -1;
+  f->nterm = 0;
   f->base = base;
   for ( k = 0 ; k < 12 ; k++ ) f->bc[k] = bc && k < nbc ? bc[k] : 0.0;
+  f->term = (struct flux_term*)calloc(nterm > 0 ? nterm : 1,sizeof(struct flux_term));
+  if ( !f->term ) return 0;
   f->nterm = nterm;
+  points = poles = nterm > 0;
   for ( i = 0 ; i < nterm ; i++ )
   { const double *t = terms + 11*i;
     struct flux_term *u = f->term + i;
@@ -300,182 +495,477 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
     u->energy = t[7] != 0;
     u->angle = t[8]; u->tension = t[9];
     u->coef = u->energy ? -u->tension*cos(u->angle*M_PI/180.0)*u->R2 : -u->R/3.0*u->R2;
+    if ( u->d[0] != 0 || u->d[1] != 0 || u->d[2] != 0 || !(u->K3 > 0) ) points = 0;
+    if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 ) poles = 0;
   }
-  f->points = nterm > 0;
-  for ( i = 0 ; i < nterm ; i++ )
-  { struct flux_term *u = f->term + i;
-    if ( u->d[0] != 0 || u->d[1] != 0 || u->d[2] != 0 ) f->points = 0;
-    for ( k = 0 ; k < 3 ; k++ ) f->pc[k][i] = u->c[k];
-    f->pR2[i] = u->K2;
-    f->pR3[i] = u->K3;
-  }
+  if ( (points || poles) && !flux_group_for(f,poles) )
+    f->group = -1;              /* (out of memory: term by term) */
   return 1;
 }
 
-/* The point sources' 1/r^3 and 3/r^5 factors, the costly part of a facet
-   integrand (most of a 16-bead pack's gradient step): ir3 = coef/(r^2 r)
-   (coef/R^3 inside, where r^2 < R^2) and, with want5, ir5 = 3 ir3/r^2 (0
-   inside). Four terms at a time with AVX2, two with SSE2, picked at run
-   time; IEEE square roots, quotients and products, no fused operations
-   (-ffp-contract=off), so each term's factors are the scalar ones to the
-   bit, and the sums after them are taken in the same order as before. */
-static void flux_inv_scalar(int n, const REAL *r2, const REAL *coef, const REAL *R2,
-                            const REAL *R3, int want5, REAL *ir3, REAL *ir5)
-{ int t;
-  for ( t = 0 ; t < n ; t++ )
-    if ( r2[t] < R2[t] )
-    { ir3[t] = coef[t]/R3[t];
-      if ( want5 ) ir5[t] = 0.0;
+/* The kernels: a group's terms at x, for each of its ncol coefficient
+   columns, out[col][]. Each of FLUX_LANES lanes sums its terms, the lanes
+   added at the end as ((0 + 1) + (2 + 3)); the AVX2 kernels and the scalar
+   ones take the same IEEE operations in the same order (no fused ones:
+   -ffp-contract=off), so they agree to the bit.
+
+   Point sources (kind 0): F = coef w/r^3, w = x - c (coef w/K^3 inside the
+   cap). With a = coef/r^3, b = 3a/r^2, e = 15a/r^4 (b = e = 0 inside):
+     dF_m/dx_i = a d_mi - b w_m w_i,
+     d2F_m/dx_i dx_j = -b (d_mi w_j + d_mj w_i + d_ij w_m) + e w_m w_i w_j;
+   out: F 3, dF 6 (00 11 22 01 02 12), d2F 10 (000 111 222 001 002 110 112
+   220 221 012: F = -grad of a potential, symmetric in all indices).
+
+   Monopoles (kind 1): A = coef (d x w) phi, phi = 1/D, D = r (r - d . w):
+     D_i = (2 - q) w_i - r d_i, q = d . w/r,
+     D_ij = (2 - q) d_ij + q w_i w_j/r^2 - (w_i d_j + w_j d_i)/r,
+     phi_i = -D_i phi^2, phi_ij = 2 D_i D_j phi^3 - D_ij phi^2,
+     dA_m/dx_i = coef ((d x e_i)_m phi + (d x w)_m phi_i),
+     d2A_m/dx_i dx_j = coef ((d x e_i)_m phi_j + (d x e_j)_m phi_i + (d x w)_m phi_ij)
+   (1/r = (r - d . w) phi: no second division); out: A 3, dA 9 (m i),
+   d2A 18 (m: 00 11 22 01 02 12). */
+#define FLUX_POINT_TERM(T, ADD, SUB, MUL, DIV, SQRT, LT, SEL, ZERO, ONE, LOADC)              \
+  { T w0 = SUB(X0,LOADC(g->cx)), w1 = SUB(X1,LOADC(g->cy)), w2 = SUB(X2,LOADC(g->cz));      \
+    T r2 = ADD(ADD(MUL(w0,w0),MUL(w1,w1)),MUL(w2,w2)), r = SQRT(r2);                         \
+    T u = DIV(ONE,MUL(r2,r)), q = MUL(u,r), iK3 = LOADC(g->iK3), s;                          \
+    int c;                                                                                   \
+    LT(in,r2,LOADC(g->K2));                                                                  \
+    s = SEL(in,iK3,u);                                                                       \
+    for ( c = 0 ; c < ncol ; c++ )                                                           \
+    { T a = MUL(LOADC(coef[c]),s), *A = acc[c];                                              \
+      A[0] = ADD(A[0],MUL(w0,a)); A[1] = ADD(A[1],MUL(w1,a)); A[2] = ADD(A[2],MUL(w2,a));    \
+      if ( order >= 1 )                                                                      \
+      { T b = SEL(in,ZERO,MUL(MUL(K_3,a),q));                                                \
+        T bw0 = MUL(b,w0), bw1 = MUL(b,w1), bw2 = MUL(b,w2);                                 \
+        A[3] = ADD(A[3],SUB(a,MUL(bw0,w0)));                                                 \
+        A[4] = ADD(A[4],SUB(a,MUL(bw1,w1)));                                                 \
+        A[5] = ADD(A[5],SUB(a,MUL(bw2,w2)));                                                 \
+        A[6] = SUB(A[6],MUL(bw0,w1));                                                        \
+        A[7] = SUB(A[7],MUL(bw0,w2));                                                        \
+        A[8] = SUB(A[8],MUL(bw1,w2));                                                        \
+        if ( order >= 2 )                                                                    \
+        { T e = SEL(in,ZERO,MUL(MUL(K_5,b),q));                                              \
+          T ew0 = MUL(e,w0), s0 = MUL(ew0,w0), s1 = MUL(MUL(e,w1),w1), s2 = MUL(MUL(e,w2),w2); \
+          T b3 = MUL(K_3,b);                                                                 \
+          A[9] = ADD(A[9],MUL(SUB(s0,b3),w0));                                               \
+          A[10] = ADD(A[10],MUL(SUB(s1,b3),w1));                                             \
+          A[11] = ADD(A[11],MUL(SUB(s2,b3),w2));                                             \
+          A[12] = ADD(A[12],MUL(SUB(s0,b),w1));                                              \
+          A[13] = ADD(A[13],MUL(SUB(s0,b),w2));                                              \
+          A[14] = ADD(A[14],MUL(SUB(s1,b),w0));                                              \
+          A[15] = ADD(A[15],MUL(SUB(s1,b),w2));                                              \
+          A[16] = ADD(A[16],MUL(SUB(s2,b),w0));                                              \
+          A[17] = ADD(A[17],MUL(SUB(s2,b),w1));                                              \
+          A[18] = ADD(A[18],MUL(MUL(ew0,w1),w2));                                            \
+        }                                                                                    \
+      }                                                                                      \
+    }                                                                                        \
+  }
+
+/* (the indices of the six i <= j pairs) */
+#define FLUX_PAIRS { {0,0},{1,1},{2,2},{0,1},{0,2},{1,2} }
+
+#define FLUX_POLE_TERM(T, ADD, SUB, MUL, DIV, SQRT, LT, SEL, ZERO, ONE, LOADC)               \
+  { T w[3], d[3], C[3], dC[3][3], r2, r, dw, rd, phi;                                        \
+    int c, m, i, k;                                                                          \
+    w[0] = SUB(X0,LOADC(g->cx)); w[1] = SUB(X1,LOADC(g->cy)); w[2] = SUB(X2,LOADC(g->cz));   \
+    d[0] = LOADC(g->dx); d[1] = LOADC(g->dy); d[2] = LOADC(g->dz);                           \
+    r2 = ADD(ADD(MUL(w[0],w[0]),MUL(w[1],w[1])),MUL(w[2],w[2]));                             \
+    r = SQRT(r2);                                                                            \
+    dw = ADD(ADD(MUL(d[0],w[0]),MUL(d[1],w[1])),MUL(d[2],w[2]));                             \
+    rd = SUB(r,dw);                                                                          \
+    phi = DIV(ONE,MUL(r,rd));                                                                \
+    C[0] = SUB(MUL(d[1],w[2]),MUL(d[2],w[1]));                                               \
+    C[1] = SUB(MUL(d[2],w[0]),MUL(d[0],w[2]));                                               \
+    C[2] = SUB(MUL(d[0],w[1]),MUL(d[1],w[0]));                                               \
+    dC[0][0] = ZERO; dC[0][1] = SUB(ZERO,d[2]); dC[0][2] = d[1];                             \
+    dC[1][0] = d[2]; dC[1][1] = ZERO; dC[1][2] = SUB(ZERO,d[0]);                             \
+    dC[2][0] = SUB(ZERO,d[1]); dC[2][1] = d[0]; dC[2][2] = ZERO;                             \
+    { T pg[3], ph[6], ir = ZERO, q = ZERO;                                                   \
+      if ( order >= 1 )                                                                      \
+      { T p2 = MUL(phi,phi), tq;                                                             \
+        ir = MUL(rd,phi); q = MUL(dw,ir); tq = SUB(K_2,q);                                   \
+        for ( i = 0 ; i < 3 ; i++ )                                                          \
+          pg[i] = SUB(ZERO,MUL(SUB(MUL(tq,w[i]),MUL(r,d[i])),p2));                           \
+        if ( order >= 2 )                                                                    \
+        { static const int pr[6][2] = FLUX_PAIRS;                                            \
+          T p3 = MUL(p2,phi), qr2 = MUL(MUL(q,ir),ir), Dg[3];                                \
+          for ( i = 0 ; i < 3 ; i++ ) Dg[i] = SUB(MUL(tq,w[i]),MUL(r,d[i]));                 \
+          for ( k = 0 ; k < 6 ; k++ )                                                        \
+          { int a = pr[k][0], b = pr[k][1];                                                  \
+            T Dh = SUB(MUL(MUL(w[a],w[b]),qr2),MUL(ADD(MUL(w[a],d[b]),MUL(w[b],d[a])),ir)); \
+            if ( a == b ) Dh = ADD(tq,Dh);                                                   \
+            ph[k] = SUB(MUL(MUL(K_2,MUL(Dg[a],Dg[b])),p3),MUL(Dh,p2));                       \
+          }                                                                                  \
+        }                                                                                    \
+      }                                                                                      \
+      for ( c = 0 ; c < ncol ; c++ )                                                         \
+      { T cf = LOADC(coef[c]), a = MUL(cf,phi), cC[3], *A = acc[c];                          \
+        for ( m = 0 ; m < 3 ; m++ )                                                          \
+        { cC[m] = MUL(cf,C[m]);                                                              \
+          A[m] = ADD(A[m],MUL(C[m],a));                                                      \
+        }                                                                                    \
+        if ( order >= 1 )                                                                    \
+          for ( m = 0 ; m < 3 ; m++ )                                                        \
+            for ( i = 0 ; i < 3 ; i++ )                                                      \
+              A[3+3*m+i] = ADD(A[3+3*m+i],ADD(MUL(a,dC[m][i]),MUL(cC[m],pg[i])));            \
+        if ( order >= 2 )                                                                    \
+        { static const int pr[6][2] = FLUX_PAIRS;                                            \
+          T G[3];                                                                            \
+          for ( i = 0 ; i < 3 ; i++ ) G[i] = MUL(cf,pg[i]);                                  \
+          for ( m = 0 ; m < 3 ; m++ )                                                        \
+            for ( k = 0 ; k < 6 ; k++ )                                                      \
+            { int a2 = pr[k][0], b2 = pr[k][1];                                              \
+              A[12+6*m+k] = ADD(A[12+6*m+k],ADD(ADD(MUL(dC[m][a2],G[b2]),                    \
+                                                    MUL(dC[m][b2],G[a2])),                   \
+                                                MUL(cC[m],ph[k])));                          \
+            }                                                                                \
+        }                                                                                    \
+      }                                                                                      \
+    }                                                                                        \
+  }
+
+static int flux_nout(int kind, int order)
+{ return kind ? (order >= 2 ? 30 : order ? 12 : 3) : (order >= 2 ? 19 : order ? 9 : 3);
+}
+
+#define S_ADD(a,b) ((a) + (b))
+#define S_SUB(a,b) ((a) - (b))
+#define S_MUL(a,b) ((a) * (b))
+#define S_DIV(a,b) ((a) / (b))
+#define S_SQRT(a) sqrt(a)
+#define S_LT(m,a,b) int m = (a) < (b)
+#define S_SEL(m,a,b) ((m) ? (a) : (b))
+
+static void flux_kernel_scalar(const struct flux_group *g, int ncol, const REAL *const *coef,
+                               const REAL *x, int order, REAL out[FLUX_COLS][FLUX_OUT])
+{ REAL lane[FLUX_COLS][FLUX_OUT][FLUX_LANES];
+  const REAL X0 = x[0], X1 = x[1], X2 = x[2], K_2 = 2.0, K_3 = 3.0, K_5 = 5.0;
+  int t, l, c, k, nout = flux_nout(g->kind,order);
+  (void)K_5;
+  for ( l = 0 ; l < FLUX_LANES ; l++ )
+  { REAL acc[FLUX_COLS][FLUX_OUT];
+    memset(acc,0,sizeof(acc));
+    for ( t = l ; t < g->np ; t += FLUX_LANES )
+    {
+#define S_LOAD(p) (p)[t]
+      if ( g->kind )
+        FLUX_POLE_TERM(REAL,S_ADD,S_SUB,S_MUL,S_DIV,S_SQRT,S_LT,S_SEL,0.0,1.0,S_LOAD)
+      else
+        FLUX_POINT_TERM(REAL,S_ADD,S_SUB,S_MUL,S_DIV,S_SQRT,S_LT,S_SEL,0.0,1.0,S_LOAD)
+#undef S_LOAD
     }
-    else
-    { REAL r = sqrt(r2[t]);
-      ir3[t] = coef[t]/(r2[t]*r);
-      if ( want5 ) ir5[t] = 3.0*ir3[t]/r2[t];
-    }
+    for ( c = 0 ; c < ncol ; c++ )
+      for ( k = 0 ; k < nout ; k++ ) lane[c][k][l] = acc[c][k];
+  }
+  for ( c = 0 ; c < ncol ; c++ )
+    for ( k = 0 ; k < nout ; k++ )
+      out[c][k] = (lane[c][k][0] + lane[c][k][1]) + (lane[c][k][2] + lane[c][k][3]);
 }
 
 #if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__)) && !defined(LONGDOUBLE) \
     && !defined(FLOAT128)
 #include <immintrin.h>
 #define FLUX_SIMD 1
-__attribute__((target("avx2")))
-static void flux_inv_avx2(int n, const REAL *r2, const REAL *coef, const REAL *R2,
-                          const REAL *R3, int want5, REAL *ir3, REAL *ir5)
-{ int t = 0;
-  const __m256d three = _mm256_set1_pd(3.0), zero = _mm256_setzero_pd();
-  for ( ; t + 4 <= n ; t += 4 )
-  { __m256d q = _mm256_loadu_pd(r2 + t), c = _mm256_loadu_pd(coef + t);
-    __m256d in = _mm256_cmp_pd(q, _mm256_loadu_pd(R2 + t), _CMP_LT_OQ);
-    __m256d out3 = _mm256_div_pd(c,_mm256_mul_pd(q,_mm256_sqrt_pd(q)));
-    __m256d i3 = _mm256_blendv_pd(out3,_mm256_div_pd(c,_mm256_loadu_pd(R3 + t)),in);
-    _mm256_storeu_pd(ir3 + t,i3);
-    if ( want5 )
-      _mm256_storeu_pd(ir5 + t,_mm256_blendv_pd(_mm256_div_pd(_mm256_mul_pd(three,out3),q),
-                                                zero,in));
-  }
-  flux_inv_scalar(n - t,r2 + t,coef + t,R2 + t,R3 + t,want5,ir3 + t,ir5 + t);
+#define V_LT(m,a,b) __m256d m = _mm256_cmp_pd(a,b,_CMP_LT_OQ)
+#define V_SEL(m,a,b) _mm256_blendv_pd(b,a,m)
+#define V_LOAD(p) _mm256_loadu_pd((p) + t)
+
+#define FLUX_AVX2_BODY(TERM)                                                                 \
+{ __m256d acc[FLUX_COLS][FLUX_OUT];                                                          \
+  const __m256d X0 = _mm256_set1_pd(x[0]), X1 = _mm256_set1_pd(x[1]), X2 = _mm256_set1_pd(x[2]); \
+  const __m256d zero = _mm256_setzero_pd(), one = _mm256_set1_pd(1.0),                       \
+                K_2 = _mm256_set1_pd(2.0), K_3 = _mm256_set1_pd(3.0), K_5 = _mm256_set1_pd(5.0); \
+  int t, c, k, nout = flux_nout(g->kind,order);                                              \
+  (void)K_2; (void)K_3; (void)K_5;                                                           \
+  for ( c = 0 ; c < ncol ; c++ )                                                             \
+    for ( k = 0 ; k < nout ; k++ ) acc[c][k] = zero;                                         \
+  for ( t = 0 ; t < g->np ; t += FLUX_LANES )                                                \
+    TERM(__m256d,_mm256_add_pd,_mm256_sub_pd,_mm256_mul_pd,_mm256_div_pd,_mm256_sqrt_pd,     \
+         V_LT,V_SEL,zero,one,V_LOAD)                                                         \
+  for ( c = 0 ; c < ncol ; c++ )                                                             \
+    for ( k = 0 ; k < nout ; k++ )                                                           \
+    { REAL l[4];                                                                             \
+      _mm256_storeu_pd(l,acc[c][k]);                                                         \
+      out[c][k] = (l[0] + l[1]) + (l[2] + l[3]);                                             \
+    }                                                                                        \
 }
 
-static void flux_inv_sse2(int n, const REAL *r2, const REAL *coef, const REAL *R2,
-                          const REAL *R3, int want5, REAL *ir3, REAL *ir5)
-{ int t = 0;
-  const __m128d three = _mm_set1_pd(3.0);
-  for ( ; t + 2 <= n ; t += 2 )
-  { __m128d q = _mm_loadu_pd(r2 + t), c = _mm_loadu_pd(coef + t);
-    __m128d in = _mm_cmplt_pd(q,_mm_loadu_pd(R2 + t));
-    __m128d out3 = _mm_div_pd(c,_mm_mul_pd(q,_mm_sqrt_pd(q)));
-    __m128d in3 = _mm_div_pd(c,_mm_loadu_pd(R3 + t));
-    _mm_storeu_pd(ir3 + t,_mm_or_pd(_mm_and_pd(in,in3),_mm_andnot_pd(in,out3)));
-    if ( want5 )
-      _mm_storeu_pd(ir5 + t,_mm_andnot_pd(in,_mm_div_pd(_mm_mul_pd(three,out3),q)));
-  }
-  flux_inv_scalar(n - t,r2 + t,coef + t,R2 + t,R3 + t,want5,ir3 + t,ir5 + t);
-}
+__attribute__((target("avx2"),always_inline))
+static inline void flux_point_avx2(const struct flux_group *g, int ncol, const REAL *const *coef,
+                                   const REAL *x, int order, REAL out[FLUX_COLS][FLUX_OUT])
+FLUX_AVX2_BODY(FLUX_POINT_TERM)
+
+__attribute__((target("avx2"),always_inline))
+static inline void flux_pole_avx2(const struct flux_group *g, int ncol, const REAL *const *coef,
+                                  const REAL *x, int order, REAL out[FLUX_COLS][FLUX_OUT])
+FLUX_AVX2_BODY(FLUX_POLE_TERM)
+
+/* (each kind, column count and order its own function: the loops over them
+   unrolled, the accumulators in registers) */
+typedef void (*flux_kernel_fn)(const struct flux_group *, const REAL *const *, const REAL *,
+                               REAL [FLUX_COLS][FLUX_OUT]);
+#define FLUX_AVX2(NAME, KERNEL, NCOL, ORDER)                                                \
+  __attribute__((target("avx2")))                                                           \
+  static void NAME(const struct flux_group *g, const REAL *const *coef, const REAL *x,      \
+                   REAL out[FLUX_COLS][FLUX_OUT])                                           \
+  { KERNEL(g,NCOL,coef,x,ORDER,out); }
+FLUX_AVX2(flux_avx2_p10,flux_point_avx2,1,0)
+FLUX_AVX2(flux_avx2_p11,flux_point_avx2,1,1)
+FLUX_AVX2(flux_avx2_p12,flux_point_avx2,1,2)
+FLUX_AVX2(flux_avx2_p20,flux_point_avx2,2,0)
+FLUX_AVX2(flux_avx2_p21,flux_point_avx2,2,1)
+FLUX_AVX2(flux_avx2_p22,flux_point_avx2,2,2)
+FLUX_AVX2(flux_avx2_m10,flux_pole_avx2,1,0)
+FLUX_AVX2(flux_avx2_m11,flux_pole_avx2,1,1)
+FLUX_AVX2(flux_avx2_m12,flux_pole_avx2,1,2)
+FLUX_AVX2(flux_avx2_m20,flux_pole_avx2,2,0)
+FLUX_AVX2(flux_avx2_m21,flux_pole_avx2,2,1)
+FLUX_AVX2(flux_avx2_m22,flux_pole_avx2,2,2)
+static const flux_kernel_fn flux_avx2[2][2][3] =
+  {{{flux_avx2_p10,flux_avx2_p11,flux_avx2_p12},{flux_avx2_p20,flux_avx2_p21,flux_avx2_p22}},
+   {{flux_avx2_m10,flux_avx2_m11,flux_avx2_m12},{flux_avx2_m20,flux_avx2_m21,flux_avx2_m22}}};
 #endif
 
-static void flux_inv(int n, const REAL *r2, const REAL *coef, const REAL *R2, const REAL *R3,
-                     int want5, REAL *ir3, REAL *ir5)
+static int flux_simd = -1;        /* (a benign race: every thread finds the same) */
+
+static void flux_kernel(const struct flux_group *g, int ncol, const REAL *const *coef,
+                        const REAL *x, int order, REAL out[FLUX_COLS][FLUX_OUT])
 {
 #ifdef FLUX_SIMD
-  static int level = -1;            /* (a benign race: every thread finds the same) */
-  if ( level < 0 ) level = __builtin_cpu_supports("avx2") ? 2 : 1;
-  if ( level == 2 ) { flux_inv_avx2(n,r2,coef,R2,R3,want5,ir3,ir5); return; }
-  flux_inv_sse2(n,r2,coef,R2,R3,want5,ir3,ir5);
+  if ( flux_simd < 0 ) flux_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
+  if ( flux_simd )
+  { flux_avx2[g->kind][ncol-1][order](g,coef,x,out);
+    return;
+  }
+#endif
+  flux_kernel_scalar(g,ncol,coef,x,order,out);
+}
+
+/* pyse_native_simd(0): the scalar kernels (tests compare the two) */
+int pyse_native_simd(int on)
+{
+#ifdef FLUX_SIMD
+  int was;
+  if ( flux_simd < 0 ) flux_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
+  was = flux_simd;
+  flux_simd = on && __builtin_cpu_supports("avx2") ? 1 : 0;
+  return was;
 #else
-  flux_inv_scalar(n,r2,coef,R2,R3,want5,ir3,ir5);
+  (void)on;
+  return 0;
 #endif
 }
 
-/* a field of point sources only at x, in flux_eval's order: v and (order)
-   g added to */
-static void flux_points(const struct flux_field *f, const REAL *x, int order, REAL floor,
-                        REAL v[3], REAL g[3][3])
-{ REAL X[3][FLUX_TERMS], r2[FLUX_TERMS], coef[FLUX_TERMS], ir3[FLUX_TERMS], ir5[FLUX_TERMS];
-  int t, m, i, n = f->nterm;
-  for ( t = 0 ; t < n ; t++ )
-  { for ( m = 0 ; m < 3 ; m++ ) X[m][t] = x[m] - f->pc[m][t];
-    r2[t] = X[0][t]*X[0][t] + X[1][t]*X[1][t] + X[2][t]*X[2][t];
-    coef[t] = flux_coefficient(f->term + t,floor);
+/* A thread's last Gauss points' sums, every column of the group: the
+   volume's and the wetting's integrands are taken at the same Gauss points
+   one after the other (Evolver's element loop: each facet's methods in
+   turn, an edge's energy and content), the second from here (a quarter of
+   a 64-bead pack's sums in its gradient steps: the volume's projection
+   takes the volume alone, at new points each pass). Keyed by the point's
+   bits, the group, the order, the floor and the registration, in a slot
+   hashed from the point (eight slots searched in turn, the comparisons'
+   branches were a sixth of a 4-bead pack's step); a value at an order is
+   the same, to the bit, as the one taken with a higher order. */
+struct flux_cached
+{ long gen;
+  int group, order;
+  REAL floor;
+  unsigned long long x[3];
+  REAL out[FLUX_COLS][FLUX_OUT];
+};
+struct flux_thread
+{ struct flux_cached cache[FLUX_CACHE];
+  REAL *coefbuf;                 /* the columns' coefficients, the floor raised */
+  int coefcap, cos_ok;
+  REAL cos_floor, cos_value;     /* cos(floor), the last floor's */
+};
+static __thread struct flux_thread flux_tls;   /* (one lookup a call: each is a call
+                                                  to __tls_get_addr in a module) */
+
+/* cos(floor), the thread's last */
+static REAL flux_cos(struct flux_thread *T, REAL floor)
+{ if ( !T->cos_ok || floor != T->cos_floor )
+  { T->cos_value = cos(floor*M_PI/180.0);
+    T->cos_floor = floor;
+    T->cos_ok = 1;
   }
-  flux_inv(n,r2,coef,f->pR2,f->pR3,order,ir3,ir5);
-  for ( t = 0 ; t < n ; t++ )
-  { REAL a = ir3[t];
-    if ( r2[t] < f->pR2[t] )           /* inside the cap: coef (x - c)/K^3 */
-    { for ( m = 0 ; m < 3 ; m++ )
-      { v[m] += X[m][t]*a;
-        if ( order ) g[m][m] += a;
-      }
+  return T->cos_value;
+}
+
+/* field f's terms at x (its group's column), to the order, into
+   res[flux_nout()]; 0 if out of memory */
+static int flux_group_terms(const struct flux_field *f, const REAL *x, int order, REAL floor,
+                            REAL *res)
+{ const struct flux_group *g = flux_groups + f->group;
+  struct flux_thread *T = &flux_tls;
+  const REAL *coef[FLUX_COLS];
+  struct flux_cached *e;
+  unsigned long long b[3], h;
+  int c, t, k, nout = flux_nout(g->kind,order);
+  memcpy(b,x,sizeof(b));
+  h = b[0]*0x9E3779B97F4A7C15ULL ^ b[1]*0xC2B2AE3D27D4EB4FULL ^ b[2]*0x165667B19E3779F9ULL;
+  e = T->cache + ((h ^ (h >> 29)) >> 32) % FLUX_CACHE;
+  if ( !(e->gen == flux_gen && e->x[0] == b[0] && e->x[1] == b[1] && e->x[2] == b[2]
+         && e->group == f->group && e->order >= order && e->floor == floor) )
+  { if ( g->uniform )
+    { coef[0] = g->one;
+      flux_kernel(g,1,coef,x,order,e->out);
     }
     else
-    { REAL b = order ? ir5[t] : 0.0;
-      for ( m = 0 ; m < 3 ; m++ )
-      { v[m] += X[m][t]*a;
-        if ( order ) for ( i = 0 ; i < 3 ; i++ ) g[m][i] += (m == i ? a : 0.0) - b*X[m][t]*X[i][t];
+    { for ( c = 0 ; c < g->ncol ; c++ )
+      { coef[c] = g->c0[c];
+        if ( floor > g->amin[c] )
+        { /* relax()'s staging: the angles under the floor raised to it */
+          REAL cosf = flux_cos(T,floor);
+          if ( T->coefcap < FLUX_COLS*g->np )
+          { REAL *nb = (REAL*)realloc(T->coefbuf,(size_t)FLUX_COLS*g->np*sizeof(REAL));
+            if ( !nb ) return 0;
+            T->coefbuf = nb;
+            T->coefcap = FLUX_COLS*g->np;
+          }
+          for ( t = 0 ; t < g->np ; t++ )
+            T->coefbuf[c*g->np+t] = floor > g->athr[c][t] ? g->kc[c][t]*cosf : g->c0[c][t];
+          coef[c] = T->coefbuf + c*g->np;
+        }
       }
+      flux_kernel(g,g->ncol,coef,x,order,e->out);
     }
+    e->gen = flux_gen;
+    e->group = f->group;
+    e->order = order;
+    e->floor = floor;
+    for ( c = 0 ; c < 3 ; c++ ) e->x[c] = b[c];
+  }
+  if ( g->uniform )
+  { /* (every term's coefficient, the floor raised past its angle or not) */
+    c = f->col;
+    REAL a = floor > g->athr[c][0] ? g->kc[c][0]*flux_cos(T,floor) : g->c0[c][0];
+    for ( k = 0 ; k < nout ; k++ ) res[k] = a*e->out[0][k];
+  }
+  else
+    for ( k = 0 ; k < nout ; k++ ) res[k] = e->out[f->col][k];
+  return 1;
+}
+
+/* a field's own terms (base): values v, first derivatives g */
+static void flux_base(const struct flux_field *f, const REAL *x, REAL floor, REAL v[3],
+                      REAL g[3][3])
+{ int i, m;
+  for ( m = 0 ; m < 3 ; m++ )
+  { v[m] = 0.0;
+    for ( i = 0 ; i < 3 ; i++ ) g[m][i] = 0.0;
+  }
+  if ( f->base == 1 ) { v[2] = x[2]; g[2][2] = 1.0; }
+  else if ( f->base == 2 )
+  { REAL XX = x[0] - f->bc[0], YY = x[1] - f->bc[1], ZZ = x[2] - f->bc[2];
+    v[0] = ZZ/3.0*YY;        g[0][1] = ZZ/3.0; g[0][2] = YY/3.0;
+    v[1] = -(f->bc[2] + ZZ/3.0)*XX;  g[1][0] = -(f->bc[2] + ZZ/3.0); g[1][2] = -XX/3.0;
+  }
+  else if ( f->base == 3 || f->base == 4 )
+  { /* a plane's: x = o + s u + t v; content u n_z (o_z t + u_z s t + v_z t^2/2),
+       wetting k u t (constraints.plane) */
+    const REAL *o = f->bc + (f->base == 3 ? 1 : 2), *u = o + 3, *w = o + 6;
+    REAL ss = 0, tt = 0, p, dp[3];
+    for ( i = 0 ; i < 3 ; i++ ) { ss += u[i]*(x[i] - o[i]); tt += w[i]*(x[i] - o[i]); }
+    if ( f->base == 3 )
+    { REAL nz = f->bc[0];
+      p = nz*(o[2]*tt + u[2]*ss*tt + 0.5*w[2]*tt*tt);
+      for ( i = 0 ; i < 3 ; i++ )
+        dp[i] = nz*(o[2]*w[i] + u[2]*(tt*u[i] + ss*w[i]) + w[2]*tt*w[i]);
+    }
+    else
+    { REAL k = plane_coefficient(f,floor);
+      p = k*tt;
+      for ( i = 0 ; i < 3 ; i++ ) dp[i] = k*w[i];
+    }
+    for ( m = 0 ; m < 3 ; m++ )
+    { v[m] = u[m]*p;
+      for ( i = 0 ; i < 3 ; i++ ) g[m][i] = u[m]*dp[i];
+    }
+  }
+}
+
+/* a field's own terms' second derivatives (base): h[m][i][j] */
+static void flux_base_second(const struct flux_field *f, REAL h[3][3][3])
+{ int i, j, m;
+  memset(h,0,27*sizeof(REAL));
+  if ( f->base == 2 )
+  { /* (Z/3 Y, -(c_z + Z/3) X, 0) */
+    h[0][1][2] = h[0][2][1] = 1.0/3.0;
+    h[1][0][2] = h[1][2][0] = -1.0/3.0;
+  }
+  else if ( f->base == 3 )
+  { /* u_m n_z (u_z s t + v_z t^2/2): u_m n_z (u_z (u_i w_j + w_i u_j) + v_z w_i w_j) */
+    const REAL *o = f->bc + 1, *u = o + 3, *w = o + 6;
+    REAL nz = f->bc[0];
+    for ( m = 0 ; m < 3 ; m++ )
+      for ( i = 0 ; i < 3 ; i++ )
+        for ( j = 0 ; j < 3 ; j++ )
+          h[m][i][j] = u[m]*nz*(u[2]*(u[i]*w[j] + w[i]*u[j]) + w[2]*w[i]*w[j]);
   }
 }
 
 static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
                      REAL (*d)[MAXCOORD], REAL ***s)
 { struct flux_field *f = NULL;
-  dual out[3], X[3];
-  REAL ex[3][3] = {{1,0,0},{0,1,0},{0,0,1}}, floor;
+  REAL floor, v[3], g[3][3];
   int i, j, m, t;
   if ( flux_load != pyse_load_serial() ) return 0;
-  for ( i = 0 ; i < flux_count ; i++ )
-    if ( fluxes[i].key == key ) { f = fluxes + i; break; }
+  f = flux_find(key);
   if ( !f ) return 0;
   floor = flux_floor();
-  if ( order < 2 )
-  { /* values (and first derivatives) in closed form: no second-order duals,
-       most of the cost of a gradient step */
-    REAL v[3] = {0,0,0}, g[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
-    if ( f->base == 1 ) { v[2] = x[2]; g[2][2] = 1.0; }
-    else if ( f->base == 2 )
-    { REAL XX = x[0] - f->bc[0], YY = x[1] - f->bc[1], ZZ = x[2] - f->bc[2];
-      v[0] = ZZ/3.0*YY;        g[0][1] = ZZ/3.0; g[0][2] = YY/3.0;
-      v[1] = -(f->bc[2] + ZZ/3.0)*XX;  g[1][0] = -(f->bc[2] + ZZ/3.0); g[1][2] = -XX/3.0;
+  flux_base(f,x,floor,v,g);
+  if ( f->group >= 0 )
+  { const struct flux_group *G = flux_groups + f->group;
+    REAL o[FLUX_OUT];
+    if ( !flux_group_terms(f,x,order,floor,o) ) return 0;
+    for ( m = 0 ; m < 3 ; m++ ) v[m] += o[m];
+    if ( order && !G->kind )
+    { g[0][0] += o[3]; g[1][1] += o[4]; g[2][2] += o[5];
+      g[0][1] += o[6]; g[1][0] += o[6];
+      g[0][2] += o[7]; g[2][0] += o[7];
+      g[1][2] += o[8]; g[2][1] += o[8];
     }
-    else if ( f->base == 3 || f->base == 4 )
-    { /* a plane's: x = o + s u + t v; content u n_z (o_z t + u_z s t + v_z t^2/2),
-         wetting k u t (constraints.plane) */
-      const REAL *o = f->bc + (f->base == 3 ? 1 : 2), *u = o + 3, *w = o + 6;
-      REAL ss = 0, tt = 0, p, dp[3];
-      for ( i = 0 ; i < 3 ; i++ ) { ss += u[i]*(x[i] - o[i]); tt += w[i]*(x[i] - o[i]); }
-      if ( f->base == 3 )
-      { REAL nz = f->bc[0];
-        p = nz*(o[2]*tt + u[2]*ss*tt + 0.5*w[2]*tt*tt);
-        for ( i = 0 ; i < 3 ; i++ )
-          dp[i] = nz*(o[2]*w[i] + u[2]*(tt*u[i] + ss*w[i]) + w[2]*tt*w[i]);
-      }
-      else
-      { REAL k = plane_coefficient(f,floor);
-        p = k*tt;
-        for ( i = 0 ; i < 3 ; i++ ) dp[i] = k*w[i];
-      }
+    else if ( order )
       for ( m = 0 ; m < 3 ; m++ )
-      { v[m] = u[m]*p;
-        for ( i = 0 ; i < 3 ; i++ ) g[m][i] = u[m]*dp[i];
-      }
+        for ( i = 0 ; i < 3 ; i++ ) g[m][i] += o[3+3*m+i];
+    for ( m = 0 ; m < 3 ; m++ )
+    { val[m] = v[m];
+      if ( order ) for ( i = 0 ; i < 3 ; i++ ) d[m][i] = g[m][i];
     }
-    if ( f->points )
-      flux_points(f,x,order,floor,v,g);
-    else
+    if ( order >= 2 )
+    { /* (the ten of a point source's, the six of each monopole component's) */
+      static const int sym[3][3][3] = {{{0,3,4},{3,5,9},{4,9,7}},
+                                       {{3,5,9},{5,1,6},{9,6,8}},
+                                       {{4,9,7},{9,6,8},{7,8,2}}};
+      static const int pair[3][3] = {{0,3,4},{3,1,5},{4,5,2}};
+      REAL h[3][3][3];
+      flux_base_second(f,h);
+      for ( m = 0 ; m < 3 ; m++ )
+        for ( i = 0 ; i < 3 ; i++ )
+          for ( j = 0 ; j < 3 ; j++ )
+            s[m][i][j] = h[m][i][j] + (G->kind ? o[12 + 6*m + pair[i][j]] : o[9 + sym[m][i][j]]);
+    }
+    return 1;
+  }
+  if ( order < 2 )
+  { /* term by term (a field of mixed terms; none of _flux's) */
     for ( t = 0 ; t < f->nterm ; t++ )
     { struct flux_term *u = f->term + t;
       REAL coef = flux_coefficient(u,floor), X[3], r2, r;
+      int point = u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0;
       for ( m = 0 ; m < 3 ; m++ ) X[m] = x[m] - u->c[m];
       r2 = X[0]*X[0] + X[1]*X[1] + X[2]*X[2];
       r = sqrt(r2);
-      if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 && r2 < u->K2 )
+      if ( point && r2 < u->K2 )
       { REAL ir3 = coef/u->K3;             /* inside the cap: coef (x - c)/K^3 */
         for ( m = 0 ; m < 3 ; m++ )
         { v[m] += X[m]*ir3;
           if ( order ) g[m][m] += ir3;
         }
       }
-      else if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 )
+      else if ( point )
       { REAL ir3 = coef/(r2*r), ir5 = 3.0*ir3/r2;
         for ( m = 0 ; m < 3 ; m++ )
         { v[m] += X[m]*ir3;
@@ -504,120 +994,46 @@ static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
     }
     return 1;
   }
-  if ( f->points && (f->base == 0 || f->base == 1) )
-  { /* second derivatives in closed form for point sources (a facet
-       integrand): with w = x - c, a = coef/r^3, F = a w,
-       dF_m/dx_i = a (d_mi - 3 w_m w_i/r^2),
-       d2F_m/dx_i dx_j = -3 a/r^2 (d_mi w_j + d_mj w_i + d_ij w_m)
-                         + 15 a w_m w_i w_j/r^4;
-       inside, F = coef w/R^3, linear. (The dual numbers, with pow, were a
-       quarter of a 16-bead pack's Newton step.) */
-    /* (F = -grad of a potential: d2F_m/dx_i dx_k is symmetric in all three
-       indices, ten components: 000 111 222, 001 002 110 112 220 221, 012) */
-    REAL v[3] = {0,0,0}, g[3][3] = {{0,0,0},{0,0,0},{0,0,0}};
-    REAL h000 = 0, h111 = 0, h222 = 0, h001 = 0, h002 = 0, h110 = 0, h112 = 0,
-         h220 = 0, h221 = 0, h012 = 0;
-    if ( f->base == 1 ) { v[2] = x[2]; g[2][2] = 1.0; }
-    for ( t = 0 ; t < f->nterm ; t++ )
-    { REAL w0 = x[0] - f->pc[0][t], w1 = x[1] - f->pc[1][t], w2 = x[2] - f->pc[2][t];
-      REAL r2 = w0*w0 + w1*w1 + w2*w2, coef = flux_coefficient(f->term + t,floor);
-      REAL a, b, e;
-      if ( r2 < f->pR2[t] )
-      { a = coef/f->pR3[t];
-        v[0] += w0*a; v[1] += w1*a; v[2] += w2*a;
-        g[0][0] += a; g[1][1] += a; g[2][2] += a;
-        continue;
-      }
-      a = coef/(r2*sqrt(r2)); b = 3.0*a/r2; e = 15.0*a/(r2*r2);
-      v[0] += w0*a; v[1] += w1*a; v[2] += w2*a;
-      g[0][0] += a - b*w0*w0; g[1][1] += a - b*w1*w1; g[2][2] += a - b*w2*w2;
-      g[0][1] -= b*w0*w1; g[0][2] -= b*w0*w2; g[1][2] -= b*w1*w2;
-      h000 += -3.0*b*w0 + e*w0*w0*w0;
-      h111 += -3.0*b*w1 + e*w1*w1*w1;
-      h222 += -3.0*b*w2 + e*w2*w2*w2;
-      h001 += -b*w1 + e*w0*w0*w1;
-      h002 += -b*w2 + e*w0*w0*w2;
-      h110 += -b*w0 + e*w1*w1*w0;
-      h112 += -b*w2 + e*w1*w1*w2;
-      h220 += -b*w0 + e*w2*w2*w0;
-      h221 += -b*w1 + e*w2*w2*w1;
-      h012 += e*w0*w1*w2;
-    }
-    g[1][0] = g[0][1]; g[2][0] = g[0][2]; g[2][1] = g[1][2];
+  { /* second derivatives term by term, as dual numbers */
+    dual out[3], X[3];
+    REAL ex[3][3] = {{1,0,0},{0,1,0},{0,0,1}}, h[3][3][3];
+    flux_base_second(f,h);
     for ( m = 0 ; m < 3 ; m++ )
-    { val[m] = v[m];
-      for ( i = 0 ; i < 3 ; i++ ) d[m][i] = g[m][i];
+    { out[m].v = v[m];
+      for ( i = 0 ; i < 3 ; i++ )
+      { out[m].g[i] = g[m][i];
+        for ( j = 0 ; j < 3 ; j++ ) out[m].h[i][j] = h[m][i][j];
+      }
     }
-    { REAL h[3][3][3];
-      int k;
-      for ( m = 0 ; m < 3 ; m++ )
-        for ( i = 0 ; i < 3 ; i++ )
-          for ( k = 0 ; k < 3 ; k++ )
-          { int n0 = (m == 0) + (i == 0) + (k == 0), n1 = (m == 1) + (i == 1) + (k == 1);
-            int n2 = 3 - n0 - n1;
-            REAL c;
-            if ( n0 == 3 ) c = h000; else if ( n1 == 3 ) c = h111; else if ( n2 == 3 ) c = h222;
-            else if ( n0 == 2 ) c = n1 ? h001 : h002;
-            else if ( n1 == 2 ) c = n0 ? h110 : h112;
-            else if ( n2 == 2 ) c = n0 ? h220 : h221;
-            else c = h012;
-            h[m][i][k] = c;
-          }
-      for ( m = 0 ; m < 3 ; m++ )
-        for ( i = 0 ; i < 3 ; i++ )
-          for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = h[m][i][j];
+    for ( t = 0 ; t < f->nterm ; t++ )
+    { struct flux_term *u = f->term + t;
+      REAL coef = flux_coefficient(u,floor);
+      dual r2;
+      for ( m = 0 ; m < 3 ; m++ ) X[m] = d_lin(ex[m],-u->c[m],x);
+      r2 = d_add(d_add(d_mul(X[0],X[0]),d_mul(X[1],X[1])),d_mul(X[2],X[2]));
+      if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 )
+      { dual inv = r2.v < u->K2 ? d_const(coef/u->K3)   /* inside the cap: (x - c)/K^3 */
+                                : d_scale(d_pow(r2,-1.5),coef);   /* coef (x - c)/r^3 */
+        for ( m = 0 ; m < 3 ; m++ ) out[m] = d_add(out[m],d_mul(X[m],inv));
+      }
+      else
+      { dual r = d_pow(r2,0.5), dw = d_const(0.0), den, inv;
+        for ( m = 0 ; m < 3 ; m++ ) dw = d_add(dw,d_scale(X[m],u->d[m]));
+        den = d_mul(r,d_add(r,d_scale(dw,-1.0)));
+        inv = d_scale(d_inv(den),coef);
+        /* (d x w) */
+        out[0] = d_add(out[0],d_mul(d_add(d_scale(X[2],u->d[1]),d_scale(X[1],-u->d[2])),inv));
+        out[1] = d_add(out[1],d_mul(d_add(d_scale(X[0],u->d[2]),d_scale(X[2],-u->d[0])),inv));
+        out[2] = d_add(out[2],d_mul(d_add(d_scale(X[1],u->d[0]),d_scale(X[0],-u->d[1])),inv));
+      }
     }
-    return 1;
-  }
-  for ( m = 0 ; m < 3 ; m++ ) out[m] = d_const(0.0);
-  if ( f->base == 1 ) out[2] = d_lin(ex[2],0.0,x);
-  else if ( f->base == 2 )
-  { dual XX = d_lin(ex[0],-f->bc[0],x), YY = d_lin(ex[1],-f->bc[1],x), ZZ = d_lin(ex[2],-f->bc[2],x);
-    out[0] = d_mul(d_scale(ZZ,1.0/3.0),YY);
-    out[1] = d_scale(d_mul(d_add(d_const(f->bc[2]),d_scale(ZZ,1.0/3.0)),XX),-1.0);
-  }
-  else if ( f->base == 3 || f->base == 4 )
-  { const REAL *o = f->bc + (f->base == 3 ? 1 : 2), *u = o + 3, *w = o + 6;
-    dual ss = d_const(0.0), tt = d_const(0.0), p;
-    for ( i = 0 ; i < 3 ; i++ )
-    { dual xi = d_lin(ex[i],-o[i],x);
-      ss = d_add(ss,d_scale(xi,u[i]));
-      tt = d_add(tt,d_scale(xi,w[i]));
+    for ( m = 0 ; m < 3 ; m++ )
+    { val[m] = out[m].v;
+      for ( i = 0 ; i < 3 ; i++ )
+      { d[m][i] = out[m].g[i];
+        for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = out[m].h[i][j];
+      }
     }
-    if ( f->base == 3 )
-      p = d_scale(d_add(d_add(d_scale(tt,o[2]),d_scale(d_mul(ss,tt),u[2])),
-                        d_scale(d_mul(tt,tt),0.5*w[2])),f->bc[0]);
-    else
-      p = d_scale(tt,plane_coefficient(f,floor));
-    for ( m = 0 ; m < 3 ; m++ ) out[m] = d_scale(p,u[m]);
-  }
-  for ( t = 0 ; t < f->nterm ; t++ )
-  { struct flux_term *u = f->term + t;
-    REAL coef = flux_coefficient(u,floor);
-    dual r2;
-    for ( m = 0 ; m < 3 ; m++ ) X[m] = d_lin(ex[m],-u->c[m],x);
-    r2 = d_add(d_add(d_mul(X[0],X[0]),d_mul(X[1],X[1])),d_mul(X[2],X[2]));
-    if ( u->d[0] == 0 && u->d[1] == 0 && u->d[2] == 0 )
-    { dual inv = r2.v < u->K2 ? d_const(coef/u->K3)   /* inside the cap: (x - c)/K^3 */
-                              : d_scale(d_pow(r2,-1.5),coef);   /* coef (x - c)/r^3 */
-      for ( m = 0 ; m < 3 ; m++ ) out[m] = d_add(out[m],d_mul(X[m],inv));
-    }
-    else
-    { dual r = d_pow(r2,0.5), dw = d_const(0.0), den, inv;
-      for ( m = 0 ; m < 3 ; m++ ) dw = d_add(dw,d_scale(X[m],u->d[m]));
-      den = d_mul(r,d_add(r,d_scale(dw,-1.0)));
-      inv = d_scale(d_inv(den),coef);
-      /* (d x w) */
-      out[0] = d_add(out[0],d_mul(d_add(d_scale(X[2],u->d[1]),d_scale(X[1],-u->d[2])),inv));
-      out[1] = d_add(out[1],d_mul(d_add(d_scale(X[0],u->d[2]),d_scale(X[2],-u->d[0])),inv));
-      out[2] = d_add(out[2],d_mul(d_add(d_scale(X[1],u->d[0]),d_scale(X[0],-u->d[1])),inv));
-    }
-  }
-  for ( m = 0 ; m < 3 ; m++ )
-  { val[m] = out[m].v;
-    if ( order >= 1 ) for ( i = 0 ; i < 3 ; i++ ) d[m][i] = out[m].g[i];
-    if ( order >= 2 )
-      for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = out[m].h[i][j];
   }
   return 1;
 }

@@ -632,6 +632,9 @@ NB_MODULE(_core, m) {
   }, "con"_a, "centre"_a, "radius"_a, "e1"_a, "e2"_a, "e3"_a, "k"_a,
      "a sphere wall's contact-line integrands evaluated in C (constraints.sphere(axis=))");
   m.def("native_enable", [](bool on) { Lock lock; pyse_native_enable(on); }, "on"_a);
+  m.def("native_simd", [](bool on) { Lock lock; return bool(pyse_native_simd(on)); }, "on"_a,
+        "The flux gauge's sums with AVX2 where available (True) or scalar, the same to the "
+        "bit; returns the previous setting.");
   m.def("native_flux", [](std::string method, int con, int which, int base,
                           std::vector<double> bc, std::vector<double> terms) {
     Lock lock;
