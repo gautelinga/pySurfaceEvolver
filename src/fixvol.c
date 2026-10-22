@@ -19,6 +19,7 @@
 static  int maxquants;  /* total number of constraints */
 REAL *vpressures = NULL; /* so global pressures not messed */
 static  int fixcount = 0;  /* number of constrained quantities */
+int pyse_fixcount(void) { return fixcount; }  /* pySE: for iterate.c */
 /* for numbering various types of constraints */
 static  int gen_quant_start;
 static  struct linsys LS;  /* for sparse constraints */

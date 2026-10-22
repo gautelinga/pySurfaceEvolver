@@ -288,6 +288,21 @@
   descents' gradient steps skip the move at scale 0 where nothing changed and take
   a parabola's step from the energy's slope (11 -> 7 ms a step; off elsewhere).
 
+- Descents' gradient steps evaluate the integrands once per move instead of twice:
+  each move's volumes are predicted for its restoring motion (where the step began,
+  plus the slope along the motion from the volume gradients, plus the curvature the
+  first trial measured), and the energies the line search compares are taken as if
+  the volumes were restored, to first order with the pressures. The restore's own
+  pass checks the volumes and restores again if they are out of tolerance; the
+  final move's volumes land as close as the stock projection's. The search's
+  energies are nearer the restored ones than the stock projection's own (a trial
+  after vertex averaging: 4e-7 off against 2.5e-5); 200 steps of a 16-bead pack end
+  3e-7 from the stock projection's energy. Instructions a step, flux gauge: 16
+  beads at 2k facets 64 -> 43 million, at 14k 407 -> 281, 64 beads (5.9k facets)
+  249 -> 156. Every gradient step (stock search too, the same to the bit): the
+  content isn't evaluated again after the move where the projection's last pass
+  found it there (16-bead pack 108 -> 99 million at 2k facets, 616 -> 568 at 14k).
+
 ### Documentation
 
 - New page "Draining through changes of topology" (docs/drainage_topology.md): a drop

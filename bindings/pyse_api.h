@@ -155,7 +155,8 @@ int pyse_native_formula_register(int con, int kind, const double *p);
 /* Gradient steps with fewer energy evaluations (src/iterate.c,
    pyse_fast_steps: the move at scale 0 left out where nothing changed since
    the last step, the scale from a parabola with the energy's slope where it
-   can be; off by default); returns the previous setting. */
+   can be, each move's content predicted for its restoring motion; off by
+   default); returns the previous setting. */
 int pyse_set_fast_steps(int on);
 /* For each edge and each of the constraints nums, whether the edge is on it
    (out: edges x ncon, row-major). */

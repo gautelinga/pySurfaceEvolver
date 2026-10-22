@@ -2309,7 +2309,9 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     topology, ev._topology_held = ev._topology_held, True
     # (and gradient steps with fewer energy evaluations: no move at scale 0
     # where nothing changed since the last step, the scale from a parabola
-    # with the energy's slope; a pack's step 11 ms to 7. Not the stock
+    # with the energy's slope; a pack's step 11 ms to 7; each move's volumes
+    # predicted for its restoring motion, not evaluated, a 16-bead pack's
+    # step at 2k facets 64 million instructions to 44. Not the stock
     # search, which relax() and Evolver.command("g") otherwise keep)
     fast = _core.set_fast_steps(True) if hasattr(_core, "set_fast_steps") else None
     try:

@@ -1139,6 +1139,9 @@ bailout:
   /* passes merged in an iteration step (calc_all_grads(), move_vertices()) */
   grads_merge_energy = grads_merged_energy = 0;
   content_fuse_energy = content_energy_ready = 0;
+  { extern void pyse_iterate_abort(void);   /* (iterate.c: its predictions) */
+    pyse_iterate_abort();
+  }
   if ( list && (list != permlist) )
     { myfree((char*)list); list = NULL; } /* plug memory leak */
   quiet_flag = 0;

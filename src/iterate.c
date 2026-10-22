@@ -34,16 +34,173 @@ int volgrads_changed_flag; /* whether volgrads recalced during move */
    - The move at scale 0 (the energy with the restoring motion alone) is
      left out where nothing has changed since the last step ended (the
      clock where it ended: Evolver's edits, recalc(), pySE's edits and
-     snapshots all move it): it finds the energy that step ended at, its
-     volumes restored to 1e-13.
+     snapshots all move it): it finds the energy that step ended at (taken
+     as if its volumes were restored, see pyse_predict_content).
    - The first trial's energy and the energy's exact slope at scale 0 along
      the motion, -force . velocity, give a parabola whose minimum is taken
      for the scale where the trial lowered the energy, the parabola is
      convex and its minimum within a factor 8 of the trial's scale; else
      the doubling or halving as before. (The step falls back to the trial's
-     scale, known to lower the energy, where it raised it.) */
+     scale, known to lower the energy, where it raised it.)
+   - Each move's volumes after it predicted for its restoring motion, not
+     evaluated (pyse_predict_content): one pass of the integrands a move
+     instead of two. */
 int pyse_fast_steps = 0;
 static long pyse_settled_stamp = -1;
+long pyse_recalc_stamp = -1;   /* the clock where recalc() (command.c) ended */
+
+/* pySE: the clock where project_all() left the bodies' and quantities'
+   content values those at its coordinates (its last content pass after its
+   last move of them), -1 where it didn't */
+static long pyse_content_stamp = -1;
+
+/* pySE (pyse_fast_steps): the content after a move predicted, not
+   evaluated, for its restoring motion: the content where the step began
+   (known where nothing has changed since the last step ended) plus the
+   scale times its slope along the motion, sum grad V . velocity, and, once
+   a trial has measured it, the scale squared times its curvature. Each move
+   evaluated the content twice, before and after restoring it (the second
+   pass with the energy), and a step made 2-4 moves: on a 16-bead pack the
+   flux gauge's integrands, as costly for the volume as for the energy, at
+   7 point sets a step, about two more for the forces. The first trial's
+   prediction leaves out the content's second-order change along the motion
+   (the motion is tangent to the constraints): left in after the restore,
+   0.0003-0.002 of the tolerance on a 16-bead pack, which the restore's own
+   pass finds (restoring again where it is out of tolerance), and from it
+   the curvature for the later moves. The energies the search compares, its
+   trials' and the one the last step ended at, are taken as if their
+   constraints were restored, to first order (see content_energy_shift(): a
+   trial's energy off by 2.5e-5 for its volumes, after it by 2e-8; the
+   scale it chose was 3.56 for 3.37, and 200 steps ended 5e-4 higher; with
+   it 3e-7 from the stock projection's). The final move's volumes are left
+   as close to their targets as its restore put them, its energy theirs;
+   the next step restores them. */
+static int pyse_predict_content = 0;
+static REAL pyse_move_scale = 0.0;   /* the move project_all() follows */
+static REAL *pyse_dcontent = NULL;   /* per fixed constraint, its slope, then its curvature */
+static int pyse_dcontent_size = 0;
+static int pyse_curved = 0;          /* the curvatures measured in this step */
+static int pyse_move_predicted = 0;  /* the last move's content was */
+static REAL pyse_move_shift = 0.0;   /* its energy's shift (content_energy_shift()) */
+int pyse_fixcount(void);   /* fixvol.c */
+
+/* an error ended a step (userio.c): no predictions outside one */
+void pyse_iterate_abort(void)
+{ pyse_predict_content = 0;
+  pyse_move_predicted = 0;
+  pyse_content_stamp = -1;
+}
+
+/* the slopes of the fixed constraints' content along the motion (1 if
+   found: plain vertex motion, see fast_slope(), no torus, no ideal gas) */
+static int content_slopes(void)
+{ vertex_id v_id;
+  int i, nfix = pyse_fixcount();
+  if ( nfix <= 0 || web.torus_flag || approx_curve_flag || web.pressure_flag )
+    return 0;
+  if ( nfix > pyse_dcontent_size )
+  { REAL *d = (REAL*)realloc(pyse_dcontent,2*nfix*sizeof(REAL));
+    if ( !d ) return 0;
+    pyse_dcontent = d;
+    pyse_dcontent_size = nfix;
+  }
+  for ( i = 0 ; i < 2*nfix ; i++ ) pyse_dcontent[i] = 0.0;
+  pyse_curved = 0;
+  FOR_ALL_VERTICES(v_id)
+  { ATTR attr = get_vattr(v_id);
+    REAL *v;
+    volgrad *vgptr;
+    if ( attr & FIXED ) continue;
+    if ( attr & BOUNDARY ) return 0;
+    v = get_velocity(v_id);
+    for ( vgptr = get_vertex_vgrad(v_id) ; vgptr ; vgptr = vgptr->chain )
+    { int bi = vgptr->fixnum;
+      if ( bi < 0 || bi >= nfix ) continue;
+      for ( i = 0 ; i < SDIM ; i++ )
+        pyse_dcontent[bi] += vgptr->grad[i]*v[i];
+    }
+  }
+  return 1;
+}
+
+/* the change predicted for fixed constraint fixi by the move */
+static REAL predicted_change(int fixi, int nfix)
+{ REAL s = pyse_move_scale;
+  return s*pyse_dcontent[fixi] + (pyse_curved ? s*s*pyse_dcontent[nfix + fixi] : 0.0);
+}
+
+/* the fixed constraints' content put at its prediction for the move by
+   pyse_move_scale (1 if done) */
+static int predict_content(void)
+{ body_id b_id;
+  int k, nfix = pyse_fixcount();
+  if ( nfix > pyse_dcontent_size ) return 0;
+  if ( !everything_quantities_flag )
+    FOR_ALL_BODIES(b_id)
+    { int fixi;
+      if ( !(get_battr(b_id) & FIXEDVOL) ) continue;
+      fixi = get_body_fixnum(b_id);
+      if ( fixi < 0 || fixi >= nfix ) continue;
+      set_body_volume(b_id,get_body_volume(b_id) + predicted_change(fixi,nfix),NOSETSTAMP);
+    }
+  for ( k = 0 ; k < gen_quant_count ; k++ )
+  { struct gen_quant *gq = GEN_QUANT(k);
+    if ( (gq->flags & Q_DELETED) || !(gq->flags & Q_FIXED) ) continue;
+    if ( gq->fixnum < 0 || gq->fixnum >= nfix ) continue;
+    gq->value += predicted_change(gq->fixnum,nfix);
+  }
+  if ( itdebug ) printf("Content predicted for scale %g\n",(double)pyse_move_scale);
+  return 1;
+}
+
+/* after a predicted trial's restore, what it left off the targets, over
+   the scale squared: the content's curvature along the motion (to the
+   prediction's first-order part, which restored the rest) */
+static void content_curvature(void)
+{ body_id b_id;
+  int k, nfix = pyse_fixcount();
+  REAL s2 = pyse_move_scale*pyse_move_scale;
+  if ( pyse_curved || nfix > pyse_dcontent_size || !(s2 > 0.0) ) return;
+  if ( !everything_quantities_flag )
+    FOR_ALL_BODIES(b_id)
+    { int fixi;
+      if ( !(get_battr(b_id) & FIXEDVOL) ) continue;
+      fixi = get_body_fixnum(b_id);
+      if ( fixi < 0 || fixi >= nfix ) continue;
+      pyse_dcontent[nfix + fixi] = (get_body_volume(b_id) - get_body_fixvol(b_id))/s2;
+    }
+  for ( k = 0 ; k < gen_quant_count ; k++ )
+  { struct gen_quant *gq = GEN_QUANT(k);
+    if ( (gq->flags & Q_DELETED) || !(gq->flags & Q_FIXED) ) continue;
+    if ( gq->fixnum < 0 || gq->fixnum >= nfix ) continue;
+    pyse_dcontent[nfix + gq->fixnum] = (gq->value - gq->target)/s2;
+  }
+  pyse_curved = 1;
+}
+
+/* the energy's change to first order were the fixed constraints restored
+   from where they are: sum pressure (target - value), the pressures the
+   multipliers the step's forces were projected with */
+static REAL content_energy_shift(void)
+{ body_id b_id;
+  int k, nfix = pyse_fixcount();
+  REAL shift = 0.0;
+  if ( !everything_quantities_flag )
+    FOR_ALL_BODIES(b_id)
+    { int fixi;
+      if ( !(get_battr(b_id) & FIXEDVOL) ) continue;
+      fixi = get_body_fixnum(b_id);
+      if ( fixi < 0 || fixi >= nfix ) continue;
+      shift += get_body_pressure(b_id)*(get_body_fixvol(b_id) - get_body_volume(b_id));
+    }
+  for ( k = 0 ; k < gen_quant_count ; k++ )
+  { struct gen_quant *gq = GEN_QUANT(k);
+    if ( (gq->flags & Q_DELETED) || !(gq->flags & Q_FIXED) ) continue;
+    if ( gq->fixnum < 0 || gq->fixnum >= nfix ) continue;
+    shift += gq->pressure*(gq->target - gq->value);
+  }
+  return shift;
+}
 
 /* -force . velocity summed over the moving vertices (the energy's slope
    along the motion at scale 0): 1 if found and negative, 0 where the motion
@@ -80,7 +237,9 @@ void iterate()
   REAL energy0,energy1,energy2=0.0;
   int seekcount = 0;  /* to prevent infinite loop */
   int settled = 0;    /* pySE: the move at scale 0 not needed */
+  int recalced = 0;   /* pySE: recalc() found the content here */
   REAL slope = 0.0;   /* pySE: the energy's slope there along the motion */
+  REAL final_shift = 0.0;  /* pySE: the final move's energy shift */
   int sloped = 0;
   REAL denom;  /* denominator of interpolation expression */
   REAL scale0,scale1=0.0,scale2=0.0;  /* for interpolation */
@@ -95,14 +254,18 @@ void iterate()
 #endif
 
   iterate_flag = 1;  /* for interrupt handler */
+  pyse_predict_content = 0;
 
   if ( web.diffusion_flag ) 
      diffuse();
   
   energy0 = web.total_energy;
-  { /* pySE: nothing changed since the last step ended (see pyse_fast_steps) */
+  { /* pySE: nothing changed since the last step ended (see pyse_fast_steps),
+       or since recalc() found the content and energy here */
     long entry_stamp = global_timestamp;
     settled = pyse_fast_steps && entry_stamp == pyse_settled_stamp && !web.diffusion_flag;
+    recalced = pyse_fast_steps && !settled && entry_stamp == pyse_recalc_stamp
+                 && !web.diffusion_flag;
   }
   if ( check_pinning_flag ) check_pinning();
   if ( normal_motion_flag ) begin_normal_motion();
@@ -115,6 +278,21 @@ void iterate()
     cg_direction();  /* fix up motion direction */
   }
   if ( pyse_fast_steps ) sloped = fast_slope(&slope);
+  pyse_predict_content = sloped && content_slopes();
+  if ( pyse_predict_content && !settled && !recalced )
+  { /* pySE: something changed since the last step ended: the content where
+       this one begins evaluated, for the predictions (a pass, for the two
+       the move at scale 0 then saves, and one each trial: on a 16-bead
+       pack's descent 3 in 10 steps, vertex averaging or contact lines
+       split between them). Not where recalc() found it here (Evolver's
+       vertex averaging or equiangulation between a descent's steps; the
+       move at scale 0 still made, as recalc() leaves the volumes off their
+       targets: taking its energy as the trials', shifted to first order,
+       was 6e-3 off after vertex averaging on a 16-bead pack) */
+    calc_content(Q_FIXED);
+    unsave_coords(&saved,SAVE_IN_ATTR);
+    save_coords(&saved,SAVE_IN_ATTR);
+  }
 
   ENTER_GRAPH_MUTEX;
 
@@ -145,7 +323,14 @@ void iterate()
        volgrads_changed_flag = 0;
     }
     if ( settled )
-    { /* pySE: the energy the last step ended at (energy0 as set above) */
+    { /* pySE: the energy the last step ended at (energy0 as set above);
+         with predicted trials, as theirs, as if its constraints were
+         restored */
+      if ( pyse_predict_content )
+      { REAL shift = content_energy_shift();
+        if ( itdebug ) printf("Energy0 %.15g shifted by %g\n",(double)energy0,(double)shift);
+        energy0 += shift;
+      }
       scale0 = 0.0;
       web.scale = tempscale;
       goto pyse_scale_zero_done;
@@ -273,6 +458,9 @@ have_scale:
 
   if ( itdebug ) printf("Final scale: %g\n",(double)web.scale);
   move_vertices(ACTUAL_MOVE,web.scale_scale*web.scale);
+  /* pySE: a predicted move's energy compared as the trials' (see
+     pyse_predict_content) */
+  final_shift = pyse_move_predicted ? pyse_move_shift : 0.0;
 
 
   if ( web.jiggle_flag )  jiggle(); 
@@ -286,19 +474,28 @@ have_scale:
     autopop_cleanup();   
   }
 
-  if ( fixed_constraint_flag ) calc_content(Q_FIXED);
+  if ( fixed_constraint_flag )
+  { /* pySE: not again where project_all()'s last pass found the content at
+       the coordinates the move left (nothing has moved since: the same
+       values; a 16-bead pack's gradient step made 7 passes of the flux
+       gauge's integrands, this one of them) */
+    if ( pyse_content_stamp == global_timestamp && !web.jiggle_flag
+           && !autopop_flag && !autochop_flag && !web.torus_flag )
+      fixed_volume_timestamp = global_timestamp;
+    else calc_content(Q_FIXED);
+  }
 
   if ( !is_finite(web.total_energy ))
   { kb_error(1864,
      "Motion would cause infinite energy. Restoring coordinates.\n",WARNING);
         goto iterate_error_exit;
      }     
-  if ( check_increase_flag && (web.total_energy > energy0) )
+  if ( check_increase_flag && (web.total_energy + final_shift > energy0) )
   { kb_error(1865,
      "Motion would have increased energy. Restoring coordinates.\n",WARNING);
         goto iterate_error_exit;
   }
-  if ( !web.motion_flag && (web.total_energy > energy0) )
+  if ( !web.motion_flag && (web.total_energy + final_shift > energy0) )
   { /* go back and use scale1 */
     restore_coords(&saved,SAVE_IN_ATTR);
     web.scale = scale1; /* known to decrease energy */
@@ -377,6 +574,7 @@ have_scale:
     pyse_settled_stamp = chopped ? -1 : global_timestamp;
   }
   iterate_flag = old_flag; /* for interrupt handler */
+  pyse_predict_content = 0;
   goto iterate_exit;
 
 iterate_error_exit:
@@ -392,6 +590,7 @@ iterate_error_exit:
   iterate_flag = old_flag; /* for interrupt handler */
   update_display();
   breakflag = BREAKREPEAT; /* break repeat loop */
+  pyse_predict_content = 0;
 
 iterate_exit:
   LEAVE_GRAPH_MUTEX;
@@ -637,6 +836,8 @@ void move_vertices(
   /* the energy below evaluated in project_all()'s last content pass
      where it can be (see calc_content_and_energy()) */
   content_fuse_energy = 1;
+  pyse_move_scale = scale;
+  pyse_move_predicted = 0;
   project_all(1, mode);
   content_fuse_energy = 0;
  
@@ -645,6 +846,13 @@ void move_vertices(
      calc_pressure();
 
   calc_energy();  /* energy after motion */
+  if ( pyse_move_predicted && mode == TEST_MOVE )
+  { /* pySE: a predicted trial's energy as if its constraints were restored
+       (pyse_predict_content) */
+    if ( itdebug ) printf("Energy %.15g shifted by %g\n",(double)web.total_energy,
+                          (double)pyse_move_shift);
+    web.total_energy += pyse_move_shift;
+  }
 
 } // end move_vertices()
 
@@ -767,6 +975,7 @@ void project_all(
 { vertex_id v_id;
   fl_sel sel;
   int one_sided_mode = (mode2==TEST_MOVE) ? KEEP_ONESIDEDNESS : RESET_ONESIDEDNESS;
+  int fresh = 0;  /* pySE: the content values at the coordinates (pyse_content_stamp) */
   /* project to constraints and boundaries */
   content_energy_ready = 0;
 
@@ -799,23 +1008,29 @@ void project_all(
   /* enforce volume constraints also; keep conjugate gradient under control */
   if ( mode && fixed_constraint_flag ) 
   { int calc_count;
-    REAL orig_diff = calc_content(Q_FIXED);
+    /* pySE: the content after the move predicted (pyse_predict_content) */
+    int predicted = pyse_predict_content && predict_content();
+    REAL orig_diff = predicted ? 1.0 : calc_content(Q_FIXED);
     REAL old_diff = orig_diff;
     REAL diff=old_diff;  /* total relative constraint diff */
     REAL stepsize = 1.0;
+    int keep_volgrads = 0;
+    int was_predicted = predicted;
     struct oldcoord psaved;
+    fresh = !predicted;
     calc_count = 1;
     psaved.coord = NULL;
     save_coords(&psaved,SAVE_SEPARATE);
     do
     { content_energy_ready = 0;  /* moving again */
-      if ( diff == 0.0 ) break; 
+      if ( diff == 0.0 && !predicted ) break; 
       if ( itdebug ) printf("Diff: %g    Old_diff: %g\n",
            (double)diff,(double)old_diff);
       if ( diff > 1.01*old_diff )
       { 
         if ( itdebug ) printf("Diff increased. Restoring coords.\n");
         restore_coords(&psaved,SAVE_SEPARATE); 
+        fresh = 0;
         if ( diff > 100*old_diff )
         { sprintf(msg,"Total constraint difference would increase by factor of %f.\nAborting constraint adjustment.\n",(DOUBLE)fabs(diff/old_diff) );
           outstring(msg);
@@ -825,7 +1040,8 @@ void project_all(
           stepsize *= 0.5;
       }
       else stepsize = 1.0;
-      if ((volgrads_every_flag || (diff > 0.5*old_diff)) && (calc_count > 1))
+      if ((volgrads_every_flag || (diff > 0.5*old_diff)) && (calc_count > 1)
+            && !keep_volgrads )
       { /* not good improvement, so recalculate */
         if ( itdebug ) printf("Recalculating volgrads.\n");
         calc_all_grads(CALC_VOLGRADS);
@@ -833,6 +1049,7 @@ void project_all(
         volgrads_changed_flag = 1;
       }
       volume_restore(stepsize,mode2);
+      fresh = 0;
       global_timestamp++;
       if ( calc_count++ > 10 ) 
       { 
@@ -848,13 +1065,34 @@ void project_all(
          evaluated the energy too, of which only the last was used: on a
          16-bead pack's slow steps, ten passes) -- pySE */
       diff = calc_count <= 2 ? calc_content_and_energy() : calc_content(Q_FIXED);
+      fresh = 1;
       if ( itdebug ) printf("Next diff: %g\n",(double)diff);
-    } while ( mode && (diff > 1) ); 
+      keep_volgrads = 0;
+      if ( predicted )
+      { /* pySE: the prediction restored; where that left the constraints
+           out of tolerance, on as if the move had ended here (the
+           restore not counted as a poor one, the gradients kept) */
+        predicted = 0;
+        if ( mode2 == TEST_MOVE && diff <= 1 ) content_curvature();
+        if ( diff > 1 )
+        { if ( itdebug ) printf("Predicted restore short: on from here.\n");
+          unsave_coords(&psaved,SAVE_SEPARATE);
+          save_coords(&psaved,SAVE_SEPARATE);
+          old_diff = diff;
+          keep_volgrads = 1;
+        }
+      }
+    } while ( mode && (diff > 1) );
 
     unsave_coords(&psaved,SAVE_SEPARATE);
+    if ( was_predicted )
+    { pyse_move_shift = content_energy_shift();
+      pyse_move_predicted = 1;
+    }
   } /* end enforcing volume constraints */
 
   global_timestamp++;
+  pyse_content_stamp = fresh ? global_timestamp : -1;
 
   return;
 } /* end project_all() */

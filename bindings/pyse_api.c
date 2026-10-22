@@ -676,6 +676,9 @@ static void set_values_body(void *arg)
     row++;
   }
   expect_rows(row,a->n);
+  /* moved vertices move the clock (what it stamps, a gradient step's
+     record of where the last one ended among them, is stale) */
+  if ( a->t.coord >= 0 ) global_timestamp++;
   if ( autorecalc_flag ) recalc();
 }
 

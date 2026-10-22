@@ -69,6 +69,10 @@ void recalc()
   }
   reset_conj_grad();
   if ( normal_motion_flag ) begin_normal_motion();
+  { /* pySE: where the content and energy were found (iterate.c) */
+    extern long pyse_recalc_stamp;
+    pyse_recalc_stamp = global_timestamp;
+  }
 } /* end recalc() */
 
 /******************************************************************
