@@ -12,6 +12,9 @@ void pyse_surface_changed(void);
 /* which load the surface is (pyse_api.c): pySE's state keyed to it */
 long pyse_load_serial(void);
 
+/* changes to the native integrands (pyse_native.c): registrations, toggles */
+long pyse_native_serial(void);
+
 /* geometry (pyse_check.c) */
 REAL pyse_det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d);
 int pyse_crosses(const REAL *p, const REAL *q, const REAL *a, const REAL *b, const REAL *c,

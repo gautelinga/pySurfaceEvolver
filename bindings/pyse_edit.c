@@ -116,6 +116,11 @@ struct ctx
   struct edit_args *batch;         /* the batch's, its keys taken when its first edit is made */
   int grids_due;                   /* the grids to be built when first needed, padded so */
   REAL due_pad;
+  int near_on;                     /* a remesh near a change, clean near it: see near_clean() */
+  long ncap, *nkey;                /* the cells near its region (side h), by hash: key -1 none */
+  int *vok, vok_now;               /* per vertex: its elements found clean (near_verify), */
+  long vok_size;                   /* when this is vok_now */
+  int changed;                     /* an edit made (or undone) */
 };
 
 /* a fresh mark for this pass; 1 if id wasn't marked yet */
@@ -1011,6 +1016,7 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
    anything): a batch that changes nothing takes none (a remesh near a
    change took nine, each the whole surface, for a few edits) */
 static void keys_now(struct edit_args *a);
+static void near_verify(struct ctx *c, struct ids *verts);
 
 /* the grids built if they are due (see run_batch) */
 static void ensure_grids(struct ctx *c)
@@ -1024,6 +1030,7 @@ static void before(struct ctx *c, struct ids *verts, struct counts *was)
 { if ( c->snapping && !c->snap ) { c->snap = pyse_snapshot_hold(); c->snap_k = c->cur_k; }
   if ( c->batch ) keys_now(c->batch);
   ensure_grids(c);
+  if ( c->clean && c->near_on ) near_verify(c,verts);
   patch(c,verts,was,PATCH_BEFORE,NULL,NULL);
 }
 
@@ -1493,6 +1500,13 @@ static int smooth(struct ctx *c, vertex_id v)
         fe = get_next_facet(fe);
       } while ( valid_id(fe) && !equal_id(fe,fe0) && ++m < 1000 );
     }
+  }
+  if ( c->clean && c->near_on )
+  { /* (the patch before() would look at: v's star) */
+    ensure_grids(c);
+    star(v,&verts);
+    near_verify(c,&verts);
+    verts.n = 0;
   }
   few = c->clean && !far_only;
   if ( few ) moved_patch(c,v,&was,PATCH_BEFORE,NULL,NULL);
@@ -2114,17 +2128,15 @@ static long key(element_id id)
 
 /* the keys of the batch's elements as they are, before its first edit
    changes anything (their keys then: a batch of a whole surface's facets,
-   few of them edited, took them all first, a quarter of its time) */
+   few of them edited, took them all first, a quarter of its time); until
+   then each element is the one asked for (its key taken twice to say so was
+   a third of a degenerate batch's time over a 15k-facet pack, none made) */
 static void keys_now(struct edit_args *a)
 { int k;
   if ( a->keyed ) return;
   for ( k = a->op == PYSE_OP_PATCH ? 1 : 0 ; k < a->n ; k++ ) a->keys[k] = key(item(a->op,a->ids[k]));
   a->keyed = 1;
 }
-
-/* element i's key when the batch began */
-static long key_was(struct edit_args *a, int i)
-{ return a->keyed ? a->keys[i] : key(item(a->op,a->ids[i])); }
 
 static int one(struct ctx *c, struct edit_args *a, int k)
 { element_id id, id2;
@@ -2135,7 +2147,8 @@ static int one(struct ctx *c, struct edit_args *a, int k)
     int i, r;
     for ( i = 1 ; i < a->n ; i++ )
     { fs[i-1] = item(op,a->ids[i]);
-      if ( !valid_id(fs[i-1]) || key(fs[i-1]) != key_was(a,i) ) { temp_free((char *)fs); return PYSE_EDIT_GONE; }
+      if ( !valid_id(fs[i-1]) || (a->keyed && key(fs[i-1]) != a->keys[i]) )
+      { temp_free((char *)fs); return PYSE_EDIT_GONE; }
     }
     r = patch_on(c,(int)a->ids[0],fs,a->n - 1);
     temp_free((char *)fs);
@@ -2144,8 +2157,9 @@ static int one(struct ctx *c, struct edit_args *a, int k)
   if ( paired(op) )
   { id = item(op,a->ids[2*k]);
     id2 = item(op,a->ids[2*k+1]);
-    if ( !valid_id(id) || !valid_id(id2) || key(id) != key_was(a,2*k)
-         || key(id2) != key_was(a,2*k+1) ) return PYSE_EDIT_GONE;
+    if ( !valid_id(id) || !valid_id(id2)
+         || (a->keyed && (key(id) != a->keys[2*k] || key(id2) != a->keys[2*k+1])) )
+      return PYSE_EDIT_GONE;
     switch ( op )
     { case PYSE_OP_SNAP: return snap(c,id,id2);
       case PYSE_OP_MERGE: return merge_facets(c,id,id2);
@@ -2153,7 +2167,7 @@ static int one(struct ctx *c, struct edit_args *a, int k)
     }
   }
   id = item(op,a->ids[k]);
-  if ( !valid_id(id) || key(id) != key_was(a,k) ) return PYSE_EDIT_GONE;
+  if ( !valid_id(id) || (a->keyed && key(id) != a->keys[k]) ) return PYSE_EDIT_GONE;
   switch ( op )
   { case PYSE_OP_COLLAPSE: return collapse(c,id,0);
     case PYSE_OP_FLIP: return flip(c,id,c->mode);
@@ -2195,9 +2209,12 @@ static void run_batch(struct ctx *c, struct edit_args *a)
      no padding; else built again, for a smoothing batch padded so that its
      moves leave their elements in their items. A remesh near a change on a
      30k-facet pack built them 13 times for 100 vertices, a fifth of its
-     time) */
+     time; and a remesh near a change, its batches a region's, keeps them
+     where its candidates are a sixteenth of the elements: its flips and
+     moves after the grids were padded or not built them again each sweep,
+     a third of its time on a 15k-facet pack) */
   { long total = c->fgrid.total + c->egrid.total;
-    int few = 256L*count < total;
+    int few = (region ? 16L : 256L)*count < total;
     int keep = c->fgrid.built && 4*(c->fgrid.xn + c->egrid.xn) <= total
                && (few || (!c->in_cells && c->pad == 0));
     /* (built when first needed: a batch whose candidates are all refused
@@ -2223,9 +2240,14 @@ static void run_batch(struct ctx *c, struct edit_args *a)
       made = 0;
     }
     r = one(c,a,k);
-    if ( r >= 0 ) { a->results[k] = r; made += r == PYSE_EDIT_DONE; continue; }
+    if ( r >= 0 )
+    { a->results[k] = r;
+      made += r == PYSE_EDIT_DONE;
+      if ( r == PYSE_EDIT_DONE ) c->changed = 1;
+      continue;
+    }
     a->results[k] = -r;
-    undone = 1;
+    undone = c->changed = 1;
     if ( !c->snap )
       kb_error(PYSE_ERR_BAD_ARGUMENT,"Internal error: an edit changed the surface before "
                "its checks.\n",RECOVERABLE);
@@ -2234,6 +2256,7 @@ static void run_batch(struct ctx *c, struct edit_args *a)
     { int again = 0;
       pyse_snapshot_put_back(c->snap);
       grids_build(c);
+      c->vok_now++;                  /* (those found clean were of a later surface) */
       for ( j = base ; j < k && !again ; j++ )
         if ( a->results[j] == PYSE_EDIT_DONE )
         { int rr = one(c,a,j);
@@ -2275,13 +2298,38 @@ static void setup(struct ctx *c, struct edit_args *a)
   c->flat = a->params[7];
 }
 
+/* recalc() after a call, but where it made no edit and the surface is as
+   the last edit or remesh left it, recalculated (nothing set since: no
+   command, coordinates, values, multipliers, native integrands or threads), the rest
+   of what recalc() does only: it projects every vertex and evaluates every
+   quantity again, to the same values (a remesh's degenerate batch, none
+   made, spent 60% of its time there, a tenth of a remesh near a change on a
+   15k-facet pack) */
+static long recalc_mark[4] = {-1,-1,-1,-1};
+static int recalc_done;
+
+static void recalc_unless(struct ctx *c)
+{ web_timestamp = top_timestamp = ++global_timestamp;
+  if ( c->changed || recalc_mark[0] != pyse_surface_version()
+       || recalc_mark[1] != pyse_load_serial() || recalc_mark[2] != pyse_native_serial()
+       || recalc_mark[3] != pyse_threads() )
+    recalc();
+  else
+  { global_timestamp++;
+    reset_rot_order();
+    change_flag = 0;
+    reset_conj_grad();
+    if ( normal_motion_flag ) begin_normal_motion();
+  }
+  recalc_done = 1;
+}
+
 static void edit_body(void *arg)
 { struct edit_args *a = (struct edit_args *)arg;
   struct ctx c;
   setup(&c,a);
   run_batch(&c,a);
-  web_timestamp = top_timestamp = ++global_timestamp;
-  recalc();
+  recalc_unless(&c);
 }
 
 /* ---- the remesher ------------------------------------------------------- */
@@ -2346,6 +2394,7 @@ static int count_done(int *r, int n)
    surface; every edit checked as in a batch, contact lines kept (they
    are the edits' features). results: splits, collapses, flips, moves. */
 static int surface_clean(struct ctx *c);
+static int near_clean(struct ctx *c);
 
 static void remesh_body(void *arg)
 { struct edit_args *a = (struct edit_args *)arg;
@@ -2363,7 +2412,7 @@ static void remesh_body(void *arg)
       if ( valid_id(v) ) add_to_region(v);
     }
   }
-  c.clean = surface_clean(&c);
+  c.clean = region ? near_clean(&c) : surface_clean(&c);
   keep_len = c.max_len; keep_mode = c.mode;
   for ( pass = 0 ; pass < 4 ; pass++ ) a->results[pass] = 0;
   for ( sweep = 0 ; sweep < (sweeps > 0 ? sweeps : 3) ; sweep++ )
@@ -2387,10 +2436,11 @@ static void remesh_body(void *arg)
     }
     if ( !moved ) break;            /* (topology settled: smoothing alone doesn't repeat) */
   }
+  if ( c.nkey ) temp_free((char *)c.nkey);
+  if ( c.vok ) temp_free((char *)c.vok);
   free(region);
   region = NULL; region_n = 0;
-  web_timestamp = top_timestamp = ++global_timestamp;
-  recalc();
+  recalc_unless(&c);
 }
 
 int pyse_edit(int op, const long *ids, int n, const double *params, const int *walls,
@@ -2410,6 +2460,7 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
   }
   a->op = op; a->ids = ids; a->n = n; a->params = params; a->walls = walls;
   a->sides = sides; a->nwalls = nwalls; a->manifold = manifold; a->results = results;
+  recalc_done = 0;
   if ( op == PYSE_OP_REMESH )
     status = pyse_surface_call(remesh_body,a);
   else
@@ -2418,6 +2469,10 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
     status = pyse_surface_call(edit_body,a);
   }
   pyse_surface_changed();
+  recalc_mark[0] = recalc_done && status == PYSE_OK ? pyse_surface_version() : -1;
+  recalc_mark[1] = pyse_load_serial();
+  recalc_mark[2] = pyse_native_serial();
+  recalc_mark[3] = pyse_threads();
   free(a);
   free(sizes);
   sizes = NULL; sizes_n = 0;
@@ -2534,6 +2589,172 @@ static int surface_clean(struct ctx *c)
     if ( crossings_of(c,e,&none) ) return 0;
   line_crossings(c,&a);
   return a.count == 0;
+}
+
+/* A remesh near a change: whether it may skip the counts before its edits
+   (c->clean, see patch()) asked near its region only. Every edit's patch
+   is within a few rings of the region, and whether the whole surface was
+   clean (surface_clean: every edge asked against the facets, 30k of them
+   on a 15k-facet pack, half the time of a remesh near a change) decides
+   nothing more than whether crossings in the patches have to be counted:
+   the verdicts are the same either way where a patch has none, since an
+   edit kept on a clean patch leaves none in it and changes nothing outside
+   it. So here: the contact lines asked as surface_clean does (all of them:
+   few), the edges and facets with a vertex in the cells within NEAR_CELLS
+   of the region's (cells of side h, a patch's two rings at most 2.7 h
+   across) asked against all; and where an edit's patch has a vertex outside
+   those cells, that vertex's edges and facets asked before it (near_verify:
+   a crossing found there was on the surface when the remesh began, the
+   edits making none, so surface_clean would have found it: the counts are
+   taken from then on, as they would have been all along, the verdicts
+   before the same). The same edits as with surface_clean, but for contact
+   lines crossing on two walls (lines_cross isn't symmetric there). */
+#define NEAR_CELLS 3
+
+static long near_key(struct ctx *c, const REAL *x, long dx, long dy, long dz)
+{ long k[3], d[3] = {dx,dy,dz}, key = 0;
+  int i;
+  for ( i = 0 ; i < 3 ; i++ )
+  { REAL s = floor(x[i]/c->h);
+    if ( !(fabs(s) < 1e6) ) return -1;      /* (not a number, or far out: outside) */
+    k[i] = ((long)s + d[i]) & 0x1FFFFF;
+    key = (key << 21) | k[i];
+  }
+  return key;
+}
+
+static long near_slot(struct ctx *c, long key)
+{ unsigned long u = (unsigned long)key*0x9E3779B97F4A7C15UL;
+  long m = c->ncap - 1, s = (long)((u ^ (u >> 32)) & (unsigned long)m);
+  while ( c->nkey[s] >= 0 && c->nkey[s] != key ) s = (s + 1) & m;
+  return s;
+}
+
+static void near_add(struct ctx *c, long key, long *used)
+{ long s, i;
+  if ( key < 0 ) return;
+  if ( 2*(*used + 1) > c->ncap )
+  { long old = c->ncap, *was = c->nkey;
+    c->ncap = old ? 2*old : 1024;
+    c->nkey = (long *)temp_calloc(c->ncap,sizeof(long));
+    for ( i = 0 ; i < c->ncap ; i++ ) c->nkey[i] = -1;
+    for ( i = 0 ; i < old ; i++ ) if ( was[i] >= 0 ) c->nkey[near_slot(c,was[i])] = was[i];
+    if ( was ) temp_free((char *)was);
+  }
+  s = near_slot(c,key);
+  if ( c->nkey[s] < 0 ) { c->nkey[s] = key; (*used)++; }
+}
+
+/* whether v is in the cells near the region */
+static int near_in(struct ctx *c, vertex_id v)
+{ long key;
+  if ( !c->ncap ) return 0;
+  key = near_key(c,get_coord(v),0,0,0);
+  return key >= 0 && c->nkey[near_slot(c,key)] == key;
+}
+
+static int near_clean(struct ctx *c)
+{ struct crossing_args a;
+  struct ids none = {0,0,0}, E = {0,0,0}, F = {0,0,0};
+  vertex_id v;
+  long used = 0, i, dx, dy, dz, *seed = NULL, nseed = 0, mseed = 0;
+  int clean = 1, guard;
+  memset(&a,0,sizeof(a));
+  far_only = 0;
+  grids_build(c);                  /* (the first batch keeps them) */
+  c->near_on = 1;
+  c->vok_now = 1;
+  line_crossings(c,&a);
+  if ( a.count ) return 0;
+  /* the region's cells, then those within NEAR_CELLS of them */
+  FOR_ALL_VERTICES(v)
+    if ( in_region(v) ) near_add(c,near_key(c,get_coord(v),0,0,0),&used);
+  for ( i = 0 ; i < c->ncap ; i++ )
+    if ( c->nkey[i] >= 0 )
+    { if ( nseed == mseed )
+      { mseed = mseed ? 2*mseed : 1024;
+        seed = seed ? (long *)temp_realloc((char *)seed,mseed*sizeof(long))
+                    : (long *)temp_calloc(mseed,sizeof(long));
+      }
+      seed[nseed++] = c->nkey[i];
+    }
+  for ( i = 0 ; i < nseed ; i++ )
+  { long k[3], key;
+    int j;
+    for ( j = 0 ; j < 3 ; j++ ) k[j] = (seed[i] >> (21*(2-j))) & 0x1FFFFF;
+    for ( dz = -NEAR_CELLS ; dz <= NEAR_CELLS ; dz++ )
+      for ( dy = -NEAR_CELLS ; dy <= NEAR_CELLS ; dy++ )
+        for ( dx = -NEAR_CELLS ; dx <= NEAR_CELLS ; dx++ )
+        { key = (((k[0] + dx) & 0x1FFFFF) << 42) | (((k[1] + dy) & 0x1FFFFF) << 21)
+                | ((k[2] + dz) & 0x1FFFFF);
+          near_add(c,key,&used);
+        }
+  }
+  if ( seed ) temp_free((char *)seed);
+  /* the edges and facets with a vertex there, against all */
+  c->stamp_now++;
+  FOR_ALL_VERTICES(v)
+  { edge_id e, e0;
+    if ( !used || !near_in(c,v) ) continue;
+    EACH_EDGE_AT(v,e,e0,guard)
+      if ( mark(c,positive_id(e)) ) push(&E,positive_id(e));
+  }
+  for ( i = 0 ; i < E.n ; i++ )
+  { facetedge_id fe0 = get_edge_fe(E.a[i]), fe = fe0;
+    int n = 0;
+    if ( valid_id(fe0) ) do
+    { facet_id f = positive_id(get_fe_facet(fe));
+      if ( valid_id(f) && mark(c,f) ) push(&F,f);
+      fe = get_next_facet(fe);
+    } while ( valid_id(fe) && !equal_id(fe,fe0) && ++n < 1000 );
+  }
+  for ( i = 0 ; i < E.n && clean ; i++ ) if ( crossings_of(c,E.a[i],&none) ) clean = 0;
+  for ( i = 0 ; i < F.n && clean ; i++ ) if ( crossings_of(c,F.a[i],&none) ) clean = 0;
+  if ( E.a ) temp_free((char *)E.a);
+  if ( F.a ) temp_free((char *)F.a);
+  return clean;
+}
+
+/* before an edit of a remesh near a change, clean near it: the edges and
+   facets at each of verts outside the cells near the region asked against
+   all, once each (until the surface is put back); one crossing, and the
+   remesh counts them from here on (c->clean 0) */
+static void near_verify(struct ctx *c, struct ids *verts)
+{ struct ids none = {0,0,0}, E = {0,0,0}, F = {0,0,0};
+  int i, k, guard;
+  for ( i = 0 ; i < verts->n && c->clean ; i++ )
+  { vertex_id v = verts->a[i];
+    long o = ordinal(v);
+    edge_id e, e0;
+    if ( !valid_element(v) || near_in(c,v) ) continue;
+    if ( o < c->vok_size && c->vok[o] == c->vok_now ) continue;
+    E.n = F.n = 0;
+    c->stamp_now++;
+    EACH_EDGE_AT(v,e,e0,guard)
+      if ( mark(c,positive_id(e)) ) push(&E,positive_id(e));
+    for ( k = 0 ; k < E.n ; k++ )
+    { facetedge_id fe0 = get_edge_fe(E.a[k]), fe = fe0;
+      int n = 0;
+      if ( valid_id(fe0) ) do
+      { facet_id f = positive_id(get_fe_facet(fe));
+        if ( valid_id(f) && mark(c,f) ) push(&F,f);
+        fe = get_next_facet(fe);
+      } while ( valid_id(fe) && !equal_id(fe,fe0) && ++n < 1000 );
+    }
+    for ( k = 0 ; k < E.n && c->clean ; k++ ) if ( crossings_of(c,E.a[k],&none) ) c->clean = 0;
+    for ( k = 0 ; k < F.n && c->clean ; k++ ) if ( crossings_of(c,F.a[k],&none) ) c->clean = 0;
+    if ( !c->clean ) break;
+    if ( o >= c->vok_size )
+    { long m = 2*o + 64, j;
+      c->vok = c->vok ? (int *)temp_realloc((char *)c->vok,m*sizeof(int))
+                      : (int *)temp_calloc(m,sizeof(int));
+      for ( j = c->vok_size ; j < m ; j++ ) c->vok[j] = 0;
+      c->vok_size = m;
+    }
+    c->vok[o] = c->vok_now;
+  }
+  if ( E.a ) temp_free((char *)E.a);
+  if ( F.a ) temp_free((char *)F.a);
 }
 
 static void crossing_body(void *arg)

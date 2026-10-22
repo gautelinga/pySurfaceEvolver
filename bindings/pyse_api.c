@@ -1949,6 +1949,7 @@ void pyse_set_multipliers(const double *in, long n)
 { body_id b_id;
   long row = 0;
   int i;
+  surface_version++;       /* (the pressures: an edit's recalc() isn't skipped) */
   FOR_ALL_BODIES(b_id)
     if ( row < n ) set_body_pressure(b_id,(REAL)in[row++]);
   for ( i = 0 ; i < gen_quant_count && row < n ; i++ )

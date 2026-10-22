@@ -100,7 +100,10 @@ static int native_count = 0;
 static long native_load = -1;
 static int native_on = 1;
 
-void pyse_native_enable(int on) { native_on = on; }
+static long native_serial = 0;   /* bumped at every registration or toggle */
+long pyse_native_serial(void) { return native_serial; }
+
+void pyse_native_enable(int on) { native_on = on; native_serial++; }
 
 /* register constraint con as a sphere wall (k: its energy coefficient, NaN
    where it isn't a number: the content only); 0 if it can't be (no
@@ -110,6 +113,7 @@ int pyse_native_sphere(int con, const double *c, double R, const double *e1,
 { struct constraint *cn;
   struct native *n;
   int i;
+  native_serial++;
   if ( native_load != pyse_load_serial() ) { native_count = 0; native_load = pyse_load_serial(); }
   if ( con < 0 || con >= web.maxcon || native_count >= NATIVE_MAX ) return 0;
   cn = get_constraint(con);
@@ -443,6 +447,7 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
 { struct expnode *key = NULL;
   struct flux_field *f = NULL;
   int i, k, points, poles;
+  native_serial++;
   if ( flux_load != pyse_load_serial() ) { flux_reset(); flux_load = pyse_load_serial(); }
   if ( nterm < 0 || SDIM != 3 || nbc > 12 ) return 0;
   if ( method && method[0] )
@@ -747,6 +752,7 @@ int pyse_native_simd(int on)
 {
 #ifdef FLUX_SIMD
   int was;
+  native_serial++;
   if ( flux_simd < 0 ) flux_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
   was = flux_simd;
   flux_simd = on && __builtin_cpu_supports("avx2") ? 1 : 0;
@@ -1113,6 +1119,7 @@ int pyse_native_formula_register(int con, int kind, const double *p)
   REAL pts[8][3] = {{0.31,-0.27,0.73},{1.9,0.4,-0.6},{-0.8,2.3,1.1},{0.05,0.11,3.7},
                     {-1.37,-0.91,0.29},{0.7071,0.7071,0.0},{2.9,-3.1,-0.4},{0.013,-0.6,-2.2}};
   int i, k, j;
+  native_serial++;
   if ( formula_load != pyse_load_serial() )
   { for ( i = 0 ; i < formula_count ; i++ )
       formulas[i].key = NULL;    /* (the old load's expressions are gone) */
