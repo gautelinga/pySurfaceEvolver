@@ -290,6 +290,54 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
    max (x, y, z each: the edge's midpoint, the two lines' middle). */
 int pyse_crossings(int far, long *count, double *where, long max);
 
+/* The topology events' loops (pyse_events.c, for _events.py): on arrays
+   only, never Evolver's state, so not guarded and safe to run beside a
+   call. Rows as in the mesh's arrays (x: n x 3, f: nf x 3, pairs n x 2).
+   Each returns 0, -1 when memory ran out, -2 for a row out of range;
+   arrays returned through pointers are malloc'ed, the caller frees them.
+   threads: at most that many OpenMP threads, where the work is enough.
+
+   frame: the facets' unique edges (smaller end first, sorted), each
+   vertex's unit normal (the facets' areas summed) and whether it lies in a
+   fold (a facet round it facing against it). */
+int pyse_events_frame(long n, const double *x, long nf, const int64_t *f,
+                      int64_t **edges, long *ne, double *normal, unsigned char *folded);
+/* self: the surface close to itself, (vertex, facet) pairs in order (vi,
+   ti): vi in vmask, a corner of the facet in pmask facing vi (normals
+   apart by more than 120 degrees) within R, the facet not round vi and no
+   corner of it folded, facing vi (its corners' normals summed), within
+   reach*r[vi] of its centroid less its radius, the gap to its closest
+   point (closest) within r[vi] (a neck, neck_factor times that), along
+   vi's normal for more than half of it, and no corner within two edges of
+   vi along the mesh (edges). neck: a body lies across (with_bodies;
+   behind/ahead: the bodies on each side of each vertex), or (without)
+   the gap is behind vi. */
+int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne,
+                     const int64_t *edges, const double *normal, const double *r,
+                     const unsigned char *vmask, const unsigned char *pmask,
+                     const unsigned char *folded, const int64_t *behind, const int64_t *ahead,
+                     int with_bodies, double R, double reach, double neck_factor, int threads,
+                     long *count, int64_t **vi, int64_t **ti, double **gap, double **closest,
+                     unsigned char **neck);
+/* lines: one constraint's contact lines (its contact-line edges, joined
+   into paths as _geometry._chains does: line_vertices, nl of them, the
+   paths' in turn, a loop's first vertex once) and the pairs (i < j, rows
+   of line_vertices, np of them, in order) closer than factor times the
+   largest h there and than factor times their mean h (scale), on two
+   lines or farther apart along theirs than three times that or their
+   distance (d). */
+int pyse_events_lines(long n, const double *x, const double *h, long ne, const int64_t *edges,
+                      double factor, long *nl, int64_t **line_vertices, long *np,
+                      int64_t **pi, int64_t **pj, double **pd, double **pscale);
+/* segments: each point's distance to the nearest of the segments (a, b) */
+int pyse_events_segments(long np, const double *p, long ns, const double *a, const double *b,
+                         int threads, double *out);
+/* groups: the connected groups of masked vertices, joined by links (nl
+   pairs) between masked ones: per vertex its group's smallest member (-1
+   where not masked). */
+int pyse_events_groups(long n, const unsigned char *mask, long nl, const int64_t *links,
+                       int64_t *label);
+
 /* Whether the surface is converted to quantities (everything_quantities;
    the first Hessian converts it): a snapshot restores only into the mode
    it was taken in. */

@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
+#include <new>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -188,6 +190,36 @@ nb::object to_numpy(std::vector<T> &&data, std::initializer_list<size_t> shape) 
     delete static_cast<std::vector<T> *>(p);
   });
   return nb::cast(nb::ndarray<nb::numpy, T>(heap->data(), shape, owner));
+}
+
+// Hand a malloc'ed buffer (pyse_events.c's results) to NumPy; NULL (no
+// rows) gives an empty array.
+template <typename T, typename S>
+nb::object from_malloc(S *data, std::initializer_list<size_t> shape) {
+  static_assert(sizeof(T) == sizeof(S), "same layout");
+  if (!data) data = static_cast<S *>(std::malloc(sizeof(S)));
+  if (!data) throw std::bad_alloc();
+  nb::capsule owner(data, [](void *p) noexcept { std::free(p); });
+  return nb::cast(nb::ndarray<nb::numpy, T>(reinterpret_cast<T *>(data), shape, owner));
+}
+
+// pyse_events.c's status as an exception
+void events_status(int status, const char *what) {
+  if (status == -1) throw std::bad_alloc();
+  if (status == -2) throw std::invalid_argument(std::string(what) + ": a vertex row out of range");
+}
+
+template <typename T, int D>
+using In = nb::ndarray<const T, nb::ndim<D>, nb::c_contig, nb::device::cpu>;
+
+// A vector handed to NumPy as a typed 1-d array (for the stubs' types).
+template <typename T>
+nb::ndarray<nb::numpy, T, nb::ndim<1>> array_1d(std::vector<T> &&data) {
+  auto *heap = new std::vector<T>(std::move(data));
+  nb::capsule owner(heap, [](void *p) noexcept {
+    delete static_cast<std::vector<T> *>(p);
+  });
+  return nb::ndarray<nb::numpy, T, nb::ndim<1>>(heap->data(), {heap->size()}, owner);
 }
 
 }  // namespace
@@ -777,4 +809,113 @@ NB_MODULE(_core, m) {
   // (no Evolver lock: a snapshot's memory is its own, and this runs from
   // __del__, maybe inside a callback of a running call)
   m.def("snapshot_free", [](long handle) { pyse_snapshot_free(handle); }, "handle"_a);
+
+  // ---- the topology events' loops (pyse_events.c) ----------------------------
+  // On arrays only: no Evolver lock (they run beside a call), the GIL
+  // released. The threads setting is read without the lock (an int).
+  m.def("events_frame", [](In<double, 2> x, In<int64_t, 2> f) {
+    if (x.shape(1) != 3 || f.shape(1) != 3)
+      throw std::invalid_argument("events_frame: x (n, 3), f (nf, 3)");
+    long n = long(x.shape(0)), nf = long(f.shape(0)), ne = 0;
+    int64_t *edges = nullptr;
+    auto *normal = static_cast<double *>(std::malloc(size_t(n > 0 ? n : 1) * 3 * sizeof(double)));
+    auto *folded = static_cast<unsigned char *>(std::malloc(size_t(n > 0 ? n : 1)));
+    int status = -1;
+    if (normal && folded) {
+      nb::gil_scoped_release release;
+      status = pyse_events_frame(n, x.data(), nf, f.data(), &edges, &ne, normal, folded);
+    }
+    if (status != 0) { std::free(normal); std::free(folded); }
+    events_status(status, "events_frame");
+    return nb::make_tuple(from_malloc<int64_t>(edges, {size_t(ne), size_t(2)}),
+                          from_malloc<double>(normal, {size_t(n), size_t(3)}),
+                          from_malloc<bool>(folded, {size_t(n)}));
+  }, "x"_a, "f"_a,
+     "(edges (ne, 2): the facets' unique edges, smaller end first, sorted; normals (n, 3): "
+     "the facets' areas summed, unit; folded (n,): a facet round it facing against it)");
+  m.def("events_self", [](In<double, 2> x, In<int64_t, 2> f, In<int64_t, 2> edges,
+                          In<double, 2> normal, In<double, 1> r, In<bool, 1> vmask,
+                          In<bool, 1> pmask, In<bool, 1> folded, In<int64_t, 1> behind,
+                          In<int64_t, 1> ahead, bool with_bodies, double R, double reach,
+                          double neck_factor) {
+    size_t n = x.shape(0);
+    if (x.shape(1) != 3 || f.shape(1) != 3 || edges.shape(1) != 2 || normal.shape(0) != n
+        || normal.shape(1) != 3 || r.shape(0) != n || vmask.shape(0) != n
+        || pmask.shape(0) != n || folded.shape(0) != n || behind.shape(0) != n
+        || ahead.shape(0) != n)
+      throw std::invalid_argument("events_self: arrays of the wrong shapes");
+    int threads = pyse_threads();
+    long count = 0;
+    int64_t *vi = nullptr, *ti = nullptr;
+    double *gap = nullptr, *closest = nullptr;
+    unsigned char *neck = nullptr;
+    int status;
+    {
+      nb::gil_scoped_release release;
+      status = pyse_events_self(
+          long(n), x.data(), long(f.shape(0)), f.data(), long(edges.shape(0)), edges.data(),
+          normal.data(), r.data(), reinterpret_cast<const unsigned char *>(vmask.data()),
+          reinterpret_cast<const unsigned char *>(pmask.data()),
+          reinterpret_cast<const unsigned char *>(folded.data()), behind.data(), ahead.data(),
+          with_bodies, R, reach, neck_factor, threads, &count, &vi, &ti, &gap, &closest, &neck);
+    }
+    events_status(status, "events_self");
+    size_t k = size_t(count);
+    return nb::make_tuple(from_malloc<int64_t>(vi, {k}), from_malloc<int64_t>(ti, {k}),
+                          from_malloc<double>(gap, {k}), from_malloc<double>(closest, {k, size_t(3)}),
+                          from_malloc<bool>(neck, {k}));
+  }, "x"_a, "f"_a, "edges"_a, "normal"_a, "r"_a, "vmask"_a, "pmask"_a, "folded"_a, "behind"_a,
+     "ahead"_a, "with_bodies"_a, "R"_a, "reach"_a, "neck_factor"_a,
+     "(vertex rows, facet rows, gaps, closest points, neck) of the surface close to itself, "
+     "in order (vertex, facet): see pyse_api.h");
+  m.def("events_lines", [](In<double, 2> x, In<double, 1> h, In<int64_t, 2> edges,
+                           double factor) {
+    if (x.shape(1) != 3 || h.shape(0) != x.shape(0) || edges.shape(1) != 2)
+      throw std::invalid_argument("events_lines: arrays of the wrong shapes");
+    long nl = 0, np = 0;
+    int64_t *lv = nullptr, *pi = nullptr, *pj = nullptr;
+    double *pd = nullptr, *pscale = nullptr;
+    int status;
+    {
+      nb::gil_scoped_release release;
+      status = pyse_events_lines(long(x.shape(0)), x.data(), h.data(), long(edges.shape(0)),
+                                 edges.data(), factor, &nl, &lv, &np, &pi, &pj, &pd, &pscale);
+    }
+    events_status(status, "events_lines");
+    size_t k = size_t(np);
+    return nb::make_tuple(from_malloc<int64_t>(lv, {size_t(nl)}), from_malloc<int64_t>(pi, {k}),
+                          from_malloc<int64_t>(pj, {k}), from_malloc<double>(pd, {k}),
+                          from_malloc<double>(pscale, {k}));
+  }, "x"_a, "h"_a, "edges"_a, "factor"_a,
+     "(line vertices, i, j, distances, scales): contact-line vertices close to each other "
+     "while far apart along the lines (pairs of rows of the line vertices); see pyse_api.h");
+  m.def("events_segments", [](In<double, 2> p, In<double, 2> a, In<double, 2> b) {
+    if (p.shape(1) != 3 || a.shape(1) != 3 || b.shape(1) != 3 || a.shape(0) != b.shape(0))
+      throw std::invalid_argument("events_segments: p (n, 3), a and b (m, 3)");
+    size_t n = p.shape(0);
+    std::vector<double> dist(n);
+    int threads = pyse_threads(), status;
+    {
+      nb::gil_scoped_release release;
+      status = pyse_events_segments(long(n), p.data(), long(a.shape(0)), a.data(), b.data(),
+                                    threads, dist.data());
+    }
+    events_status(status, "events_segments");
+    return array_1d(std::move(dist));
+  }, "p"_a, "a"_a, "b"_a, "each point's distance to the nearest of the segments (a, b)");
+  m.def("events_groups", [](In<bool, 1> mask, In<int64_t, 2> links) {
+    if (links.shape(1) != 2) throw std::invalid_argument("events_groups: links (m, 2)");
+    size_t n = mask.shape(0);
+    std::vector<int64_t> label(n);
+    int status;
+    {
+      nb::gil_scoped_release release;
+      status = pyse_events_groups(long(n), reinterpret_cast<const unsigned char *>(mask.data()),
+                                  long(links.shape(0)), links.data(), label.data());
+    }
+    events_status(status, "events_groups");
+    return array_1d(std::move(label));
+  }, "mask"_a, "links"_a,
+     "per vertex the smallest member of its group (masked vertices joined by links), -1 "
+     "where not masked");
 }
