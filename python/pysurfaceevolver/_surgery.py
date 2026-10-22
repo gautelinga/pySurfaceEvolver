@@ -2421,6 +2421,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     refused_at: list = []               # changes refused in it: (kind, solid, place)
     history: list = []                  # changes made, undone or refused in it, by place (_Tried)
     told: list = []                     # ... and those put off, told of
+    seen: dict = {}                     # this iteration's events as tried (place)
     unsound: Any = None                 # the state the last "relaxed, but" round left
     last: Any = None                    # the state the last unconverged run left
     stalled = 0                         # runs in a row that left it as it was
@@ -2439,15 +2440,26 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                        for k, c, w in at)
         return count(made_at) >= _AGAIN or count(refused_at) >= _AGAIN
 
+    def place(e) -> _Tried:
+        """e as a change tried (_tried), taken once an iteration, on the
+        mesh it was found on (a change's undone, the iteration's are lost)."""
+        got = seen.get(id(e))
+        if got is None or got[0] is not e:
+            got = seen[id(e)] = (e, _tried(ev, e, ""))
+        return got[1]
+
+    def note(e, what: str) -> None:
+        history.append(place(e)._replace(what=what))
+
     def note_refused(e) -> None:
         refused_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
-        history.append(_tried(ev, e, "refused"))
+        note(e, "refused")
 
     def later(e) -> bool:
         """Whether e's change is put off (_put_off), told of once a place."""
-        if not _put_off(ev, e, history):
+        here = place(e)
+        if not history or not _put_off(here, history):
             return False
-        here = _tried(ev, e, "")
         if not any(_same_place(here, t) for t in told):
             told.append(here)
             _log.debug("change put off: %s (made, undone or refused at its place in this "
@@ -2462,7 +2474,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         descent ran away)."""
         if e.kind != "neck":
             return False
-        here = _tried(ev, e, "")
+        here = place(e)
         return any(t.kind == "neck" and t.what == "made" and _same_place(here, t)
                    for t in history)
 
@@ -2471,7 +2483,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         nonlocal way, before, tried, since, stuck, falling, remeshing, stalled
         _checked(ev, f"the change: {e}")
         made_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
-        history.append(_tried(ev, e, "made"))
+        note(e, "made")
         undo[:] = [(pre.pop(), e)] if pre else []
         pre.clear()
         _remesh_now(ev, h0, near=[e.where])
@@ -2508,6 +2520,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     falling, remeshing = False, True
                     guard(ev)
             fresh = ev._save()          # (where this iteration began)
+            seen.clear()
             _tidy(ev, h0, shut, close=closing)
             _checked(ev, "tidying (lines, patches, poles)")
             x = _places(ev)
@@ -2626,7 +2639,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 _log.debug("change made: %s", neck)
                 _checked(ev, f"pinch_off: {neck}")
                 made_at.append((neck.kind, str(neck.constraint), np.asarray(neck.where, float)))
-                history.append(_tried(ev, neck, "made"))
+                note(neck, "made")
                 changes.append(neck)
                 undo.clear()
                 way, before, since = None, [], 0
@@ -2838,7 +2851,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     del changes[k]
                     break
             made_at.extend([(e.kind, str(e.constraint), np.asarray(e.where, float))]*_AGAIN)
-            history.append(_tried(ev, e, "undone"))
+            note(e, "undone")
             refused = f"{e}: Evolver failed after it ({str(error).splitlines()[0]})"
             _log.debug("change undone: %s", refused)
             way, before, since = None, [], 0
@@ -3580,18 +3593,21 @@ def _reopening(e, shut: list, h: float) -> bool:
 class _Tried(NamedTuple):
     """A change a descent made, undid or refused (``what``): its event's
     kind, the solids it is on or against (_solids_at), where, its edges
-    there and its gap in them."""
+    there, its gap in them, and which way it goes (_sense)."""
     kind: str
     solids: frozenset
     where: np.ndarray
     scale: float
     gap: float
+    sense: int
     what: str
 
 
 def _tried(ev, e, what: str) -> _Tried:
+    """e as a change tried (on the mesh it was found on: its vertices are
+    rows of it)."""
     return _Tried(e.kind, _solids_at(ev, e), np.asarray(e.where, float), float(e.scale),
-                  float(e.gap)/max(float(e.scale), 1e-300), what)
+                  float(e.gap)/max(float(e.scale), 1e-300), _sense(ev, e), what)
 
 
 def _solids_at(ev, e) -> frozenset:
@@ -3611,38 +3627,63 @@ def _solids_at(ev, e) -> frozenset:
     return frozenset(_base(names[c] or int(nums[c])) for c in np.flatnonzero(on))
 
 
-def _same_place(a: _Tried, b: _Tried) -> bool:
+def _sense(ev, e) -> int:
+    """Which way an event's change goes: +1 joining the liquid (a touch's
+    merge, wetting a solid, contact lines joined across dry ground), -1
+    parting it (a neck's cut, drying, lines joined across a wet strip),
+    0 not known."""
+    if e.kind in ("neck", "touch"):
+        return -1 if e.kind == "neck" else 1
+    if e.kind == "solid":
+        return {"body": -1, "outside": 1}.get(e.between or "", 0)
+    try:
+        nums, _, dist, names = ev._constraint_gaps()
+        c = _column(nums, names, e.constraint)
+        m = ev.mesh()
+        x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
+        on = np.isnan(dist[:, c])
+        a, b = _closest_pair(x, np.asarray(e.vertices, int), on)
+        return -1 if _wet_between(ev, m, x, f, on, int(nums[c]), a, b) else 1
+    except (ValueError, IndexError):
+        return 0
+
+
+def _same_place(a: _Tried, b: _Tried, reach: float = None) -> bool:
     """Whether two changes are at one place: on (or against) the same solid,
-    or both on none, within _PLACE of the larger of their edges."""
+    or both on none, within ``reach`` (default _PLACE) of the larger of
+    their edges."""
     return (bool(a.solids & b.solids) or not (a.solids or b.solids)) \
-        and float(np.linalg.norm(a.where - b.where)) < _PLACE*max(a.scale, b.scale)
+        and float(np.linalg.norm(a.where - b.where)) \
+        < (_PLACE if reach is None else reach)*max(a.scale, b.scale)
 
 
-def _put_off(ev, e, history: list) -> bool:
-    """Whether a descent puts e's change off: one was made or undone at its
-    place in this descent (the same change, which didn't take, or the
-    opposite: cut and joined, dried and wetted), or one of its kind refused
-    there, and e isn't nearer than _MARGIN of that one's gap (in their
-    edges; through the solid deeper than 1/_MARGIN of it, where that one
-    was at it or through; a neck, touch or contact lines met). Made at the
-    same gap, a change and its opposite take
-    turns: a pack's sheet at a side wall had its footprint dried three
-    times and its lines joined back, the runs between crossing there, until
-    the descent ran away. The guards and the descent's runs hold the
+def _put_off(here: _Tried, history: list) -> bool:
+    """Whether a descent puts a change (``here``, as _tried takes it) off:
+    at its place in this descent the opposite was made or undone (cut and
+    merged, dried and wetted, a footprint dried and its lines joined back),
+    the same was made within an edge (it came back: it didn't take), or one
+    of its kind refused; and it isn't nearer than _MARGIN of that one's gap
+    (in their edges; through the solid deeper than 1/_MARGIN of it, where
+    that one was at it or through; a neck, touch or contact lines met).
+    Made at the same gap, a change and its opposite take turns: a pack's
+    sheet at a side wall had its footprint dried three times and its lines
+    joined back, the runs between crossing there, until the descent ran
+    away. (The same change beside one made is no repeat: a film drying in
+    patches over a bead, the next one two edges from the last, was put off
+    and the descent wandered 200 runs.) The guards and the runs hold the
     surface meanwhile; a neck that pinches, a film that thins, comes nearer
     and is made then (and where a run would cross, _change_nearest still
     makes it, after the others)."""
-    if not history:
-        return False
-    here = _tried(ev, e, "")
-    gaps = [t.gap for t in history if _same_place(here, t)
-            and (t.what != "refused" or t.kind == e.kind)]
+    gaps = [t.gap for t in history
+            if (t.what == "refused" and t.kind == here.kind and _same_place(here, t))
+            or (t.what != "refused" and (_same_place(here, t, 1.0) if t.sense == here.sense != 0
+                                         else _same_place(here, t)))]
     if not gaps:
         return False
     g = min(gaps)
     # (a neck, touch or contact lines can't come nearer than 0: there, met)
     return not (here.gap < (g*_MARGIN if g > 0 else g/_MARGIN)
-                or (e.kind != "solid" and here.gap <= 0))
+                or (here.kind != "solid" and here.gap <= 0))
 
 
 def _coming(found: list, before: list) -> list:

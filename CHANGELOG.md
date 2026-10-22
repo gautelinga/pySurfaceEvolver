@@ -391,14 +391,16 @@
   round, to the end of the budget), which is taken as the descent's end where all
   it lacks is a better mesh (degenerate facets, the surface near a wall or itself).
 
-- A descent doesn't make a change where it just made, undid or refused one: where a
-  change was made or undone (the same change, which didn't take, or its opposite: a
-  cut and a merge, drying and wetting, a footprint dried and its lines joined back),
-  or one of its kind refused, on the same solid (or both on none) within three of
-  the local edges, the next is put off until it is nearer than half that one's gap
-  (through a solid twice as deep; a neck, touch or contact lines met). The guards
-  and the runs hold the surface meanwhile; where a run would cross, the changes not
-  put off are tried first, then these. A sheet's neck at a wall where one was cut in
+- A descent doesn't make a change where it just made, undid or refused one: where
+  the opposite change was made or undone (a cut and a merge, drying and wetting, a
+  footprint dried and its lines joined back) on the same solid (or both on none)
+  within three of the local edges, the same change within one (it came back: it
+  didn't take), or one of its kind refused within three, the next is put off until
+  it is nearer than half that one's gap (through a solid twice as deep; a neck,
+  touch or contact lines met). The guards and the runs hold the surface meanwhile;
+  where a run would cross, the changes not put off are tried first, then these.
+  (The same change beside one made is no repeat: a film drying in patches over a
+  bead, the next two edges from the last, put off, left the descent wandering.) A sheet's neck at a wall where one was cut in
   the descent ruptures by a hole beside its contact line instead of its footprint
   dried again. 16-bead replays had a sheet's footprint on a side wall dried three
   times and its lines joined back, the runs crossing between, until the descent
