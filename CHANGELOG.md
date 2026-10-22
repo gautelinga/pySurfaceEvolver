@@ -413,6 +413,13 @@
   cut: the liquid parts at the wall, the pieces made bodies as a cut's are. Where
   the neck is still there after it, the refusal stands.
 
+- A neck collapsed below the mesh whose one side is a spike (the facets on its
+  ring's edges there all meet at one vertex with no other neighbours: a filament
+  thinned to a cone 3e-5 across at its base) is taken off, the apex and the ring
+  collapsed to one point and the rest of the surface closed there. Cut as a neck,
+  the spike's facets would be one point's: Evolver refused every edge ("the ring
+  didn't collapse to one vertex (3 left)"), at every look of a 16-bead descent.
+
 - Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
   was dissolved and another made: Evolver gives the freed volume quantity's and
   method instance's slots to the next ones, and the restore copied flags back slot

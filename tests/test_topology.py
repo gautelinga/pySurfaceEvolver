@@ -914,6 +914,26 @@ def test_a_neck_collapsed_below_the_mesh_is_cut():
     ev.command("g 1")
 
 
+def test_a_spike_collapsed_below_the_mesh_is_taken_off():
+    # the hourglass's top cone replaced by a spike on its waist (three facets
+    # to one apex, a filament thinned to a cone 1e-5 across at its base): cut
+    # as a neck, its facets would be one point's (Evolver refused every
+    # edge, "3 left"); taken off, the surface closed at the waist, the
+    # volume as it was
+    from pysurfaceevolver import _surgery as S
+    v, f = _hourglass(1e-5)
+    v = np.r_[v[:7], [[0, 0, 1.5]]]
+    f = [row for row in f.tolist() if max(row) <= 6] + [[7, 4 + i, 4 + (i + 1) % 3]
+                                                        for i in range(3)]
+    ev, volume = _held(v, np.array(f))
+    assert len(S._collapsed_rings(ev.mesh(), S._median_edge(ev.mesh()))) == 1
+    assert S._pinch_collapsed(ev) == 1
+    assert list(ev.bodies().ids) == [1] and ev.counts["vertices"] == 5
+    assert ev.body(1).volume == pytest.approx(volume, rel=1e-5)     # (the waist's collapse)
+    assert S.check_topology(ev) == [] and not S._collapsed_rings(ev.mesh(), S._median_edge(ev.mesh()))
+    ev.command("g 1")
+
+
 def test_a_collapse_keeps_the_surface_a_manifold():
     # the hourglass's waist edges: merging an edge's ends would join them to
     # the waist's third vertex by two edges (the surface pinched along an

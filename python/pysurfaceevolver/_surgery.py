@@ -3460,8 +3460,12 @@ def _pinch_collapsed(ev) -> int:
             crossed, start, energy = _crossings(ev), ev._save(), ev.energy
             guarded = _guarded(ev)
             _unguard(ev)
+            apex = _spike(f, np.asarray(m.edges), ring, side)
             try:
-                _pinch_ring(ev, m, x, f, ring, centre, side, h)
+                if apex is None:
+                    _pinch_ring(ev, m, x, f, ring, centre, side, h)
+                else:
+                    _take_spike(ev, x, ring, apex, centre, h)
                 if _crossings(ev) > crossed:
                     raise ValueError("the cut passed the surface through itself")
                 why = _unsteppable(ev, energy)
@@ -3476,14 +3480,59 @@ def _pinch_collapsed(ev) -> int:
             finally:
                 if guarded:
                     guard(ev)
-            _log.debug("change made: a neck collapsed below the mesh, %.2g across at (%s), cut",
-                       across, ", ".join(f"{c:.4g}" for c in centre))
+            _log.debug("change made: a %s collapsed below the mesh, %.2g across at (%s), %s",
+                       "neck" if apex is None else "spike", across,
+                       ", ".join(f"{c:.4g}" for c in centre), "cut" if apex is None else "taken off")
             made += 1
             cut = True
             break
         if not cut:
             break
     return made
+
+
+def _spike(f, edges, ring, side) -> "int | None":
+    """Where one side of a collapsed neck (_ring_sides) is a spike: the
+    facets on its ring's edges there all meet at one vertex, whose only
+    neighbours are the ring's (a filament thinned to a cone 3 edges round
+    at its base). That vertex's row, else None."""
+    on = set(int(v) for v in ring)
+    for s in (-1.0, 1.0):
+        apex = set()
+        for row in f[np.isin(f, ring).sum(axis=1) == 2]:
+            third = [int(v) for v in row if int(v) not in on]
+            if third and side[third[0]] == s:
+                apex.add(third[0])
+        if len(apex) == 1:
+            p = apex.pop()
+            if set(edges[(edges == p).any(axis=1)].ravel().tolist()) - {p} <= on:
+                return p
+    return None
+
+
+def _take_spike(ev, x, ring, apex, centre, scale: float) -> None:
+    """A spike on a collapsed neck (_spike) taken off: its apex and the ring
+    collapsed to the ring's centre (Evolver deletes the edges there), the
+    rest of the surface closed at that point. (Cut as a neck, the spike's
+    three facets would be one point's: Evolver refused every edge, "3
+    left", run after run, a 16-bead pack's descent going round them.) The
+    spike enclosed nothing to speak of."""
+    moved = x.copy()
+    moved[ring] = centre
+    moved[apex] = centre
+    ev.vertices = moved
+    tiny = 1e-9*scale
+    count = ev.counts["edges"]
+    for _ in range(len(ring) + 3):
+        ev.command(f"delete edge where length < {_num(tiny, 'length')}")
+        now = ev.counts["edges"]
+        if now == count:
+            break
+        count = now
+    m = ev.mesh()
+    at = np.flatnonzero(np.linalg.norm(np.asarray(m.vertices) - centre, axis=1) < 1e3*tiny)
+    if len(at) != 1 or _sides_at(np.asarray(m.facets), int(at[0])) != 1:
+        raise ValueError(f"the spike didn't collapse to one point ({len(at)} left)")
 
 
 def _drop_empty(ev) -> int:
