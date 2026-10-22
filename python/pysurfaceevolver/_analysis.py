@@ -35,11 +35,13 @@ _ELASTIC_METHODS = frozenset({
     "relaxed_elastic2_A", "dirichlet_elastic", "SVK_elastic", "neo_hookean",
     "stress_integral"})
 
-# residual() and _target_gap() of the surface as it last was, kept for its
-# version (_core.surface_version(): any edit, command or move changes it): a
-# 16-bead pack's descent asked 57% of its 12.6k residuals of a state it had
-# just measured (a run's check before relax(), relax()'s own at its start),
-# 73 s of a 1500 s replay, and the volumes' gap as often
+# residual() of the surface as it last was, kept for its version
+# (_core.surface_version(): any edit, command or move changes it): a 16-bead
+# pack's descent asked 57% of its 12.6k residuals of a state it had just
+# measured (a run's check before relax(), relax()'s own at its start), 73 s
+# of a 1500 s replay. (Not _target_gap(): its first reading at a version can
+# come before the quantities' recalculation it makes, and kept, it would
+# stand in for the later, recalculated ones)
 _measured: Dict[str, tuple] = {}
 
 class _Analysis(_Engine):
@@ -50,10 +52,6 @@ class _Analysis(_Engine):
         targets (the largest gap, relative to the target; absolute for a
         target of 0), and what closing the gaps costs in energy to first
         order (the sum of |pressure * gap|)."""
-        version = _core.surface_version()
-        kept = _measured.get("target_gap")
-        if kept is not None and kept[0] == version:
-            return kept[1]
         gaps: List[float] = []
         cost = 0.0
         b = self.bodies()
@@ -66,10 +64,7 @@ class _Analysis(_Engine):
             if q.kind == "fixed":
                 gaps.append(abs(q.target - q.value)/(abs(q.target) if q.target else 1.0))
                 cost += abs(q.pressure*(q.target - q.value))
-        out = max(gaps, default=0.0), cost
-        if _core.surface_version() == version:     # (nothing changed meanwhile)
-            _measured["target_gap"] = (version, out)
-        return out
+        return max(gaps, default=0.0), cost
 
     def _degenerate(self) -> bool:
         """Whether a facet is degenerate (an angle below 1 degree)."""
