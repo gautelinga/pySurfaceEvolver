@@ -315,6 +315,30 @@
 
 ### Fixes
 
+- Topology runs at a box's side walls (16-bead packs drained to breakthrough):
+  - The descents' guards: each vertex on the walls nearest it, as many as make
+    three with the walls it is on (not two, planes first: free vertices in a
+    box's corner went into the bead there, run after run undone; contact lines'
+    vertices, unguarded, went out through the side wall their wall meets);
+    contact-line edges split during gradient steps give the midpoint the
+    guards both ends have.
+  - A sheet (a neck whose waist normals lie along one direction) is an event
+    within the gap two sheets are, not four times it: sheets against side walls
+    ruptured 1-1.8 edges thick, and the liquid came back over the cut again
+    and again.
+  - A neck against one wall is cut across an axis along the wall (its waist's
+    vertices are the flanks beside the wall, whose normals put the axis across
+    it: the cut squashed the flanks together and left the neck, the body one
+    piece); where the collapse leaves the neck's two ends on the wall joined by
+    an edge, the checked `unzip` edit parts them.
+  - Shrunk patches are closed against the edges round them where the mesh is
+    finer than the edge scale (a one-facet patch made on a refined mesh was
+    closed at once, and the surface lay on the wall with its contact refused);
+    pieces of surface with a border and next to no area (lone facets left
+    along a box's edge) are taken away as crumbs.
+  - The checked edits count each vertex of a patch once (a separation beside
+    another pinched vertex was refused as worse).
+
 - Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
   was dissolved and another made: Evolver gives the freed volume quantity's and
   method instance's slots to the next ones, and the restore copied flags back slot

@@ -17,6 +17,7 @@ from ._errors import _num
 _SEAM = 3.0     # the cut's tips are tidied within this many median edges
 _TOUCH = 0.05   # a solid this close (in its event's edges): the surface resting on it
 _GUARD_REACH = 5.0  # free vertices are guarded from the walls within this many median edges
+_GUARDS = 3         # ... the nearest this many (a free vertex hits at most that many at once)
 _POLE_MARGIN = 0.5  # a sphere(axis=)'s pole moved when a contact line comes this near (radii)
 _POLE_TRIES = 3     # a run that came within half that done again this often, the poles moved
 _POLE_CHUNK = 10    # runs in chunks of this many steps, the poles moved ahead of the lines between
@@ -84,23 +85,23 @@ def _checked(ev, what: str) -> None:
         raise TopologyCheckError(what, structural)
 
 
-def _guard_order(gap: np.ndarray, plane: np.ndarray) -> np.ndarray:
-    """Per vertex, the columns of the two walls guard() puts it on: those
-    within reach (finite gap), planes before the others, each nearest first."""
-    key = np.where(np.isfinite(gap), np.where(plane[None, :], 0.0, 1.0), 2.0)
-    return np.lexsort((gap, key), axis=1)[:, :2]
+def _guard_order(gap: np.ndarray) -> np.ndarray:
+    """Per vertex, the columns of the walls guard() puts it on: the three
+    nearest (those within reach, finite gap, count), nearest first."""
+    return np.argsort(gap, axis=1, kind="stable")[:, :_GUARDS]
 
 
 def guard(ev) -> None:
-    """Keep free vertices out of the solids in the descent after a change
+    """Keep the vertices out of the solids in the descent after a change
     (descend(), not falling: gradient steps move the vertices): each
     wall with a contact angle gets a one-sided copy of its constraint
-    (no integrals, named GUARD_PREFIX + its key), put on the vertices on
-    no wall and not fixed, for the two walls nearest each within
-    _GUARD_REACH median edges (a contact line's vertex in the 0.03 gap
-    between two beads hit the next bead's guard and a third, and a free
-    vertex three guards: Evolver's ERROR 5883, more constraints than
-    dimensions); called again as the vertices move. Evolver stops a vertex there; the energy and the
+    (no integrals, named GUARD_PREFIX + its key), put on the vertices not
+    fixed, for the walls nearest each within _GUARD_REACH median edges, as
+    many as make _GUARDS with the walls it is on (Evolver stops, ERROR 5883,
+    where a vertex hits more constraints than the space has dimensions: a
+    contact line's vertex, on its wall, in the 0.03 gap between two beads
+    hit the next bead's guard and a third); called again as the vertices
+    move. Evolver stops a vertex there; the energy and the
     volumes don't change, and the surface resting on the solid is a
     contact to make (a film thinned away). Gradient steps took vertices
     through a sphere beside its contact line, contact after contact, until
@@ -134,10 +135,13 @@ def guard(ev) -> None:
         names = [str(n) for n in names]
     _unguard(ev, names)
     m = ev.mesh()
-    free = ~np.asarray(m.fixed, dtype=bool)
     real = [i for i, n in enumerate(names) if not n.startswith(GUARD_PREFIX)]
-    if real:
-        free &= ~np.isnan(dist[:, real]).any(axis=1)
+    on = np.isnan(dist[:, real]) if real else np.zeros((len(m.vertices), 0), dtype=bool)
+    # (the guards a vertex can take: _GUARDS less the walls it is on, so it
+    # hits no more constraints than that at once: unguarded, a contact
+    # line's vertex on a side wall went 0.17 out through the side wall it
+    # meets at the box's edge, run after run undone)
+    room = np.where(np.asarray(m.fixed, dtype=bool), 0, _GUARDS - on.sum(axis=1))
     cols = [_column(nums, names, key) for key in walls]
     h = _edge_scale(ev)
     # (not a vertex through the solid by more than a tenth of an edge: the
@@ -145,36 +149,59 @@ def guard(ev) -> None:
     # Evolver projected it out: a pack's vertex 0.47 inside a bead, on
     # another bead's guard too, went 3.9 onto both, out of the box)
     signed = dist[:, cols]
-    gap = np.abs(signed)
-    gap[~free] = np.inf
+    gap = np.abs(np.nan_to_num(signed, nan=np.inf))
+    gap[room <= 0] = np.inf
     gap[np.nan_to_num(signed, nan=0.0) < -0.1*h] = np.inf
     gap[gap > _GUARD_REACH*h] = np.inf
-    # the two nearest walls only (three hits: Evolver's ERROR 5883), planes
-    # first (a box's sides, its floor): the surface through a solid is a
-    # contact to make, through the box nothing can mend it (a free vertex
-    # by a bead in the corner, guarded against the bead and one side, went
-    # 0.23 out through the other, and the descent ran away out there)
-    plane = np.array([getattr(w, "shape", (None,))[0] == "plane" for w in walls.values()])
-    order = _guard_order(gap, plane)
+    # the three nearest (not two, planes first, as they were: a pack's free
+    # vertices in a box's corner, 0.4-0.6 from both side walls and on their
+    # guards, went 0.02-0.27 into the bead in the corner, bead8 or bead11, 151
+    # runs undone so in one descent, which then ran away; nor the two nearest,
+    # as before that: a free vertex by a bead in the corner, guarded against
+    # the bead and one side, went 0.23 out through the other)
+    order = _guard_order(gap)
     chosen = np.zeros_like(gap, dtype=bool)
     rows = np.arange(len(gap))[:, None]
-    chosen[rows, order] = np.isfinite(gap[rows, order])
-    # (not two whose normals there are within 10 degrees of each other: a
-    # free vertex in the 0.015 gap where a bead touches a side wall, on both
-    # guards, left Evolver's constraint projection singular, ERROR 3005; the
-    # nearer one only)
-    both = np.flatnonzero(chosen.sum(axis=1) == 2)
-    if len(both):
-        normals = {}
-        for j in np.unique(order[both]):
-            _, grad = ev._call(_core.constraint_normals, int(nums[cols[j]]))
-            normals[int(j)] = np.asarray(grad.data)
-        a = np.array([normals[int(j)][i] for i, j in zip(both, order[both, 0])])
-        b = np.array([normals[int(j)][i] for i, j in zip(both, order[both, 1])])
+    chosen[rows, order] = np.isfinite(gap[rows, order]) \
+        & (np.arange(order.shape[1])[None, :] < room[:, None])
+    # (not two whose normals there are within 10 degrees of each other, nor
+    # one within 10 degrees of a wall the vertex is on: a free vertex in the
+    # 0.015 gap where a bead touches a side wall, on both guards, left
+    # Evolver's constraint projection singular, ERROR 3005; the nearer one
+    # only, the wall it is on first)
+    normals: dict = {}
+
+    def normal(num: int) -> np.ndarray:
+        if num not in normals:
+            _, grad = ev._call(_core.constraint_normals, num)
+            normals[num] = np.asarray(grad.data)
+        return normals[num]
+
+    def tangent(rows_, a, b) -> np.ndarray:
         cos = np.abs(np.einsum("ij,ij->i", a, b)) / np.maximum(
             np.linalg.norm(a, axis=1)*np.linalg.norm(b, axis=1), 1e-300)
-        tangent = both[cos > 0.985]
-        chosen[tangent, order[tangent, 1]] = False
+        return rows_[cos > 0.985]
+
+    guarded = chosen.any(axis=1)
+    for c, col in enumerate(real):
+        for far in range(order.shape[1]):
+            pair = np.flatnonzero(on[:, c] & guarded)
+            pair = pair[chosen[pair, order[pair, far]]]
+            if len(pair):
+                b = np.array([normal(int(nums[cols[int(order[i, far])]]))[i] for i in pair])
+                drop = tangent(pair, normal(int(nums[col]))[pair], b)
+                chosen[drop, order[drop, far]] = False
+    several = np.flatnonzero(chosen.sum(axis=1) >= 2)
+    for near in range(order.shape[1]):
+        for far in range(near + 1, order.shape[1]):
+            pair = several[chosen[several, order[several, near]]
+                           & chosen[several, order[several, far]]]
+            if not len(pair):
+                continue
+            a = np.array([normal(int(nums[cols[int(order[i, near])]]))[i] for i in pair])
+            b = np.array([normal(int(nums[cols[int(order[i, far])]]))[i] for i in pair])
+            drop = tangent(pair, a, b)
+            chosen[drop, order[drop, far]] = False
     for j, key in enumerate(walls):
         if chosen[:, j].any():
             ev.set_constraint("vertex", f"{GUARD_PREFIX}{key}", where=chosen[:, j])
@@ -656,6 +683,27 @@ def pinch_off(ev, event, relax: bool = True) -> List[int]:
     _, _, gaps, _ = ev._constraint_gaps()
     on = np.isnan(gaps) if gaps.size else np.zeros((len(x), 0), dtype=bool)
     held = m.fixed | border | on.any(axis=1)
+    walls = np.flatnonzero(on[ring].any(axis=0))
+    if len(walls) == 1:
+        # (against one wall, its axis along the wall, as the neck mirrored
+        # in it is whole: its waist's vertices, those facing each other
+        # across it, are the two flanks beside the wall, their normals along
+        # the wall, and the axis came out across it: the ring, cut by a plane
+        # along the wall, ran beside the wall on both flanks, not over the
+        # neck, and the cut squashed them together, leaving the neck: a
+        # 16-bead pack's neck on a side wall was cut six times in a descent,
+        # the body one piece still each time, the neck back where it was
+        # cut, until the descent ran away)
+        nums, _, _, _ = ev._constraint_gaps()
+        at_wall = ring[on[ring, walls[0]]]
+        k = at_wall[np.argmin(np.linalg.norm(x[at_wall] - centre, axis=1))]
+        _, grad = ev._call(_core.constraint_normals, int(nums[walls[0]]))
+        normal = np.asarray(grad.data, float)[k]
+        if np.linalg.norm(normal) > 0:
+            ring, centre, side = _ring(x, f, edges, event, normal/np.linalg.norm(normal))
+            if len(ring) < 3:
+                raise ValueError("pinch_off(): no ring of edges round the neck found")
+            walls = np.flatnonzero(on[ring].any(axis=0))
     if held[ring].any():
         # a neck against one wall (half a neck, its ring from the wall's
         # contact line round to it again: liquid against a side wall or a
@@ -663,7 +711,6 @@ def pinch_off(ev, event, relax: bool = True) -> List[int]:
         # the ring collapses to its vertex on the wall nearest its middle, the
         # contact line then goes through that vertex twice, and the
         # separation splits it, a line per side
-        walls = np.flatnonzero(on[ring].any(axis=0))
         lone = (len(walls) == 1 and not m.fixed[ring].any()
                 and (on[ring].sum(axis=1) <= 1).all()
                 and not (border[ring] & ~on[ring].any(axis=1)).any())
@@ -943,22 +990,19 @@ def _waist_normals(x, f, event) -> np.ndarray:
 
 
 def _sheet(x, f, event) -> bool:
-    """Whether a neck is a sheet thinning rather than a tube: its waist's
-    normals all along one direction (round a tube they turn about its axis),
-    the second of their moments under _SHEET of the first."""
-    n = _waist_normals(x, f, event)
-    if len(n) < 3:
-        return False
-    lam = np.linalg.eigvalsh(n.T @ n)
-    return bool(lam[2] > 0 and lam[1] < _SHEET*lam[2])
+    """Whether a neck is a sheet thinning rather than a tube (_events.sheet
+    of its waist's normals)."""
+    from ._events import sheet
+    return sheet(_waist_normals(x, f, event))
 
 
-def _ring(x, f, edges, event):
+def _ring(x, f, edges, event, mirror=None):
     """The vertices to collapse at a neck: the ends of the edges crossing the
     plane through the neck's narrowest point, across its axis, there (two
     rows; collapsing one left slivers that didn't relax); the point they
     collapse to (their centroid); and each vertex's signed distance from the
-    plane."""
+    plane. ``mirror``: the unit normal of a wall the neck lies against (the
+    axis then along the wall)."""
     p = np.asarray(event.where, float)
     reach = max(3*event.gap, 3*event.scale)
     # the axis: the direction the normals round the waist are all across
@@ -966,7 +1010,12 @@ def _ring(x, f, edges, event):
     if len(waist) < 3:
         waist = np.flatnonzero(np.linalg.norm(x - p, axis=1) < max(event.gap, 2*event.scale))
     normals = _waist_normals(x, f, event)
-    _, vectors = np.linalg.eigh(normals.T @ normals)
+    moment = normals.T @ normals
+    if mirror is not None:
+        # (along the wall: the direction across it never the axis)
+        along = np.eye(3) - np.outer(mirror, mirror)
+        moment = along @ moment @ along + (np.trace(moment) + 1.0)*np.outer(mirror, mirror)
+    _, vectors = np.linalg.eigh(moment)
     axis = vectors[:, 0]
     s = (x - p) @ axis
     radial = np.linalg.norm((x - p) - np.outer(s, axis), axis=1)
@@ -1011,11 +1060,27 @@ def _cut(ev, x, ring, centre, scale) -> None:
     f = np.asarray(m.facets)
     # (a neck against a wall: its ring's two ends on the wall's contact line
     # stay two vertices, Evolver deleting no edge between two of a border's
-    # vertices that would pinch it; each is then where the sides meet)
+    # vertices that would pinch it; that edge, between the sides, made two
+    # contact-line edges, one per side, and the two vertices separated, one
+    # per side (the checked unzip, _edits): left, it held the sides
+    # together, the cut one piece, its two vertices pinched)
     border = np.zeros(len(m.vertices), dtype=bool)
-    border[np.asarray(m.edges)[m.edge_valence() == 1].ravel()] = True
+    edges = np.asarray(m.edges)
+    border[edges[m.edge_valence() == 1].ravel()] = True
     if len(at) != 1 and not (len(at) == 2 and border[at].all()):
         raise ValueError(f"pinch_off(): the ring didn't collapse to one vertex ({len(at)} left)")
+    if len(at) == 2:
+        from ._edits import REASONS, edit
+        joint = np.flatnonzero(np.isin(edges, at).all(axis=1))
+        if len(joint) > 1:
+            raise ValueError("pinch_off(): the neck's ends on the wall are joined by "
+                             f"{len(joint)} edges")
+        if len(joint):
+            r = edit(ev, "unzip", [int(np.asarray(m.edge_ids)[joint[0]])])
+            if r[0] != 0:
+                raise ValueError("pinch_off(): the neck's ends on the wall can't be parted "
+                                 f"({REASONS[int(r[0])]})")
+            return
     sides = [_sides_at(f, int(k)) for k in at]
     if len(at) == 1 and sides[0] < 2:
         raise ValueError("pinch_off(): collapsing the ring didn't pinch the surface")
@@ -1878,12 +1943,18 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
     energy (a loop round a pole), nor where Evolver can't take a gradient
     step from it. (Within half an edge, the one-facet holes
     contacts open on a wall were closed and opened again over and over,
-    piling vertices up.) The lines oriented (orient_lines). Returns how many
-    were closed; each one's wall and middle appended to ``out``."""
+    piling vertices up; and within 0.2 of the edges round the loop where
+    the mesh is finer than h: a contact where it was refined, edges 0.046
+    for h 0.165, opened a patch of one facet that the next tidying closed,
+    the surface lay on the wall again, its contact refused as reopening a
+    closed patch, and the descent crept 400 iterations without settling.)
+    The lines oriented (orient_lines). Returns how many were closed; each
+    one's wall and middle appended to ``out``."""
     m = ev.mesh()
     f, edges = np.asarray(m.facets), np.asarray(m.edges)
     x = np.asarray(m.vertices)
     valence = m.edge_valence()
+    lengths = m.edge_lengths()
     closed = 0
     ons = _edges_on(ev, list(surface.walls))
     for key in list(ons):
@@ -1903,7 +1974,10 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
             if v != start or not 3 <= len(loop) <= 6:
                 continue
             corners = edges[loop, 0]
-            if np.linalg.norm(x[corners] - x[corners[0]], axis=1).max() > 0.2*h:
+            spokes = np.isin(edges, corners).any(axis=1)
+            spokes[loop] = False
+            local = min(h, float(np.median(lengths[spokes]))) if spokes.any() else h
+            if np.linalg.norm(x[corners] - x[corners[0]], axis=1).max() > 0.2*local:
                 continue
             a, b = edges[loop[0]]
             beside = np.flatnonzero(((f == a) & (np.roll(f, -1, axis=1) == b)).any(axis=1))
@@ -1936,7 +2010,7 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
             # 16-bead pack's replay stopped there)
             m = ev.mesh()
             f, edges, x = np.asarray(m.facets), np.asarray(m.edges), np.asarray(m.vertices)
-            valence = m.edge_valence()
+            valence, lengths = m.edge_valence(), m.edge_lengths()
             ons = _edges_on(ev, list(surface.walls))
             break
     return closed
@@ -2160,7 +2234,6 @@ _FINE = 0.25            # _sizes: the finest target edge, in h0
 _GRADE = 0.5            # _sizes: how fast the targets grow away from a gap (per length)
 _COARSEN = 1.5          # _sizes: a vertex's target grows at most this much a remeshing
 _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
-_SHEET = 0.25           # a neck whose waist normals' second moment is under this of the first: a sheet
 _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
 _PINCHED = 0.05         # a neck three edges round, each under this times the edge scale: collapsed
 _GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient steps
@@ -3147,10 +3220,11 @@ def _drop_empty(ev) -> int:
     other border) enclosing next to no volume (under 1e-6 of their area to
     the 3/2), or within two median edges across, taken away with the
     bodies they alone bound: a bubble with no gas in it, a crumb of liquid;
-    so are bodies under half an edge across. (Two drops merging on a
-    plane, a second merge beside the first left a sheet of 16 facets, one
-    edge on three of them, its eight vertices at one point, and the surface
-    came out in two pieces.) How many."""
+    so are bodies under half an edge across, and pieces with a border but
+    next to no area (under a hundredth of an edge squared). (Two drops
+    merging on a plane, a second merge beside the first left a sheet of 16
+    facets, one edge on three of them, its eight vertices at one point, and
+    the surface came out in two pieces.) How many."""
     m = ev.mesh()
     if m.facets is None or not len(m.facets):
         return 0
@@ -3172,10 +3246,19 @@ def _drop_empty(ev) -> int:
         return 0
     gone = []
     lost = 0.0
+    areas = 0.5*np.linalg.norm(np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]]), axis=1)
     for c in np.unique(label):
         mine = label == c
         if (count[np.unique(edge[mine])] == 1).any():
-            continue                    # a border (a contact line)
+            # a border (a contact line); a crumb where it has next to no
+            # area (patches made where a box's walls meet left lone facets
+            # lying along the edge or in the corner, their corners on the
+            # walls, all three edges border: nothing could take them, and a
+            # pack's relaxed state kept them as facets of 0 degrees, the
+            # descent going on down from it 195 times in two hours)
+            if float(areas[mine].sum()) < 0.01*h*h:
+                gone.append(mine)
+            continue
         # (about its own middle; or flat, its vertices in one plane: with an
         # edge on three facets the piece doesn't close, and its volume
         # depends on where it's measured from)

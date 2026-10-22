@@ -35,7 +35,10 @@
  *             fan, moved offset edges toward its fan;
  *   degenerate a facet with next to no area: its shortest edge collapsed
  *             (a needle) or its longest flipped (a cap); twin facets (the
- *             same three edges) both dissolved.
+ *             same three edges) both dissolved;
+ *   unzip     an edge between two facets whose ends are on one wall's
+ *             contact lines made two contact-line edges, one per facet, and
+ *             its ends separated, one vertex per fan.
  */
 
 #include "include.h"
@@ -1089,11 +1092,18 @@ enum { PATCH_BEFORE, PATCH_AFTER, PATCH_CHECK };
    out_f) */
 static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
                   struct ids *out_e, struct ids *out_f)
-{ struct ids E = {0,0,0}, F = {0,0,0}, CE = {0,0,0}, CF = {0,0,0};
+{ struct ids E = {0,0,0}, F = {0,0,0}, CE = {0,0,0}, CF = {0,0,0}, V = {0,0,0};
   int i, guard;
   edge_id e, e0;
   memset(k,0,sizeof(*k));
   c->stamp_now++;
+  /* (each vertex once: a separation's patch after it is its vertex's star
+     and the new vertices', which share neighbours, and a pinched neighbour
+     counted twice made the separation look worse; the other end of an
+     unzipped edge, pinched until its own separation) */
+  for ( i = 0 ; i < verts->n ; i++ )
+    if ( valid_element(verts->a[i]) && mark(c,verts->a[i]) ) push(&V,verts->a[i]);
+  verts = &V;
   for ( i = 0 ; i < verts->n ; i++ )
   { vertex_id v = verts->a[i];
     if ( !valid_element(v) ) continue;
@@ -1198,6 +1208,7 @@ static void patch(struct ctx *c, struct ids *verts, struct counts *k, int stage,
   if ( F.a ) temp_free((char *)F.a);
   if ( CE.a ) temp_free((char *)CE.a);
   if ( CF.a ) temp_free((char *)CF.a);
+  if ( V.a ) temp_free((char *)V.a);
 }
 
 /* the patch round verts before an edit: its problems, and its elements
@@ -2265,6 +2276,83 @@ undo:
   return -why;
 }
 
+/* an edge two facets share whose ends are both on wall's contact lines made
+   two contact-line edges on the wall, one for each facet (a new edge for
+   the second, the facet made again on it), and its ends, where the line
+   now goes through twice, separated one vertex per fan: pinch_off's cut of
+   a neck against a wall collapses its ring onto the wall, the two strands
+   of contact line either side of the neck ending in two vertices there,
+   and Evolver keeps the edge between them (deleting it would pinch the
+   line), which held the two sides together: the cut left one piece, its
+   vertices pinched, and the neck came again where it was cut, over and
+   over (a 16-bead pack's run cut one ten times). */
+static int unzip(struct ctx *c, edge_id e)
+{ facetedge_id fe1, fe;
+  facet_id f1, f2;
+  vertex_id a, b, ends[2];
+  edge_id t[3], e2 = NULLID;
+  body_id front, back;
+  struct ids verts = {0,0,0};
+  struct counts was;
+  int wall = -1, w, k, why;
+
+  e = positive_id(e);
+  if ( get_eattr(e) & (FIXED|CONSTRAINT|BOUNDARY) ) return PYSE_EDIT_CONSTRAINTS;
+  if ( valence(e) != 2 ) return PYSE_EDIT_NOT_APPLICABLE;
+  a = get_edge_tailv(e); b = get_edge_headv(e);
+  if ( !on_border(a) || !on_border(b) ) return PYSE_EDIT_NOT_APPLICABLE;
+  if ( (get_vattr(a) | get_vattr(b)) & (FIXED|BOUNDARY) ) return PYSE_EDIT_FIXED;
+  for ( w = 0 ; w < c->nwalls && wall < 0 ; w++ )
+    if ( v_on_constraint(a,c->walls[w]) && v_on_constraint(b,c->walls[w]) ) wall = c->walls[w];
+  if ( wall < 0 ) return PYSE_EDIT_CONSTRAINTS;
+  fe1 = get_edge_fe(e);
+  f1 = positive_id(get_fe_facet(fe1));
+  f2 = positive_id(get_fe_facet(get_next_facet(fe1)));
+  if ( equal_id(f1,f2) || (get_fattr(f2) & FIXED) ) return PYSE_EDIT_NOT_APPLICABLE;
+  star(a,&verts); star(b,&verts);
+  before(c,&verts,&was);
+  /* f2's edges as its loop goes, e's place taken by a new edge the same way */
+  fe = get_facet_fe(f2);
+  for ( k = 0 ; k < 3 ; k++, fe = get_next_edge(fe) )
+  { t[k] = get_fe_edge(fe);
+    if ( equal_id(positive_id(t[k]),e) )
+    { e2 = new_edge(get_edge_tailv(t[k]),get_edge_headv(t[k]),NULLID);
+      t[k] = e2;
+    }
+  }
+  if ( !valid_id(e2) ) { if ( verts.a ) temp_free((char *)verts.a); return PYSE_EDIT_NOT_APPLICABLE; }
+  front = get_facet_body(f2); back = get_facet_body(inverse_id(f2));
+  set_facet_body(f2,NULLID); set_facet_body(inverse_id(f2),NULLID);
+  if ( !dissolve_facet(f2) ) { if ( verts.a ) temp_free((char *)verts.a); return -PYSE_EDIT_EVOLVER; }
+  make_facet(t,front,back,f1);
+  /* both on the wall, stored the way their facet goes (orientation 1) */
+  { edge_id both[2];
+    both[0] = e; both[1] = positive_id(e2);
+    for ( k = 0 ; k < 2 ; k++ )
+    { if ( inverted(get_fe_facet(get_edge_fe(both[k]))) ) reverse_orientation_edge(both[k]);
+      unset_attr(both[k],NEGBOUNDARY);
+      set_e_constraint_map(both[k],wall);
+    }
+  }
+  star(get_edge_tailv(e2),&verts);
+  /* the ends: one vertex per fan */
+  ends[0] = a; ends[1] = b;
+  for ( k = 0 ; k < 2 ; k++ )
+  { int r = separate(c,ends[k]);
+    if ( r < 0 ) { why = -r; goto out; }
+    if ( r != PYSE_EDIT_DONE ) { why = PYSE_EDIT_PINCH; goto out; }
+  }
+  top_timestamp = ++global_timestamp;
+  { struct ids keep = {0,0,0};
+    for ( k = 0 ; k < verts.n ; k++ ) if ( valid_element(verts.a[k]) ) push(&keep,verts.a[k]);
+    why = after(c,&keep,&was,0);
+    if ( keep.a ) temp_free((char *)keep.a);
+  }
+out:
+  if ( verts.a ) temp_free((char *)verts.a);
+  return why ? -why : PYSE_EDIT_DONE;
+}
+
 /* ---- batches ------------------------------------------------------------ */
 
 struct edit_args
@@ -2283,6 +2371,7 @@ struct edit_args
 static int op_type(int op)
 { switch ( op )
   { case PYSE_OP_COLLAPSE: case PYSE_OP_FLIP: case PYSE_OP_SPLIT: case PYSE_OP_BRIDGE:
+    case PYSE_OP_UNZIP:
       return EDGE;
     case PYSE_OP_DEGENERATE: case PYSE_OP_MERGE: case PYSE_OP_PATCH: return FACET;
   }
@@ -2364,6 +2453,7 @@ static int one(struct ctx *c, struct edit_args *a, int k)
     case PYSE_OP_SMOOTH: return smooth(c,id);
     case PYSE_OP_SEPARATE: return separate(c,id);
     case PYSE_OP_DEGENERATE: return degenerate(c,id);
+    case PYSE_OP_UNZIP: return unzip(c,id);
   }
   return PYSE_EDIT_NOT_APPLICABLE;
 }
@@ -2642,7 +2732,7 @@ int pyse_edit(int op, const long *ids, int n, const double *params, const int *w
               const double *size, long nsize)
 { struct edit_args *a;
   int status, k;
-  if ( op < PYSE_OP_COLLAPSE || op > PYSE_OP_PATCH )
+  if ( op < PYSE_OP_COLLAPSE || op > PYSE_OP_UNZIP )
     return PYSE_ERROR;
   a = (struct edit_args *)calloc(1,sizeof(*a));
   if ( !a ) return PYSE_FATAL;
@@ -3000,7 +3090,11 @@ int pyse_crossings(int far, long *count, double *where, long max)
    1.9 in 18 steps, the energy 1.4 lower; split back onto the bead, it was 0.4
    higher than where the run began). With a length set, each gradient step
    (iterate()) ends with the border edges on a constraint longer than it split,
-   the midpoints onto their constraints, until none is. */
+   the midpoints onto their constraints, until none is. A midpoint takes the
+   one-sided constraints both ends are on too (the guards a descent keeps the
+   vertices out of the solids with: a midpoint without them, on a side wall,
+   went 0.05 out through the side wall it meets at the box's edge, and the
+   run was undone). */
 static REAL line_chop = 0.0;
 
 double pyse_line_chop(double length)
@@ -3025,9 +3119,22 @@ int pyse_chop_lines(void)
     }
     if ( !long_.n ) break;
     for ( k = 0 ; k < long_.n ; k++ )
-    { e = long_.a[k];
-      if ( !valid_element(e) || !valid_id(edge_refine(e)) ) continue;
-      project(get_edge_headv(e));        /* e is the tail half now */
+    { vertex_id t, h, mid;
+      unsigned int m;
+      e = long_.a[k];
+      if ( !valid_element(e) ) continue;
+      t = get_edge_tailv(e); h = get_edge_headv(e);
+      if ( !valid_id(edge_refine(e)) ) continue;
+      mid = get_edge_headv(e);           /* e is the tail half now */
+      if ( get_vattr(t) & CONSTRAINT )
+        for ( m = 1 ; m <= get_v_constraint_map(t)[0] ; m++ )
+        { /* (the map read afresh: setting one can move the attributes) */
+          int c = (int)(get_v_constraint_map(t)[m] & CONMASK);
+          if ( (get_constraint(c)->attr & (NONNEGATIVE|NONPOSITIVE))
+               && v_on_constraint(h,c) && !v_on_constraint(mid,c) )
+            set_v_constraint_map(mid,c);
+        }
+      project(mid);
       total++;
     }
   }

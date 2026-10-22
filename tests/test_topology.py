@@ -852,6 +852,26 @@ def test_a_closed_piece_enclosing_nothing_is_taken_away():
     assert S._drop_empty(ev) == 0
 
 
+def test_a_lone_facet_with_no_area_is_taken_away():
+    # a cube's body, and apart from it one facet, its corners in a row (as
+    # patches made where a box's walls meet left them along the edge, all
+    # three edges border: no edit could take them, and the descent went on
+    # down from a relaxed state 400 times for its 0-degree angle); one with
+    # area stays
+    from pysurfaceevolver import _surgery as S
+    box = shapes.box(n=2)
+    v, f = np.asarray(box.vertices, float), np.asarray(box.faces)
+    for corners, gone in (([[3, 0, 0], [3.02, 0, 0], [3.05, 0, 0]], 1),
+                          ([[3, 0, 0], [3.5, 0, 0], [3.2, 0.4, 0]], 0)):
+        ev = pyse.Evolver()
+        ev.load_arrays(np.r_[v, corners], np.r_[f, [[len(v), len(v) + 1, len(v) + 2]]],
+                       bodies=[pyse.Body(faces=range(len(f)))])
+        volume = ev.body(1).volume
+        assert S._drop_empty(ev) == gone
+        assert ev.counts["facets"] == len(f) + 1 - gone
+        assert ev.body(1).volume == pytest.approx(volume)
+
+
 def _hourglass(waist):
     # two triangular double cones joined at a waist `waist` across (a closed
     # surface of 18 facets, one body)
@@ -1047,15 +1067,15 @@ def test_a_run_evolver_fails_in_is_undone_and_implausible():
     assert _surgery._implausible(ev, before) != "Evolver failed"
 
 
-def _sheet_on_a_wall():
+def _sheet_on_a_wall(thin=0.03):
     """A thin sheet of liquid standing on the wall x = 0 (90 degrees: a
     mirror), half a flattened hemisphere of radius 0.7, thinnest where it
-    meets the wall at mid-height (0.042 across)."""
+    meets the wall at mid-height (1.4 thin across: 0.042)."""
     cap = shapes.cap(0.7, 0.7, nr=8, nt=32)
     v = np.asarray(cap.vertices, float)
     x, y, z = v[:, 2], v[:, 0], v[:, 1]
     ev = pyse.Evolver()
-    ev.load_arrays(np.c_[x, y*(0.03 + 0.6*x + 2*z**2), z], cap.faces,
+    ev.load_arrays(np.c_[x, y*(thin + 0.6*x + 2*z**2), z], cap.faces,
                    constraints={1: C.plane((1, 0, 0), 0.0, contact_angle=90.0)},
                    vertex_constraints={1: cap.rims["rim"]}, bodies=[pyse.Body(volume=None)])
     ev.body(1).target = ev.body(1).volume
@@ -1077,6 +1097,188 @@ def test_a_sheet_thinnest_at_a_wall_ruptures_there():
     assert sorted(np.sign(np.mean(line[:-1, 2])) for line in lines) == [-1, 1]
     assert list(ev.bodies().ids) == [1] and ev.body(1).volume == pytest.approx(v0, rel=1e-9)
     assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
+
+
+def test_a_sheet_is_an_event_as_two_sheets_are_not_as_a_neck():
+    # (a neck counts within NECK times the gap two sheets do, the ring round
+    # it under-resolved; a sheet's faces are two sheets: 0.042 across on
+    # edges of 0.16, under half an edge, it is a neck event to rupture; 0.14
+    # across, not yet: at NECK times, a 16-bead pack's sheets ruptured 1-1.8
+    # edges thick, the liquid came back over the cut, again and again)
+    from pysurfaceevolver._analysis import EVENT_FACTOR
+    thin = [e for e in _sheet_on_a_wall(0.03).events() if e.kind == "neck"]
+    assert len(thin) == 1 and thin[0].gap < EVENT_FACTOR*thin[0].scale
+    assert not [e for e in _sheet_on_a_wall(0.1).events() if e.kind == "neck"]
+
+
+def _half_neck(waist=0.06, nz=11, nt=8):
+    """Half a liquid bridge between the planes z = 0 and z = 1 lying against
+    the wall y = 0 (all at 90 degrees: mirrors), its axis along the wall,
+    thinned to a neck `waist` across at mid-height: the neck's ring runs
+    from the wall's contact line round to it again."""
+    z = np.linspace(0.0, 1.0, nz + 1)
+    r = 0.6 - (0.6 - waist/2)*np.sin(np.pi*z)**2
+    t = np.linspace(0.0, np.pi, nt + 1)
+    v = np.array([[rr*np.cos(tt), rr*np.sin(tt), zz] for zz, rr in zip(z, r) for tt in t])
+
+    def k(i, j):
+        return i*(nt + 1) + j
+    f = []
+    for i in range(nz):
+        for j in range(nt):
+            a, b, c, d = k(i, j), k(i, j + 1), k(i + 1, j + 1), k(i + 1, j)
+            f += [[a, b, c], [a, c, d]] if (i + j) % 2 else [[a, b, d], [b, c, d]]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f,
+                   constraints={"wall": C.plane((0, 1, 0), 0.0, contact_angle=90.0),
+                                "bottom": C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                                "top": C.plane((0, 0, -1), -1.0, contact_angle=90.0)},
+                   vertex_constraints={"wall": [k(i, j) for i in range(nz + 1) for j in (0, nt)],
+                                       "bottom": [k(0, j) for j in range(nt + 1)],
+                                       "top": [k(nz, j) for j in range(nt + 1)]},
+                   bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    return ev
+
+
+@pytest.mark.parametrize("nz", [10, 11])
+def test_a_neck_against_a_wall_is_cut_into_two_bodies(nz):
+    # (the neck's axis along the wall: its waist's vertices are its flanks
+    # beside the wall, and their normals put the axis across it, the ring
+    # then beside the wall on both flanks, not over the neck; cut there, the
+    # neck stayed, the body one, a vertex pinched (10 rows, the waist on
+    # one) or the pieces one body (11))
+    from pysurfaceevolver import _surgery
+    ev = _half_neck(nz=nz)
+    v0 = ev.body(1).volume
+    neck = [e for e in ev.events() if e.kind == "neck"]
+    assert len(neck) == 1
+    ev.pinch_off(neck[0], relax=False)
+    assert list(ev.bodies().ids) == [1, 2]
+    volumes = [ev.body(i).volume for i in (1, 2)]
+    assert sum(volumes) == pytest.approx(v0, rel=0.02) and min(volumes) > 0.45*v0
+    assert len(ev.contact_lines("wall")) == 2
+    assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
+
+
+def test_two_fans_joined_along_an_edge_on_a_wall_are_unzipped():
+    # (a neck against a wall collapsed to its two ends on the wall, the edge
+    # between them kept by Evolver: the checked unzip makes it two
+    # contact-line edges, one per fan, and parts the ends, one vertex per
+    # fan; the patch check counting each vertex once, the other end, pinched
+    # until it is parted too, not twice)
+    from pysurfaceevolver._edits import edit
+    v = np.array([[0, 0, 0], [0.2, 0, 0], [-0.1, 0, 0.15], [0.1, 0.15, 0.15], [0.3, 0, 0.15],
+                  [-0.1, 0, -0.15], [0.1, 0.15, -0.15], [0.3, 0, -0.15]], float)
+    f = [[0, 1, 3], [0, 3, 2], [1, 4, 3], [1, 0, 6], [0, 5, 6], [1, 6, 7]]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints={"wall": C.plane((0, 1, 0), 0.0, contact_angle=90.0)},
+                   vertex_constraints={"wall": [0, 1, 2, 4, 5, 7]})
+
+    def lines(m):
+        return int(((m.edge_valence() == 1) & ev.on_constraint("wall", "edge")).sum())
+    m = ev.mesh()
+    assert lines(m) == 4
+    joint = [k for k, (a, b) in enumerate(np.asarray(m.edges)) if {int(a), int(b)} == {0, 1}]
+    assert list(edit(ev, "unzip", [int(m.edge_ids[joint[0]])])) == [0]
+    m = ev.mesh()
+    assert len(m.vertices) == 10 and lines(m) == 6
+    assert len(_pieces(ev)) == 2
+
+
+def _corner():
+    """A few facets in a box's corner (side walls x = 0 and y = 0, 90
+    degrees) by a bead in it, 0.015 from both: vertex 0 free, 0.25 from both
+    walls and 0.08 from the bead; vertex 1 on the wall y = 0 (a contact
+    line's), 0.1 from the wall x = 0; vertex 2 on the wall x = 0 where the
+    bead nearly touches it, 0.015 from the bead."""
+    v = np.array([[0.25, 0.25, 1.0], [0.1, 0.0, 1.15], [0.0, 1.015, 1.02], [0.3, 0.0, 0.85],
+                  [0.0, 0.3, 0.85], [0.0, 0.8, 1.2]], float)
+    f = [[0, 1, 3], [0, 4, 1], [0, 5, 4], [0, 2, 5]]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints={
+        "wallxlo": C.plane((1, 0, 0), 0.0, contact_angle=90.0),
+        "wallylo": C.plane((0, 1, 0), 0.0, contact_angle=90.0),
+        "bead": C.sphere((1.015, 1.015, 1.0), 1.0, contact_angle=15.0, gauge="flux")},
+        vertex_constraints={"wallylo": [1, 3], "wallxlo": [2, 4, 5]})
+    return ev
+
+
+def test_the_guards_keep_vertices_from_every_wall_near_them():
+    # a free vertex in the corner, guarded against both side walls only,
+    # went into the bead in the corner (a pack's 151 runs undone so in one
+    # descent): guarded against all three; a contact line's vertex on one
+    # side wall against the other (it went out through it) and the bead,
+    # filling its three; not against a wall as good as tangent to its own
+    # (the bead where it nearly touches the side wall: Evolver's projection
+    # singular, ERROR 3005)
+    from pysurfaceevolver import _surgery as S
+    from pysurfaceevolver._engine import GUARD_PREFIX, surface
+    ev = _corner()
+    surface.edge_scale = 0.2
+    x = ev.vertices.copy()
+    S.guard(ev)
+    nums, _, dist, names = ev._constraint_gaps(guards=True)
+    names = [str(n) for n in names]
+
+    def guards(v):
+        return sorted(n[len(GUARD_PREFIX):] for c, n in enumerate(names)
+                      if n.startswith(GUARD_PREFIX) and np.isnan(dist[v, c]))
+    assert guards(0) == ["bead", "wallxlo", "wallylo"]
+    assert guards(1) == ["bead", "wallxlo"]
+    assert guards(2) == []
+    assert np.array_equal(ev.vertices, x)
+
+
+def test_a_contact_lines_split_takes_its_ends_guards():
+    # (the contact-line edges split as gradient steps go, _core.line_chop: a
+    # midpoint without its ends' guards went out through the side wall at
+    # the box's edge)
+    from pysurfaceevolver import _core, _surgery as S
+    from pysurfaceevolver._engine import GUARD_PREFIX, surface
+    ev = _corner()
+    surface.edge_scale = 0.2
+    S.guard(ev)
+    n = ev.counts["vertices"]
+    was = _core.line_chop(0.1)
+    try:
+        ev.command("g 1")
+    finally:
+        _core.line_chop(was)
+    assert ev.counts["vertices"] > n
+    nums, _, dist, names = ev._constraint_gaps(guards=True)
+    names = [str(c) for c in names]
+    on_wall = np.isnan(dist[:, names.index("wallylo")])
+    guarded = np.isnan(dist[:, names.index(f"{GUARD_PREFIX}wallxlo")])
+    new = np.arange(ev.counts["vertices"]) >= n
+    assert (new & on_wall).any() and guarded[new & on_wall].all()
+
+
+def _hole(a, b):
+    """A film over the plane z = 0 with a triangular hole `a` across, its rim
+    on the plane (a patch's contact line of three edges), a ring of edges
+    `b` long round it."""
+    t3, t6 = np.arange(3)*2*np.pi/3, np.arange(6)*np.pi/3 + np.pi/6
+    v = np.r_[np.c_[a/np.sqrt(3)*np.cos(t3), a/np.sqrt(3)*np.sin(t3), np.zeros(3)],
+              np.c_[b*np.cos(t6), b*np.sin(t6), np.full(6, 0.3*b)]]
+    f = []
+    for i in range(3):
+        j = (i + 1) % 3
+        f += [[i, 3 + 2*i, j], [j, 3 + 2*i, 3 + 2*i + 1], [j, 3 + 2*i + 1, 3 + (2*i + 2) % 6]]
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints={"ground": C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
+                   vertex_constraints={"ground": [0, 1, 2]})
+    return ev
+
+
+def test_a_patch_is_closed_as_shrunk_against_the_edges_round_it():
+    # (a contact where the mesh was refined, edges 0.05 for h 0.165, opened
+    # a patch of a facet, closed as shrunk at the next tidying, and the
+    # surface lay on the wall again, its contact refused as reopening)
+    from pysurfaceevolver import _surgery as S
+    assert S.close_patches(_hole(0.03, 0.05), 0.165) == 0
+    assert S.close_patches(_hole(0.003, 0.05), 0.165) == 1
+    assert S.close_patches(_hole(0.03, 0.3), 0.165) == 1
 
 
 def test_a_footprint_under_a_dome_is_told_from_a_sheets():

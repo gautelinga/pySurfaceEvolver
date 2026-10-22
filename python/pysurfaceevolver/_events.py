@@ -14,6 +14,7 @@ from . import _core
 
 KINDS = ("neck", "touch", "solid", "contact lines")
 NECK = 4.0      # a neck counts within this many times the gap two sheets do
+SHEET = 0.25    # a neck whose waist normals' second moment is under this of the first: a sheet
 WEDGE = 0.7     # next to a contact line: closer than this share of its wedge's height
 
 
@@ -179,7 +180,13 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
     (neck_factor: NECK over the elements' order). (NECK was 3 while h, each
     vertex's edge length, was other edges' mean: at a thinning waist 1.1-1.35
     times the true one; with the true h, 3 let a bridge pinch between two
-    looks, 0.43 across at the last, under 0.37 to count.)"""
+    looks, 0.43 across at the last, under 0.37 to count.) Not a sheet's
+    (sheet(): liquid between two faces that are flat across it, not round
+    a waist): its two faces are two sheets, and count as those do (at four
+    times that a 16-bead pack's sheets against a side wall ruptured 1-1.8
+    edges thick; the liquid came back over the cut, the lines joined again
+    and the sheet ruptured again, four times in a descent that then ran
+    away)."""
     r = factor*h
     reach = max(neck_factor, 1.0)
     if not moving.any():
@@ -216,9 +223,21 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
             k = nearest.get(group)
             if k is None or 2*len(members) > size[piece[members]].max():
                 continue
+            if kind == "neck" and g[k] >= r[a[k]] and sheet(normal[members]):
+                continue
             events.append(Event(kind, float(g[k]), float(h[a[k]]), (x[a[k]] + cc[k])/2,
                                 np.asarray(members)))
     return events
+
+
+def sheet(normals: np.ndarray) -> bool:
+    """Whether a neck's waist (its vertices' unit normals) is a sheet's, not
+    a tube's: the normals all along one direction (round a tube they turn
+    about its axis), the second of their moments under SHEET of the first."""
+    if len(normals) < 3:
+        return False
+    lam = np.linalg.eigvalsh(normals.T @ normals)
+    return bool(lam[2] > 0 and lam[1] < SHEET*lam[2])
 
 
 # ---- the surface close to a solid -----------------------------------------------
