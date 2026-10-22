@@ -2307,6 +2307,7 @@ _GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient
 _STALLED = 2            # runs in a row leaving the state as it was: the descent stalled
 _PLACE = 3.0            # changes at one place: on one solid, within this many of their edges
 _MARGIN = 0.5           # ... made again there (or undone) only at under this share of the gap
+_PUT_OFF = 20           # ... or after this many iterations of the descent put off
 
 
 def _median_edge(m) -> float:
@@ -2420,7 +2421,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
 
     refused_at: list = []               # changes refused in it: (kind, solid, place)
     history: list = []                  # changes made, undone or refused in it, by place (_Tried)
-    told: list = []                     # ... and those put off, told of
+    told: list = []                     # ... and those put off: (_Tried, the iteration it began)
+    turn = 0                            # the iteration
     seen: dict = {}                     # this iteration's events as tried (place)
     unsound: Any = None                 # the state the last "relaxed, but" round left
     last: Any = None                    # the state the last unconverged run left
@@ -2449,22 +2451,31 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         return got[1]
 
     def note(e, what: str) -> None:
-        history.append(place(e)._replace(what=what))
+        here = place(e)._replace(what=what)
+        history.append(here)
+        if what == "made":
+            told[:] = [t for t in told if not _same_place(here, t[0])]
 
     def note_refused(e) -> None:
         refused_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
         note(e, "refused")
 
     def later(e) -> bool:
-        """Whether e's change is put off (_put_off), told of once a place."""
+        """Whether e's change is put off (_put_off), told of once a place;
+        for _PUT_OFF iterations at most (a pack's sheet at a side wall,
+        its lines joined, thinned again at the joint and was held there
+        until the descent's budget ran out, 370 s, its footprint then dried
+        all the same)."""
         here = place(e)
         if not history or not _put_off(here, history):
             return False
-        if not any(_same_place(here, t) for t in told):
-            told.append(here)
+        since_told = [turn - t for h, t in told if _same_place(here, h)]
+        if not since_told:
+            told.append((here, turn))
             _log.debug("change put off: %s (made, undone or refused at its place in this "
                        "descent, and no nearer now)", e)
-        return True
+            return True
+        return max(since_told) < _PUT_OFF
 
     def other(e) -> bool:
         """Whether e is a neck where one was cut in this descent already: a
@@ -2493,7 +2504,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         way, before, tried, since, stuck = None, [], 0, 0, False
         falling, remeshing, stalled = False, True, 0
 
-    for _ in range(_FALL_TOTAL*_FALL_ITERATIONS):
+    for turn in range(_FALL_TOTAL*_FALL_ITERATIONS):
         try:
             since += 1
             if since > _FALL_ITERATIONS:

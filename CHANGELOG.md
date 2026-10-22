@@ -398,7 +398,10 @@
   within three of the local edges, the same change within one (it came back: it
   didn't take), or one of its kind refused within three, the next is put off until
   it is nearer than half that one's gap (through a solid twice as deep; a neck,
-  touch or contact lines met). The guards and the runs hold the surface meanwhile;
+  touch or contact lines met), or for 20 of the descent's iterations at most (a
+  sheet at a side wall, its lines joined, thinned again at the joint and was held
+  there until the descent's budget ran out). The guards and the runs hold the
+  surface meanwhile;
   where a run would cross, the changes not put off are tried first, then these;
   and where the descent gets nowhere (its runs stall, or its budget runs out), the
   change nearest to coming is made, these included, before it remeshes or gives up
