@@ -370,6 +370,10 @@
     and folds allowed in the checked merge when the faces are closer than
     their facets are wide (the tube between them can't but fold back).
 
+- The remesher's collapse walks a facet ring with a guard, as its other walks do: a
+  16-bead replay spent half an hour in a ring that never came back to its start;
+  the collapse is now refused.
+
 - Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
   was dissolved and another made: Evolver gives the freed volume quantity's and
   method instance's slots to the next ones, and the restore copied flags back slot
