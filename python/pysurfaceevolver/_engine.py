@@ -76,6 +76,8 @@ def _element_type(element: str) -> int:
 # mesh() result for the engine's current surface version (see _core.surface_version)
 _mesh_cache: "tuple[int, Mesh] | None" = None
 _mesh_cache_lock = threading.Lock()
+# _constraint_gaps() results for that version, by (guards, retired)
+_gaps_cache: "tuple[int, dict] | None" = None
 
 
 
@@ -627,16 +629,34 @@ class _Engine:
         topology keep free vertices out of solids with (named
         GUARD_PREFIX...: see _surgery.guard). Never the constraints
         _surgery.move_poles moved off (_SurfaceMemory.retired)."""
+        # (kept for the surface version, read-only, as mesh() is: a 16-bead
+        # pack's event search took the table twice, and _surgery._sizes
+        # once more before it, 1.3 ms each at 3k facets, 16 ms at 30k)
+        global _gaps_cache
+        version = _core.surface_version()
+        key = (bool(guards), frozenset(surface.retired))
+        with _mesh_cache_lock:
+            cache = _gaps_cache if _gaps_cache is not None and _gaps_cache[0] == version else None
+            if cache is not None and key in cache[1]:
+                nums, attrs, dist, names = cache[1][key]
+                return nums, attrs, dist, list(names)
         _, gaps = self._call(_core.constraint_gaps)
         nums, attrs, dist, names = gaps.data
         keep = [i for i, n in enumerate(names)
                 if (guards or not str(n).startswith(GUARD_PREFIX))
                 and (n or int(nums[i])) not in surface.retired]
-        if len(keep) == len(names):
-            return gaps.data
-        return (np.asarray(nums)[keep], np.asarray(attrs)[keep],
-                np.asarray(dist)[:, keep] if np.asarray(dist).ndim == 2 else np.asarray(dist),
-                [names[i] for i in keep])
+        if len(keep) != len(names):
+            nums, attrs, names = np.asarray(nums)[keep], np.asarray(attrs)[keep], \
+                [names[i] for i in keep]
+            dist = np.asarray(dist)[:, keep] if np.asarray(dist).ndim == 2 else np.asarray(dist)
+        nums, attrs, dist = np.asarray(nums), np.asarray(attrs), np.asarray(dist)
+        _read_only(nums, attrs, dist)
+        with _mesh_cache_lock:
+            if _core.surface_version() == version:   # nothing changed meanwhile
+                if _gaps_cache is None or _gaps_cache[0] != version:
+                    _gaps_cache = (version, {})
+                _gaps_cache[1][key] = (nums, attrs, dist, tuple(names))
+        return nums, attrs, dist, list(names)
 
     def set_constraint(self, element: str, constraint: Union[int, str], where=None,
                        on: bool = True) -> None:

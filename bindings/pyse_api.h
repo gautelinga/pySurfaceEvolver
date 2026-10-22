@@ -234,6 +234,10 @@ int pyse_constraint_gaps(const int *nums, int ncon, double *out, long n);
 /* Per vertex, the unit gradient of constraint num's level-set function
    (n x 3; NaN where it vanishes). */
 int pyse_constraint_normals(int num, double *out, long n);
+/* The same at the listed vertex rows only (out: nrows x 3, in their order;
+   a query from the topology runs needs the solid's few vertices close by:
+   the whole column was most of its cost). */
+int pyse_constraint_normals_rows(int num, const int64_t *rows, long nrows, double *out, long n);
 /* Per facet (linear soapfilm), its three corners as Evolver sees them, the
    second and third unwrapped to the first across a torus's sides (n x 3 x 3). */
 int pyse_facet_corners(double *out, long n);

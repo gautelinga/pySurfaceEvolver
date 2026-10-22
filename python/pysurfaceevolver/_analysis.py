@@ -453,6 +453,7 @@ class _Analysis(_Engine):
             np.add.at(vn, m.facets[:, k], normals)
         on = np.isnan(dist)
         sel = on[:, column] & (on.sum(axis=1) == 1) & (np.linalg.norm(vn, axis=1) > 0)
-        _, solid = self._call(_core.constraint_normals, int(constraint))
+        _, solid = self._call(_core.constraint_normals_at, int(constraint),
+                              np.flatnonzero(sel).astype(np.int64))
         nl = vn[sel]/np.linalg.norm(vn[sel], axis=1)[:, None]
-        return np.degrees(np.arccos(np.clip((nl*solid.data[sel]).sum(axis=1), -1.0, 1.0)))
+        return np.degrees(np.arccos(np.clip((nl*solid.data).sum(axis=1), -1.0, 1.0)))

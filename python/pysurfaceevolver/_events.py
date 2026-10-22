@@ -101,12 +101,9 @@ def find(ev, factor: float, self_factor: Optional[float] = None) -> List[Event]:
         else np.asarray(m.facet_bodies)
     # the body on each side of a vertex: the facets' normals point out of
     # their front body, so it lies behind (-normal) and the back body in front
-    behind, ahead = np.zeros(n, dtype=np.int64), np.zeros(n, dtype=np.int64)
-    # (unbuffered: an assignment through f[:, i] kept the last facet's body
-    # where a vertex has several facets in that column)
-    for i in range(3):
-        np.maximum.at(behind, f[:, i], bodies[:, 0])
-        np.maximum.at(ahead, f[:, i], bodies[:, 1])
+    # (the largest over its facets: an assignment through f[:, i] kept the
+    # last facet's body where a vertex has several facets in that column)
+    behind, ahead = _vertex_max(n, f, bodies[:, 0]), _vertex_max(n, f, bodies[:, 1])
     with_bodies = bool(bodies.any())
     moving = used & ~np.asarray(m.fixed, bool)
     events = _self(x, f, e, h, normal, behind, ahead, with_bodies, moving & ~folded,
@@ -118,6 +115,26 @@ def find(ev, factor: float, self_factor: Optional[float] = None) -> List[Event]:
     found += _contact_lines(m, x, e, h, used, factor, nums, dist, names)
     events += [_on_copy(event, copies) for event in found]
     return sorted(events, key=lambda ev_: ev_.gap/ev_.scale)
+
+
+def _vertex_max(n: int, f: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Per vertex the largest of its facets' values (body numbers), 0 if
+    none is positive: a mask per value, the larger ones last, where there
+    are few (np.maximum.at, unbuffered, took 8.8 ms of a 30k-facet
+    surface's search for the two sides; the masks 1-2)."""
+    out = np.zeros(n, dtype=np.int64)
+    values = np.asarray(values, dtype=np.int64)
+    positive = values[values > 0]
+    if not len(positive):
+        return out
+    distinct = np.flatnonzero(np.bincount(positive))
+    if len(distinct) > 8:
+        for i in range(3):
+            np.maximum.at(out, f[:, i], values)
+        return out
+    for v in distinct:
+        out[np.bincount(f[values == v].ravel(), minlength=n) > 0] = v
+    return out
 
 
 def _base(key) -> str:
@@ -298,12 +315,19 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
     for c in np.flatnonzero(band_all.any(axis=0) & ~placing):
         on, g, band, side = on_all[:, c], g_all[:, c], band_all[:, c], float(sides[c])
         key: Union[int, str] = names[c] or int(nums[c])
-        _, grad = ev._call(_core.constraint_normals, int(nums[c]))
-        towards = -side*np.asarray(grad.data)          # from the surface to the solid
+        # (the normals only at the band's vertices, where they are used: the
+        # whole column was 0.6-2.3 ms a solid of a pack's search)
+        rows = np.flatnonzero(band)
+        _, grad = ev._call(_core.constraint_normals_at, int(nums[c]),
+                           np.ascontiguousarray(rows, dtype=np.int64))
+        towards = np.zeros((len(x), 3))
+        towards[rows] = -side*np.asarray(grad.data)     # from the surface to the solid
         # what lies between (None without bodies): the body behind or ahead
         outside = None
         if with_bodies:
-            outside = ~(np.where(np.einsum("ij,ij->i", towards, normal) < 0, behind, ahead) > 0)
+            outside = np.zeros(len(x), dtype=bool)
+            outside[rows] = ~(np.where(np.einsum("ij,ij->i", towards[rows], normal[rows]) < 0,
+                                       behind[rows], ahead[rows]) > 0)
         # the stretches (of the band and the vertices on it) that reach no
         # contact line on it
         label = _labels(band | on, e)

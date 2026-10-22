@@ -425,6 +425,22 @@ NB_MODULE(_core, m) {
   }, "num"_a, CALLBACK_NAMES, "data: per vertex the unit gradient of a constraint's "
                               "formula (n, 3; NaN where it vanishes)");
 
+  m.def("constraint_normals_at", [](int num, In<int64_t, 1> rows, CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long n = pyse_count(PYSE_VERTEX), nrows = long(rows.shape(0));
+    for (long k = 0; k < nrows; k++)
+      if (rows.data()[k] < 0 || rows.data()[k] >= n)
+        throw nb::index_error("constraint_normals_at: a vertex row out of range");
+    std::vector<double> normals(nrows > 0 ? size_t(nrows) * 3 : 0);
+    CallResult r = run_guarded([&] {
+      return pyse_constraint_normals_rows(num, rows.data(), nrows, normals.data(), n);
+    });
+    if (r.status == PYSE_OK)
+      r.data = to_numpy(std::move(normals), {size_t(nrows > 0 ? nrows : 0), size_t(3)});
+    return r;
+  }, "num"_a, "rows"_a, CALLBACK_NAMES,
+     "data: constraint_normals' rows at the listed vertex rows only (len(rows), 3)");
+
   m.def("values", [](int type, const std::string &expr, CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(type);

@@ -170,11 +170,17 @@ def guard(ev) -> None:
     # Evolver's constraint projection singular, ERROR 3005; the nearer one
     # only, the wall it is on first)
     normals: dict = {}
+    # (only at the vertices that can have two: on a wall and guarded, or
+    # guarded twice)
+    need = np.ascontiguousarray(np.flatnonzero(
+        (chosen.any(axis=1) & on.any(axis=1)) | (chosen.sum(axis=1) >= 2)), dtype=np.int64)
 
     def normal(num: int) -> np.ndarray:
         if num not in normals:
-            _, grad = ev._call(_core.constraint_normals, num)
-            normals[num] = np.asarray(grad.data)
+            normals[num] = np.zeros((len(gap), 3))
+            if len(need):
+                _, grad = ev._call(_core.constraint_normals_at, num, need)
+                normals[num][need] = np.asarray(grad.data)
         return normals[num]
 
     def tangent(rows_, a, b) -> np.ndarray:
@@ -3457,6 +3463,24 @@ def _coarsen(ev, h0: float) -> None:
             guard(ev)
 
 
+def _held_sizes(numbers: np.ndarray) -> np.ndarray:
+    """The last targets (surface.sizes) of the vertices with these numbers,
+    inf where none (a table indexed by number: a lookup a vertex took 5 ms
+    at 30k facets)."""
+    numbers = np.asarray(numbers, dtype=np.int64)
+    out = np.full(len(numbers), np.inf)
+    if not surface.sizes or not len(numbers):
+        return out
+    keys = np.fromiter(surface.sizes.keys(), dtype=np.int64, count=len(surface.sizes))
+    values = np.fromiter(surface.sizes.values(), dtype=float, count=len(surface.sizes))
+    top = int(max(keys.max(), numbers.max())) + 1
+    if keys.min() < 0 or numbers.min() < 0 or top > 8*(len(keys) + len(numbers)) + 1024:
+        return np.array([surface.sizes.get(int(i), np.inf) for i in numbers])
+    table = np.full(top, np.inf)
+    table[keys] = values
+    return table[numbers]
+
+
 def _sizes(ev, h0: float) -> np.ndarray:
     """A target edge length per vertex for a descent's remeshing: h0, but
     the gap where the surface comes within h0 of a wall it isn't on (away
@@ -3529,19 +3553,29 @@ def _sizes(ev, h0: float) -> np.ndarray:
     # held everywhere, a pack's long descent kept what the front had passed
     # refined, its facets 3.6k to 8.7k, a remeshing 38 s)
     numbers = np.asarray(m.vertex_ids)
-    before = np.array([surface.sizes.get(int(i), np.inf) for i in numbers])
+    before = _held_sizes(numbers)
     grow = np.where(size >= h0, _COARSEN, 1.0 if surface.sizes_held else _COARSEN)
     size = np.minimum(size, grow*before)
     size = np.clip(size, _FINE*h0, h0)
+    # (each vertex's neighbours' targets plus _GRADE of the edge, the least
+    # of them, by the edges' ends sorted once: np.minimum.at, unbuffered,
+    # took 3 ms a round at 30k facets)
     lengths = m.edge_lengths()
+    ends = np.concatenate([edges[:, 0], edges[:, 1]])
+    order = np.argsort(ends, kind="stable")
+    ends = ends[order]
+    other = np.concatenate([edges[:, 1], edges[:, 0]])[order]
+    step = _GRADE*np.concatenate([lengths, lengths])[order]
+    first = np.flatnonzero(np.r_[True, ends[1:] != ends[:-1]])
+    at = ends[first]
     for _ in range(30):
         new = size.copy()
-        np.minimum.at(new, edges[:, 0], size[edges[:, 1]] + _GRADE*lengths)
-        np.minimum.at(new, edges[:, 1], size[edges[:, 0]] + _GRADE*lengths)
+        new[at] = np.minimum(new[at], np.minimum.reduceat(size[other] + step, first))
         if np.array_equal(new, size):
             break
         size = new
-    surface.sizes = {int(i): float(v) for i, v in zip(numbers, size) if v < h0}
+    keep = size < h0
+    surface.sizes = dict(zip(numbers[keep].tolist(), size[keep].tolist()))
     return size
 
 
@@ -3575,8 +3609,9 @@ def _push_out(ev, through: list, h: float) -> None:
         rows = rows[off[rows] & (side*d[rows] < 0)]
         if not len(rows):
             continue
-        _, grad = ev._call(_core.constraint_normals, int(nums[c]))
-        normal = np.asarray(grad.data)[rows]
+        _, grad = ev._call(_core.constraint_normals_at, int(nums[c]),
+                           np.ascontiguousarray(rows, dtype=np.int64))
+        normal = np.asarray(grad.data)
         moved[rows] += side*normal*(-side*d[rows] + 1e-3*h)[:, None]
     ev.vertices = moved
 

@@ -1114,19 +1114,30 @@ int pyse_facet_corners(double *out, long n)
   return surface_call(corners_body,&a);
 }
 
-struct cnormals_args { int num; double *out; long n; };
+struct cnormals_args { int num; double *out; long n; const int64_t *rows; long nrows; };
 
 static void cnormals_body(void *arg)
 { struct cnormals_args *a = (struct cnormals_args *)arg;
   vertex_id v_id;
-  long row = 0;
+  long row = 0, k;
   int i;
+  double *out = a->out;    /* (with rows: per vertex, then gathered) */
+  unsigned char *want = NULL;
   if ( a->num < 0 || a->num >= web.maxcon || !(get_constraint(a->num)->attr & IN_USE) )
     inconsistent("no such constraint");
+  if ( a->rows )
+  { out = (double*)temp_calloc((size_t)(a->n > 0 ? a->n : 1)*3,sizeof(double));
+    want = (unsigned char*)temp_calloc((size_t)(a->n > 0 ? a->n : 1),1);
+    for ( k = 0 ; k < a->nrows ; k++ )
+    { if ( a->rows[k] < 0 || a->rows[k] >= a->n ) inconsistent("vertex row out of range");
+      want[a->rows[k]] = 1;
+    }
+  }
   FOR_ALL_VERTICES(v_id)
   { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
-    double *o = a->out + (size_t)row*3;
+    double *o = out + (size_t)row*3;
     if ( row >= a->n ) inconsistent("too many vertices");
+    if ( want && !want[row] ) { row++; continue; }
     for ( i = 0 ; i < MAXCOORD ; i++ ) grad[i] = 0.0;
     eval_all(get_constraint(a->num)->formula,get_coord(v_id),SDIM,&f,grad,v_id);
     for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
@@ -1136,16 +1147,27 @@ static void cnormals_body(void *arg)
     row++;
   }
   if ( row != a->n ) inconsistent("element count changed");
+  if ( a->rows )
+  { for ( k = 0 ; k < a->nrows ; k++ )
+      for ( i = 0 ; i < 3 ; i++ )
+        a->out[k*3 + i] = out[a->rows[k]*3 + i];
+    temp_free((char*)out);
+    temp_free((char*)want);
+  }
 }
 
 int pyse_constraint_normals(int num, double *out, long n)
+{ return pyse_constraint_normals_rows(num,NULL,0,out,n);
+}
+
+int pyse_constraint_normals_rows(int num, const int64_t *rows, long nrows, double *out, long n)
 { struct cnormals_args a;
   if ( in_protected ) return PYSE_BUSY;
   if ( !initialized || !surface_valid ) return invalid_surface();
   if ( n != web.skel[VERTEX].count )
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
-                      "Output array does not match the vertex count.");
-  a.num = num; a.out = out; a.n = n;
+                      "Vertex count changed.");
+  a.num = num; a.out = out; a.n = n; a.rows = rows; a.nrows = nrows;
   return surface_call(cnormals_body,&a);
 }
 

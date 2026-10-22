@@ -303,6 +303,15 @@
   content isn't evaluated again after the move where the projection's last pass
   found it there (16-bead pack 108 -> 99 million at 2k facets, 616 -> 568 at 14k).
 
+- Topology events and a descent's target edge sizes: the table of constraint gaps
+  kept for the surface version (the sizing took it, then the event search again);
+  constraint normals at the vertices that need them only (`_core.constraint_normals_at`);
+  points' distances to contact-line segments through a tree of boxes (5-20 times
+  faster than against every segment); the bodies either side of a vertex and the
+  sizes' grading without unbuffered `np.maximum.at`/`np.minimum.at`. The same events
+  and sizes; at a 30k-facet pack the search 130 -> 104 ms, the sizing 156 -> 112 ms,
+  a remesh near a change 640 -> 565 ms.
+
 ### Documentation
 
 - New page "Draining through changes of topology" (docs/drainage_topology.md): a drop

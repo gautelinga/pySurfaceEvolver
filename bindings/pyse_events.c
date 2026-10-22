@@ -787,34 +787,153 @@ fail:
 
 /* ---- distances to segments ---------------------------------------------------- */
 
+/* a point's squared distance to segment j (a + t ab, ab and |ab|^2 in ab) */
+static double segment_d2(const double *p, const double *a, const double *ab, long j)
+{ const double *e = ab + 4*j;
+  double q[3], d[3], t;
+  sub3(p,a + 3*j,q);
+  t = clip01(dot3(q,e)/e[3]);
+  d[0] = q[0] - t*e[0]; d[1] = q[1] - t*e[1]; d[2] = q[2] - t*e[2];
+  return dot3(d,d);
+}
+
+/* The segments in a tree of boxes: each node the box round its segments,
+   split at the median of their middles along its longest side, down to
+   SEG_LEAF a leaf. A point's nearest segment is then found in the boxes
+   closer than the nearest so far: the same minimum as over all of them.
+   (Over all of them for every point, a 30k-facet pack's search spent 35 ms
+   of its 130 here: its 5k points close to a wall against the contact
+   lines' 1.3k edges, per wall.) */
+#define SEG_LEAF 4
+#define SEG_STACK 128
+
+struct seg_node { double lo[3], hi[3]; long left, start, count; };  /* left < 0: a leaf */
+
+/* the k-th smallest of key[idx[lo..hi]] put at lo + k, smaller before it */
+static void select_k(long *idx, const double *key, long lo, long hi, long k)
+{ k += lo;
+  while ( hi > lo )
+  { double pivot = key[idx[(lo + hi)/2]];
+    long i = lo, j = hi;
+    while ( i <= j )
+    { while ( key[idx[i]] < pivot ) i++;
+      while ( key[idx[j]] > pivot ) j--;
+      if ( i <= j ) { long t = idx[i]; idx[i] = idx[j]; idx[j] = t; i++; j--; }
+    }
+    if ( k <= j ) hi = j;
+    else if ( k >= i ) lo = i;
+    else return;
+  }
+}
+
+static long seg_tree(long ns, const double *a, const double *b, long *idx,
+                     struct seg_node *node, double *key)
+{ long count = 1, stack[SEG_STACK], top = 0, k;
+  for ( k = 0 ; k < ns ; k++ ) idx[k] = k;
+  node[0].start = 0; node[0].count = ns;
+  stack[top++] = 0;
+  while ( top )
+  { struct seg_node *nd = node + stack[--top];
+    int c, axis = 0;
+    for ( c = 0 ; c < 3 ; c++ ) { nd->lo[c] = INFINITY; nd->hi[c] = -INFINITY; }
+    for ( k = nd->start ; k < nd->start + nd->count ; k++ )
+      for ( c = 0 ; c < 3 ; c++ )
+      { double u = a[3*idx[k]+c], v = b[3*idx[k]+c];
+        if ( u < nd->lo[c] ) nd->lo[c] = u;
+        if ( v < nd->lo[c] ) nd->lo[c] = v;
+        if ( u > nd->hi[c] ) nd->hi[c] = u;
+        if ( v > nd->hi[c] ) nd->hi[c] = v;
+      }
+    nd->left = -1;
+    if ( nd->count <= SEG_LEAF || top + 2 > SEG_STACK ) continue;
+    for ( c = 1 ; c < 3 ; c++ )
+      if ( nd->hi[c] - nd->lo[c] > nd->hi[axis] - nd->lo[axis] ) axis = c;
+    for ( k = nd->start ; k < nd->start + nd->count ; k++ )
+      key[idx[k]] = a[3*idx[k]+axis] + b[3*idx[k]+axis];
+    select_k(idx,key,nd->start,nd->start + nd->count - 1,nd->count/2);
+    nd->left = count;
+    node[count].start = nd->start; node[count].count = nd->count/2;
+    node[count+1].start = nd->start + nd->count/2;
+    node[count+1].count = nd->count - nd->count/2;
+    stack[top++] = count;
+    stack[top++] = count + 1;
+    count += 2;
+  }
+  return count;
+}
+
+static double box_d2(const struct seg_node *nd, const double *p)
+{ double s = 0.0;
+  int c;
+  for ( c = 0 ; c < 3 ; c++ )
+  { double d = p[c] < nd->lo[c] ? nd->lo[c] - p[c] : p[c] > nd->hi[c] ? p[c] - nd->hi[c] : 0.0;
+    s += d*d;
+  }
+  return s;
+}
+
+static double seg_nearest_d2(const struct seg_node *node, const long *idx, const double *p,
+                             const double *a, const double *ab)
+{ long stack[SEG_STACK], top = 0, k;
+  double best = INFINITY;
+  stack[top++] = 0;
+  while ( top )
+  { const struct seg_node *nd = node + stack[--top];
+    if ( !(box_d2(nd,p) < best) ) continue;
+    if ( nd->left < 0 || top + 2 > SEG_STACK )   /* (a leaf; or all its segments) */
+    { for ( k = nd->start ; k < nd->start + nd->count ; k++ )
+      { double d2 = segment_d2(p,a,ab,idx[k]);
+        if ( d2 < best ) best = d2;
+      }
+      continue;
+    }
+    { double dl = box_d2(node + nd->left,p), dr = box_d2(node + nd->left + 1,p);
+      long near = dl <= dr ? nd->left : nd->left + 1;   /* the nearer looked in first */
+      stack[top++] = near == nd->left ? nd->left + 1 : nd->left;
+      stack[top++] = near;
+    }
+  }
+  return best;
+}
+
 int pyse_events_segments(long np, const double *p, long ns, const double *a, const double *b,
                          int threads, double *out)
 { double *ab = (double *)malloc(at_least_one(ns)*4*sizeof(double));
-  long i, k;
+  long *idx = NULL, i, k;
+  struct seg_node *node = NULL;
+  double *key = NULL;
+  int finite = 1;
   if ( !ab ) return -1;
   /* each segment's direction and its length squared */
   for ( k = 0 ; k < ns ; k++ )
   { sub3(b + 3*k,a + 3*k,ab + 4*k);
     ab[4*k+3] = at_least(dot3(ab + 4*k,ab + 4*k),1e-300);
+    finite = finite && finite3(a + 3*k) && finite3(b + 3*k);
+  }
+  /* (the tree for more than a few, all finite: else each point against
+     all of them, as before, NaN for a NaN among them) */
+  if ( finite && ns > 2*SEG_LEAF )
+  { idx = (long *)malloc((size_t)ns*sizeof(long));
+    node = (struct seg_node *)malloc((size_t)2*ns*sizeof(struct seg_node));
+    key = (double *)malloc((size_t)ns*sizeof(double));
+    if ( !idx || !node || !key ) { free(ab); free(idx); free(node); free(key); return -1; }
+    seg_tree(ns,a,b,idx,node,key);
   }
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) \
-      num_threads((double)np*ns >= PAR_MIN_WORK && threads > 1 ? threads : 1)
+      num_threads((double)np*(node ? 16 : ns) >= PAR_MIN_WORK && threads > 1 ? threads : 1)
 #endif
   for ( i = 0 ; i < np ; i++ )
   { double best = INFINITY;
     long j;
-    for ( j = 0 ; j < ns ; j++ )
-    { const double *e = ab + 4*j;
-      double q[3], d[3], t;
-      sub3(p + 3*i,a + 3*j,q);
-      t = clip01(dot3(q,e)/e[3]);
-      d[0] = q[0] - t*e[0]; d[1] = q[1] - t*e[1]; d[2] = q[2] - t*e[2];
-      best = nan_min(dot3(d,d),best);
-    }
+    if ( node && finite3(p + 3*i) )
+      best = seg_nearest_d2(node,idx,p + 3*i,a,ab);
+    else
+      for ( j = 0 ; j < ns ; j++ )
+        best = nan_min(segment_d2(p + 3*i,a,ab,j),best);
     out[i] = sqrt(best);
   }
-  free(ab);
+  free(ab); free(idx); free(node); free(key);
   return 0;
 }
 
