@@ -325,13 +325,48 @@ static void facet_frames(long nf, const int64_t *f, const double *x, const doubl
    within R (the vertex pairs), the gap to their closest point within the
    vertex's r (necks neck_factor times it) and mostly along its normal, and
    no corner within two edges of it along the mesh. */
+/* The facets in grids by the way they face: the axis their side's
+   largest component is on and its sign (bins 0-5), or none (6: a side
+   that isn't a number, kept in every search). A vertex can face no facet
+   of a bin whose sides all lie within 54.7 degrees of an axis that its
+   normal leans toward enough: every such side's dot with the normal is at
+   least the bound below, and the test wants it under -0.5. Most of a
+   vertex's candidates are its own sheet's facets, which face the way it
+   does; their bins are left out (the search at a 16-bead pack's 28k
+   facets was 214 million instructions, nearly all those candidates). */
+#define SELF_BINS 7
+#define SELF_AXIS 0.577      /* a largest component's least share, under 1/sqrt(3) */
+
+static int self_bin(const double *tn)
+{ double m = fabs(tn[0]);
+  int a = 0, d;
+  for ( d = 1 ; d < 3 ; d++ ) if ( fabs(tn[d]) > m ) { m = fabs(tn[d]); a = d; }
+  if ( !(m >= SELF_AXIS) ) return SELF_BINS - 1;
+  return 2*a + (tn[a] < 0);
+}
+
+/* whether every side in bin b has its dot with nw at -0.5 or more: the
+   cone of unit vectors t with s t_a >= SELF_AXIS comes nearest -nw at its
+   rim, unless it holds -nw (dot -|nw|) */
+static int self_bin_away(int b, const double *nw)
+{ double s = (b & 1) ? -1.0 : 1.0, alpha, len, beta, bound;
+  if ( b >= SELF_BINS - 1 ) return 0;
+  alpha = s*nw[b >> 1];
+  len = sqrt(dot3(nw,nw));
+  if ( !(len > 0) || !isfinite(len) ) return 0;
+  if ( -alpha >= SELF_AXIS*len ) return 0;
+  beta = sqrt(fmax(len*len - alpha*alpha,0.0));
+  bound = SELF_AXIS*alpha - sqrt(1.0 - SELF_AXIS*SELF_AXIS)*beta;
+  return bound > -0.5 + 1e-9;
+}
+
 struct self_args
 { const double *x, *normal, *r, *centre, *radius, *tn;
-  const double *gc;          /* the centroids in the grid's order */
+  const double *gc[SELF_BINS];    /* the centroids in each grid's order */
   const int64_t *f, *behind, *ahead, *nbr;
   const long *nstart;
   const unsigned char *pmask;
-  const struct grid *g;
+  const struct grid *g[SELF_BINS];
   int with_bodies;
   double R, reach, neck_factor, rmax;
 };
@@ -340,18 +375,21 @@ static int vertex_hits(const struct self_args *s, long w, long *stamp, struct bu
 { const double *p = s->x + 3*w, *nw = s->normal + 3*w;
   double near = s->reach*s->r[w], q, q2, R2 = s->R*s->R;
   long lo[3], hi[3], b, c, first = out->count;
-  int ringed = 0;
+  int ringed = 0, bin;
   if ( !finite3(p) || near != near ) return 0;
   q = (fmin(near,s->R) + s->rmax)*(1 + 1e-9);
   q2 = q*q;
-  grid_box(s->g,p,q,lo,hi);
+  for ( bin = 0 ; bin < SELF_BINS ; bin++ )
+  { const struct grid *g = s->g[bin];
+    if ( !g->start || self_bin_away(bin,nw) ) continue;
+    grid_box(g,p,q,lo,hi);
   /* a row of cells along x is one run of the grid's items, their
      centroids copied in that order: read straight through */
   for ( c = lo[2] ; c <= hi[2] ; c++ )
   for ( b = lo[1] ; b <= hi[1] ; b++ )
-  { long row = (c*s->g->n[1] + b)*s->g->n[0], k, end = s->g->start[row + hi[0] + 1];
-    for ( k = s->g->start[row + lo[0]] ; k < end ; k++ )
-    { const double *m = s->gc + 3*k;
+  { long row = (c*g->n[1] + b)*g->n[0], k, end = g->start[row + hi[0] + 1];
+    for ( k = g->start[row + lo[0]] ; k < end ; k++ )
+    { const double *m = s->gc[bin] + 3*k;
       int64_t t;
       const int64_t *fc;
       double u[3], cp[3], gap, along;
@@ -359,7 +397,7 @@ static int vertex_hits(const struct self_args *s, long w, long *stamp, struct bu
       struct self_hit hit;
       u[0] = m[0] - p[0]; u[1] = m[1] - p[1]; u[2] = m[2] - p[2];
       if ( dot3(u,u) > q2 ) continue;
-      t = s->g->items[k];
+      t = g->items[k];
       fc = s->f + 3*t;
       if ( fc[0] == w || fc[1] == w || fc[2] == w ) continue;
       if ( !(dot3(s->tn + 3*t,nw) < -0.5) ) continue;
@@ -401,6 +439,7 @@ static int vertex_hits(const struct self_args *s, long w, long *stamp, struct bu
       if ( buf_push(out,&hit) ) return -1;
     }
   }
+  }
   /* its facets in increasing order, as the pairs came */
   if ( out->count - first > 1 )
     qsort(out->data + (size_t)first*out->size,(size_t)(out->count - first),out->size,
@@ -416,13 +455,17 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
                      long *count, int64_t **vi, int64_t **ti, double **gap, double **closest,
                      unsigned char **neck)
 { struct self_args s;
-  struct grid g = { { 0, 0, 0 }, 0, { 0, 0, 0 }, NULL, NULL };
+  struct grid g[SELF_BINS];
   struct buf *chunks = NULL;
-  double *centre = NULL, *radius = NULL, *tn = NULL, *gc = NULL, rmax = 0.0, qsum = 0.0;
-  unsigned char *usable = NULL;
+  double *centre = NULL, *radius = NULL, *tn = NULL, *gc[SELF_BINS], rmax = 0.0, qsum = 0.0;
+  unsigned char *usable = NULL, *inbin = NULL;
   long *nstart = NULL, *fill = NULL, t, v, k, nq = 0, nchunks = 0, total = 0, failed = 0;
   int64_t *nbr = NULL;
   const long CHUNK = 32;
+  int bin;
+
+  memset(g,0,sizeof(g));
+  for ( bin = 0 ; bin < SELF_BINS ; bin++ ) gc[bin] = NULL;
 
   *count = 0;
   *vi = *ti = NULL; *gap = *closest = NULL; *neck = NULL;
@@ -448,11 +491,21 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
       nq++;
     }
   if ( nq == 0 ) goto done;
-  if ( grid_make(&g,centre,nf,usable,qsum/nq) ) goto fail;
-  { long items = g.start[g.n[0]*g.n[1]*g.n[2]];
-    gc = (double *)malloc(at_least_one(items)*3*sizeof(double));
-    if ( !gc ) goto fail;
-    for ( k = 0 ; k < items ; k++ ) memcpy(gc + 3*k,centre + 3*g.items[k],3*sizeof(double));
+  inbin = (unsigned char *)malloc(at_least_one(nf));
+  if ( !inbin ) goto fail;
+  for ( bin = 0 ; bin < SELF_BINS ; bin++ )
+  { long items, any = 0;
+    for ( t = 0 ; t < nf ; t++ )
+    { inbin[t] = usable[t] && self_bin(tn + 3*t) == bin;
+      any += inbin[t];
+    }
+    if ( !any ) continue;          /* (g[bin].start NULL: nothing to search) */
+    if ( grid_make(g + bin,centre,nf,inbin,qsum/nq) ) goto fail;
+    items = g[bin].start[g[bin].n[0]*g[bin].n[1]*g[bin].n[2]];
+    gc[bin] = (double *)malloc(at_least_one(items)*3*sizeof(double));
+    if ( !gc[bin] ) goto fail;
+    for ( k = 0 ; k < items ; k++ )
+      memcpy(gc[bin] + 3*k,centre + 3*g[bin].items[k],3*sizeof(double));
   }
   /* each vertex's neighbours along the mesh */
   nstart = (long *)calloc((size_t)n + 1,sizeof(long));
@@ -468,9 +521,9 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
   }
 
   s.x = x; s.normal = normal; s.r = r; s.centre = centre; s.radius = radius; s.tn = tn;
-  s.gc = gc;
+  for ( bin = 0 ; bin < SELF_BINS ; bin++ ) { s.gc[bin] = gc[bin]; s.g[bin] = g + bin; }
   s.f = f; s.behind = behind; s.ahead = ahead; s.nstart = nstart; s.nbr = nbr;
-  s.pmask = pmask; s.g = &g; s.with_bodies = with_bodies; s.R = R; s.reach = reach;
+  s.pmask = pmask; s.with_bodies = with_bodies; s.R = R; s.reach = reach;
   s.neck_factor = neck_factor; s.rmax = rmax;
   /* the vertices in chunks, each chunk's hits in a list of its own, the
      lists joined in order: the same pairs, in the same order, threads or
@@ -523,18 +576,18 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
   *count = total;
 done:
   if ( chunks ) for ( k = 0 ; k < nchunks ; k++ ) free(chunks[k].data);
-  free(chunks); free(centre); free(radius); free(tn); free(gc); free(usable); free(nstart);
+  free(chunks); free(centre); free(radius); free(tn); free(usable); free(inbin); free(nstart);
   free(fill); free(nbr);
-  grid_free(&g);
+  for ( bin = 0 ; bin < SELF_BINS ; bin++ ) { free(gc[bin]); grid_free(g + bin); }
   return 0;
 fail:
   free(*vi); free(*ti); free(*gap); free(*closest); free(*neck);
   *vi = *ti = NULL; *gap = *closest = NULL; *neck = NULL;
   *count = 0;
   if ( chunks ) for ( k = 0 ; k < nchunks ; k++ ) free(chunks[k].data);
-  free(chunks); free(centre); free(radius); free(tn); free(gc); free(usable); free(nstart);
+  free(chunks); free(centre); free(radius); free(tn); free(usable); free(inbin); free(nstart);
   free(fill); free(nbr);
-  grid_free(&g);
+  for ( bin = 0 ; bin < SELF_BINS ; bin++ ) { free(gc[bin]); grid_free(g + bin); }
   return -1;
 }
 

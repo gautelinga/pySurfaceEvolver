@@ -235,6 +235,13 @@
   240 at one thread 4.95e12 -> 3.53e12 instructions (867 -> 637 s), the same run
   line for line.
 
+- `events()`' search for the surface close to itself (and `_sizes`' at an edge
+  across) keeps a grid of the facets per way they face (the axis of their side's
+  largest component, and its sign) and leaves out, for each vertex, the grids whose
+  facets can't face it: most of a vertex's candidates were its own sheet's facets.
+  At a 16-bead pack's 28k facets 109 -> 64 million instructions at half an edge,
+  214 -> 93 at one edge; the same pairs, threads or not.
+
 - The table of each vertex's gap to each constraint (events, guards, remeshing
   sizes, health) and the constraint normals at chosen vertices look each formula's
   closed form up once per call, not per vertex, and the table's rows go in parallel
