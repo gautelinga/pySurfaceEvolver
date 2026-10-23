@@ -24,6 +24,7 @@ REASONS = {0: "done", 1: "gone (an earlier edit took it)", 2: "not applicable",
            16: "a fold", 17: "into a solid", 18: "an edge through a facet",
            19: "not the same in the replay"}
 DONE = 0
+FOLD = 16
 _PARAMS = ("max_turn", "max_volume", "max_len", "tol", "mode", "smoothing", "offset",
            "flat", "h", "sweeps")
 DEFAULTS = dict(max_turn=45.0, max_volume=0.05, max_len=0.0, tol=0.01, mode=0,
@@ -65,7 +66,8 @@ def edit(ev, op: str, ids: Iterable, sizes=None, **params) -> np.ndarray:
     (DEFAULTS): max_turn (degrees a facet's normal may turn), max_volume
     (the volume an edit may sweep, in h^3), max_len (longest edge a collapse
     may make, in h; 0: any), tol (depth into a wall allowed, in h), mode
-    (flips: 0 any, 1 more equiangular, 2 valences nearer 6), smoothing (the
+    (flips: 0 any, 1 more equiangular, 2 valences nearer 6; merge and
+    separate: 1 lets folds grow), smoothing (the
     step toward the neighbours), offset (how far separated vertices move
     apart, in h), flat (a degenerate facet's area, in h^2), h (the length
     scale; 0: the mean edge), sweeps (remesh). ``sizes``: a target edge

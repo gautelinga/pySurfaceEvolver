@@ -1041,6 +1041,30 @@ def test_a_cut_leaves_no_body_without_facets():
     ev.command("g 1")
 
 
+def test_three_tubes_collapsed_at_one_point_are_three_pieces():
+    # the facets round a pack's crumpled neck, four vertices 4e-4 to 4e-3
+    # apart (two collapsed rings sharing two, a chord across): three
+    # filaments meet there, each its own piece (two were looked for, and
+    # each ring cut alone left a vertex beside the point, "2 left", or two
+    # edges joining the same vertices)
+    from types import SimpleNamespace
+    from pysurfaceevolver import _surgery as S
+    f = np.array([[4, 5, 2], [1, 5, 6], [2, 6, 4], [6, 2, 1], [7, 0, 8], [0, 3, 5],
+                  [3, 0, 11], [0, 2, 11], [10, 3, 12], [1, 2, 7], [5, 1, 0], [10, 11, 2],
+                  [3, 11, 12], [2, 5, 3], [2, 0, 7], [1, 8, 0], [8, 1, 9], [2, 3, 10],
+                  [7, 9, 1]])
+    ring = np.arange(4)
+    side = S._ring_sides(f, ring)
+    assert side is not None and sorted(set(side[4:])) == [1.0, 2.0, 3.0]
+    assert [len(set(side[[a, b, c]])) for a, b, c in ((4, 5, 6), (7, 8, 9), (10, 11, 12))] == [1]*3
+    lengths = {(0, 1): 3e-4, (1, 2): 5e-4, (0, 2): 7e-4, (0, 3): 3.7e-3, (2, 3): 3.8e-3}
+    edges = np.array(sorted({tuple(sorted((int(a), int(b)))) for r in f for a, b in
+                             zip(r, np.roll(r, -1))}))
+    m = SimpleNamespace(edges=edges, facets=f,
+                        edge_lengths=lambda: np.array([lengths.get(tuple(e), 0.1) for e in edges]))
+    assert [r.tolist() for r in S._collapsed_clusters(m, 0.16)] == [[0, 1, 2, 3]]
+
+
 def test_a_collapse_keeps_the_surface_a_manifold():
     # the hourglass's waist edges: merging an edge's ends would join them to
     # the waist's third vertex by two edges (the surface pinched along an

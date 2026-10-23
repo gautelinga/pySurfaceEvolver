@@ -502,6 +502,14 @@
   didn't collapse to one vertex (3 left)"), at every look of a 16-bead descent. A
   spike's tip may be up to three vertices joined only to the ring and each other: a
   tip of two, cut as a neck, left two vertices ("2 left") and the neck uncut.
+  Collapsed rings that share vertices are one neck, cut at once (a neck crumpled four
+  vertices round, a chord across it, is two rings), and a neck may part into more
+  than two pieces (filaments of a crumpled sheet meeting where they collapsed: each
+  its own cone, the separation of the point letting the cones' folds grow, as they
+  relax out). Cut one ring at a time, a 16-bead replay's left a vertex beside the
+  point ("2 left"), then Evolver's `pop` (the separation refused: a fold) joined two
+  vertices by two edges, and the descent stalled round them. A cut whose collapse
+  joins two vertices by two edges is refused, and so is a `pop` that does.
 
 - Where a descent's run passes the surface through itself and no event within the
   events' factor is there, the change made instead is looked for there within twice

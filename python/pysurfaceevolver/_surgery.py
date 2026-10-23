@@ -792,10 +792,12 @@ def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int
     return made
 
 
-def _pinch_ring(ev, m, x, f, ring, centre, side, scale: float) -> List[int]:
+def _pinch_ring(ev, m, x, f, ring, centre, side, scale: float,
+                pieces: bool = False) -> List[int]:
     """pinch_off's cut: the ring (rows of m's vertices) collapsed to centre,
     the body split where that makes it two pieces (side: each vertex's side
-    of the cut, by sign). The bodies made."""
+    of the cut, by sign; with ``pieces``, the number of its piece, 1, 2,
+    3 ..., 0 on the ring: _ring_sides). The bodies made."""
     touching = np.isin(f, ring).any(axis=1)
     bodies = np.unique(np.asarray(m.facet_bodies)[touching])
     bodies = bodies[bodies > 0]
@@ -811,13 +813,20 @@ def _pinch_ring(ev, m, x, f, ring, centre, side, scale: float) -> List[int]:
         vol = np.where(np.asarray(m.facet_bodies)[touching, 0] == body, vol, -vol)
     corners = side[f[touching]]
     inner = np.isin(f[touching], ring)
-    # by the corners off the ring (facets with all three on it: by all three)
-    facet_side = np.sign(np.where(inner.all(axis=1), corners.mean(axis=1),
-                                  np.where(inner, 0.0, corners).sum(axis=1)))
-    lost = {s: float(vol[facet_side == s].sum()) for s in (-1.0, 1.0)}
+    if pieces:
+        # (by a corner off the ring; facets with all three on it, inside
+        # the collapse, by none)
+        facet_side = np.where(inner, 0.0, corners).max(axis=1)
+        keys = [float(k) for k in np.unique(facet_side) if k > 0]
+    else:
+        # by the corners off the ring (facets with all three on it: by all three)
+        facet_side = np.sign(np.where(inner.all(axis=1), corners.mean(axis=1),
+                                      np.where(inner, 0.0, corners).sum(axis=1)))
+        keys = [-1.0, 1.0]
+    lost = {s: float(vol[facet_side == s].sum()) for s in keys}
     before = _body_state(ev, body) if body else {}
     facet_ids = np.asarray(m.facet_ids)
-    near = {s: facet_ids[touching][facet_side == s] for s in (-1.0, 1.0)}
+    near = {s: facet_ids[touching][facet_side == s] for s in keys}
     lengths = m.edge_lengths()[m.edge_valence() != 1]
     h = float(np.median(lengths)) if len(lengths) else float(scale)
     snapshot = ev._save()
@@ -1181,6 +1190,7 @@ def _cut(ev, x, ring, centre, scale) -> None:
     pop the vertex where the two sides now meet."""
     moved = x.copy()
     moved[ring] = centre
+    doubled = _doubled_edges(ev)
     ev.vertices = moved
     tiny = 1e-9*scale
     count = ev.counts["edges"]
@@ -1190,6 +1200,10 @@ def _cut(ev, x, ring, centre, scale) -> None:
         if now == count:
             break
         count = now
+    # (Evolver's deletion joined a vertex beside the ring to the point by
+    # two edges, a pack's crumpled neck's: the descent stalled round them)
+    if _doubled_edges(ev) > doubled:
+        raise ValueError("pinch_off(): collapsing the ring joined two vertices by two edges")
     m = ev.mesh()
     at = np.flatnonzero(np.linalg.norm(np.asarray(m.vertices) - centre, axis=1) < 1e3*tiny)
     f = np.asarray(m.facets)
@@ -1222,19 +1236,36 @@ def _cut(ev, x, ring, centre, scale) -> None:
     # one vertex per cone (the checked separation, _edits); else Evolver's pop
     # (a wall's two vertices: those with two cones; one with one is already
     # its piece's alone)
-    from ._edits import REASONS, edit
+    from ._edits import FOLD, REASONS, edit
     ids = [int(i) for i, n in zip(np.asarray(m.vertex_ids)[at], sides) if n >= 2]
     if not ids:
         return
     r = edit(ev, "separate", ids)
-    for v, why in zip(ids, r):
+    if (np.abs(r) == FOLD).any():
+        # (the cones as crumpled as the neck was: folds may grow, as they
+        # relax out; mode 1)
+        r = np.where(np.abs(r) == FOLD, edit(ev, "separate", ids, mode=1), r)
+    for v, why in zip(ids, np.abs(r)):
         if why != 0:
             if len(ids) > 1:
                 raise ValueError("pinch_off(): the neck's ends on the wall can't be separated "
                                  f"({REASONS[int(why)]})")
             _log.debug("fallback: pinch split by pop (the separation refused: %s)",
                        REASONS[int(why)])
+            doubled = _doubled_edges(ev)
             ev.command(f"pop vertex[{v}]")
+            # (not where the pop left two edges between the same two
+            # vertices: a pack's crumpled neck's did, and the descent
+            # stalled round them)
+            if _doubled_edges(ev) > doubled:
+                raise ValueError("pinch_off(): the neck's tip can't be separated "
+                                 f"({REASONS[int(why)]}; popped, doubled edges)")
+
+
+def _doubled_edges(ev) -> int:
+    """How many edges join the same two vertices as another."""
+    e = np.sort(np.asarray(ev.mesh().edges), axis=1)
+    return len(e) - len(np.unique(e, axis=0)) if len(e) else 0
 
 
 def _tidy_seam(ev, centre, h: float) -> None:
@@ -1374,7 +1405,7 @@ def _split_body(ev, body: int, before: dict, near: dict, lost: dict) -> List[int
         if i == body:
             continue
         mine = facet_ids[(fb == i).any(axis=1)]
-        share = sum(lost[s] for s in (-1.0, 1.0) if np.isin(near[s], mine).any())
+        share = sum(lost[s] for s in near if np.isin(near[s], mine).any())
         targets[i] = volumes[i] + share
     targets[body] = before["target"] - sum(targets.values())
     for i in pieces:
@@ -3555,11 +3586,42 @@ def _collapsed_rings(m, h: float) -> list:
     return [np.array(t) for t in sorted(rings)]
 
 
+def _collapsed_clusters(m, h: float) -> list:
+    """The collapsed necks' rings (_collapsed_rings), those sharing vertices
+    as one (a neck crumpled four vertices round, a chord across it, is two
+    rings: collapsed one at a time, Evolver's edge deletion left the other's
+    vertex beside the point, or two edges joining the same vertices)."""
+    rings = _collapsed_rings(m, h)
+    parent = list(range(len(rings)))
+
+    def root(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+    first: dict = {}
+    for k, ring in enumerate(rings):
+        for v in ring.tolist():
+            if v in first:
+                parent[root(k)] = root(first[v])
+            else:
+                first[v] = k
+    groups: dict = {}
+    for k, ring in enumerate(rings):
+        groups.setdefault(root(k), []).append(ring)
+    return [np.unique(np.concatenate(g)) for g in groups.values()]
+
+
 def _ring_sides(f, ring) -> "np.ndarray | None":
     """Each vertex's side of a collapsed neck's ring (+1, -1; 0 on the ring
     or away from it): the facets round the ring in two pieces joined across
-    edges off it. None where they aren't two."""
-    touching = np.flatnonzero(np.isin(f, ring).any(axis=1))
+    edges off it; where they are more (tubes meeting where they collapsed:
+    a pack's crumpled sheet, three filaments at one point), each piece's
+    number, 1, 2, 3 ... None where there is one, or a vertex is in two."""
+    inside = np.isin(f, ring)
+    # (not facets with all three corners on it: inside the collapse, which
+    # takes them; a neck crumpled four vertices round, a chord across it)
+    touching = np.flatnonzero(inside.any(axis=1) & ~inside.all(axis=1))
     on = set(int(v) for v in ring)
     parent = {int(k): int(k) for k in touching}
 
@@ -3580,15 +3642,17 @@ def _ring_sides(f, ring) -> "np.ndarray | None":
             else:
                 by_edge[key] = int(k)
     pieces = sorted({root(int(k)) for k in touching})
-    if len(pieces) != 2:
+    if len(pieces) < 2:
         return None
+    label = {r: (1.0 if r == pieces[0] else -1.0) if len(pieces) == 2 else float(n + 1)
+             for n, r in enumerate(pieces)}
     side = np.zeros(int(f.max()) + 1)
     for k in touching:
-        sign = 1.0 if root(int(k)) == pieces[0] else -1.0
+        sign = label[root(int(k))]
         for v in f[k]:
             if int(v) in on:
                 continue
-            if side[v] == -sign:
+            if side[v] not in (0.0, sign):
                 return None             # a vertex on both sides: no neck
             side[v] = sign
     return side
@@ -3618,21 +3682,20 @@ def _pinch_collapsed(ev) -> int:
         held = np.asarray(m.fixed, dtype=bool) | border | on
         cut = False
         ids = np.asarray(m.vertex_ids)
-        for ring in _collapsed_rings(m, h):
+        for ring in _collapsed_clusters(m, h):
             key = frozenset(int(i) for i in ids[ring])
             side = None if held[ring].any() or key in _PINCH_LEFT else _ring_sides(f, ring)
             if side is None:
                 continue
             centre = x[ring].mean(axis=0)
-            across = float(max(np.linalg.norm(x[ring[i]] - x[ring[(i + 1) % 3]])
-                               for i in range(3)))
+            across = float(np.linalg.norm(x[ring][:, None] - x[ring][None], axis=2).max())
             crossed, start, energy = _crossings(ev), ev._save(), ev.energy
             guarded = _guarded(ev)
             _unguard(ev)
             apex = _spike(f, np.asarray(m.edges), ring, side)
             try:
                 if apex is None:
-                    _pinch_ring(ev, m, x, f, ring, centre, side, h)
+                    _pinch_ring(ev, m, x, f, ring, centre, side, h, pieces=bool(side.max() > 1))
                 else:
                     _take_spike(ev, x, ring, apex, centre, h)
                 if _crossings(ev) > crossed:
@@ -3668,7 +3731,7 @@ def _spike(f, edges, ring, side) -> "list | None":
     two, 0.01 and 0.02 from a ring 1e-4 across, cut as a neck: Evolver
     deleted no edge between them, "2 left", and the neck was left.)"""
     on = set(int(v) for v in ring)
-    for s in (-1.0, 1.0):
+    for s in np.unique(side[side != 0]):
         tip = {int(v) for row in f[np.isin(f, ring).any(axis=1)] for v in row
                if int(v) not in on and side[v] == s}
         if not 1 <= len(tip) <= 3:

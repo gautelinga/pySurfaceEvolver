@@ -1870,7 +1870,14 @@ static int separate(struct ctx *c, vertex_id v)
     if ( b > 0 ) star(u,&verts);
   }
   top_timestamp = ++global_timestamp;
+  /* (mode 1, a cut's tips: the cones a neck collapsed below the mesh
+     leaves are as crumpled as the neck was, their facets folded back on
+     each other; folds may grow, as they relax out. Refused, Evolver's pop
+     split a pack's such vertex instead, leaving two edges between the
+     same two vertices, and the descent stalled round them) */
+  c->fold_ok = c->mode == 1;
   why = after(c,&verts,&was,0);
+  c->fold_ok = 0;
   if ( !why )
   { /* the pinch is gone */
     struct counts now;
