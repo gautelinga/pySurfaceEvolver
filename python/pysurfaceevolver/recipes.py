@@ -835,7 +835,12 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     contact line, vertices the gradient steps take through its solid are put
     back out). Bodies cut off keep their volumes; a body the run steps keeps
     its number for the piece holding most of the liquid, and for a merged
-    body, whose target is the bodies' added. The state each such descent ends
+    body, whose target is the bodies' added. (Not yet in general: a piece a
+    cut leaves can be folded back into the body it shares the most solids
+    with, a dry patch that cuts a region off doesn't make it a body, and a
+    merge keeps the volume continuous through the body's constant, hiding
+    what the mesh lost; a bead pack's liquid left behind isn't to be trusted
+    yet.) The state each such descent ends
     in is a :class:`Step` with ``fell`` set and the events whose changes were
     made in ``changes``; the run goes on from there as from a new start, its
     edges kept in range (``remesh`` if given, else within 0.4 and 4/3 of

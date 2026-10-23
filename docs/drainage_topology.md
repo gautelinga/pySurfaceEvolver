@@ -157,6 +157,24 @@ The liquid just before the jump (left) and just after it (right), at the same vo
 - Drained further, this pore stops at a volume of about 0.16. Newton's steps
   converge only slowly in a strongly curved part of the remaining liquid, and the run
   can't step on. A finer mesh and a run down to the pendular rings are open.
-- A pack of many beads isn't done yet. Sixteen beads in a box drain from a volume of
-  87.5 to between 57 and 80, run to run, through many dry patches, before a descent
-  that doesn't settle or a step that doesn't converge ends the run (PLAN, stage F).
+- Sixteen beads in a box, its floor a wall, drain to breakthrough (the gas reaching
+  the floor) through a few hundred changes: six packings at contact angles of 15, 20
+  and 25 degrees, all eighteen at one thread and at two, in 2 to 16 minutes each at
+  one thread (`bench/topology/corpus.py --set wide`). Their beads use the flux gauge
+  (`constraints.sphere(gauge="flux")`), which has no singular point to move. Where a
+  change or a descent fails on the way, the run backs up a few points and goes on
+  from there another way (a shorter step, a fresh mesh).
+- A run's work is bounded, in passes over the surface (an evaluation of the energy,
+  forces or volumes on every facet is one; deterministic, unlike its time): past
+  `budget=` (1.5 million by default; the packs' runs take 0.14 to 0.6 million) it
+  ends with a warning, "the run's budget spent". A longer run, or a finer mesh's,
+  passes a larger `budget` (or `None`). A descent that goes on past 100000 passes
+  counts as failed, and the run backs up.
+- **Liquid cut off is not yet held at its own volume.** A piece a cut leaves can be
+  folded back into the body it shares the most solids with (in a pack, nearly always
+  the draining one); a dry patch that cuts a region off doesn't make it a body of
+  its own, so it drains with the rest; and a merge keeps the measured volume
+  continuous by changing the body's constant, which hides what the mesh lost. So
+  the liquid left behind (the residual saturation after breakthrough) and the
+  volumes after the first cut-off are not to be trusted yet; the steps up to it,
+  each an equilibrium at its volume, are.

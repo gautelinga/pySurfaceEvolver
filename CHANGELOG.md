@@ -58,6 +58,13 @@
   bridge, a dry patch opening on a sphere inside a draining drop; a pilot bead-pack
   pore drained from volume 0.69 to 0.05 through ten drying changes (a coarse mesh;
   one level finer it got to 0.41).
+  **Limitation:** liquid cut off is not yet held at its own volume in general. A
+  piece a cut leaves can be folded back into the body it shares the most solids with
+  (in a bead pack, nearly always the draining one), a dry patch that cuts a region
+  off doesn't make it a body of its own, and a merge keeps the measured volume
+  continuous by changing the body's constant, which hides what the mesh lost. The
+  residual liquid after breakthrough isn't to be trusted yet (docs:
+  drainage_topology).
 
 - `constraints.sphere(axis=...)`: the sphere's integrals singular only at its north
   pole, `center + radius*axis`, so that it can point at a neighbouring bead where a
