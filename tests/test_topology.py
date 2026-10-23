@@ -1687,7 +1687,8 @@ def test_a_change_where_one_was_made_is_put_off_till_nearer():
     # (_surgery._put_off) within a descent: the opposite of a change made
     # (on its solid, within three of its edges), or the same within an edge
     # (it came back), waits until it is nearer than half that one's gap; a
-    # refusal puts off its own kind only
+    # refusal puts off its own kind only; a surface resting on a solid isn't
+    # put off
     from pysurfaceevolver import _surgery
     from pysurfaceevolver._events import Event
 
@@ -1712,11 +1713,37 @@ def test_a_change_where_one_was_made_is_put_off_till_nearer():
     assert put_off(tried("solid", -0.015, 0.0, 1), through)
     assert not put_off(tried("solid", -0.025, 0.0, 1), through)
     assert not put_off(tried("solid", 0.01, 0.0, 1), [])
+    # (resting on the solid, held there by its guard: it comes no nearer)
+    assert not put_off(tried("solid", 0.003, 0.05, -1), made)
+    assert not put_off(tried("solid", 0.003, 0.2, 1), made)
 
     def event(kind, between=None):
         return Event(kind, 0.01, 0.1, np.zeros(3), np.array([0]), "bead1", between)
     assert [_surgery._sense(None, event(k)) for k in ("neck", "touch")] == [-1, 1]
     assert [_surgery._sense(None, event("solid", b)) for b in ("body", "outside")] == [-1, 1]
+
+
+def test_a_patch_growing_by_resting_contacts_is_no_repeat(monkeypatch):
+    # (_surgery._again) made three times at one place, a change is not made
+    # there again; but a surface resting on a solid beside its contact line
+    # there is the patch growing (the guard holds it at the solid): only its
+    # refusals and undoing count
+    from types import SimpleNamespace
+    from pysurfaceevolver import _surgery
+    from pysurfaceevolver._events import Event
+    monkeypatch.setattr(_surgery, "_edge_scale", lambda ev: 0.1)
+    monkeypatch.setattr(_surgery, "_beside_line", lambda ev, e, h: True)
+    at = [("solid", "bead1", np.zeros(3))]
+
+    def event(gap):
+        return Event("solid", gap, 0.1, np.zeros(3), np.array([0]), "bead1", "body")
+    again = _surgery._again
+    assert again(None, event(0.01), at*3, [], [])               # coming, made thrice
+    assert not again(None, event(0.001), at*3, [], [])          # resting beside its line
+    assert again(None, event(0.001), [], at*3, [])              # refused thrice
+    assert again(None, event(0.001), [], [], at)                # undone
+    monkeypatch.setattr(_surgery, "_beside_line", lambda ev, e, h: False)
+    assert again(None, event(0.001), at*3, [], [])              # resting elsewhere
 
 
 def test_a_drop_on_a_flux_sphere_is_the_exact_cap():

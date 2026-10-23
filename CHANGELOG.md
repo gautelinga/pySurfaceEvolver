@@ -511,6 +511,15 @@
   vertices by two edges, and the descent stalled round them. A cut whose collapse
   joins two vertices by two edges is refused, and so is a `pop` that does.
 
+- A surface resting on a solid (its guard holding it there) is no change a descent
+  puts off: it can come no nearer, and put off it held the runs still. Nor do the
+  contacts made where it rests beside a contact line on that solid count toward
+  `_AGAIN` (three at one place): they are the patch there growing, the line moving on
+  past vertices the guard holds; an undone change is still not made again there.
+  Six of the 15 descents the 16-bead replays and the wide set stopped in stalled with
+  such a contact last put off or counted out (a film drying over a bead, held at its
+  patch's edge).
+
 - Where a descent's run passes the surface through itself and no event within the
   events' factor is there, the change made instead is looked for there within twice
   the factor (elsewhere still within it): a 16-bead run's two tongues of contact line

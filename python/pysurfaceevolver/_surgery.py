@@ -2554,6 +2554,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     undo: list = []                     # (that state, the change) for the last one made
 
     refused_at: list = []               # changes refused in it: (kind, solid, place)
+    undone_at: list = []                # ... and undone
     told: list = []                     # ... and those put off: (_Tried, the iteration it began)
     turn = 0                            # the iteration
     seen: dict = {}                     # this iteration's events as tried (place)
@@ -2562,18 +2563,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     stalled = 0                         # runs in a row that left it as it was
 
     def again(e) -> bool:
-        """Whether e's change was made _AGAIN times here already (a pack's
-        forced join of contact lines where a side wall meets the floor was
-        made 160 times, each run after it through itself, until the run
-        timed out), or refused as often (a contact squeezed into the gap
-        where a bead nearly touches a wall was refused 1215 times in a run)."""
-        h = _edge_scale(ev)
-
-        def count(at):
-            return sum(k == e.kind and c == str(e.constraint)
-                       and float(np.linalg.norm(np.asarray(e.where) - w)) < h
-                       for k, c, w in at)
-        return count(made_at) >= _AGAIN or count(refused_at) >= _AGAIN
+        return _again(ev, e, made_at, refused_at, undone_at)
 
     def place(e) -> _Tried:
         """e as a change tried (_tried), taken once an iteration, on the
@@ -2624,7 +2614,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
 
     def undo_last(why: str) -> bool:
         """The last change made undone (back to the state before it), and
-        not made again here (_AGAIN times over, and noted undone): whether
+        not made again here (noted undone): whether
         there was one to undo."""
         nonlocal way, before, since, refused
         if not undo:
@@ -2635,7 +2625,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             if c is e:
                 del changes[k]
                 break
-        made_at.extend([(e.kind, str(e.constraint), np.asarray(e.where, float))]*_AGAIN)
+        undone_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
         note(e, "undone")
         refused = f"{e}: {why}"
         _log.debug("change undone: %s", refused)
@@ -3039,6 +3029,29 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                            f"change, and as many after remeshing" if since > _FALL_ITERATIONS else
                            f"no stable state within {_FALL_TOTAL*_FALL_ITERATIONS} steps") \
         + (f" (the last change not made: {refused})" if refused else "")
+
+
+def _again(ev, e, made_at: list, refused_at: list, undone_at: list) -> bool:
+    """Whether e's change was made _AGAIN times here already (a pack's
+    forced join of contact lines where a side wall meets the floor was
+    made 160 times, each run after it through itself, until the run
+    timed out), or refused as often (a contact squeezed into the gap
+    where a bead nearly touches a wall was refused 1215 times in a run),
+    or undone here. (The made not counted for a surface resting on a
+    solid beside its contact line there: the patch there growing, the
+    line moving on past vertices the guard holds at the solid; counted,
+    a 16-bead replay's film drying over a bead was held at its patch's
+    edge after three, and the descent stalled.)"""
+    h = _edge_scale(ev)
+
+    def count(at):
+        return sum(k == e.kind and c == str(e.constraint)
+                   and float(np.linalg.norm(np.asarray(e.where) - w)) < h
+                   for k, c, w in at)
+    growing = e.kind == "solid" and 0 <= e.gap < _TOUCH*float(e.scale) \
+        and _beside_line(ev, e, h)
+    return (not growing and count(made_at) >= _AGAIN) or count(refused_at) >= _AGAIN \
+        or count(undone_at) > 0
 
 
 def _common(a, b) -> float:
@@ -3957,7 +3970,15 @@ def _put_off(here: _Tried, history: list) -> bool:
     the contact lines joined after a merge on a plane.) The guards and the
     runs hold the surface meanwhile; a neck that pinches, a film that thins,
     comes nearer and is made then (and where a run would cross,
-    _change_nearest still makes it, after the others)."""
+    _change_nearest still makes it, after the others). Not a surface resting
+    on a solid (_resting, not through it): its guard holds it there, it
+    comes no nearer, and put off it held the descent's runs still (a 16-bead
+    replay's film on a bead, resting by a dry patch made there, put off
+    until the runs stalled and the descent gave up; most of the stalls a
+    batch of replays ended in had such a change last put off); _AGAIN
+    bounds its repeats."""
+    if here.kind == "solid" and 0 <= here.gap < _TOUCH:
+        return False
     gaps = [t.gap for t in history
             if (t.what == "refused" and t.kind == here.kind and _same_place(here, t))
             or (t.what != "refused" and t.sense != here.sense and _same_place(here, t))
