@@ -504,6 +504,53 @@ def test_arclength_stops_where_its_tries_run_out(monkeypatch, caplog):
     assert not any(s.fell for s in steps)
 
 
+def test_a_descent_past_its_budget_stops_and_the_run_backs_up(monkeypatch, caplog):
+    # descents bounded at a pass over the surface: each stops at its first
+    # iteration, the run backs up as from any stop and ends where its tries
+    # run out, with the reason
+    import logging
+    from pysurfaceevolver import _surgery
+    monkeypatch.setattr(_surgery, "_BUDGET", 1)
+    ev = _sphere_bridge(0.09)
+    with warnings.catch_warnings(record=True) as caught, \
+            caplog.at_level(logging.DEBUG, logger="pysurfaceevolver.topology"):
+        warnings.simplefilter("always")
+        steps = list(recipes.arclength(ev, ev.body(1), -0.003, 60, topology=True))
+    stops = [str(w.message) for w in caught if "arclength()" in str(w.message)]
+    assert len(stops) == 1 and "the descent's budget spent" in stops[0]
+    assert any(r.getMessage().startswith("branch backed up") for r in caplog.records)
+    assert not any(s.fell for s in steps)
+
+
+def test_a_run_past_its_budget_stops_after_its_last_step():
+    # the run's work bounded: it ends with a warning after the step that
+    # spent it, at the same step every time (work, not time); the caller's
+    # work between steps isn't counted
+    def run(budget, between=False):
+        ev = _sphere_bridge(0.09)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = []
+            for s in recipes.arclength(ev, ev.body(1), -0.003, 14, topology=True,
+                                       budget=budget):
+                out.append(s)
+                if between:
+                    ev.relax()
+        return out, [str(w.message) for w in caught if "arclength()" in str(w.message)]
+    full, stops = run(None)
+    assert not stops and any(s.fell for s in full)
+    a, stops = run(200)
+    assert len(stops) == 1 and "the run's budget spent" in stops[0]
+    assert 2 <= len(a) < len(full)
+    b, _ = run(200)
+    c, _ = run(200, between=True)
+    # (the same steps; their values to rounding: OpenMP's sums, and the
+    # caller's relax() moving the surface by that much)
+    assert len(a) == len(b) == len(c)
+    for other in (b, c):
+        assert [s.value for s in other] == pytest.approx([s.value for s in a], rel=1e-9)
+
+
 def test_a_bridge_between_disks_pinches_at_its_fold_into_two_equal_drops():
     # pinned to the rims of disks 3 apart (slenderness 1.5): stable down to
     # the fold, volume 0.4751 of the cylinder (disk_bridge.md), where the neck

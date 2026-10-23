@@ -104,6 +104,7 @@ def refusal_class(message):
 
 def stop_class(message):
     for key, name in (("ran away", "descent ran away"),
+                      ("budget spent", "budget spent"),
                       ("no stable state", "no stable state"),
                       ("three falls", "three falls without a change"),
                       ("Evolver:", "Evolver error"),
@@ -170,6 +171,10 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     # (per step: the kinds of the changes made, whether it fell; a step
     # the run backed up past is no longer the run's)
     made = {}
+    # (the run's work, in passes over the surface, as arclength's budget
+    # counts it: _core.work() between steps over the facets after each)
+    from pysurfaceevolver import _core
+    work = {"last": _core.work(), "passes": 0.0}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
@@ -178,6 +183,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                 taken = 0
                 for step in recipes.arclength(ev, ev.body(1), ds, STEPS - first, topology=True):
                     taken += 1
+                    work["passes"] += (_core.work() - work["last"])/max(1, ev.counts["facets"])
+                    result["passes"] = round(work["passes"])
                     step.index += first
                     state["step"] = step.index
                     if checkpoints:
@@ -200,6 +207,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                               f"{' fell' if step.fell else ''}"
                               f"{''.join(f'; made {e}' for e in step.changes)}\n")
                     log.flush()
+                    work["last"] = _core.work()     # (not the checkpoints' and the log's)
                     if goal == "half" and step.value <= target:
                         result["reached"] = True
                         done = True

@@ -2441,6 +2441,8 @@ _STALLED = 2            # runs in a row leaving the state as it was: the descent
 _PLACE = 3.0            # changes at one place: on one solid, within this many of their edges
 _MARGIN = 0.5           # ... made again there (or undone) only at under this share of the gap
 _PUT_OFF = 20           # ... or after this many iterations of the descent put off
+_BUDGET = 100000        # a descent's work at most, in passes over its surface (_core.work: an
+                        # energy, force or content evaluation of every facet is one)
 
 
 def _median_edge(m) -> float:
@@ -2552,6 +2554,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     if not falling:
         guard(ev)
     since, stuck = 0, False
+    work = _core.work()                 # (where the budget began)
     closing, fresh = True, None         # whether the tidying closes patches; the iteration's start
     shut: list = []                     # patches closed in this descent: (wall, middle)
     made_at: list = []                  # changes made in it: (kind, solid, place)
@@ -2654,6 +2657,14 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
 
     for turn in range(_FALL_TOTAL*_FALL_ITERATIONS):
         try:
+            spent = (_core.work() - work)/max(1, ev.counts["facets"])
+            if spent > _BUDGET:
+                # (bounded in work, not in time, so that a run comes back the
+                # same: a 16-bead pack's descent crept on for 30 minutes,
+                # changes made and undone at a side wall, within its turns)
+                return None, changes, (f"the descent's budget spent ({spent:.0f} passes over "
+                                       f"the surface in {turn} iterations)") \
+                    + (f" (the last change not made: {refused})" if refused else "")
             since += 1
             if since > _FALL_ITERATIONS:
                 # (first, after a change, the change nearest to coming,

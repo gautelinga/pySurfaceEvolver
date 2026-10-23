@@ -632,6 +632,7 @@ def _remesher(ev, remesh: Any) -> Optional[Callable[[Callable[[], None]], bool]]
 
 
 _QUIET_FALLS = 20       # arclength(topology=True): falls in a row without a change, at most
+_RUN_BUDGET = 1.5e6     # ... and its work, in passes over the surface (budget=)
 # ... where the run would stop, it backs up to a state it went through and
 # goes on another way: (steps back, the step's factor, the edge length's
 # factor, remeshed afresh to it; None: the mesh as it was), try by try at
@@ -745,7 +746,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
               tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
               remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
-              events: Union[bool, float] = True, topology: bool = False) -> Iterator[Step]:
+              events: Union[bool, float] = True, topology: bool = False,
+              budget: Optional[float] = _RUN_BUDGET) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
     target volume or ``ev.quantity(name)``'s target).
@@ -852,6 +854,15 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     the run, fail. How liquid
     splits at a pinch depends on the way down, here a guided descent of the
     energy, not the liquid's flow.
+
+    ``budget`` bounds such a run's work (``topology=True`` only), in passes
+    over the surface (an evaluation of the energy, the forces or the volumes
+    on every facet is one; a Hessian four), counted as the run goes, not
+    the caller's work between steps: past it the run ends, with a warning,
+    after its last step. A descent's own work is bounded too, at 100000
+    passes, past which it counts as stopped (and the run backs up). Work,
+    not time: a run comes back the same on a slower or busier machine.
+    None: no bound.
     """
     if not topology:
         yield from _branch(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
@@ -874,6 +885,23 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     # gluing it back, the next fall's first event, until it ran away)
     history: list = []
     backups, step_ds = _Backups(), ds
+    spent, counted = 0.0, _core.work()  # (the run's work, in passes; counted up to)
+
+    def spend() -> bool:
+        """The work since the last count added (passes over the surface as
+        it is now); whether the budget is spent."""
+        nonlocal spent, counted
+        now = _core.work()
+        spent += (now - counted)/max(1, ev.counts["facets"])
+        counted = now
+        return budget is not None and spent > budget
+
+    def out_of_budget() -> bool:
+        if not spend():
+            return False
+        warnings.warn(f"arclength(): the run's budget spent ({spent:.0f} passes over the "
+                      f"surface): stopping", UserWarning, stacklevel=3)
+        return True
 
     def kept(step: Step, moved: bool) -> None:
         """The state after the step just yielded, kept to back up to; past an
@@ -921,6 +949,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         return True
 
     while index < steps:
+        if out_of_budget():
+            return
         last = last[-1:]                # (the state a change ended in: events coming from it)
         seen: List[np.ndarray] = []
         lost, event, moved = False, None, False
@@ -952,7 +982,11 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 moves.append(step.value - last[-1].value)
             step.index = index
             index += 1
+            spend()
             yield step
+            counted = _core.work()      # (not the caller's work between steps)
+            if out_of_budget():
+                return
             orient_lines(ev)
             move_poles(ev)      # (sphere(axis=): its pole kept off its contact lines)
             last, seen = (last + [step])[-3:], (seen + [ev.vertices])[-2:]
@@ -1062,7 +1096,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                        np.array(bodies.pressure), result, events=ev.events(factor),
                        fell=True, changes=cut)
         before = last[-1].value if last else None
+        spend()
         yield settled
+        counted = _core.work()
         last = [settled]
         index += 1
         quiet = 0 if cut else quiet + 1

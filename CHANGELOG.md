@@ -116,6 +116,18 @@
   change it makes (2000 in all), not 200 in all. Three falls without a change stop
   a run only when no step was taken between them.
 
+- `arclength(topology=True, budget=1.5e6)`: a run's work is bounded, in passes over
+  the surface (an energy, force or volume evaluation of every facet is one, a Hessian
+  four; `_core.work()` counts them, deterministically): past it the run ends with a
+  warning after its last step. A descent's own work is bounded at 100000 passes,
+  past which it counts as stopped and the run backs up. Work, not time, so a run
+  comes back the same on a slower or busier machine; the caller's work between steps
+  isn't counted; `budget=None` lifts it. Before, a descent was bounded only by its
+  2000 iterations (one took over 30 minutes on a loaded machine) and the back-ups
+  only by their number. The 16-bead packs' runs to breakthrough take 0.14 to 0.6
+  million passes (2 to 14 minutes at one thread); each descent's work and time are
+  logged ("descent's work: ...").
+
 - `arclength(topology=True)` backs up where it would stop: where a change or a
   descent fails (runs away, stalls, finds no stable state, Evolver or an edit fails
   on the way) or falls stop getting anywhere, the run goes back to a state it went
