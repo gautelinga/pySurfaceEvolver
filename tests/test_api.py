@@ -560,16 +560,19 @@ def test_sigint_interrupts_long_run(run_python):
         from pysurfaceevolver import Evolver
         ev = Evolver("cube.fe")
         ev.command("r; r; r")
-        threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGINT)).start()
+        # (the timer started inside the try: on a loaded machine the main
+        # thread can wait half a second before it gets there, and the
+        # interrupt came outside it)
         try:
+            threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGINT)).start()
             ev.command("g 10000000")
         except KeyboardInterrupt:
             print("INTERRUPTED")
         print("VOLUME", ev.eval("body[1].volume"))
         print("HANDLER", signal.getsignal(signal.SIGINT) is signal.default_int_handler)
     """)
-    assert "INTERRUPTED" in result.stdout, result.stderr
-    assert "HANDLER True" in result.stdout
+    assert "INTERRUPTED" in result.stdout, (result.stdout, result.stderr)
+    assert "HANDLER True" in result.stdout, (result.stdout, result.stderr)
     volume = float(result.stdout.split("VOLUME")[1].split()[0])
     assert volume == pytest.approx(1.0, rel=1e-6)
 

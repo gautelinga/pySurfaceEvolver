@@ -1833,7 +1833,7 @@ def _vertex_through_the_ball(ev, n=41, vid=None):
         vid = int(m.vertex_ids[int(np.argmax(np.asarray(m.vertices)[:, 2]))])
     out = []
     for z in np.linspace(0.5, -0.5, n):
-        ev.command(f"set vertex[{vid}] x 0; set vertex[{vid}] y 0; set vertex[{vid}] z {z!r}; recalc")
+        ev.command(f"set vertex[{vid}] x 0; set vertex[{vid}] y 0; set vertex[{vid}] z {float(z)!r}; recalc")
         out.append((ev.energy, ev.body(1).volume))
     return np.asarray(out)
 
