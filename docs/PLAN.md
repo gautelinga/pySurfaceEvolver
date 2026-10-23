@@ -5,6 +5,26 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
+## Resume here (2026-10-23)
+
+**Topology runs, 16-bead packs to breakthrough (stage-f-pack, unpushed):** the wide set
+(6 seeds x 15/20/25 degrees) reaches breakthrough 18/18 at 1 thread with no back-ups
+(median 5 min, max 16 min, s1_t15's 329 steps) and 18/18 at 2 threads (7 back-ups, all
+recovered; max 13 min), idle machine, 4 runs at a time. Runs and descents are bounded in
+work (`_core.work()`, passes over the surface; deterministic): a descent at 100000 passes
+(a stop the run backs up from), a run at `arclength(budget=1.5e6)`. The runs take
+0.14-0.6 million passes. Last session's 27-43 minute runs were mostly the machine's load
+(12-17): time runs on an idle machine, or compare passes. A laptop suspend shows as the
+same ~4100 s gap in every log.
+
+**Open:** s1_t15 just over the 15-minute target; branch steps are ~60% of a run's time,
+and failed correctors about half their Newton work (a stall exit made them cheaper but
+failed more often and changed the runs' paths: 7 back-ups and slower in all; dropped).
+Corrector work per point (~16 Newton pairs) is the lever. Pre-existing mypy errors in
+`_surgery.py` (`np.ix_` with lists x2, a tuple assignment ~line 2948) under local numpy
+1.26 stubs: check under CI's numpy before releasing. Persistent scratch:
+`~/pyse_scratch` (not /tmp, which a reboot wiped with the failure library).
+
 ## Resume here (2026-10-15)
 
 **Released:** 0.7.5 (2026-10-15, tag v0.7.5) and 0.7.4 (2026-10-12, tag v0.7.4); wheels as
