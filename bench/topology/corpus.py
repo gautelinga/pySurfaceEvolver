@@ -167,7 +167,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                   start=v0, target=target, end=v0, steps=0, reached=False, stop="",
                   stop_class="", changes=0, kinds={}, falls=0, facets=ev.counts["facets"],
                   python=sys.executable, pyse=os.path.dirname(pyse.__file__))
-    kinds = Counter()
+    # (per step: the kinds of the changes made, whether it fell; a step
+    # the run backed up past is no longer the run's)
+    made = {}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
@@ -185,10 +187,13 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                         for ext in (".fe", ".pkl"):
                             if os.path.exists(stale + ext):
                                 os.remove(stale + ext)
-                    kinds.update(e.kind for e in step.changes)
+                    for k in [k for k in made if k >= step.index]:
+                        del made[k]
+                    made[step.index] = ([e.kind for e in step.changes], step.fell)
+                    kinds = Counter(kind for m, _ in made.values() for kind in m)
                     result.update(end=float(step.value), steps=step.index,
                                   changes=sum(kinds.values()), kinds=dict(kinds),
-                                  falls=result["falls"] + bool(step.fell),
+                                  falls=sum(fell for _, fell in made.values()),
                                   facets=ev.counts["facets"])
                     log.write(f"{time.time() - t0:8.1f}s step {step.index:4d}  V {step.value:.4f} "
                               f"facets {ev.counts['facets']} angle {ev.mesh_quality().angle_min:.1f}"
@@ -254,6 +259,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                                     for _, t in records if t.startswith("run undone: ")))
     result["descent_stops"] = dict(Counter(stop_class(t) for _, t in records
                                            if t.startswith("descent stopped: ")))
+    # (where the run would have stopped, backed up and gone on another way)
+    result["backed_up"] = dict(Counter(stop_class(t) for _, t in records
+                                       if t.startswith("branch backed up")))
     for key, prefix in (("poles_moved", "pole moved"), ("patches_closed", "patch closed"),
                         ("flat_dropped", "flat facets dropped")):
         result[key] = sum(t.startswith(prefix) for _, t in records)
