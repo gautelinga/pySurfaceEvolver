@@ -2544,6 +2544,10 @@ int pyse_snapshot_restore(long handle)
   return status;
 }
 
+double pyse_work_count(void)
+{ return pyse_work;
+}
+
 extern int pyse_fast_steps;   /* src/iterate.c */
 
 int pyse_set_fast_steps(int on)

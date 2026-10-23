@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import warnings
 from typing import Any, List, NamedTuple, Optional
 
@@ -2510,6 +2511,7 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     # step at 2k facets 64 million instructions to 44. Not the stock
     # search, which relax() and Evolver.command("g") otherwise keep)
     fast = _core.set_fast_steps(True) if hasattr(_core, "set_fast_steps") else None
+    work, began = _core.work(), time.perf_counter()
     try:
         result = _descend(ev, factor, tol, falling=falling, keep=keep, h0=h0, changes=changes,
                           history=[] if history is None else history)
@@ -2520,6 +2522,8 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
         _log.debug("descent stopped: Evolver: %s", error)
         return None, changes, f"Evolver: {error}"
     finally:
+        _log.debug("descent's work: %.4g (%.0f a facet), %.1f s", _core.work() - work,
+                   (_core.work() - work)/max(1, ev.counts["facets"]), time.perf_counter() - began)
         _core.line_chop(chop)
         if fast is not None:
             _core.set_fast_steps(fast)

@@ -67,6 +67,12 @@ void thread_calc_facet_forces()
 *  Purpose:  Wrapper for total energy calculation.    
 */
 
+/* pySE: the work done, in elements evaluated (a facet, or an edge for
+   strings, per energy, force or content pass; a Hessian fill counts
+   PYSE_HESS_WORK passes): a deterministic measure of a run's cost, which
+   the descents budget by (pyse_work_count) */
+double pyse_work = 0.0;
+
 void calc_energy() 
 {
 #ifdef MPI_EVOLVER
@@ -91,6 +97,8 @@ void local_calc_energy()
   body_id    b_id;
   edge_id e_id;
   fl_sel sel;
+
+  pyse_work += PYSE_WORK_ELEMENTS;
 
   if ( web.torus_flag ) calc_periods(ADJUST_VOLUMES);
   else if ( web.torus_period ) calc_periods(NO_ADJUST_VOLUMES);
@@ -308,6 +316,8 @@ void local_calc_force()
   edge_id e_id;
   int i;
   fl_sel sel;
+
+  pyse_work += PYSE_WORK_ELEMENTS;
 
   /* forces zeroed and the quantity gradients done in calc_volgrads()'s
      pass over the elements (see calc_all_grads()) */
@@ -912,6 +922,7 @@ void  local_calc_content (
   facetedge_id fe_id;
   body_id b_id;
 
+  pyse_work += PYSE_WORK_ELEMENTS;
   FOR_ALL_BODIES(b_id)
   { /* initialize binary tree add */
     struct body *ptr;

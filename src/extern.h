@@ -2581,6 +2581,11 @@ extern long long int q_facet_setup_elapsed_time;
 }
 #endif
 
+/* pySE: the work done (calcforc.c), in elements evaluated */
+extern double pyse_work;
+#define PYSE_WORK_ELEMENTS ((double)web.skel[web.representation == STRING ? EDGE : FACET].count)
+#define PYSE_HESS_WORK 4.0
+
 #ifdef _MSC_VER
 // Microsoft, of course, has to screw with standard names.
 #define snprintf  sprintf_s

@@ -2166,6 +2166,7 @@ void hessian_fill(
   }
   #endif
  
+  pyse_work += PYSE_HESS_WORK*PYSE_WORK_ELEMENTS;
   /* clear entries */
   if ( rhs_flag ) memset((char*)rhs,0,S->total_rows*sizeof(REAL));
 

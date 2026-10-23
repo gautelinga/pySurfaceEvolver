@@ -163,6 +163,7 @@ int pyse_native_formula_register(int con, int kind, const double *p);
    can be, each move's content predicted for its restoring motion; off by
    default); returns the previous setting. */
 int pyse_set_fast_steps(int on);
+double pyse_work_count(void);
 /* For each edge and each of the constraints nums, whether the edge is on it
    (out: edges x ncon, row-major). */
 int pyse_edges_on_constraints(const int *nums, int ncon, unsigned char *out, long n);
