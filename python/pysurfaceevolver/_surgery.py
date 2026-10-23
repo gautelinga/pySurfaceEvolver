@@ -825,10 +825,50 @@ def _pinch_ring(ev, m, x, f, ring, centre, side, scale: float) -> List[int]:
         _cut(ev, x, ring, centre, scale)
         made = _split_body(ev, body, before, near, lost) if body else []
         _tidy_seam(ev, centre, h)
+        made = _drop_bare(ev, body, made, h)
     except Exception:
         ev.restore(snapshot)
         raise
     return made
+
+
+def _drop_bare(ev, body: int, made: List[int], h: float) -> List[int]:
+    """The pieces a cut made (bodies ``made``) that are crumbs of the
+    collapsed tube itself taken away, their targets back to ``body``: those
+    the seam's tidying left without facets (their edges all went), or
+    holding next to nothing (under 1e-6 h^3) in facets of their own (a lone
+    facet left lying on a wall). (Left, a volume fixed with next to nothing to hold it,
+    Evolver's constraint projection was singular, ERROR 3005, or the fast
+    steps' volume prediction blew the energy up to 1e9; a 16-bead pack's
+    necks collapsed below the mesh were left so, uncut, run after run,
+    until its descents stalled round them.) The pieces left."""
+    if not made:
+        return made
+    m = ev.mesh()
+    fb = np.asarray(m.facet_bodies)
+    crumbs, facets = [], []
+    for i in made:
+        mine = (fb == i).any(axis=1)
+        if not mine.any():
+            crumbs.append(i)
+        elif not ((fb[mine] != i) & (fb[mine] > 0)).any() \
+                and abs(float(ev.body(i).volume)) < 1e-6*h**3:
+            crumbs.append(i)
+            facets += [int(k) for k in np.asarray(m.facet_ids)[mine]]
+    if not crumbs:
+        return made
+    fixed = ev.body(body).fixed
+    target = ev.body(body).target if fixed else None
+    if fixed and target is not None:
+        target += sum(float(ev.body(i).target) for i in crumbs if ev.body(i).fixed)
+    if facets:
+        ev.command("; ".join(f"dissolve facet[{k}]" for k in facets))
+        ev.command("dissolve edges; dissolve vertices")
+    for i in crumbs:
+        ev.command(f"dissolve body[{i}]")
+    if fixed and target is not None:
+        ev.body(body).target = target
+    return [i for i in made if i not in crumbs]
 
 
 def _dry_neck(ev, m, x, f, ring, walls, gaps, event, side, error) -> List[int]:

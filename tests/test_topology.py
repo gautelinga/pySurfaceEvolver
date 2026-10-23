@@ -1009,6 +1009,21 @@ def test_a_spike_collapsed_below_the_mesh_is_taken_off():
     ev.command("g 1")
 
 
+def test_a_cut_leaves_no_body_without_facets():
+    # a cut whose piece is a crumb the seam's tidying takes all of (left
+    # without facets, its volume fixed: Evolver's constraint projection
+    # singular, ERROR 3005): the piece dissolved, its target back to the
+    # body cut, which keeps all of it
+    from pysurfaceevolver import _surgery as S
+    ev, volume = _held(*_hourglass(1e-5))
+    ev.body(1).target = volume + 1e-3
+    ev.command("pyse_b := new_body; set body[pyse_b] target 1e-9")     # (a piece with no facets)
+    assert S._drop_bare(ev, 1, [2], 0.1) == []
+    assert list(ev.bodies().ids) == [1]
+    assert ev.body(1).target == pytest.approx(volume + 1e-3 + 1e-9, rel=1e-12)
+    ev.command("g 1")
+
+
 def test_a_collapse_keeps_the_surface_a_manifold():
     # the hourglass's waist edges: merging an edge's ends would join them to
     # the waist's third vertex by two edges (the surface pinched along an

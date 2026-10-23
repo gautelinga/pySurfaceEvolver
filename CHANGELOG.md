@@ -501,6 +501,14 @@
   the spike's facets would be one point's: Evolver refused every edge ("the ring
   didn't collapse to one vertex (3 left)"), at every look of a 16-bead descent.
 
+- A cut (`pinch_off`, a neck collapsed below the mesh) whose piece is a crumb of the
+  collapsed tube itself (left by the seam's tidying without facets, or holding next to
+  nothing in a lone facet) takes the crumb away, its target back to the body cut. Left,
+  a body with a fixed volume and nothing to hold it made Evolver's constraint
+  projection singular (ERROR 3005), or the fast gradient steps' volume prediction blew
+  the energy up to 1e9; 16-bead packs' collapsed necks were left so, uncut, until the
+  descents stalled round them.
+
 - Snapshots in memory (`relax()`'s and the descents' undo) put back after a body
   was dissolved and another made: Evolver gives the freed volume quantity's and
   method instance's slots to the next ones, and the restore copied flags back slot
