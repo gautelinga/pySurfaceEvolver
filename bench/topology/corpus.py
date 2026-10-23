@@ -105,6 +105,7 @@ def refusal_class(message):
 def stop_class(message):
     for key, name in (("ran away", "descent ran away"),
                       ("budget spent", "budget spent"),
+                      ("no liquid reaches the outlet", "no liquid at the outlet"),
                       ("no stable state", "no stable state"),
                       ("three falls", "three falls without a change"),
                       ("Evolver:", "Evolver error"),
@@ -175,14 +176,52 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     # counts it: _core.work() between steps over the facets after each)
     from pysurfaceevolver import _core
     work = {"last": _core.work(), "passes": 0.0}
+    # (the liquid kept: the targets' total changes only by the run's own
+    # steps of its body's target, counted as its setter makes them; checked
+    # between steps with no backing up between, the run's state put back)
+    stepped = {"total": 0.0}
+    setter = recipes._setter
+
+    def counted_setter(what):
+        put = setter(what)
+
+        def counted(ev_, value):
+            before = ev_.body(1).target
+            put(ev_, value)
+            stepped["total"] += float(value) - float(before)
+        return counted
+    recipes._setter = counted_setter
+    outlet = "bottom" if goal == "breakthrough" else None
+    liquid = {"last": None, "error": 0.0, "trapped": 0.0, "bodies": 0, "held": 0.0}
+
+    def check_liquid(step):
+        b = ev.bodies()
+        fixed = np.asarray(b.fixed, bool)
+        total = float(np.sum(np.asarray(b.target)[fixed]))
+        backed = any(t.startswith("branch backed up") for _, t in records[liquid.get("seen", 0):])
+        liquid["seen"] = len(records)
+        if liquid["last"] is not None and not backed:
+            error = (total - liquid["last"][0]) - (stepped["total"] - liquid["last"][1])
+            liquid["error"] = max(liquid["error"], abs(error))
+        liquid["last"] = (total, stepped["total"])
+        others = fixed & (np.asarray(b.ids) != 1)
+        liquid["trapped"] = float(step.trapped)
+        liquid["bodies"] = int(others.sum())
+        if others.any():
+            liquid["held"] = max(liquid["held"], float(np.max(np.abs(
+                np.asarray(b.volume)[others] - np.asarray(b.target)[others]))))
+        result.update(trapped=liquid["trapped"], trapped_bodies=liquid["bodies"],
+                      conservation=liquid["error"], trapped_held=liquid["held"])
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         try:
             done, falls_at_start = False, 0
             while not done:
                 taken = 0
-                for step in recipes.arclength(ev, ev.body(1), ds, STEPS - first, topology=True):
+                for step in recipes.arclength(ev, ev.body(1), ds, STEPS - first, topology=True,
+                                              outlet=outlet):
                     taken += 1
+                    check_liquid(step)
                     work["passes"] += (_core.work() - work["last"])/max(1, ev.counts["facets"])
                     result["passes"] = round(work["passes"])
                     step.index += first
@@ -203,6 +242,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                                   falls=sum(fell for _, fell in made.values()),
                                   facets=ev.counts["facets"])
                     log.write(f"{time.time() - t0:8.1f}s step {step.index:4d}  V {step.value:.4f} "
+                              f"trapped {step.trapped:.4f} "
                               f"facets {ev.counts['facets']} angle {ev.mesh_quality().angle_min:.1f}"
                               f"{' fell' if step.fell else ''}"
                               f"{''.join(f'; made {e}' for e in step.changes)}\n")
@@ -270,6 +310,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     # (where the run would have stopped, backed up and gone on another way)
     result["backed_up"] = dict(Counter(stop_class(t) for _, t in records
                                        if t.startswith("branch backed up")))
+    result["splits"] = sum(t.startswith("clusters: bodies") for _, t in records)
+    result["targets_changed"] = sum("the targets' total changed" in t for _, t in records)
+    result["mixed"] = sum("face both liquid and gas" in t for _, t in records)
     for key, prefix in (("poles_moved", "pole moved"), ("patches_closed", "patch closed"),
                         ("flat_dropped", "flat facets dropped")):
         result[key] = sum(t.startswith(prefix) for _, t in records)

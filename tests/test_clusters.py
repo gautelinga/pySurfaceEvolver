@@ -145,3 +145,90 @@ def test_reconcile_keeps_the_liquid_reaching_the_outlet_draining():
     K.reconcile(ev)
     assert ev._liquid["dry"] and list(ev.bodies().ids) == [1]
     ev._liquid = None
+
+
+def _flat(L, z, h):
+    """The square [0, L]^2 at height z facing up, in nearly equilateral
+    triangles of edge about h (rows offset by half an edge), and the rows
+    on each side."""
+    dy = h*np.sqrt(3)/2
+    ny = max(2, int(round(L/dy)))
+    nx = max(2, int(round(L/h)))
+    rows, v = [], []
+    for j, y in enumerate(np.linspace(0, L, ny + 1)):
+        xs = np.linspace(0, L, nx + 1)
+        if j % 2 and 0 < j < ny:
+            xs = np.r_[0.0, (xs[:-1] + xs[1:])/2, L]
+        rows.append(list(range(len(v), len(v) + len(xs))))
+        v += [(x, y, z) for x in xs]
+    v = np.array(v)
+    f = []
+    for a, b in zip(rows[:-1], rows[1:]):
+        i = k = 0
+        while i < len(a) - 1 or k < len(b) - 1:
+            if k == len(b) - 1 or (i < len(a) - 1 and v[a[i + 1], 0] <= v[b[k + 1], 0]):
+                f.append((a[i], a[i + 1], b[k]))
+                i += 1
+            else:
+                f.append((a[i], b[k + 1], b[k]))
+                k += 1
+    f = np.array(f)
+    tol = 1e-9
+    sides = {"xlo": np.flatnonzero(v[:, 0] < tol), "xhi": np.flatnonzero(v[:, 0] > L - tol),
+             "ylo": np.flatnonzero(v[:, 1] < tol), "yhi": np.flatnonzero(v[:, 1] > L - tol)}
+    return v, f, sides
+
+
+def test_a_pendular_ring_cut_off_from_the_draining_liquid_keeps_its_volume():
+    # two beads stacked in a box, the liquid over them drained through the
+    # floor: the meniscus goes down past the upper bead and leaves a ring
+    # where the beads touch, cut off; it keeps its volume while the liquid
+    # round the lower bead drains on to the floor, and relaxed alone it is
+    # the same (its own pressure, not the draining liquid's)
+    import warnings
+    from pysurfaceevolver import recipes
+    L, theta, h = 3.0, 20.0, 0.3
+    beads = [(L/2, L/2, 1.015), (L/2, L/2, 3.045)]
+    v, f, sides = _flat(L, 4.05, h)
+    walls = {"xlo": C.plane((1, 0, 0), 0.0, contact_angle=90.0),
+             "xhi": C.plane((-1, 0, 0), -L, contact_angle=90.0),
+             "ylo": C.plane((0, 1, 0), 0.0, contact_angle=90.0),
+             "yhi": C.plane((0, -1, 0), -L, contact_angle=90.0),
+             "bottom": C.plane((0, 0, 1), 0.0, contact_angle=90.0)}
+    for i, c in enumerate(beads):
+        walls[f"bead{i + 1}"] = C.sphere(c, 1.0, contact_angle=theta, gauge="flux")
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints=walls, vertex_constraints=sides,
+                   bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ev.relax()
+        run = []
+        for step in recipes.arclength(ev, ev.body(1), -0.5, 200, topology=True,
+                                      outlet="bottom"):
+            run.append((step, ev.bodies()))
+            if any(e.kind == "solid" and str(e.constraint) == "bottom" and e.between == "body"
+                   for e in step.events) or ev.on_constraint("bottom").any():
+                break
+    cut = [i for i, (s, _) in enumerate(run) if s.trapped > 0]
+    assert cut, "no ring cut off"
+    after = run[cut[0]:]
+    held = after[0][0].trapped
+    assert 0.1 < held < 0.5 and len(after) >= 5
+    for step, bodies in after:
+        assert list(bodies.ids) == [1, 2]
+        assert step.trapped == pytest.approx(held, rel=1e-9)
+        assert bodies.target[1] == pytest.approx(held, rel=1e-12)
+    assert after[-1][0].value < after[0][0].value - 2       # (the floor's liquid drained on)
+    ring = ev.mesh()
+    on = [k for k in ("bead1", "bead2") if ev.on_constraint(k)[
+        np.unique(np.asarray(ring.facets)[(np.asarray(ring.facet_bodies) == 2).any(axis=1)])].any()]
+    assert on == ["bead1", "bead2"]
+    pressure = ev.body(2).pressure
+    gone = np.asarray(ring.facet_ids)[(np.asarray(ring.facet_bodies) == 1).any(axis=1)]
+    ev.command("; ".join(f"dissolve facet[{int(i)}]" for i in gone))
+    ev.command("dissolve edges; dissolve vertices; dissolve body[1]")
+    assert ev.relax().converged
+    assert ev.body(2).volume == pytest.approx(held, rel=1e-9)
+    assert ev.body(2).pressure == pytest.approx(pressure, rel=1e-5)

@@ -27,7 +27,7 @@ import pickle
 import re
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Iterator, List, Optional, Union
+from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence, Union
 
 import numpy as np
 
@@ -53,6 +53,7 @@ class Step:
     events: list = field(default_factory=list)  # Evolver.events() there (see events=)
     fell: bool = False         # reached by a descent after a change or a fall (topology=)
     changes: list = field(default_factory=list)  # the events whose changes were made
+    trapped: float = 0.0       # the volume of the liquid cut off from the run's (topology=)
 
 
 def _setter(what: Any) -> Callable[[Any, Any], None]:
@@ -747,7 +748,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
               tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
               remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
               events: Union[bool, float] = True, topology: bool = False,
-              budget: Optional[float] = _RUN_BUDGET) -> Iterator[Step]:
+              budget: Optional[float] = _RUN_BUDGET,
+              outlet: Union[None, str, Sequence[str]] = None) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
     target volume or ``ev.quantity(name)``'s target).
@@ -833,14 +835,21 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     making the changes that come on the way (after a change by
     :meth:`Evolver.relax` in short runs, the edges kept in range; next to a
     contact line, vertices the gradient steps take through its solid are put
-    back out). Bodies cut off keep their volumes; a body the run steps keeps
-    its number for the piece holding most of the liquid, and for a merged
-    body, whose target is the bodies' added. (Not yet in general: a piece a
-    cut leaves can be folded back into the body it shares the most solids
-    with, a dry patch that cuts a region off doesn't make it a body, and a
-    merge keeps the volume continuous through the body's constant, hiding
-    what the mesh lost; a bead pack's liquid left behind isn't to be trusted
-    yet.) The state each such descent ends
+    back out). Liquid cut off keeps its volume: after every change the
+    liquid's clusters (its surface's pieces, joined where the liquid between
+    walls joins them, found on a grid of the space the plane, sphere and
+    cylinder walls leave) are made bodies, each trapped one fixed at what it
+    holds and relaxed with the rest; the run's body (stepping a body's
+    target) is the liquid reaching ``outlet`` (a wall's name or a list of
+    them; several clusters there are one body, at one pressure), and
+    without one its largest cluster. A trapped cluster that merges with the
+    run's body, or comes to reach the outlet, is the run's again, its volume
+    added; a crumb's liquid goes to the nearest body. The run ends, with a
+    warning, where no liquid reaches the outlet. ``Step.trapped`` is the
+    trapped clusters' volume. (A layer of liquid thinner than the grid,
+    half the mesh's edge, doesn't join pieces; where the surface touches
+    other constraints, or a boundary wire closes it, the clusters are its
+    pieces.) The state each such descent ends
     in is a :class:`Step` with ``fell`` set and the events whose changes were
     made in ``changes``; the run goes on from there as from a new start, its
     edges kept in range (``remesh`` if given, else within 0.4 and 4/3 of
@@ -873,13 +882,57 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         yield from _branch(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
                            halvings=halvings, along=along, remesh=remesh, events=events)
         return
+    from ._views import BodyView
+    outlets = [outlet] if isinstance(outlet, (str, int)) else list(outlet or [])
+    for key in outlets:
+        ev.on_constraint(key)           # (an unknown name raises here)
+    keep = what.number if isinstance(what, BodyView) else None
+    previous = ev._liquid
+    ev._liquid = dict(keep=keep, outlet=outlets, dry=False,
+                      original=frozenset(int(i) for i in ev.bodies().ids))
+    try:
+        yield from _topology_run(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
+                                 halvings=halvings, along=along, remesh=remesh, events=events,
+                                 budget=budget)
+    finally:
+        ev._liquid = previous
+
+
+def _trapped(ev) -> float:
+    """The volume of the bodies a topology run split off the liquid it
+    steps (ev._liquid): the trapped clusters'."""
+    run = ev._liquid
+    if run is None:
+        return 0.0
+    bodies = ev.bodies()
+    return float(sum(v for i, v in zip(bodies.ids, bodies.volume)
+                     if int(i) != run["keep"] and int(i) not in run["original"]))
+
+
+def _drained_out(ev) -> bool:
+    """Whether a topology run with an outlet has no liquid reaching it
+    (_clusters.reconcile found none, and it is so still)."""
+    run = ev._liquid
+    if run is None or not run["outlet"] or not run["dry"]:
+        return False
+    from ._clusters import clusters
+    c = clusters(ev, run["outlet"])
+    reach = [bool(o) for o, b in zip(c.outlet, c.bodies)
+             if run["keep"] in b or any(i not in run["original"] for i in b)]
+    run["dry"] = not any(reach)
+    return run["dry"]
+
+
+def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, tidy: bool,
+                  halvings: int, along, remesh, events, budget) -> Iterator[Step]:
+    """arclength(topology=True)'s run (ev._liquid set)."""
     from ._analysis import EVENT_FACTOR
     factor = _event_factor(events) or EVENT_FACTOR
     set_value = _setter(what)
-    from ._views import BodyView
+    from ._clusters import reconcile
     from ._surgery import (_ON_THE_WAY, TopologyCheckError, _edge_scale, _keep_edges, _log,
                            _resting, move_poles, orient_lines)
-    keep = what.number if isinstance(what, BodyView) else None
+    keep = ev._liquid["keep"]
     index, quiet, stuck, start = 0, 0, 0, True
     run_remesh = remesh
     last: List[Step] = []
@@ -905,7 +958,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         if not spend():
             return False
         warnings.warn(f"arclength(): the run's budget spent ({spent:.0f} passes over the "
-                      f"surface): stopping", UserWarning, stacklevel=3)
+                      f"surface): stopping", UserWarning, stacklevel=4)
         return True
 
     def kept(step: Step, moved: bool) -> None:
@@ -953,6 +1006,19 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             run_remesh = functools.partial(_keep_edges, h0=h, hi=_ON_THE_WAY)
         return True
 
+    def drained_out() -> bool:
+        if not _drained_out(ev):
+            return False
+        warnings.warn(f"arclength(): no liquid reaches the outlet "
+                      f"({', '.join(map(str, ev._liquid['outlet']))}): stopping",
+                      UserWarning, stacklevel=4)
+        return True
+
+    # (the liquid's clusters made bodies from the start: each trapped one
+    # its own, at the volume it holds)
+    reconcile(ev)
+    if drained_out():
+        return
     while index < steps:
         if out_of_budget():
             return
@@ -986,6 +1052,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             if last and not step.fell:
                 moves.append(step.value - last[-1].value)
             step.index = index
+            step.trapped = _trapped(ev)
             index += 1
             spend()
             yield step
@@ -1094,16 +1161,18 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                 continue
             if failure is not None:
                 raise failure
-            warnings.warn(f"arclength(): {what_} stopped: {why}", UserWarning, stacklevel=2)
+            warnings.warn(f"arclength(): {what_} stopped: {why}", UserWarning, stacklevel=3)
             return
         bodies = ev.bodies()
         settled = Step(index, _current(ev, what), ev.energy, np.array(bodies.volume),
                        np.array(bodies.pressure), result, events=ev.events(factor),
-                       fell=True, changes=cut)
+                       fell=True, changes=cut, trapped=_trapped(ev))
         before = last[-1].value if last else None
         spend()
         yield settled
         counted = _core.work()
+        if drained_out():
+            return
         last = [settled]
         index += 1
         quiet = 0 if cut else quiet + 1
@@ -1121,7 +1190,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                       f"{quiet} falls in a row ended without a change of topology")
             if go_back(reason):
                 continue
-            warnings.warn(f"arclength(): {reason}: stopping", UserWarning, stacklevel=2)
+            warnings.warn(f"arclength(): {reason}: stopping", UserWarning, stacklevel=3)
             return
 
 

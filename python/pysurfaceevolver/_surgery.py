@@ -12,6 +12,7 @@ from typing import Any, List, NamedTuple, Optional
 import numpy as np
 
 from . import _core
+from ._clusters import reconcile
 from ._engine import GUARD_PREFIX, _guards_only_changed, surface
 from ._errors import _num
 
@@ -1328,32 +1329,31 @@ def _walls_touched(ev, body: int) -> list:
 
 
 def _rejoin_strays(ev, body: int, old: set, near: dict) -> None:
-    """After a cut's rebody: the pieces of the body it made that no facet
-    by the cut is in (pieces the liquid joins through the walls before it,
-    not split by the cut) joined again to the piece by the cut they share
-    the most walls with (else the largest), under body's number where
-    either had it."""
+    """After a cut's rebody: the pieces of the body it made that are one
+    liquid still (one cluster, joined through the liquid between walls:
+    _clusters.clusters) made one body again, under body's number where one
+    of them had it, else the number of the piece by the cut."""
+    from ._clusters import clusters
     pieces = [body] + sorted(set(int(i) for i in ev.bodies().ids) - old)
     if len(pieces) < 2:
         return
+    c = clusters(ev)
     m = ev.mesh()
     ids, fb = np.asarray(m.facet_ids), np.asarray(m.facet_bodies)
     by_cut = np.concatenate([np.asarray(v) for v in near.values()]) if near else np.zeros(0)
-    cut = [i for i in pieces if np.isin(ids[(fb == i).any(axis=1)], by_cut).any()]
-    strays = [i for i in pieces if i not in cut]
-    if not cut or not strays:
-        return
-    walls = {i: set(_walls_touched(ev, i)) for i in pieces}
-    size = {i: int((fb == i).any(axis=1).sum()) for i in pieces}
-    for i in strays:
-        into = max(cut, key=lambda j: (len(walls[i] & walls[j]), size[j]))
-        if i == body:
-            _fold(ev, into, i)
-            cut = [i if j == into else j for j in cut]
-            walls[i] |= walls[into]
-        else:
-            _fold(ev, i, into)
-            walls[into] |= walls[i]
+    groups: dict = {}
+    for i in pieces:
+        mine = c.side[fb == i]
+        if len(mine):
+            groups.setdefault(int(np.bincount(mine[mine >= 0]).argmax()), []).append(i)
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        cut = [i for i in group if np.isin(ids[(fb == i).any(axis=1)], by_cut).any()]
+        into = body if body in group else (cut or group)[0]
+        for i in group:
+            if i != into:
+                _fold(ev, i, into)
 
 
 def _split_body(ev, body: int, before: dict, near: dict, lost: dict) -> List[int]:
@@ -2486,6 +2486,7 @@ def apply(ev, event, keep=None, other: bool = False) -> None:
         merge(ev, event, keep)
     else:
         contact(ev, event, keep)
+    reconcile(ev)
 
 
 def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=None,
@@ -2833,6 +2834,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                             # itself there, and the run went on so)
                             ev.restore(here)
                             raise ValueError("the cut passed the surface through itself")
+                        reconcile(ev)
                         neck = e
                         break
                     except ValueError as error:
@@ -3791,6 +3793,8 @@ def _pinch_collapsed(ev) -> int:
             break
         if not cut:
             break
+    if made:
+        reconcile(ev)
     return made
 
 
@@ -3926,13 +3930,44 @@ def _drop_empty(ev) -> int:
         fb = np.asarray(m.facet_bodies)
         kept = {int(b) for b in fb[~taken].ravel() if b > 0}
         empty = sorted({int(b) for b in fb[taken].ravel() if b > 0} - kept)
+    # (a body that goes with them gives its target to the nearest body
+    # left, the cluster it most likely came from: the liquid kept)
+    held = [(b, ev.body(b).target, x[np.unique(f[(fb == b).any(axis=1)])].mean(axis=0))
+            for b in empty if ev.body(b).fixed]
     ev.command("; ".join(f"dissolve facet[{int(i)}]" for i in ids))
     ev.command("dissolve edges; dissolve vertices")
     for b in empty:
         ev.command(f"dissolve body[{b}]")
+    given = _give_targets(ev, held)
     _log.debug("closed pieces enclosing nothing, crumbs, taken away: %d (%d facets, volume %.2g%s)",
-               len(gone), len(ids), lost, f"; bodies {empty}" if empty else "")
+               len(gone), len(ids), lost, f"; bodies {empty}{given}" if empty else "")
     return len(gone)
+
+
+def _give_targets(ev, held: list) -> str:
+    """Each (body, target, centre) of bodies taken away: its target added to
+    the fixed body with a vertex nearest the centre. What went where, for
+    the log."""
+    if not held:
+        return ""
+    bodies = ev.bodies()
+    fixed = [int(i) for i, fx in zip(bodies.ids, bodies.fixed) if fx]
+    m = ev.mesh()
+    if not fixed or m.facets is None or not len(m.facets):
+        return ""
+    x, f, fb = np.asarray(m.vertices, float), np.asarray(m.facets), np.asarray(m.facet_bodies)
+    gone = []
+    for b, target, centre in held:
+        reach = {i: float(np.linalg.norm(x[np.unique(f[(fb == i).any(axis=1)])] - centre,
+                                         axis=1).min())
+                 for i in fixed if (fb == i).any()}
+        if not reach:
+            continue
+        into = min(reach, key=reach.get)
+        body = ev.body(into)
+        body.target = body.target + target
+        gone.append(f"{b}'s {target:.2g} to {into}")
+    return f" (targets: {', '.join(gone)})" if gone else ""
 
 
 def _reopening(e, shut: list, h: float, turn: Optional[int] = None) -> bool:

@@ -80,6 +80,9 @@ class _Relaxing(_Analysis):
     # relax(): no junctions popped nor collapsed edges deleted (a topology
     # descent's runs: it makes the changes itself, each one checked)
     _topology_held: bool = False
+    # recipes.arclength(topology=True): the body it steps, its outlet walls,
+    # the bodies it started with (_clusters.reconcile)
+    _liquid: Optional[dict] = None
     # set by _newton(): the coordinates a Newton step left and the negative
     # eigenvalues its factorization counted (where it began)
     _inertia: "tuple[_Coords, int] | None" = None
