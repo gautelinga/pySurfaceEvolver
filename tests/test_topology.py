@@ -495,7 +495,8 @@ def test_arclength_stops_where_its_tries_run_out(monkeypatch, caplog):
     assert len(stops) == 1 and "stopped: the descent ran away (a test's)" in stops[0]
     backed = [s for s in said if s.startswith("branch backed up")]
     assert 4 <= len(backed) <= 12 and said[-1].startswith("branch not backed up again")
-    assert [int(s.split()[3]) for s in backed[:4]] == sorted(int(s.split()[3]) for s in backed[:4])
+    back = [0 if s.split()[3] == "to" else int(s.split()[3]) for s in backed[:4]]
+    assert back == sorted(back)                     # (each further back)
     assert not any(s.fell for s in steps)
 
 

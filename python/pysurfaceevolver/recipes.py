@@ -907,8 +907,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         state, scale, h = back
         step_ds = ds*scale
         n = failed - state.index
-        _log.debug("branch backed up %d step%s: %s; ds %.3g, edges %.3g", n,
-                   "" if n == 1 else "s", why, step_ds, h)
+        _log.debug("branch backed up %s: %s; ds %.3g, edges %.3g",
+                   "to its last step" if n == 0 else f"{n} step{'' if n == 1 else 's'}", why,
+                   step_ds, h)
         index, last, start = state.index + 1, [state.step], False
         quiet, stuck = state.quiet, state.stuck
         del moves[state.moves:]
