@@ -1434,33 +1434,45 @@ def _rebody(ev, split: bool = False) -> None:
     be in pieces the liquid joins through the walls, as round a bead's
     contact with a wall or another bead: a pack's liquid was in pieces of
     4934 and 543 facets, and rebody after a merge made the small one body 1
-    with the whole volume target, the rest body 2.)"""
+    with the whole volume target, the rest body 2.) Every body it doesn't
+    split keeps its target (rebody sets each to what the body holds: a
+    trapped drop's target moved to its volume at each merge elsewhere)."""
     from ._errors import EvolverWarning
-    m = ev.mesh() if not split else None
-    states = {int(b): _body_state(ev, int(b)) for b in ev.bodies().ids} if m is not None else {}
+    m = ev.mesh()
+    bodies = ev.bodies()
+    targets = {int(i): float(t) for i, t, fx in zip(bodies.ids, bodies.target, bodies.fixed)
+               if fx}
+    states = {int(b): _body_state(ev, int(b)) for b in bodies.ids} if not split else {}
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "WARNING 2171", EvolverWarning)
         ev.command("rebody")
-    if m is None or m.facet_bodies is None:
+    if m.facet_bodies is None:
         return
     was = {int(i): int(b) for i, b in zip(m.facet_ids, np.asarray(m.facet_bodies)[:, 0])}
     old = {int(b) for b in np.asarray(m.facet_bodies).ravel() if b > 0}
     now = ev.mesh()
     fb = np.asarray(now.facet_bodies)
-    folded = set()
+    folded, parted = set(), set()
     for b in sorted({int(b) for b in ev.bodies().ids} - old):
         mine = np.asarray(now.facet_ids)[fb[:, 0] == b]
         before = [was[int(i)] for i in mine if int(i) in was and was[int(i)] > 0]
         if before:
             into = max(set(before), key=before.count)
-            _fold(ev, b, into)
-            folded.add(into)
+            if split:
+                parted.add(into)
+            else:
+                _fold(ev, b, into)
+                folded.add(into)
     # (rebody set the pieces' targets to what each held)
     for b in folded:
         if b in states:
             body = ev.body(b)
             body.volconst = states[b]["volconst"]
             body.target = states[b]["target"] if states[b]["fixed"] else None
+    alive = {int(i) for i in ev.bodies().ids}
+    for b, t in targets.items():
+        if b in alive and b not in folded and b not in parted:
+            ev.body(b).target = t
 
 
 def _fold(ev, b: int, into: int) -> None:
