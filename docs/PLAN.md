@@ -17,6 +17,8 @@ work (`_core.work()`, passes over the surface; deterministic): a descent at 1000
 (12-17): time runs on an idle machine, or compare passes. A laptop suspend shows as the
 same ~4100 s gap in every log.
 
+**Next:** trapped liquid (section below), before releasing.
+
 **Open:** s1_t15 just over the 15-minute target; branch steps are ~60% of a run's time,
 and failed correctors about half their Newton work (a stall exit made them cheaper but
 failed more often and changed the runs' paths: 7 back-ups and slower in all; dropped).
@@ -196,6 +198,61 @@ Open, for the user to pick (proposed 2026-10-13, updated after 0.7.5):
   bit-identical. Possible: reuse the null vectors between steps (they barely move).
 
 Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
+
+## Next: trapped liquid keeps its volume (planned 2026-10-23, not started)
+
+Before the next release (the user: fix this first). Today a piece a cut leaves can be
+folded back into the draining body (`_rejoin_strays`), dry patches/contacts/sheet
+holes never split bodies, and crumbs are deleted with their volume only logged.
+(Merges' constant shifts are already limited to whole pole quanta, `_kept_constant`;
+the conservation check confirms or reopens it.)
+
+**Decisions (user, 2026-10-23):** the liquid connected to an outlet wall drains
+(`arclength(..., outlet="bottom")`, a name or list; without it the largest cluster
+drains, as today); trapped clusters keep fixed volumes, relaxed every step, and rejoin
+the draining body if they merge with it (two trapped merging stay trapped, targets
+added); connectivity from the liquid region itself (a grid of the pore space), not
+facet connectivity; a crumb's liquid goes to the cluster it came from (or the
+nearest); merges conserve physically (no constant shift); no liquid connected to the
+outlet: stop with a warning; outputs: trapped volume per step, cluster ids in the
+XDMF series; validation: conservation on the packs, an exact trapped case. Pacing:
+all phases, a commit per item, report at the end.
+
+**Invariant:** liquid is only split (each piece its measured volume as target, the
+draining piece the rest), joined (targets added) or stepped by the run; so the targets'
+total changes only by the run's steps.
+
+1. **Clusters** (`_clusters.py`, unit tests). Surface pieces (edge-connected facets
+   per body side, as Evolver's `rebody`) are always within one liquid region; joins
+   between them through the bulk found on a grid of the pore space at h/2: cells
+   inside a solid (beads, outside the box, from the walls' plane/sphere shapes)
+   dropped; neighbouring cells linked unless the segment crosses a facet or a solid;
+   each linked group labelled liquid of body b or gas by a vote of nearby facets'
+   sides; pieces whose liquid sides share a group are one cluster. A cluster touches
+   the outlet where its cells border the outlet wall (at a pack's start no vertex is
+   on the floor). Other wall shapes: surface pieces only, with a warning. numpy first,
+   C if the profile asks; run only after changes.
+2. **Bookkeeping**: one `_reconcile(ev, keep, outlet)` after every change (descents,
+   `_change`) and after crumbs go. Clusters touching the outlet are one body `keep`
+   (several pieces allowed: one outlet pressure, their total stepped); every other
+   cluster its own body at a fixed target. Replaces `_rejoin_strays` and the
+   largest-piece rule when an outlet is given.
+3. **API/outputs**: `outlet=`; "all the remaining liquid is trapped" stop;
+   `Step.trapped` (the trapped clusters' volume; draining = `Step.value`);
+   `series.py` per-facet cluster id and trapped flag; corpus passes
+   `outlet="bottom"` and records the trapped volume.
+4. **Validation**: small and wide sets, at every step draining + trapped = start minus
+   the run's steps to 1e-6, still 18/18 to breakthrough at 1 thread, times against
+   wide_w3; a test where a pendular bridge between two beads is cut off while liquid
+   connected to a floor outlet drains: its volume to round-off, its pressure the same
+   bridge's relaxed alone at that volume; unit tests: a throat with two menisci (one
+   cluster), a bubble inside the liquid (no false cluster), two drops (two).
+
+**Risks:** liquid layers thinner than the grid could split one cluster (a false
+trapping): conservative grid, the packs' clusters checked once against a finer grid,
+clusters logged at each split. Re-splitting after dry patches changes the runs' paths:
+robustness re-measured in phase 4. Then the limitation notes (drainage page,
+CHANGELOG, arclength docstring) go.
 
 ## Future: topology changes (planned 2026-10-16, not started)
 
