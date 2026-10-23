@@ -116,6 +116,19 @@
   change it makes (2000 in all), not 200 in all. Three falls without a change stop
   a run only when no step was taken between them.
 
+- `arclength(topology=True)` backs up where it would stop: where a change or a
+  descent fails (runs away, stalls, finds no stable state, Evolver or an edit fails
+  on the way) or falls stop getting anywhere, the run goes back to a state it went
+  through (its last stable point, then 2, 5 and 10 points back) and on from there
+  another way (half the step, a quarter, remeshed afresh, edges 0.9 and 1.1 times as
+  long), the changes on the way made where they now come; four tries at a place,
+  twelve in a run. The states are kept in memory (pySE's memory of the surface with
+  them), a few at a time: 0.3 ms a step on a 16-bead pack. Each try is logged
+  ("branch backed up 2 steps: ...") and the steps after it are numbered on from the
+  state it went back to. A 16-bead pack's runs end where the way down from one state
+  fails, and from a state next to it the way down rarely fails too: resumed at each
+  of nine failed runs' last state, all nine reached breakthrough.
+
 - `contact()` splits a contact line that runs through a vertex twice by making one
   fan of facets again on a new vertex there (Evolver's `pop`, used before, made a
   junction of three facets on one edge, a facet turned over, and Evolver's popping

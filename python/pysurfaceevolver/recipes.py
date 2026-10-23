@@ -632,6 +632,114 @@ def _remesher(ev, remesh: Any) -> Optional[Callable[[Callable[[], None]], bool]]
 
 
 _QUIET_FALLS = 20       # arclength(topology=True): falls in a row without a change, at most
+# ... where the run would stop, it backs up to a state it went through and
+# goes on another way: (steps back, the step's factor, the edge length's
+# factor, remeshed afresh to it; None: the mesh as it was), try by try at
+# one place
+_TRIES = ((0, 0.5, None), (2, 0.5, 1.0), (5, 0.25, 0.9), (10, 0.5, 1.1))
+_TRIES_IN_RUN = 12      # ... and this many tries in a run at most
+_KEPT = (2, 5, 12)      # the states kept: the last steps' within 2, every 5th within 12
+# ... and the errors on the way it backs up from as from a stop (Evolver's,
+# EvolverError, and the edits' and Newton's): not the topology check's,
+# whose point is to stop at the first
+_RETRIED = (RuntimeError, ValueError, ArithmeticError, IndexError)
+
+
+def _first_line(error: BaseException) -> str:
+    return str(error).splitlines()[0] if str(error) else type(error).__name__
+
+
+@dataclass
+class _Kept:
+    """A state arclength(topology=True) went through (yielded), to back up
+    to: the surface in memory, pySE's memory of it (relax()'s of failed
+    attempts too: the same descent from the same state went another way
+    without it), and the run's own."""
+
+    index: int
+    step: Step
+    saved: Any
+    memory: dict
+    moves: int                  # (how many of the run's value steps there were)
+    history: list
+    quiet: int
+    stuck: int
+
+
+def _copied(memory: dict) -> dict:
+    """pySE's memory of the surface (vars of _engine.surface), copied (a
+    state may be backed up to more than once)."""
+    return {k: (v.copy() if isinstance(v, (dict, list, set)) else v) for k, v in memory.items()}
+
+
+class _Backups:
+    """arclength(topology=True)'s way on where it would stop: the states it
+    went through (a few, _KEPT), and its tries at going on from one of them
+    another way (_TRIES): a place is open from a try until the run is well
+    past where it stopped (as many steps again as it backed up, and three,
+    at the shorter step), a stop there the next try; past it the step and
+    the edge length are the run's own again."""
+
+    def __init__(self) -> None:
+        self.kept: List[_Kept] = []
+        self.tries = 0                  # in the run
+        self.here = 0                   # at the open place
+        self.base = 0                   # where it first stopped there
+        self.until = -1                 # the index the place is open to
+        self.scale: Optional[float] = None  # the run's own edge length, while a place is open
+
+    def keep(self, ev, index: int, step: Step, moves: int, history: list, quiet: int,
+             stuck: int) -> None:
+        from ._engine import surface
+        memory = {k: v for k, v in vars(surface).items() if k not in ("generation", "name")}
+        self.kept.append(_Kept(index, step, ev._save(), _copied(memory), moves, list(history),
+                               quiet, stuck))
+        near, every, far = _KEPT
+        self.kept = [k for k in self.kept if index - k.index <= near
+                     or (k.index % every == 0 and index - k.index <= far)]
+
+    def past(self, index: int) -> bool:
+        """Whether the run has just gone past the open place (the step and
+        the edge length its own again)."""
+        if self.here == 0 or index <= self.until:
+            return False
+        from ._engine import surface
+        if self.scale is not None:
+            surface.edge_scale = self.scale
+        self.here, self.scale = 0, None
+        return True
+
+    def back(self, ev, failed: int) -> "Optional[tuple[_Kept, float, float]]":
+        """The surface back at a kept state for the next try where the run
+        stopped after step ``failed``: that state, the step's factor and the
+        edge length to go on with (None: no tries left, or none kept)."""
+        from ._engine import surface
+        from ._surgery import _edge_scale, _remesh_now
+        self.past(failed)
+        here = self.here + 1
+        if here > len(_TRIES) or self.tries >= _TRIES_IN_RUN or not self.kept:
+            return None
+        base = min(failed, self.base) if self.here else failed
+        back, factor, edges = _TRIES[here - 1]
+        kept = next((k for k in reversed(self.kept) if k.index <= base - back), self.kept[0])
+        try:
+            ev.restore(kept.saved)
+        except ValueError:
+            return None             # (another surface loaded meanwhile)
+        vars(surface).update(_copied(kept.memory))
+        if self.scale is None:
+            self.scale = _edge_scale(ev)
+        surface.edge_scale = self.scale*(edges or 1.0)
+        if edges is not None:
+            # (afresh: the mesh the run went on with from here is a part of
+            # the way it stopped)
+            _remesh_now(ev, surface.edge_scale)
+        self.kept = [k for k in self.kept if k.index <= kept.index]
+        self.tries += 1
+        self.here, self.base = here, base
+        self.until = kept.index + int((base - kept.index + 3)/factor)
+        return kept, factor, surface.edge_scale
+
 
 def arclength(ev, what: Any, ds: float, steps: int, *,
               bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
@@ -732,9 +840,16 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     their targets, the median edge or finer near gaps, contact lines too;
     within 0.4 and 2 of them right after a change). A branch that stops short after a change (a
     step that doesn't settle) goes on the same way from a relaxed state there.
-    The run ends, with a warning, where a change or a descent fails, and
-    after three falls in a row that change neither the topology nor the value
-    (or twenty without a change of topology). How liquid
+    Where a change or a descent fails (it runs away, stalls, finds no stable
+    state, Evolver or an edit fails on the way) or three falls in a row
+    change neither the topology nor the value (or twenty the topology), the
+    run backs up to a state it went through and goes on from there another
+    way, the changes on it made as they come there: first from its last
+    stable point at half the step, then 2, 5 and 10 points back, remeshed
+    afresh, with steps of a half, a quarter and a half, and edges 0.9 and
+    1.1 times as long the last two times, until past where it stopped; it
+    ends, with a warning, where four such tries at one place, or twelve in
+    the run, fail. How liquid
     splits at a pinch depends on the way down, here a guided descent of the
     energy, not the liquid's flow.
     """
@@ -746,7 +861,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     factor = _event_factor(events) or EVENT_FACTOR
     set_value = _setter(what)
     from ._views import BodyView
-    from ._surgery import _resting, move_poles, orient_lines
+    from ._surgery import (_ON_THE_WAY, TopologyCheckError, _edge_scale, _keep_edges, _log,
+                           _resting, move_poles, orient_lines)
     keep = what.number if isinstance(what, BodyView) else None
     index, quiet, stuck, start = 0, 0, 0, True
     run_remesh = remesh
@@ -757,20 +873,75 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     # had its footprint dried in a fall, and the descent after it began by
     # gluing it back, the next fall's first event, until it ran away)
     history: list = []
+    backups, step_ds = _Backups(), ds
+
+    def kept(step: Step, moved: bool) -> None:
+        """The state after a step yielded, kept to back up to; past an open
+        place, the run's own step again."""
+        nonlocal step_ds
+        # (a branch's step: the stops before it and their changes behind)
+        backups.keep(ev, step.index, step, len(moves), [] if moved else history,
+                     0 if moved else quiet, 0 if moved else stuck)
+        if backups.past(step.index + 1):
+            step_ds = ds
+            _log.debug("branch past where it backed up: ds %.3g, edges %.3g again", ds,
+                       _edge_scale(ev))
+
+    def go_back(why: str) -> bool:
+        """Where the run would stop after its last step: back to a state it
+        went through, to go on from there another way (_Backups); whether it
+        did."""
+        nonlocal index, quiet, stuck, start, run_remesh, last, step_ds
+        failed = index - 1
+        try:
+            back = backups.back(ev, failed)
+        except _RETRIED as error:
+            if isinstance(error, TopologyCheckError):
+                raise
+            _log.debug("branch not backed up: %s (%s)", why, _first_line(error))
+            return False
+        if back is None:
+            _log.debug("branch not backed up again: %s (%d tries in the run)", why,
+                       backups.tries)
+            return False
+        state, scale, h = back
+        step_ds = ds*scale
+        n = failed - state.index
+        _log.debug("branch backed up %d step%s: %s; ds %.3g, edges %.3g", n,
+                   "" if n == 1 else "s", why, step_ds, h)
+        index, last, start = state.index + 1, [state.step], False
+        quiet, stuck = state.quiet, state.stuck
+        del moves[state.moves:]
+        history[:] = state.history
+        if remesh is None:
+            run_remesh = functools.partial(_keep_edges, h0=h, hi=_ON_THE_WAY)
+        return True
+
     while index < steps:
         last = last[-1:]                # (the state a change ended in: events coming from it)
         seen: List[np.ndarray] = []
         lost, event, moved = False, None, False
+        failure: Optional[Exception] = None
         if not start and callable(run_remesh):
             # (the edges in range from where a change or fall ended, not only
             # from a branch's third point on: falling every few steps, a
             # pack's surface went on with the edges a descent leaves, up to
             # twice their targets, 0.41 for 0.2; the branch relaxes it first)
             run_remesh(ev)
-        for step in _branch(ev, what, ds, steps - index + (0 if start else 1), bounds=bounds,
-                            tol=tol, tidy=tidy, halvings=halvings,
-                            along=along if start else None, remesh=run_remesh, events=events,
-                            report=start):
+        branch = _branch(ev, what, step_ds, steps - index + (0 if start else 1), bounds=bounds,
+                         tol=tol, tidy=tidy, halvings=halvings,
+                         along=along if start else None, remesh=run_remesh, events=events,
+                         report=start)
+        while True:
+            try:
+                step = next(branch)
+            except StopIteration:
+                break
+            except _RETRIED as error:
+                if isinstance(error, TopologyCheckError):
+                    raise
+                failure = error         # (Evolver failing in a step: as a stop)
+                break
             if not start and step.index == 0:
                 continue                # where the fall ended, yielded already
             moved = moved or step.index > 0     # (a step past where the branch began)
@@ -783,8 +954,11 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             move_poles(ev)      # (sphere(axis=): its pole kept off its contact lines)
             last, seen = (last + [step])[-3:], (seen + [ev.vertices])[-2:]
             if len(last) > 1 and _negative(last[-1]) > _negative(last[-2]):
+                # (not kept: backed up to, the run would go on along the
+                # unstable branch from it, its stability lost unseen)
                 lost = True
                 break
+            kept(step, moved)
             coming = _coming(step.events, last[-2].events) if len(last) > 1 else []
             coming += [e for e in step.events if _resting(e) and not any(e is c for c in coming)]
             if coming:
@@ -795,7 +969,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         if moved:
             quiet = stuck = 0           # (falls without a change between steps aren't a stall)
             history.clear()
-        stalled = not (lost or event is not None)
+        stalled = failure is None and not (lost or event is not None)
         if stalled and not start and not moved:
             # not a step from where a change or fall ended: the change
             # nearest to coming there is made (the descent from there alone
@@ -817,51 +991,69 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
             # after a change the mesh is uneven where it was made (a joined
             # contact line, a merged neck): the run goes on keeping its edges
             # in range, as the change's relaxing did
-            from ._surgery import _keep_edges, _edge_scale, _ON_THE_WAY
-            h0 = _edge_scale(ev)
-            run_remesh = functools.partial(_keep_edges, h0=h0, hi=_ON_THE_WAY)
-        if stalled:
-            # the branch stopped short (a step that didn't settle after
-            # tidying: a pore's contact line receding over dry patches): from
-            # a relaxed state there, as after a change
-            from ._surgery import descend
-            if quiet and moves:
-                # (and it came back to the same state last time: past a fold
-                # where the value has its least, as a pack's liquid ran out
-                # of room above the floor, the branch steps on less and
-                # less; the value set past it, a typical step on, twice
-                # that the next time, and the liquid falls from there)
-                typical = float(np.median(np.abs(moves)))
-                way = float(np.sign(sum(moves))) or -1.0
-                # (at most eight typical steps, nor a tenth of the value:
-                # doubled without end, a pack's liquid was set to -56)
-                push = min(typical*2**min(quiet - 1, 3), 0.1*abs(value) or typical)
-                set_value(ev, value + way*push)
+            run_remesh = functools.partial(_keep_edges, h0=_edge_scale(ev), hi=_ON_THE_WAY)
+        result: Any = None
+        cut: list = []
+        why = ""
+        try:
+            if failure is not None:
+                pass
+            elif stalled:
+                # the branch stopped short (a step that didn't settle after
+                # tidying: a pore's contact line receding over dry patches):
+                # from a relaxed state there, as after a change
+                from ._surgery import descend
+                if quiet and moves:
+                    # (and it came back to the same state last time: past a
+                    # fold where the value has its least, as a pack's liquid
+                    # ran out of room above the floor, the branch steps on
+                    # less and less; the value set past it, a typical step
+                    # on, twice that the next time, and the liquid falls
+                    # from there)
+                    typical = float(np.median(np.abs(moves)))
+                    way = float(np.sign(sum(moves))) or -1.0
+                    # (at most eight typical steps, nor a tenth of the value:
+                    # doubled without end, a pack's liquid was set to -56)
+                    push = min(typical*2**min(quiet - 1, 3), 0.1*abs(value) or typical)
+                    set_value(ev, value + way*push)
+                    ev.command("recalc")
+                result, cut, why = descend(ev, factor, tol, falling=False, keep=keep,
+                                           history=history)
+            elif event is not None:
+                result, cut, why = _change(ev, event, factor, tol, keep, history)
+            elif len(last) == 3 and last[-2].value != last[-3].value and _at_fold(ev, *seen):
+                # past a fold, the stable state is still there at the unstable
+                # point's value (a catenoid's at 1.3241, its fold at 1.3255):
+                # the fall at the value one step past the last stable point,
+                # the way the value went there
+                stable, previous = last[-2].value, last[-3].value
+                way = np.sign(stable - previous)
+                far = max(stable*way, last[-1].value*way)*way
+                set_value(ev, far + (stable - previous))
                 ev.command("recalc")
-            result, cut, why = descend(ev, factor, tol, falling=False, keep=keep,
-                                       history=history)
-        elif event is not None:
-            result, cut, why = _change(ev, event, factor, tol, keep, history)
-        elif len(last) == 3 and last[-2].value != last[-3].value and _at_fold(ev, *seen):
-            # past a fold, the stable state is still there at the unstable
-            # point's value (a catenoid's at 1.3241, its fold at 1.3255): the
-            # fall at the value one step past the last stable point, the way
-            # the value went there
-            stable, previous = last[-2].value, last[-3].value
-            way = np.sign(stable - previous)
-            far = max(stable*way, last[-1].value*way)*way
-            set_value(ev, far + (stable - previous))
-            ev.command("recalc")
-            result, cut, why = _fall(ev, factor, tol, keep, history)
-        else:
-            result, cut, why = _fall(ev, factor, tol, keep, history)
+                result, cut, why = _fall(ev, factor, tol, keep, history)
+            else:
+                result, cut, why = _fall(ev, factor, tol, keep, history)
+            if result is not None:
+                _smooth(ev, factor, tol)
+        except _RETRIED as error:
+            # (a change's edits or Evolver failing on the way, the surface
+            # maybe broken: as a stop)
+            if isinstance(error, TopologyCheckError):
+                raise
+            failure, result = error, None
+        if failure is not None:
+            why = f"{type(failure).__name__}: {_first_line(failure)}"
         if result is None:
             what_ = (f"{event}" if event is not None else
                      f"relaxing where the branch stopped short ({_current(ev, what):.6g})"
-                     if stalled else f"the fall from {last[-1].value:.6g}")
+                     if stalled else f"the fall from {last[-1].value:.6g}" if lost else "a step")
+            if go_back(f"{what_} stopped: {why}"):
+                continue
+            if failure is not None:
+                raise failure
             warnings.warn(f"arclength(): {what_} stopped: {why}", UserWarning, stacklevel=2)
             return
-        _smooth(ev, factor, tol)
         bodies = ev.bodies()
         settled = Step(index, _current(ev, what), ev.energy, np.array(bodies.volume),
                        np.array(bodies.pressure), result, events=ev.events(factor),
@@ -877,10 +1069,14 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         # stopped after three, 72% drained, each draining more)
         moved_on = before is not None and abs(settled.value - before) > 1e-9*max(1.0, abs(before))
         stuck = 0 if (cut or moved_on) else stuck + 1
-        if stuck == 3 or quiet == _QUIET_FALLS:
+        kept(settled, False)
+        if stuck >= 3 or quiet >= _QUIET_FALLS:
+            # (>=: backed up to such a state, the next fall like it stops too)
             reason = ("three falls in a row ended without a change of topology or of the "
-                      "value" if stuck == 3 else
+                      "value" if stuck >= 3 else
                       f"{quiet} falls in a row ended without a change of topology")
+            if go_back(reason):
+                continue
             warnings.warn(f"arclength(): {reason}: stopping", UserWarning, stacklevel=2)
             return
 

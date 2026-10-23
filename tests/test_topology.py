@@ -429,6 +429,76 @@ def test_a_shrinking_bridge_between_spheres_falls_into_two_drops():
         assert s.result.negative_modes == 0
 
 
+def _backed_up_run(monkeypatch, caplog, fail, steps=14):
+    """The shrinking bridge's run (above), its descents' first ``fail``
+    failing (_surgery.descend, stopping as one that ran away), or with
+    fail=-1 the first neck's cut raising (as an edit failing in Evolver
+    would): the steps, the warnings, the backing up logged."""
+    import logging
+    from pysurfaceevolver import _surgery
+    descend, pinch_off, calls = _surgery.descend, _surgery.pinch_off, []
+
+    def failing_descend(*args, **kwargs):
+        calls.append("descend")
+        if calls.count("descend") <= fail:
+            return None, [], "the descent ran away (a test's)"
+        return descend(*args, **kwargs)
+
+    def failing_pinch_off(*args, **kwargs):
+        calls.append("cut")
+        if fail == -1 and calls.count("cut") == 1:
+            raise RuntimeError("a test's edit failing")
+        return pinch_off(*args, **kwargs)
+    monkeypatch.setattr(_surgery, "descend", failing_descend)
+    monkeypatch.setattr(_surgery, "pinch_off", failing_pinch_off)
+    ev = _sphere_bridge(0.09)
+    with warnings.catch_warnings(record=True) as caught, \
+            caplog.at_level(logging.DEBUG, logger="pysurfaceevolver.topology"):
+        warnings.simplefilter("always")
+        run = list(recipes.arclength(ev, ev.body(1), -0.003, steps, topology=True))
+    stops = [str(w.message) for w in caught if "arclength()" in str(w.message)]
+    return run, stops, [r.getMessage() for r in caplog.records if "branch" in r.getMessage()]
+
+
+@pytest.mark.parametrize("fail", [1, -1])
+def test_arclength_backs_up_where_a_descent_fails_and_goes_on(monkeypatch, caplog, fail):
+    # the fall from the first unstable point failing (its descent stopping,
+    # or an edit raising in it), the run backs up to the last stable point
+    # and goes on from there at half the step: it loses its stability
+    # nearer the branch point, falls, the neck is cut, the pieces are drops
+    # as without the failure, and past where it backed up the step is ds
+    # again
+    steps, stops, said = _backed_up_run(monkeypatch, caplog, fail)
+    assert not stops
+    assert said[0].startswith("branch backed up 1 step: the fall from 0.0775")
+    assert ("the descent ran away (a test's)" if fail == 1 else
+            "RuntimeError: a test's edit failing") in said[0] and "ds -0.0015" in said[0]
+    assert said[1].startswith("branch past where it backed up: ds -0.003")
+    k = [i for i, s in enumerate(steps) if s.fell]
+    assert len(k) == 1
+    fell, lost, again = steps[k[0]], steps[k[0] - 1], steps[k[0] - 2]
+    assert lost.index == again.index and lost.result.negative_modes == 1
+    assert 0.0775 < again.value < lost.value < 0.0789     # (half a step from the last stable)
+    assert [e.kind for e in fell.changes] == ["neck"]
+    assert fell.volumes.sum() == pytest.approx(lost.value, rel=1e-8)
+    assert 0.1 < fell.volumes[1]/lost.value < 0.3
+    for v, p in zip(fell.volumes, fell.pressures):
+        assert p == pytest.approx(_cap_on_sphere(v, 40.0), rel=0.005)
+    assert all(s.result.negative_modes == 0 for s in steps[k[0] + 1:])
+
+
+def test_arclength_stops_where_its_tries_run_out(monkeypatch, caplog):
+    # every fall failing: four tries at a place, each further back (and on
+    # at a new place once past it, twelve in a run at most), then the run
+    # stops as without them
+    steps, stops, said = _backed_up_run(monkeypatch, caplog, 100, steps=60)
+    assert len(stops) == 1 and "stopped: the descent ran away (a test's)" in stops[0]
+    backed = [s for s in said if s.startswith("branch backed up")]
+    assert 4 <= len(backed) <= 12 and said[-1].startswith("branch not backed up again")
+    assert [int(s.split()[3]) for s in backed[:4]] == sorted(int(s.split()[3]) for s in backed[:4])
+    assert not any(s.fell for s in steps)
+
+
 def test_a_bridge_between_disks_pinches_at_its_fold_into_two_equal_drops():
     # pinned to the rims of disks 3 apart (slenderness 1.5): stable down to
     # the fold, volume 0.4751 of the cylinder (disk_bridge.md), where the neck
