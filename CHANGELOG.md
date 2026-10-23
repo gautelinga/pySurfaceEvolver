@@ -508,7 +508,10 @@
   pops and edge collapses after a sheet's footprint on a side wall was dried left a
   vertex there pinched (two fans of facets, edges through facets), which no contact
   on that wall could separate after; every one was refused and the descents ran away
-  (two of the 18 16-bead runs drained to breakthrough).
+  (two of the 18 16-bead runs drained to breakthrough). And a contact separates only
+  the vertices its own change leaves the contact line going through twice (or the
+  event's own), not one elsewhere on the wall: there, one that couldn't be separated
+  refused every contact on that wall.
 
 - A cut (`pinch_off`, a neck collapsed below the mesh) whose piece is a crumb of the
   collapsed tube itself (left by the seam's tidying without facets, or holding next to

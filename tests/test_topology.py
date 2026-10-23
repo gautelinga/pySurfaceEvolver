@@ -1243,6 +1243,26 @@ def test_a_sheet_thinnest_at_a_wall_ruptures_there():
     assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
 
 
+def test_a_contact_separates_only_its_own_pinches(monkeypatch):
+    # a vertex the contact line already goes through twice away from the
+    # event (a pack's, on a side wall, unseparable: every contact on that
+    # wall after was refused) is left to itself; one among the event's
+    # vertices is the change's
+    from pysurfaceevolver import _edits, _surgery
+    ev = _sheet_on_a_wall()
+    m = ev.mesh()
+    row = int(np.flatnonzero(ev.on_constraint(1))[0])
+    vid = int(np.asarray(m.vertex_ids)[row])
+    monkeypatch.setattr(_surgery, "_pinch_rows", lambda ev, m, num: np.array([row]))
+    left = _surgery._pinches_elsewhere(ev, 1, [])
+    assert left == {vid} and not _surgery._pinches_elsewhere(ev, 1, [vid])
+
+    def refused(*args, **kwargs):
+        raise AssertionError("separated a pinch elsewhere")
+    monkeypatch.setattr(_edits, "edit", refused)
+    _surgery._separate_pinches(ev, 1, left)
+
+
 def test_a_sheet_is_an_event_as_two_sheets_are_not_as_a_neck():
     # (a neck counts within NECK times the gap two sheets do, the ring round
     # it under-resolved; a sheet's faces are two sheets: 0.042 across on

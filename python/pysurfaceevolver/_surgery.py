@@ -1094,13 +1094,14 @@ def _join_across(ev, event) -> None:
     _onto_copy(ev, event)
     nums, _, _, names = ev._constraint_gaps()
     num = int(nums[_column(nums, names, event.constraint)])
+    left = _pinches_elsewhere(ev, num, ids)
     m = ev.mesh()
     row = {int(v): k for k, v in enumerate(m.vertex_ids)}
     a, b = (row[int(v)] for v in ids)
     x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
     if not _bridge_lines(ev, m, num, a, b, None):
         _join_lines(ev, m, x, f, a, b, None)
-    _separate_pinches(ev, num)
+    _separate_pinches(ev, num, left)
 
 
 def _waist_normals(x, f, event) -> np.ndarray:
@@ -1658,22 +1659,36 @@ def contact(ev, event, keep=None) -> None:
     one: 116 refusals in a round of the corpus's runs), and where that can't
     be either, the contact is refused."""
     start = ev._save()
+    ids = np.asarray(ev.mesh().vertex_ids)[np.asarray(event.vertices, int)]
     _onto_copy(ev, event)
-    _contact(ev, event, keep)
     nums, _, _, names = ev._constraint_gaps()
     num = int(nums[_column(nums, names, event.constraint)])
+    left = _pinches_elsewhere(ev, num, ids)
+    _contact(ev, event, keep)
     try:
-        _separate_pinches(ev, num)
+        _separate_pinches(ev, num, left)
     except ValueError:
         m = ev.mesh()
-        pinched = np.asarray(m.vertex_ids)[_pinch_rows(ev, m, num)]
+        pinched = [int(i) for i in np.asarray(m.vertex_ids)[_pinch_rows(ev, m, num)]
+                   if int(i) not in left]
         ev.restore(start)
         if not len(pinched):
             raise
         _onto_copy(ev, event)
-        _contact(ev, event, keep, grow=[int(i) for i in pinched])
-        _separate_pinches(ev, num)
+        _contact(ev, event, keep, grow=pinched)
+        _separate_pinches(ev, num, left)
         _log.debug("patch grown over the vertices its line went through twice")
+
+
+def _pinches_elsewhere(ev, num: int, ids) -> frozenset:
+    """The ids of the vertices on constraint num the contact line goes
+    through twice already, but for an event's (their ids): not the change's
+    to separate (where one can't be, a pack's vertex pinched on a side wall
+    by a relaxing that popped it, every contact on that wall after was
+    refused, until the descents ran away)."""
+    m = ev.mesh()
+    return frozenset(int(i) for i in np.asarray(m.vertex_ids)[_pinch_rows(ev, m, num)]
+                     if int(i) not in set(int(j) for j in ids))
 
 
 def _pinch_rows(ev, m, num: int) -> np.ndarray:
@@ -1684,12 +1699,14 @@ def _pinch_rows(ev, m, num: int) -> np.ndarray:
     return np.flatnonzero((count >= 4) & ev.on_constraint(num))
 
 
-def _separate_pinches(ev, num: int) -> None:
+def _separate_pinches(ev, num: int, left: frozenset = frozenset()) -> None:
     """Vertices on constraint num where four or more border edges meet (a
-    contact line through them twice) separated, one per fan of facets."""
+    contact line through them twice) separated, one per fan of facets; not
+    those whose ids are in ``left`` (_pinches_elsewhere)."""
     from ._edits import REASONS, edit
     m = ev.mesh()
     rows = _pinch_rows(ev, m, num)
+    rows = rows[~np.isin(np.asarray(m.vertex_ids)[rows], list(left))]
     if not len(rows):
         return
     r = edit(ev, "separate", np.asarray(m.vertex_ids)[rows])
