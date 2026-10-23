@@ -876,13 +876,15 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     backups, step_ds = _Backups(), ds
 
     def kept(step: Step, moved: bool) -> None:
-        """The state after a step yielded, kept to back up to; past an open
-        place, the run's own step again."""
+        """The state after the step just yielded, kept to back up to; past an
+        open place, the run's own step again."""
         nonlocal step_ds
-        # (a branch's step: the stops before it and their changes behind)
-        backups.keep(ev, step.index, step, len(moves), [] if moved else history,
+        # (its number as the run counts, not step.index, which is the
+        # caller's: a resumed run's renumbered it; a branch's step: the stops
+        # before it and their changes behind)
+        backups.keep(ev, index - 1, step, len(moves), [] if moved else history,
                      0 if moved else quiet, 0 if moved else stuck)
-        if backups.past(step.index + 1):
+        if backups.past(index):
             step_ds = ds
             _log.debug("branch past where it backed up: ds %.3g, edges %.3g again", ds,
                        _edge_scale(ev))

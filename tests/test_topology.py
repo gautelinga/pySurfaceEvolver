@@ -433,7 +433,8 @@ def _backed_up_run(monkeypatch, caplog, fail, steps=14):
     """The shrinking bridge's run (above), its descents' first ``fail``
     failing (_surgery.descend, stopping as one that ran away), or with
     fail=-1 the first neck's cut raising (as an edit failing in Evolver
-    would): the steps, the warnings, the backing up logged."""
+    would): the steps (numbered on from 1000 as they come, as a resumed
+    run's caller numbers them), the warnings, the backing up logged."""
     import logging
     from pysurfaceevolver import _surgery
     descend, pinch_off, calls = _surgery.descend, _surgery.pinch_off, []
@@ -455,7 +456,10 @@ def _backed_up_run(monkeypatch, caplog, fail, steps=14):
     with warnings.catch_warnings(record=True) as caught, \
             caplog.at_level(logging.DEBUG, logger="pysurfaceevolver.topology"):
         warnings.simplefilter("always")
-        run = list(recipes.arclength(ev, ev.body(1), -0.003, steps, topology=True))
+        run = []
+        for step in recipes.arclength(ev, ev.body(1), -0.003, steps, topology=True):
+            step.index += 1000
+            run.append(step)
     stops = [str(w.message) for w in caught if "arclength()" in str(w.message)]
     return run, stops, [r.getMessage() for r in caplog.records if "branch" in r.getMessage()]
 
