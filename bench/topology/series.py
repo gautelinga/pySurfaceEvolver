@@ -1,15 +1,20 @@
 """A bead pack's drainage as an XDMF time series for ParaView.
 
 One run of the topology corpus (see corpus.py), every step's state kept,
-then the states written as one XDMF file (a grid per step, since the
-surface's topology changes; the time is the share of the liquid drained,
-the heights a point field) with its data in HDF5 beside it. The beads and
-the box go into static .vtp files, and a ParaView script opens all three.
+then written as one XDMF file at equally spaced volumes of the liquid: each
+frame the nearer of the states the run kept either side of that volume,
+taken to it by Newton steps (where that can't be without a change of
+topology, from either side, the nearer state as it is, at its own volume).
+A grid a frame, since the surface's topology changes; the time is the share
+of the liquid drained, the heights a point field; the data in HDF5 beside
+it. The beads and the box go into static .vtp files, and a ParaView script
+opens all three.
 
 usage: python bench/topology/series.py [--beads 16] [--seed 0] [--theta 15]
                                        [--h 0.2] [--ds -0.5] [--goal breakthrough]
                                        [--threads 1] [--out DIR]
-       python bench/topology/series.py --from CKDIR [--beads 16] [--seed 0] [--out DIR]
+                                       [--frames 200 | --dv DV | --every-step]
+       python bench/topology/series.py --from CKDIR [--beads 16] [--seed 0] [--out DIR] ...
 
 The first form runs the pack (at one thread a run is deterministic) and
 writes the series; --from writes the series of states a run already kept
@@ -37,43 +42,93 @@ def run(name, n, L, seed, theta, h, ds, goal, out, threads):
     print(ends[-1].strip() if ends else "no end line in the log", flush=True)
 
 
-def write(ck, n, L, seed, out, base):
+def at_volume(states, V):
+    """The surface at liquid volume V from the nearer of two states the run
+    kept, either side of V (else the other): Newton steps there, as the
+    run's corrector takes, else relax(). Not where the surface has gone
+    through a solid on the way (a step there needs a change of topology
+    first). (ev, step, volume, how), how None where neither got there: the
+    nearer state as the run kept it."""
+    import corpus
+    from pysurfaceevolver import recipes
+    for k, path, Vk in sorted(states, key=lambda s: abs(s[2] - V)):
+        for how in ("Newton steps", "relaxed"):
+            ev, v0, _ = corpus.restore_state(path)
+            ev.body(1).target = V
+            if how == "Newton steps":
+                ok = recipes._arc_back(ev, lambda v: None, V, 1e-8, None, None)[0]
+            else:
+                result = ev.relax(stability=False)
+                ok = result.converged and not getattr(result, "collapsed", 0)
+            if ok and not recipes._through(ev.events()):
+                return ev, k, V, how
+    k, path, Vk = min(states, key=lambda s: abs(s[2] - V))
+    ev, _, _ = corpus.restore_state(path)
+    return ev, k, Vk, None
+
+
+def write(ck, n, L, seed, out, base, frames=200, dv=None):
     """The states in ck (stepNNNN.fe and .pkl) as base.xdmf and base.h5,
-    the beads and box as base_beads.vtp and base_box.vtp, and open_base.py."""
+    the beads and box as base_beads.vtp and base_box.vtp, and open_base.py.
+    The series is at equally spaced liquid volumes (``frames`` of them from
+    the start to the end, or ``dv`` apart): each from the states the run kept
+    either side of that volume (at_volume). frames=None: every state kept,
+    as it is."""
+    import warnings
     import numpy as np, h5py
     sys.path.insert(0, HERE)
     import corpus
     from pack import settle
+    warnings.simplefilter("ignore")
     paths = sorted(glob.glob(os.path.join(ck, "step*.fe")))
     if not paths:
         sys.exit(f"no states (stepNNNN.fe) in {ck}")
+    # (the volume is body 1's, the one the run drains: pieces cut off keep theirs)
+    kept = []
+    for path in paths:
+        ev, v0, _ = corpus.restore_state(path[:-3])
+        kept.append((int(os.path.basename(path)[4:8]), path[:-3], float(ev.body(1).volume)))
+    # (at a fold the run falls at one volume and the branch may turn back a
+    # little: the volumes it has got down to)
+    low = np.minimum.accumulate([V for *_, V in kept])
+    if frames is None and dv is None:
+        wanted = [(i, None) for i in range(len(kept))]
+    else:
+        if dv is None:
+            dv = (low[0] - low[-1])/(frames - 1)
+        targets = low[0] - dv*np.arange(int((low[0] - low[-1])/dv + 1e-9) + 1)
+        wanted = [(int(np.flatnonzero(low >= V - 1e-9*v0)[-1]), float(V)) for V in targets]
     h5name = base + ".h5"
-    grids, top = [], None
+    grids, top, as_is = [], None, 0
     with h5py.File(os.path.join(out, h5name), "w") as h5:
-        for path in paths:
-            ev, v0, _ = corpus.restore_state(path[:-3])
+        for j, (i, V) in enumerate(wanted):
+            k, path, Vk = kept[i]
+            ev, v0, _ = corpus.restore_state(path)
+            label, vol = f"step {k}", Vk if V is None else V
+            if V is not None and abs(Vk - V) > 1e-6*v0:
+                ev, k, vol, how = at_volume(kept[i:i + 2], V)
+                if how is None:
+                    as_is += 1
+                label = f"step {k} as it is" if how is None else f"step {k} {how} to V {V:.4f}"
             m = ev.mesh()
             x = np.asarray(m.vertices, np.float64)
             f = np.asarray(m.facets, np.int64)
-            # (the liquid: every body, once a cut has split it)
-            liquid = sum(float(ev.body(b).volume) for b in ev.bodies().ids)
-            k = int(os.path.basename(path)[4:8])
-            g = h5.create_group(f"s{k:04d}")
+            g = h5.create_group(f"s{j:04d}")
             g["xyz"], g["tri"], g["z"] = x, f, x[:, 2]
-            grids.append((k, len(x), len(f), (v0 - liquid)/v0))
+            grids.append((j, len(x), len(f), (v0 - vol)/v0, label))
             if top is None:
                 top = float(x[:, 2].max()) + 0.2
     # (the time: the share drained, never back; states at the same share a
     # little apart, so ParaView keeps them in order)
     times, last = [], -1.0
-    for *_, drained in grids:
+    for *_, drained, _ in grids:
         last = max(drained, last + 1e-9, 0.0)
         times.append(last)
     xml = ['<?xml version="1.0" ?>', '<Xdmf Version="3.0">', ' <Domain>',
            '  <Grid Name="liquid surface" GridType="Collection" CollectionType="Temporal">']
-    for (k, nv, nf, _), t in zip(grids, times):
+    for (k, nv, nf, _, label), t in zip(grids, times):
         item = f'NumberType="{{}}" Precision="8" Format="HDF">{h5name}:/s{k:04d}'
-        xml += [f'   <Grid Name="step {k}" GridType="Uniform">',
+        xml += [f'   <Grid Name="{label}" GridType="Uniform">',
                 f'    <Time Value="{t:.9f}"/>',
                 f'    <Topology TopologyType="Triangle" NumberOfElements="{nf}">',
                 f'     <DataItem Dimensions="{nf} 3" {item.format("Int")}/tri</DataItem>',
@@ -97,8 +152,10 @@ def write(ck, n, L, seed, out, base):
     pv.Box(bounds=(0, L, 0, L, 0, top)).save(os.path.join(out, base + "_box.vtp"))
     with open(os.path.join(out, f"open_{base}.py"), "w") as f:
         f.write(PARAVIEW.format(base=base, eye=[2.6*L, -2*L, 2.6*L], focus=[L/2, L/2, top/2]))
-    print(f"{os.path.join(out, base + '.xdmf')}: {len(grids)} steps ({grids[0][0]} to "
-          f"{grids[-1][0]}), drained 0 to {times[-1]:.3f}")
+    spacing = "every state kept" if dv is None else f"volumes {dv:.4g} apart"
+    print(f"{os.path.join(out, base + '.xdmf')}: {len(grids)} frames ({spacing}), drained "
+          f"0 to {times[-1]:.3f}" + (f"; {as_is} not relaxed (no equilibrium there without "
+                                     f"a change of topology)" if as_is else ""))
 
 
 PARAVIEW = '''\
@@ -142,6 +199,11 @@ def main(argv):
     ap.add_argument("--threads", type=int, default=1, choices=(1, 2, 3, 4))
     ap.add_argument("--out")
     ap.add_argument("--from", dest="ck", help="write the series of the states kept here")
+    ap.add_argument("--frames", type=int, default=200,
+                    help="frames at equally spaced volumes, start to end (default 200)")
+    ap.add_argument("--dv", type=float, help="the volume between frames, instead of --frames")
+    ap.add_argument("--every-step", action="store_true",
+                    help="a frame per state kept, as it is, instead")
     args = ap.parse_args(argv)
     n, L = args.beads, BOX[args.beads]
     tag = "_bt" if args.goal == "breakthrough" else ""
@@ -152,7 +214,8 @@ def main(argv):
     if ck is None:
         run(name, n, L, args.seed, args.theta, args.h, args.ds, args.goal, out, args.threads)
         ck = os.path.join(out, "ck")
-    write(os.path.abspath(ck), n, L, args.seed, out, f"pack{n}_s{args.seed}_t{args.theta:g}")
+    write(os.path.abspath(ck), n, L, args.seed, out, f"pack{n}_s{args.seed}_t{args.theta:g}",
+          frames=None if args.every_step else args.frames, dv=args.dv)
 
 
 if __name__ == "__main__":
