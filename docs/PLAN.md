@@ -24,6 +24,12 @@ the targets' total; passes 5.22M vs wide_w3's 4.97M (+5%); wall time not compara
 (loaded machine), an idle rerun of s4_t25 125 s vs 165 s; clusters cost ~2.5 s a run.
 Small set (`~/pyse_scratch/small_trap`): 18/18, books to 1.6e-11, nothing trapped.
 Breakthrough volumes moved in a few runs (s0_t20 49.2 vs 53.6).
+The +5% passes is path change, not overhead: runs that trap nothing follow identical
+paths (-1%); four runs took 20-35 more steps. Freezing trapped bodies while the branch
+steps (vertices/edges/facets fixed, target lifted: a fully fixed body with a target
+makes Evolver's constraint matrix singular) was tried and DROPPED: on 6 wide runs A/B
++13% time, +14% passes, 7 back-ups vs 3 (scratch `~/pyse_scratch/freeze`). The cost is
+in the draining liquid's path, not in relaxing trapped rings (a small part of the mesh).
 
 **Next:** merge/push/release (the user).
 
