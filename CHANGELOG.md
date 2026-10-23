@@ -503,6 +503,13 @@
   spike's tip may be up to three vertices joined only to the ring and each other: a
   tip of two, cut as a neck, left two vertices ("2 left") and the neck uncut.
 
+- The relaxing after a cut (`pinch_off`'s, and `arclength`'s after a neck it cuts)
+  makes no changes of topology of its own, as a descent's runs don't: `relax()`'s
+  pops and edge collapses after a sheet's footprint on a side wall was dried left a
+  vertex there pinched (two fans of facets, edges through facets), which no contact
+  on that wall could separate after; every one was refused and the descents ran away
+  (two of the 18 16-bead runs drained to breakthrough).
+
 - A cut (`pinch_off`, a neck collapsed below the mesh) whose piece is a crumb of the
   collapsed tube itself (left by the seam's tidying without facets, or holding next to
   nothing in a lone facet) takes the crumb away, its target back to the body cut. Left,

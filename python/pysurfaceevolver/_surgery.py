@@ -1464,28 +1464,37 @@ def _settle(ev, tol: float = 1e-8) -> Any:
         for i in want:
             ev.body(i).target = want[i]
 
-    for i in want:
-        ev.body(i).target = held[i]
-    ev.command("g 5")
-    ev.newton(30, seek=True, tol=tol)
-    r = ev.relax(tol=tol)
-    if not r.converged:
-        return failed()
-    done, part = 0.0, 1.0
-    while done < 1.0:
-        start, now = ev._coords(), min(1.0, done + part)
+    # (and relax() makes no changes of its own, as in a descent: its pops
+    # and edge collapses after a 16-bead pack's sheet had its footprint on
+    # a side wall dried left a vertex there pinched, two fans of facets,
+    # which no contact on that wall could separate after, every one refused,
+    # until the descents ran away)
+    topology, ev._topology_held = ev._topology_held, True
+    try:
         for i in want:
-            ev.body(i).target = held[i] + now*(want[i] - held[i])
-        if ev.newton(20, tol=tol).converged:
-            done = now
-            continue
-        if not ev._put_back(start) or part < 1/16:
+            ev.body(i).target = held[i]
+        ev.command("g 5")
+        ev.newton(30, seek=True, tol=tol)
+        r = ev.relax(tol=tol)
+        if not r.converged:
             return failed()
-        part /= 2
-    r = ev.relax(tol=tol)
-    if not r.converged or _crossings(ev) > crossed or _outside(ev) > out:
-        return failed()
-    return r
+        done, part = 0.0, 1.0
+        while done < 1.0:
+            start, now = ev._coords(), min(1.0, done + part)
+            for i in want:
+                ev.body(i).target = held[i] + now*(want[i] - held[i])
+            if ev.newton(20, tol=tol).converged:
+                done = now
+                continue
+            if not ev._put_back(start) or part < 1/16:
+                return failed()
+            part /= 2
+        r = ev.relax(tol=tol)
+        if not r.converged or _crossings(ev) > crossed or _outside(ev) > out:
+            return failed()
+        return r
+    finally:
+        ev._topology_held = topology
 
 
 def merge(ev, event, keep=None) -> int:

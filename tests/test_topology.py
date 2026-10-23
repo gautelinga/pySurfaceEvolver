@@ -1176,6 +1176,23 @@ def test_settling_that_fails_leaves_the_surface_as_the_cut_left_it():
     assert np.allclose(ev.vertices, x) and ev.body(1).target == target
 
 
+def test_settling_makes_no_changes_of_topology_of_its_own():
+    # (after a cut, as in a descent: relax()'s pops and edge collapses after
+    # a pack's sheet had its footprint on a side wall dried left a vertex
+    # there pinched, which no contact could separate after)
+    from pysurfaceevolver import _surgery
+    ev = _drop_under_a_sphere()
+    held = []
+    relax = ev.relax
+
+    def watched(*args, **kwargs):
+        held.append(ev._topology_held)
+        return relax(*args, **kwargs)
+    ev.relax = watched
+    _surgery._settle(ev)
+    assert held and all(held) and not ev._topology_held
+
+
 def test_a_run_evolver_fails_in_is_undone_and_implausible():
     # (a pack's relax() run met an internal error, cone_analyze on a mesh a
     # failed change left; the descent goes on as from a run gone wrong)
