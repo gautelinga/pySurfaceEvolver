@@ -402,6 +402,12 @@
 
 ### Fixes
 
+- Descents: a dry patch closed in the tidying is kept shut (its contact not made
+  again there) for 20 iterations, as a change put off is, not for the rest of the
+  descent: a 16-bead pack's patch closed on a bead, the surface lay on it held by
+  its guard, and the descent's runs got nowhere for its 200 iterations (231 s)
+  before the contact was made all the same. That run 564 -> 267 s.
+
 - Evolver's walks round the mesh's rings (an edge's facets, a vertex's edges, a
   facet's edges) on the paths the topology runs take are bounded, as pySE's own
   are: edge deletion, its unstarring and link checks, edge refinement and

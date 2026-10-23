@@ -2704,6 +2704,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             fresh = ev._save()          # (where this iteration began)
             seen.clear()
             _tidy(ev, h0, shut, close=closing)
+            shut[:] = [s if len(s) > 2 else (*s, turn) for s in shut]   # (when they closed)
             _checked(ev, "tidying (lines, patches, poles)")
             x = _places(ev)
             chunk = None
@@ -2858,7 +2859,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # patch opened on a bead's top before the liquid had drained enough
             # shrank and closed, the surface lay on the bead again, and a pack's
             # run opened and closed patches there 37 times; its guard holds it)
-            resting = [e for e in found if _resting(e) and not _reopening(e, shut, h)]
+            resting = [e for e in found if _resting(e) and not _reopening(e, shut, h, turn)]
             if falling:
                 # (a fall's path is the mode's, not the liquid's: only a surface
                 # gone through a solid counts, put back out beside a contact line,
@@ -2877,7 +2878,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                                 if not any(e is r for r in resting)
                                 and (e.kind in ("touch", "contact lines")
                                      or (e.kind == "solid" and not any(e is b for b in beside)
-                                         and not _reopening(e, shut, h)))]
+                                         and not _reopening(e, shut, h, turn)))]
             made = None
             for e in coming:
                 if again(e):
@@ -2926,6 +2927,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     # the surface lying on a solid: tidied, and once more)
                     drop_flat(ev, h0)
                     close_patches(ev, h0, shut)
+                    shut[:] = [s if len(s) > 2 else (*s, turn) for s in shut]
                     # (facets crushed flat anywhere: a pack's relaxed state had
                     # three of 0 degrees, and the descent went on 1300 s round it)
                     _drop_crushed(ev)
@@ -3921,12 +3923,18 @@ def _drop_empty(ev) -> int:
     return len(gone)
 
 
-def _reopening(e, shut: list, h: float) -> bool:
+def _reopening(e, shut: list, h: float, turn: Optional[int] = None) -> bool:
     """Whether a solid event is a dry patch (the liquid between thinning)
-    within 3 h of a patch closed on its solid."""
+    within 3 h of a patch closed on its solid; with ``turn`` (the descent's
+    iteration), of one closed fewer than _PUT_OFF iterations ago (a shut
+    entry's third item, the iteration it closed in). (Not for good: a pack's
+    patch closed on a bead, the surface lay on it held by its guard, and the
+    descent's runs got nowhere for its 200 iterations, 231 s, before the
+    patch was made all the same.)"""
     return e.kind == "solid" and e.between == "body" and any(
-        str(key) == str(e.constraint) and np.linalg.norm(np.asarray(e.where) - middle) < 3*h
-        for key, middle in shut)
+        str(s[0]) == str(e.constraint) and np.linalg.norm(np.asarray(e.where) - s[1]) < 3*h
+        and (turn is None or len(s) < 3 or turn - s[2] < _PUT_OFF)
+        for s in shut)
 
 
 class _Tried(NamedTuple):
