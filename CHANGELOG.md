@@ -511,6 +511,13 @@
   vertices by two edges, and the descent stalled round them. A cut whose collapse
   joins two vertices by two edges is refused, and so is a `pop` that does.
 
+- A descent's `relax()` after it tidies a relaxed state that wasn't sound (flat facets
+  dropped, patches closed, edges kept in range) is guarded and judged as its runs
+  are, and undone where it went wrong: unguarded (the vertices the tidying made had
+  no guard) and unjudged, it took a 16-bead run's surface deep into a bead, the
+  tidying after lifted 116 chords through it and a contact took 418 vertices, and the
+  fall ran away.
+
 - A surface resting on a solid (its guard holding it there) is no change a descent
   puts off: it can come no nearer, and put off it held the runs still. Nor do the
   contacts made where it rests beside a contact line on that solid count toward

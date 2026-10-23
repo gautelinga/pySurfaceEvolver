@@ -1235,6 +1235,28 @@ def test_where_a_run_crossed_the_change_there_is_looked_for_further(monkeypatch)
     assert made is not None and made.kind == "touch" and tried == [made]
 
 
+def test_the_relaxing_of_a_tidied_state_is_judged_as_runs_are():
+    # (a descent's relax() after tidying a relaxed state: one that went
+    # wrong, a pack's surface taken deep into a bead, undone, an unconverged
+    # result; one that went right kept)
+    from pysurfaceevolver import _surgery
+    ev = _drop_under_a_sphere()
+    x = ev.vertices.copy()
+    relax = ev.relax
+
+    class Failed:
+        converged, stable, energy = False, None, None
+
+    def astray(*args, **kwargs):
+        ev.command("set vertex z z*1.5 where not fixed and on_constraint 1 == 0")
+        return Failed()
+    ev.relax = astray
+    r = _surgery._checked_relax(ev, 1e-8)
+    assert not r.converged and np.allclose(ev.vertices, x)
+    ev.relax = relax
+    assert _surgery._checked_relax(ev, 1e-8).converged
+
+
 def test_a_run_evolver_fails_in_is_undone_and_implausible():
     # (a pack's relax() run met an internal error, cone_analyze on a mesh a
     # failed change left; the descent goes on as from a run gone wrong)

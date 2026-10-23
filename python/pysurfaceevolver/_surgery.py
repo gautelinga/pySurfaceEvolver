@@ -2915,11 +2915,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     _drop_crushed(ev)
                     _even_out(ev, smooth=False)
                     _keep_edges(ev, h0)
-                    chunk = ev.relax(tol)
+                    chunk = _checked_relax(ev, tol)
                     if chunk.health is not None and any(
                             i.startswith("degenerate facets") for i in chunk.health.issues):
                         _remesh_now(ev, h0)
-                        chunk = ev.relax(tol)
+                        chunk = _checked_relax(ev, tol)
                     _checked(ev, "tidying a relaxed state")
                 if chunk.converged and chunk.stable is not False and _sound(chunk.health):
                     return chunk, changes, ""
@@ -3173,6 +3173,22 @@ def _run(ev, tol: float, n: int) -> Any:
     are singular: 0.025 radii from one where gradient steps alone left it
     0.14 away, run after run undone, the poles moved 20 times."""
     return ev.relax(tol, max_iter=n, newton=None if ev.residual() < _NEWTON_NEAR else 0)
+
+
+def _checked_relax(ev, tol: float) -> Any:
+    """A descent's relax() of a relaxed state it tidied, guarded and judged
+    as its runs are (_plausible): gone wrong, undone, an unconverged result
+    (on down in the runs). Unguarded and unjudged, it took a 16-bead pack's
+    surface, the vertices the tidying made with no guard, deep into a bead
+    (the tidying after lifted 116 chords through it, a contact took 418
+    vertices), and the fall ran away."""
+    guard(ev)
+    r, start, energy = _away_from_poles(ev, lambda n: ev.relax(tol), 1)
+    if not _plausible(ev, energy, getattr(r, "energy", None)):
+        _log.debug("run undone: implausible (volumes, energy, poles or crossings)")
+        ev.restore(start)
+        return _unconverged()
+    return r
 
 
 def _gradient_run(ev, tol: float) -> Any:
