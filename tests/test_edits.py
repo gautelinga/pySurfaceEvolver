@@ -60,6 +60,20 @@ def test_collapse_split_and_flip_keep_the_surface_sound():
     ev.relax()
 
 
+def test_a_fixed_edge_is_not_split():
+    # (its midpoint projected onto the ball would move the surface)
+    ev = _drop()
+    m = ev.mesh()
+    e = np.asarray(m.edges)
+    line = ev.on_constraint("ball")[e].all(axis=1)
+    ev.fix("edge", line)
+    volume = ev.body(1).volume
+    r = edit(ev, "split", np.asarray(m.edge_ids)[line])
+    assert _tally(r) == {"fixed": int(line.sum())}
+    ev.command("recalc")
+    assert ev.body(1).volume == volume
+
+
 def test_a_contact_lines_vertex_collapses_only_along_the_line():
     ev = _drop()
     m = ev.mesh()

@@ -417,6 +417,10 @@
   had not relaxed to its target lost the difference. Bodies removed whole give their
   target to the nearest fixed body instead of dropping it.
 
+- The checked edits' `split`, and the chopping of long contact-line edges in an
+  iteration, leave fixed edges alone, as `collapse`, `flip` and `smooth` do: a
+  fixed edge's midpoint projected onto its constraint moved the surface.
+
 - Descents: a dry patch closed in the tidying is kept shut (its contact not made
   again there) for 20 iterations, as a change put off is, not for the rest of the
   descent: a 16-bead pack's patch closed on a bead, the surface lay on it held by

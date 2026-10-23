@@ -23,7 +23,8 @@
  *             between them under max_volume; mode 1 only where it makes the
  *             facets more equiangular, mode 2 only where it brings the
  *             vertices' valences nearer 6 (4 on a border);
- *   split     an edge at its midpoint (Evolver's edge_refine), projected;
+ *   split     an edge at its midpoint (Evolver's edge_refine), projected; a
+ *             fixed edge stays;
  *   smooth    a vertex toward its neighbours, along the surface (in the
  *             tangent plane; a contact line's vertex along the line), by
  *             lambda, at most a quarter edge, projected onto its
@@ -1610,6 +1611,7 @@ static int split(struct ctx *c, edge_id e)
   struct counts was;
   vertex_id a = get_edge_tailv(e), b = get_edge_headv(e), m;
   int why;
+  if ( get_eattr(e) & FIXED ) return PYSE_EDIT_FIXED;    /* (its midpoint projected would move it) */
   star(a,&verts); star(b,&verts);
   before(c,&verts,&was);
   if ( !valid_id(edge_refine(e)) )
@@ -3148,7 +3150,7 @@ int pyse_chop_lines(void)
   { long_.n = 0;
     FOR_ALL_EDGES(e)
     { REAL *a, *b, d[3];
-      if ( !(get_eattr(e) & CONSTRAINT) || valence(e) != 1 ) continue;
+      if ( (get_eattr(e) & (CONSTRAINT|FIXED)) != CONSTRAINT || valence(e) != 1 ) continue;
       a = get_coord(get_edge_tailv(e)); b = get_coord(get_edge_headv(e));
       for ( k = 0 ; k < 3 ; k++ ) d[k] = b[k] - a[k];
       if ( norm3(d) > line_chop ) push(&long_,e);

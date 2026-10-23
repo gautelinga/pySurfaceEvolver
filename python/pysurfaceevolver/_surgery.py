@@ -3235,11 +3235,13 @@ def _gradient_run(ev, tol: float) -> Any:
             ev.command("g 1")
             out.append(_core.total_energy())
         return out
+    # (Evolver failing in the steps: an unconverged result, not a trace,
+    # back where they began; as gone wrong)
     trace, start, energy = _away_from_poles(ev, steps, _GRADIENT_RUN)
-    if not _plausible(ev, energy, trace):
+    if not isinstance(trace, list) or not _plausible(ev, energy, trace):
         ev.restore(start)
         trace, start, energy = _away_from_poles(ev, steps, 1)
-        if not _plausible(ev, energy, trace):
+        if not isinstance(trace, list) or not _plausible(ev, energy, trace):
             ev.restore(start)
             return None
     if ev.residual() < _FALL_NEAR:
