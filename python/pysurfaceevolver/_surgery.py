@@ -2945,9 +2945,9 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     # (on down, within the descent's budget: a pack's relax()
                     # ended at residual 7e-6, not quite in equilibrium, and the
                     # run stopped there)
-                    state = (tuple(ev.counts.values()), ev.energy)
-                    if not _same_state(state, unsound):
-                        unsound = state
+                    relaxed = (tuple(ev.counts.values()), ev.energy)
+                    if not _same_state(relaxed, unsound):
+                        unsound = relaxed
                         _log.debug("relaxed, but %s: on down", chunk.health)
                         continue
                     # (but not where the tidying and relaxing came back to

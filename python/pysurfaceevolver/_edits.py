@@ -6,7 +6,7 @@ edges through facets). For pySE's changes of topology and remeshing."""
 
 from __future__ import annotations
 
-from typing import Iterable, List, Tuple
+from typing import Any, Iterable, List, Tuple
 
 import numpy as np
 
@@ -122,7 +122,7 @@ def remesh(ev, h: float, sweeps: int = 3, sizes=None, region=None, **params) -> 
     edit), toward those lengths instead; with ``region`` (a mask or rows of
     ev.mesh()'s vertices), there only (the edges with an end there, a
     split's new vertex joining it). How many of each were made."""
-    ids = [] if region is None else np.asarray(ev.mesh().vertex_ids)[np.asarray(region)]
+    ids: Any = [] if region is None else np.asarray(ev.mesh().vertex_ids)[np.asarray(region)]
     if region is not None and not len(ids):
         return dict.fromkeys(("splits", "collapses", "flips", "moves"), 0)
     done = edit(ev, "remesh", ids, sizes=sizes, h=h, sweeps=sweeps, **params)
