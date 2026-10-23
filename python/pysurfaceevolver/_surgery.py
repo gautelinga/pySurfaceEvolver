@@ -3623,28 +3623,28 @@ def _pinch_collapsed(ev) -> int:
     return made
 
 
-def _spike(f, edges, ring, side) -> "int | None":
-    """Where one side of a collapsed neck (_ring_sides) is a spike: the
-    facets on its ring's edges there all meet at one vertex, whose only
-    neighbours are the ring's (a filament thinned to a cone 3 edges round
-    at its base). That vertex's row, else None."""
+def _spike(f, edges, ring, side) -> "list | None":
+    """Where one side of a collapsed neck (_ring_sides) is a spike: a tip of
+    at most three vertices whose only neighbours are the ring's and each
+    other's (a filament thinned to a cone 3 edges round at its base, its
+    tip one vertex or a few). Those vertices' rows, else None. (A tip of
+    two, 0.01 and 0.02 from a ring 1e-4 across, cut as a neck: Evolver
+    deleted no edge between them, "2 left", and the neck was left.)"""
     on = set(int(v) for v in ring)
     for s in (-1.0, 1.0):
-        apex = set()
-        for row in f[np.isin(f, ring).sum(axis=1) == 2]:
-            third = [int(v) for v in row if int(v) not in on]
-            if third and side[third[0]] == s:
-                apex.add(third[0])
-        if len(apex) == 1:
-            p = apex.pop()
-            if set(edges[(edges == p).any(axis=1)].ravel().tolist()) - {p} <= on:
-                return p
+        tip = {int(v) for row in f[np.isin(f, ring).any(axis=1)] for v in row
+               if int(v) not in on and side[v] == s}
+        if not 1 <= len(tip) <= 3:
+            continue
+        reach = set(edges[np.isin(edges, list(tip)).any(axis=1)].ravel().tolist())
+        if reach <= on | tip:
+            return sorted(tip)
     return None
 
 
 def _take_spike(ev, x, ring, apex, centre, scale: float) -> None:
-    """A spike on a collapsed neck (_spike) taken off: its apex and the ring
-    collapsed to the ring's centre (Evolver deletes the edges there), the
+    """A spike on a collapsed neck (_spike) taken off: its tip (rows apex)
+    and the ring collapsed to the ring's centre (Evolver deletes the edges there), the
     rest of the surface closed at that point. (Cut as a neck, the spike's
     three facets would be one point's: Evolver refused every edge, "3
     left", run after run, a 16-bead pack's descent going round them.) The
@@ -3655,7 +3655,7 @@ def _take_spike(ev, x, ring, apex, centre, scale: float) -> None:
     ev.vertices = moved
     tiny = 1e-9*scale
     count = ev.counts["edges"]
-    for _ in range(len(ring) + 3):
+    for _ in range(len(ring) + len(apex) + 3):
         ev.command(f"delete edge where length < {_num(tiny, 'length')}")
         now = ev.counts["edges"]
         if now == count:

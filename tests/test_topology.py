@@ -1009,6 +1009,23 @@ def test_a_spike_collapsed_below_the_mesh_is_taken_off():
     ev.command("g 1")
 
 
+def test_a_spike_with_a_tip_of_two_vertices_is_taken_off():
+    # the spike's tip two vertices (each joined only to the waist and the
+    # other): cut as a neck, Evolver deleted no edge between them, "2 left";
+    # taken off as the one-vertex spike is
+    from pysurfaceevolver import _surgery as S
+    v, f = _hourglass(1e-5)
+    v = np.r_[v[:7], [[0.03, 0, 1.1], [-0.03, 0.02, 1.15]]]
+    f = [row for row in f.tolist() if max(row) <= 6] + [[7, 4, 5], [7, 5, 8], [8, 5, 6],
+                                                        [8, 6, 4], [7, 8, 4]]
+    ev, volume = _held(v, np.array(f))
+    assert len(S._collapsed_rings(ev.mesh(), S._median_edge(ev.mesh()))) == 1
+    assert S._pinch_collapsed(ev) == 1
+    assert list(ev.bodies().ids) == [1] and ev.counts["vertices"] == 5
+    assert S.check_topology(ev) == [] and not S._collapsed_rings(ev.mesh(), S._median_edge(ev.mesh()))
+    ev.command("g 1")
+
+
 def test_a_cut_leaves_no_body_without_facets():
     # a cut whose piece is a crumb the seam's tidying takes all of (left
     # without facets, its volume fixed: Evolver's constraint projection

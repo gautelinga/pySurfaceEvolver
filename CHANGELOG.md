@@ -499,7 +499,9 @@
   thinned to a cone 3e-5 across at its base) is taken off, the apex and the ring
   collapsed to one point and the rest of the surface closed there. Cut as a neck,
   the spike's facets would be one point's: Evolver refused every edge ("the ring
-  didn't collapse to one vertex (3 left)"), at every look of a 16-bead descent.
+  didn't collapse to one vertex (3 left)"), at every look of a 16-bead descent. A
+  spike's tip may be up to three vertices joined only to the ring and each other: a
+  tip of two, cut as a neck, left two vertices ("2 left") and the neck uncut.
 
 - A cut (`pinch_off`, a neck collapsed below the mesh) whose piece is a crumb of the
   collapsed tube itself (left by the seam's tidying without facets, or holding next to
