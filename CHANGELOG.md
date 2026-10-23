@@ -511,6 +511,12 @@
   vertices by two edges, and the descent stalled round them. A cut whose collapse
   joins two vertices by two edges is refused, and so is a `pop` that does.
 
+- A descent's tidying, each iteration, drops facets of no area (under 1e-6 of the
+  edge squared) whose corners are all on one wall, as `drop_flat` does: a contact
+  line folded back on itself along one (a tongue of no width, the two vertices at its
+  root at one point, the edge between them 1.5e-11 long) was taken by no checked
+  edit nor by the descents' runs, and a 16-bead run's descent stalled round it.
+
 - A descent's `relax()` after it tidies a relaxed state that wasn't sound (flat facets
   dropped, patches closed, edges kept in range) is guarded and judged as its runs
   are, and undone where it went wrong: unguarded (the vertices the tidying made had

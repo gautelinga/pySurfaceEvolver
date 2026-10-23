@@ -2005,19 +2005,20 @@ def _dissolve_onto(ev, m, gone, key) -> None:
             b.volconst = b.volconst + _kept_constant(ev, volume[i] - b.volume, key)
 
 
-def drop_flat(ev, h: float) -> int:
-    """Facets with their corners on one wall and next to no area (under a
-    hundredth of h squared: the surface lying on the solid, as a merged
-    neck's sank onto the plane between two drops, its contact lines a chord
-    0.011 apart that edge deletion can't take, the lines would pinch) taken
-    away as contact() takes a roofed channel's. Returns how many."""
+def drop_flat(ev, h: float, share: float = 0.01) -> int:
+    """Facets with their corners on one wall and next to no area (under
+    ``share`` of h squared, a hundredth: the surface lying on the solid, as
+    a merged neck's sank onto the plane between two drops, its contact lines
+    a chord 0.011 apart that edge deletion can't take, the lines would
+    pinch) taken away as contact() takes a roofed channel's. Returns how
+    many."""
     m = ev.mesh()
     f = np.asarray(m.facets)
     if not len(f):
         return 0
     x = np.asarray(m.vertices, float)
     area = 0.5*np.linalg.norm(np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]]), axis=1)
-    small = area < 0.01*h*h
+    small = area < share*h*h
     if not small.any():
         return 0
     nums, _, dist, names = ev._constraint_gaps()
@@ -3565,15 +3566,27 @@ def _resting(e) -> bool:
 def _tidy(ev, h0: float, shut: list, close: bool = True) -> None:
     """A descent's tidying: necks collapsed below the mesh cut
     (_pinch_collapsed), closed pieces enclosing nothing taken away
-    (_drop_empty), contact lines oriented, shrunk patches closed
-    (close_patches), poles moved off the lines (move_poles); where that
-    leaves a surface Evolver can't take a gradient step from (a pack's patch
+    (_drop_empty), facets of no area lying on a wall dropped (drop_flat),
+    contact lines oriented, shrunk patches closed (close_patches), poles
+    moved off the lines (move_poles); where that leaves a surface Evolver can't take a gradient step from (a pack's patch
     closed, then a pole moved, and the constraint matrix was singular at the
     next step), undone and done without the patches closed, else not done.
     Chords through a wall lifted first (_lift_chords)."""
     _lift_chords(ev)
     _pinch_collapsed(ev)
     _drop_empty(ev)
+    # (and facets of no area with their corners on one wall: a contact line
+    # folded back on itself along one, a tongue of no width, its two
+    # vertices at its root at one point; no checked edit takes the edge
+    # between them, the runs' relax() can't, and a pack's descent stalled
+    # round it)
+    for _ in range(4):
+        try:
+            if not drop_flat(ev, h0, 1e-6):
+                break
+        except ValueError as error:
+            _log.debug("flat facets not dropped: %s", error)
+            break
     good = ev._save()
     for close in ((True, False) if close else (False,)):
         orient_lines(ev)
