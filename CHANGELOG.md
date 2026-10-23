@@ -261,6 +261,12 @@
 
 ### Speed
 
+- Newton steps: the following of moving contact and triple lines looks only at the
+  facets beside a line (kept until the mesh changes), not at every vertex and facet
+  after every step, and does nothing on a surface without lines: the same steps to
+  the bit; the plain cube's step at 98k facets back to 0.7.5's instructions (it was
+  10% more). (docs/performance.md, "Since 0.7.5".)
+
 - `Evolver.residual()` is kept for the surface's version (`_core.surface_version()`:
   any command, edit or move changes it): a 16-bead pack's descent asked 57% of its
   12.6k residuals of a state it had just measured. The same values; with the guards'

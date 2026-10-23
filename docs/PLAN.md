@@ -33,10 +33,15 @@ in the draining liquid's path, not in relaxing trapped rings (a small part of th
 
 **Next:** merge/push/release (the user).
 
-**Open (2026-10-24):** the Newton step on the cube is 16% (98k) to 21% (393k) slower than
-0.7.5 (`relax()` +2-6%; 2 threads, 5 alternated rounds, same energies; docs/performance.md
-"Since 0.7.5"; script `~/pyse_scratch/perf/relax_bench.py`, 0.7.5 venv
-`~/pyse_scratch/v075`): bisect before releasing. Doc outputs can differ between numpy
+**Open (2026-10-24):** the Newton step on the cube was 16% (98k) to 21% (393k) slower than
+0.7.5. Cause found by callgrind on unstripped builds (`pip install --target DIR -C
+cmake.define.PYSE_NOSTRIP=ON -C build-dir=BD`: the unstripped module is in BD, the install
+strips it): fl_follow_end (f367957) passed over all vertices and facets after every step.
+Fixed in eefbb2a (only the line facets, cached): instructions back to 0.7.5's. Left:
+separate processes still time the 393k step ~5% above 0.7.5 with the follow on (vs off),
+with identical instructions and results and no difference toggled in one process
+(`~/pyse_scratch/perf`: warm.py, toggle.py). Rerun relax_bench.py (0.7.5 venv
+`~/pyse_scratch/v075`) after. Doc outputs can differ between numpy
 1.26 (local .venv) and 2.5 (CI): bridge_rupture block 4's neck 0.06 vs 0.11.
 
 **Open:** s1_t15 just over the 15-minute target; branch steps are ~60% of a run's time,
