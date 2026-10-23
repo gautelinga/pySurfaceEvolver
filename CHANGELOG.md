@@ -123,7 +123,7 @@
   another way (half the step, a quarter, remeshed afresh, edges 0.9 and 1.1 times as
   long), the changes on the way made where they now come; four tries at a place,
   twelve in a run. The states are kept in memory (pySE's memory of the surface with
-  them), a few at a time: 0.3 ms a step on a 16-bead pack. Each try is logged
+  them), a few at a time: 0.12 ms a step on a 16-bead pack. Each try is logged
   ("branch backed up 2 steps: ...") and the steps after it are numbered on from the
   state it went back to. A 16-bead pack's runs end where the way down from one state
   fails, and from a state next to it the way down rarely fails too: resumed at each
