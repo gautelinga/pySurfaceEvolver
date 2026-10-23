@@ -331,7 +331,7 @@ def sphere(center, radius: float, contact_angle: Optional[float] = None, *,
     ``axis``, the centre must be numbers and ``span`` 2 pi.
 
     ``gauge="flux"``: no pole at all. The wetted area is the flux out of the
-    liquid of the field radius^2 (x - c)/|x - c|^3 (singular only at the
+    liquid of the field ``radius^2 (x - c)/|x - c|^3`` (singular only at the
     centre, inside the solid) through the liquid's surface, a facet
     integral, plus smooth line integrals on the other walls' contact lines
     (:mod:`pysurfaceevolver._flux`, which :func:`make_datafile` puts

@@ -182,10 +182,10 @@ for d in (0.5, 0.75, 1.0, 1.3):
 ```
 
 ```text
-gap 1.0: area 2.437 (Princen 2.441), pressure -0.1073 (Princen -0.1073), wetting 82 degrees around each fibre
+gap 1.0: area 2.438 (Princen 2.441), pressure -0.1073 (Princen -0.1073), wetting 82 degrees around each fibre
 gap 1.5: area 5.374 (Princen 5.376), pressure 0.1579 (Princen 0.1579), wetting 109 degrees around each fibre
-gap 2.0: area 9.894 (Princen 9.902), pressure 0.2526 (Princen 0.2522), wetting 132 degrees around each fibre
-gap 2.6: area 19.468 (Princen 19.492), pressure 0.2896 (Princen 0.2896), wetting 160 degrees around each fibre
+gap 2.0: area 9.899 (Princen 9.902), pressure 0.2523 (Princen 0.2522), wetting 132 degrees around each fibre
+gap 2.6: area 19.457 (Princen 19.492), pressure 0.2896 (Princen 0.2896), wetting 160 degrees around each fibre
 ```
 
 At the widest gap shown the liquid already reaches 160 degrees round each fibre from the

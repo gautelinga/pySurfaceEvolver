@@ -136,14 +136,14 @@ print(f"dimer: from there down to volume {V[-1]:.3f} (d = {d[-1]:.2f}), "
 ```text
 trimer: stable down to volume 0.185 (d = 0.65), the snap-in
 between: up to 1 negative mode, back up to volume 0.224 (d = 0.27), the pop-out
-dimer: from there down to volume 0.206 (d = 0.11), 0 negative modes
+dimer: from there down to volume 0.213 (d = 0.14), 0 negative modes
 ```
 
 Along the way the run passes two folds. The trimer is stable down to volume 0.185;
 there its branch turns, and the surface the run follows back up is unstable, with one
 negative mode. At volume 0.224 it turns again into stable dimers, which go on down to
-volume 0.206. There `arclength` stops by itself: the outer meniscus has come down onto
-bead 3, the film of liquid under it 6e-5 thick (an event on the step, see
+volume 0.213. There `arclength` stops by itself: the outer meniscus has come down onto
+bead 3, the film of liquid under it 2e-4 thick (an event on the step, see
 {meth}`~pysurfaceevolver.Evolver.events`), where the two bridges come apart. Followed on
 regardless, the meniscus goes into the bead (below volume 0.203; before events stopped
 the run it went on to 0.196 that way).
