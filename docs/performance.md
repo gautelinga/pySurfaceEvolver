@@ -173,6 +173,35 @@ saves on the 2-3 steps `relax()` takes on a pattern; it is used after six, above
 METIS isn't built), storage reordering along a space-filling curve (gradient steps
 2x slower).
 
+## Since 0.7.5
+
+The work after 0.7.5 went into changes of topology (`arclength(topology=True)`, bead
+packs drained to breakthrough): the event search, the remesher and the checked mesh
+edits, the gradient steps of the descents, and the flux gauge's sphere integrands are
+much faster than when they were first written (the changelog has each step: a full
+remesh of 106k facets 121 -> 25 s, events 4-6 times faster, the flux gauge's
+gradient step at 64 beads 23.5 -> 5.8 us a facet). On the wide set of 16-bead packs
+(`bench/topology/corpus.py --set wide`, 18 runs at one thread), a week's tuning took
+the whole set from about 8000 s to 5500 s (the machine's load not matched
+between the two).
+
+For the established workload, relaxing a large surface, it is slower so far: against
+0.7.5 (built from its tag, with the same numpy 1.26), the cube near equilibrium, 2
+threads, the median of five rounds with the versions alternated, an idle machine,
+the same energies to round-off; seconds (measured 2026-10-24):
+
+| surface | operation | 0.7.5 | now | |
+|---|---|---|---|---|
+| cube, linear, 98k facets | `g 1` | 0.022 | 0.019 | -10% |
+| | Newton step | 0.221 | 0.255 | +16% |
+| | `relax()` | 1.36 | 1.45 | +6% |
+| cube, linear, 393k facets | Newton step | 1.15 | 1.39 | +21% |
+| | `relax()` | 9.46 | 9.67 | +2% |
+| cube, Lagrange 2, 24k facets | `relax()` | 0.73 | 0.76 | +4% |
+| cube, Lagrange 2, 98k facets | `relax()` | 4.13 | 4.21 | +2% |
+
+The Newton step's slowdown is not yet explained.
+
 ## Threads and the Newton solver
 
 For linear soapfilm surfaces (no torus, symmetry, metric, Wulff or curvature

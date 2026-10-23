@@ -389,8 +389,15 @@
 
 - New page "Draining through changes of topology" (docs/drainage_topology.md): a drop
   draining over a sphere inside it (a dry patch opening and growing, its contact angle
-  as set) and one pore of a bead pack (dry patches on one bead, then the liquid's jump
-  at a fixed volume, curvature 4.5 to 3.1), with what it can't do yet.
+  as set); one pore of a bead pack (dry patches on one bead, then the liquid's jump
+  at a fixed volume, curvature 4.4 to 3.1, a pocket cut off); a ring cut off between
+  two stacked beads while the liquid below drains through the floor (`outlet=`, its
+  volume held to 3e-15); a 16-bead pack drained to breakthrough, its trapped clusters
+  shown, and the trapped share of the wide set's 18 runs; with what it can't do yet.
+  A movie of each run (`tools/drainage_topology_figure.py`), and the page's outputs
+  checked in CI (`tools/check_doc_snippets.py`) as the other pages' are.
+
+- docs/performance.md: since 0.7.5, measured against it.
 
 - Four pages of classic results, each against an exact reference computed on the
   page's helpers:

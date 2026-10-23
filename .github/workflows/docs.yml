@@ -49,7 +49,7 @@ jobs:
       fail-fast: false
       matrix:
         pages:
-          - docs/packing.md
+          - docs/packing.md docs/drainage_topology.md
           - docs/stress_cases.md docs/bridge_rupture.md docs/several_surfaces.md
           - docs/disk_bridge.md docs/pendant_drop.md docs/fibres.md docs/floating_lens.md
     steps:

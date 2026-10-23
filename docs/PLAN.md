@@ -33,6 +33,12 @@ in the draining liquid's path, not in relaxing trapped rings (a small part of th
 
 **Next:** merge/push/release (the user).
 
+**Open (2026-10-24):** the Newton step on the cube is 16% (98k) to 21% (393k) slower than
+0.7.5 (`relax()` +2-6%; 2 threads, 5 alternated rounds, same energies; docs/performance.md
+"Since 0.7.5"; script `~/pyse_scratch/perf/relax_bench.py`, 0.7.5 venv
+`~/pyse_scratch/v075`): bisect before releasing. Doc outputs can differ between numpy
+1.26 (local .venv) and 2.5 (CI): bridge_rupture block 4's neck 0.06 vs 0.11.
+
 **Open:** s1_t15 just over the 15-minute target; branch steps are ~60% of a run's time,
 and failed correctors about half their Newton work (a stall exit made them cheaper but
 failed more often and changed the runs' paths: 7 back-ups and slower in all; dropped).

@@ -39,7 +39,22 @@ __all__ = ["Step", "arclength", "continuation", "load_steps"]
 
 @dataclass
 class Step:
-    """One step of :func:`continuation`, after relaxing."""
+    """One step of :func:`continuation` or :func:`arclength`, after relaxing.
+
+    * ``index``: the step's number in the run; ``value``: the parameter's
+      value there (stepping a body's target, its volume).
+    * ``energy``; ``volumes`` and ``pressures``: per body, in body order.
+    * ``result``: what the relaxing returned (an :class:`IterationResult`).
+    * ``extra``: a dict of your own, kept in checkpoints.
+    * ``substeps``: the relaxes the step took (more after halving);
+      ``predicted``: relaxed from the secant prediction.
+    * ``events``: :meth:`Evolver.events` there (see ``events=``).
+    * ``fell``: reached by a descent after a change of topology or a fall
+      (``topology=True``); ``changes``: the events whose changes were made
+      on the way.
+    * ``trapped``: with ``topology=True``, the volume of the liquid cut off
+      from the run's body, held in bodies of its own (0 without any).
+    """
 
     index: int                 # position in ``values``
     value: Any                 # the value set
