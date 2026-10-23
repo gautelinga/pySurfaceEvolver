@@ -176,34 +176,17 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     # counts it: _core.work() between steps over the facets after each)
     from pysurfaceevolver import _core
     work = {"last": _core.work(), "passes": 0.0}
-    # (the liquid kept: the targets' total changes only by the run's own
-    # steps of its body's target, counted as its setter makes them; checked
-    # between steps with no backing up between, the run's state put back)
-    stepped = {"total": 0.0}
-    setter = recipes._setter
-
-    def counted_setter(what):
-        put = setter(what)
-
-        def counted(ev_, value):
-            before = ev_.body(1).target
-            put(ev_, value)
-            stepped["total"] += float(value) - float(before)
-        return counted
-    recipes._setter = counted_setter
+    # (the liquid kept: at every step what the bodies hold is their targets,
+    # the draining one's and the trapped ones'; the changes only move
+    # targets between bodies, _clusters.reconcile logging any that doesn't)
     outlet = "bottom" if goal == "breakthrough" else None
-    liquid = {"last": None, "error": 0.0, "trapped": 0.0, "bodies": 0, "held": 0.0}
+    liquid = {"error": 0.0, "trapped": 0.0, "bodies": 0, "held": 0.0}
 
     def check_liquid(step):
         b = ev.bodies()
         fixed = np.asarray(b.fixed, bool)
-        total = float(np.sum(np.asarray(b.target)[fixed]))
-        backed = any(t.startswith("branch backed up") for _, t in records[liquid.get("seen", 0):])
-        liquid["seen"] = len(records)
-        if liquid["last"] is not None and not backed:
-            error = (total - liquid["last"][0]) - (stepped["total"] - liquid["last"][1])
-            liquid["error"] = max(liquid["error"], abs(error))
-        liquid["last"] = (total, stepped["total"])
+        books = float(np.sum(np.asarray(b.volume)[fixed]) - np.sum(np.asarray(b.target)[fixed]))
+        liquid["error"] = max(liquid["error"], abs(books))
         others = fixed & (np.asarray(b.ids) != 1)
         liquid["trapped"] = float(step.trapped)
         liquid["bodies"] = int(others.sum())
@@ -318,8 +301,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         result[key] = sum(t.startswith(prefix) for _, t in records)
     result["seconds"] = time.time() - t0
     # (breakthrough: the share of the liquid drained; half: how far toward it)
-    result["drained"] = ((v0 - result["end"])/v0 if goal == "breakthrough"
-                         else (v0 - result["end"])/(v0 - target))
+    left = result["end"] + result.get("trapped", 0.0)       # (trapped liquid stays)
+    result["drained"] = ((v0 - left)/v0 if goal == "breakthrough"
+                         else (v0 - left)/(v0 - target))
     log.write(f"end: {'reached' if result['reached'] else result['stop']}\n")
     log.close()
     json.dump(result, open(os.path.join(out, f"{name}.json"), "w"), indent=1)

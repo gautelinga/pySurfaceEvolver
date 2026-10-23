@@ -6,8 +6,10 @@ frame the nearer of the states the run kept either side of that volume,
 taken to it by Newton steps (where that can't be without a change of
 topology, from either side, the nearer state as it is, at its own volume).
 A grid a frame, since the surface's topology changes; the time is the share
-of the liquid drained, the heights a point field; the data in HDF5 beside
-it. The beads and the box go into static .vtp files, and a ParaView script
+of the liquid drained (the liquid: the draining body and the trapped ones),
+the heights a point field, each facet's body (the draining liquid 1, each
+trapped cluster its own) and whether it is trapped cell fields; the data in
+HDF5 beside it. The beads and the box go into static .vtp files, and a ParaView script
 opens all three.
 
 usage: python bench/topology/series.py [--beads 16] [--seed 0] [--theta 15]
@@ -43,26 +45,28 @@ def run(name, n, L, seed, theta, h, ds, goal, out, threads):
 
 
 def at_volume(states, V):
-    """The surface at liquid volume V from the nearer of two states the run
-    kept, either side of V (else the other): Newton steps there, as the
-    run's corrector takes, else relax(). Not where the surface has gone
-    through a solid on the way (a step there needs a change of topology
-    first). (ev, step, volume, how), how None where neither got there: the
-    nearer state as the run kept it."""
+    """The surface holding liquid V (the draining body and the trapped
+    ones) from the nearer of two states the run kept, either side of V
+    (else the other), the draining body's target set to V less what that
+    state holds trapped: Newton steps there, as the run's corrector takes,
+    else relax(). Not where the surface has gone through a solid on the way
+    (a step there needs a change of topology first). (ev, step, volume,
+    how), how None where neither got there: the nearer state as the run
+    kept it."""
     import corpus
     from pysurfaceevolver import recipes
-    for k, path, Vk in sorted(states, key=lambda s: abs(s[2] - V)):
+    for k, path, Vk, Tk in sorted(states, key=lambda s: abs(s[2] - V)):
         for how in ("Newton steps", "relaxed"):
             ev, v0, _ = corpus.restore_state(path)
-            ev.body(1).target = V
+            ev.body(1).target = V - Tk
             if how == "Newton steps":
-                ok = recipes._arc_back(ev, lambda v: None, V, 1e-8, None, None)[0]
+                ok = recipes._arc_back(ev, lambda v: None, V - Tk, 1e-8, None, None)[0]
             else:
                 result = ev.relax(stability=False)
                 ok = result.converged and not getattr(result, "collapsed", 0)
             if ok and not recipes._through(ev.events()):
                 return ev, k, V, how
-    k, path, Vk = min(states, key=lambda s: abs(s[2] - V))
+    k, path, Vk, _ = min(states, key=lambda s: abs(s[2] - V))
     ev, _, _ = corpus.restore_state(path)
     return ev, k, Vk, None
 
@@ -83,14 +87,17 @@ def write(ck, n, L, seed, out, base, frames=200, dv=None):
     paths = sorted(glob.glob(os.path.join(ck, "step*.fe")))
     if not paths:
         sys.exit(f"no states (stepNNNN.fe) in {ck}")
-    # (the volume is body 1's, the one the run drains: pieces cut off keep theirs)
+    # (the liquid: body 1, the one the run drains, and the trapped bodies,
+    # cut off, at the volumes they hold)
     kept = []
     for path in paths:
         ev, v0, _ = corpus.restore_state(path[:-3])
-        kept.append((int(os.path.basename(path)[4:8]), path[:-3], float(ev.body(1).volume)))
+        volumes = np.asarray(ev.bodies().volume)
+        kept.append((int(os.path.basename(path)[4:8]), path[:-3], float(volumes.sum()),
+                     float(volumes.sum() - ev.body(1).volume)))
     # (at a fold the run falls at one volume and the branch may turn back a
     # little: the volumes it has got down to)
-    low = np.minimum.accumulate([V for *_, V in kept])
+    low = np.minimum.accumulate([V for _, _, V, _ in kept])
     if frames is None and dv is None:
         wanted = [(i, None) for i in range(len(kept))]
     else:
@@ -102,7 +109,7 @@ def write(ck, n, L, seed, out, base, frames=200, dv=None):
     grids, top, as_is = [], None, 0
     with h5py.File(os.path.join(out, h5name), "w") as h5:
         for j, (i, V) in enumerate(wanted):
-            k, path, Vk = kept[i]
+            k, path, Vk, _ = kept[i]
             ev, v0, _ = corpus.restore_state(path)
             label, vol = f"step {k}", Vk if V is None else V
             if V is not None and abs(Vk - V) > 1e-6*v0:
@@ -115,6 +122,9 @@ def write(ck, n, L, seed, out, base, frames=200, dv=None):
             f = np.asarray(m.facets, np.int64)
             g = h5.create_group(f"s{j:04d}")
             g["xyz"], g["tri"], g["z"] = x, f, x[:, 2]
+            # (each facet's liquid: its body, a cluster, and whether trapped)
+            body = np.asarray(m.facet_bodies).max(axis=1)
+            g["body"], g["trapped"] = body.astype(np.int64), (body > 1).astype(np.int64)
             grids.append((j, len(x), len(f), (v0 - vol)/v0, label))
             if top is None:
                 top = float(x[:, 2].max()) + 0.2
@@ -138,6 +148,12 @@ def write(ck, n, L, seed, out, base, frames=200, dv=None):
                 '    </Geometry>',
                 '    <Attribute Name="height" AttributeType="Scalar" Center="Node">',
                 f'     <DataItem Dimensions="{nv}" {item.format("Float")}/z</DataItem>',
+                '    </Attribute>',
+                '    <Attribute Name="body" AttributeType="Scalar" Center="Cell">',
+                f'     <DataItem Dimensions="{nf}" {item.format("Int")}/body</DataItem>',
+                '    </Attribute>',
+                '    <Attribute Name="trapped" AttributeType="Scalar" Center="Cell">',
+                f'     <DataItem Dimensions="{nf}" {item.format("Int")}/trapped</DataItem>',
                 '    </Attribute>',
                 '   </Grid>']
     xml += ['  </Grid>', ' </Domain>', '</Xdmf>']

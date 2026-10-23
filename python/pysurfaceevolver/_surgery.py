@@ -3963,7 +3963,7 @@ def _give_targets(ev, held: list) -> str:
                  for i in fixed if (fb == i).any()}
         if not reach:
             continue
-        into = min(reach, key=reach.get)
+        into = min(reach, key=lambda i: reach[i])
         body = ev.body(into)
         body.target = body.target + target
         gone.append(f"{b}'s {target:.2g} to {into}")

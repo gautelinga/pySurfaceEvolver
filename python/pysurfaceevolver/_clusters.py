@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Dict, List, NamedTuple, Optional, Sequence
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence
 
 import numpy as np
 
@@ -104,6 +104,7 @@ def _solids(ev) -> "tuple[list, list]":
         shape = getattr(w, "shape", None)
         if shape is None:
             continue
+        data: tuple
         try:
             if shape[0] == "plane":
                 data = (np.asarray(shape[1], float), float(shape[2]))
@@ -116,9 +117,9 @@ def _solids(ev) -> "tuple[list, list]":
                 continue
         except (TypeError, ValueError):
             continue            # (a shape following a parameter)
-        name = _base(key)
-        if name not in seen:
-            seen.add(name)
+        base = _base(key)
+        if base not in seen:
+            seen.add(base)
             solids.append((key, shape[0], data))
     known = {_base(k) for k, _, _ in solids}
     nums, _, dist, names = ev._constraint_gaps()
@@ -228,7 +229,7 @@ def _crossings(v: np.ndarray, f: np.ndarray, shape) -> "tuple[np.ndarray, ...]":
         idx = np.zeros((int(ok.sum()), 3), np.intp)
         idx[:, i], idx[:, j], idx[:, k] = gi[ok], gj[ok], seg[ok]
         out[0].append(np.full(len(idx), k))
-        out[1].append(np.ravel_multi_index(idx.T, shape))
+        out[1].append(np.ravel_multi_index(tuple(idx.T), shape))
         out[2].append((z - seg)[ok])
         out[3].append(use[rep[ok]])
         out[4].append(np.sign(normal[use[rep[ok]], k]).astype(np.intp))
@@ -268,14 +269,15 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
     for key in outlet:
         on = np.asarray(ev.on_constraint(key))
         hit = on[f].any(axis=1)
-        for s in (0, 1):
-            by_vertex[piece[hit & (piece[:, s] >= 0), s]] = True
+        for j in (0, 1):
+            by_vertex[piece[hit & (piece[:, j] >= 0), j]] = True
     if other:
         warnings.warn(f"the surface touches constraints that aren't plane, sphere or "
                       f"cylinder walls, or has a border off them "
                       f"({', '.join(map(str, other[:5]))}): its liquid's clusters are its "
                       "surface pieces", UserWarning, stacklevel=3)
-        return _gather(piece, body_of, components(npieces, [], []), by_vertex,
+        alone = np.zeros(0, np.intp)
+        return _gather(piece, body_of, components(npieces, alone, alone), by_vertex,
                        np.zeros(npieces, np.intp), {}, 0.0, 0)
     # (the descents' edge scale, not set here where it isn't yet: that is
     # the first descent's to set)
@@ -366,9 +368,9 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
     reached[:npieces] = by_vertex
     from ._surgery import _base
     for key in outlet:
-        for k in near_walls:
-            if _base(k) == _base(key):
-                reached |= near_walls[k] > 0
+        for wall in near_walls:
+            if _base(wall) == _base(key):
+                reached |= near_walls[wall] > 0
     return _gather(piece, body_of, label, reached, size, near_walls, s, mixed)
 
 
@@ -512,7 +514,7 @@ def reconcile(ev) -> None:
             counts = {p: (int((on_wall & ((fb == b) & (side == p[1])).any(axis=1)[:, None])
                               .sum()), int(c.walls.get(k, np.zeros(len(c.bodies)))[p[1]]))
                       for p in of_body[b]}
-            best = max(counts, key=counts.get)
+            best = max(counts, key=lambda p: counts[p])
             if counts[best] == (0, 0):
                 continue
             const[number[best[1]]] += v
