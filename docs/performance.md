@@ -200,7 +200,16 @@ the same energies to round-off; seconds (measured 2026-10-24):
 | cube, Lagrange 2, 24k facets | `relax()` | 0.73 | 0.76 | +4% |
 | cube, Lagrange 2, 98k facets | `relax()` | 4.13 | 4.21 | +2% |
 
-The Newton step's slowdown is not yet explained.
+Most of the Newton step's slowdown was the step's following of moving contact and
+triple lines (after 0.7.5): after every step it copied every vertex and looked at
+every facet to see whether the mesh beside a line had been squashed, on surfaces
+without lines too. It now looks only at the facets beside a line (kept until the
+mesh changes) and copies nothing on a surface without them, with the same results
+to the bit: the Newton step's instructions are back to 0.7.5's (98k facets), and
+switching the following on and off within one run no longer changes its time
+(before: 6% at 393k facets). Timed in separate runs, the 393k step is still about
+5% slower than 0.7.5's with the following on (the same instructions and results;
+not yet explained).
 
 ## Threads and the Newton solver
 

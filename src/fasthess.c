@@ -1657,12 +1657,74 @@ static int follow_disabled(void)
   return disabled;
 }
 
+/* The facets that can start the moves: those with a corner that may have
+   fewer than two mesh directions (on a constraint or a wire, fixed, or with
+   other than the one Newton freedom of a vertex inside a surface: on a
+   triple line). A corner that is none of these has two (its tangent plane
+   less its normal), so a squashed facet without one is inside a surface,
+   and then no step gets the moves (see above): a step that squashes none of
+   these facets gets none, whatever it does to the rest. Kept until the
+   topology, an attribute, the counts or hessian_normal change (rebuilt and
+   compared with PYSE_CHECK_FACET_CACHE). A closed surface has none, and
+   pays nothing: the plain cube's Newton step at 393k facets was 6% slower
+   with every vertex copied and every facet looked at, each step. */
+static facet_id *fw_cand = NULL;
+static long fw_ncand = 0, fw_cand_size = 0;
+static long fw_key[6] = {-1,-1,-1,-1,-1,-1};
+
+static int follow_line_corner(vertex_id v_id)
+{ struct hess_verlist *vh = get_vertex_vhead(v_id);
+  return (get_vattr(v_id) & (CONSTRAINT|FIXED|BOUNDARY)) || !vh || vh->freedom != 1 || !vh->proj;
+}
+
+static long follow_build(facet_id **out, long *size)
+{ facet_id f_id;
+  long n = 0;
+  FOR_ALL_FACETS(f_id)
+  { facetedge_id fe = get_facet_fe(f_id);
+    int k;
+    for ( k = 0 ; k < FACET_VERTS ; k++, fe = get_next_edge(fe) )
+      if ( follow_line_corner(get_fe_tailv(fe)) ) break;
+    if ( k == FACET_VERTS ) continue;
+    if ( n == *size )
+    { long want = *size ? 2*(*size) : 1024;
+      facet_id *p = (facet_id*)realloc(*out,want*sizeof(facet_id));
+      if ( !p ) return -1;
+      *out = p;
+      *size = want;
+    }
+    (*out)[n++] = f_id;
+  }
+  return n;
+}
+
+static long follow_candidates(void)
+{ long key[6];
+  key[0] = top_timestamp; key[1] = fl_attr_stamp; key[2] = web.skel[FACET].count;
+  key[3] = web.skel[VERTEX].count; key[4] = (long)web.skel[VERTEX].max_ord;
+  key[5] = hessian_normal_flag;
+  if ( memcmp(key,fw_key,sizeof key) != 0 )
+  { fw_ncand = follow_build(&fw_cand,&fw_cand_size);
+    memcpy(fw_key,key,sizeof key);
+    if ( fw_ncand < 0 ) fw_key[0] = -1;
+  }
+  else if ( fl_check() )
+  { facet_id *again = NULL;
+    long size = 0, n = follow_build(&again,&size);
+    if ( n != fw_ncand || (n > 0 && memcmp(again,fw_cand,n*sizeof(facet_id)) != 0) )
+      fprintf(stderr,"follow: stale line facets (%ld kept, %ld now)\n",fw_ncand,n);
+    free(again);
+  }
+  return fw_ncand;
+}
+
 int fl_follow_begin(void)
 { vertex_id v_id;
   long n;
   if ( fw_off || follow_disabled() || web.representation != SOAPFILM || web.symmetry_flag || SDIM != 3
        || (web.modeltype != LINEAR && web.modeltype != QUADRATIC) )
     return 0;
+  if ( follow_candidates() <= 0 ) return 0;    /* nothing can start the moves */
   n = (long)(web.skel[VERTEX].max_ord + 1)*SDIM;
   if ( n > fw_size )
   { REAL *p = (REAL*)realloc(fw_old,n*sizeof(REAL));
@@ -1734,6 +1796,41 @@ static int mesh_directions(vertex_id v_id, struct hess_verlist *vh, REAL *m)
   return nb;
 }
 
+/* how far the plain step squashes the facet with corners v (its area vector
+   after along the one before, over the one before squared), into *q, and the
+   corners' ordinals into c; 0 for a facet of worse shape than FOLLOW_SHAPE
+   before the step, or of no area (see above) */
+static int follow_squash(const vertex_id *v, REAL *q, long *c)
+{ REAL a0[MAXCOORD], b0[MAXCOORD], a1[MAXCOORD], b1[MAXCOORD], n0[MAXCOORD], n1[MAXCOORD];
+  REAL cc[MAXCOORD], *x0, *x1, *x2, *y0, *y1, *y2, nn, e2;
+  vertex_id v0 = v[0], v1 = v[1], v2 = v[2];
+  int j;
+  c[0] = loc_ordinal(v0); c[1] = loc_ordinal(v1); c[2] = loc_ordinal(v2);
+  x0 = fw_old + c[0]*SDIM; x1 = fw_old + c[1]*SDIM; x2 = fw_old + c[2]*SDIM;
+  y0 = get_coord(v0); y1 = get_coord(v1); y2 = get_coord(v2);
+  for ( j = 0 ; j < SDIM ; j++ )
+  { a0[j] = x1[j] - x0[j]; b0[j] = x2[j] - x0[j];
+    a1[j] = y1[j] - y0[j]; b1[j] = y2[j] - y0[j];
+    cc[j] = b0[j] - a0[j];
+  }
+  cross_prod(a0,b0,n0);
+  cross_prod(a1,b1,n1);
+  nn = SDIM_dot(n0,n0);
+  e2 = SDIM_dot(a0,a0) + SDIM_dot(b0,b0) + SDIM_dot(cc,cc);
+  /* shape before the step: 1 equilateral, 0 a sliver */
+  if ( !(e2 > 0.0) || 2.0*sqrt(3.0)*sqrt(nn)/e2 < FOLLOW_SHAPE || !(nn > 0.0) ) return 0;
+  *q = SDIM_dot(n0,n1)/nn;
+  return 1;
+}
+
+/* a facet's corners: its facet edge's tail, its head, the next edge's head */
+static void follow_walk(facet_id f_id, vertex_id *v)
+{ facetedge_id fe = get_facet_fe(f_id);
+  v[0] = get_fe_tailv(fe);
+  v[1] = get_fe_headv(fe);
+  v[2] = get_fe_headv(get_next_edge(fe));
+}
+
 void fl_follow_end(void)
 { vertex_id v_id;
   edge_id e_id;
@@ -1743,6 +1840,30 @@ void fl_follow_end(void)
   REAL *d = NULL, *T = NULL, *Tn = NULL, *G = NULL, *M = NULL, *h = NULL;
   char *dim = NULL;
   REAL slip = 0.0, squash = 1.0, w;
+
+  /* how far the plain step squashes the facets of fair shape (corners only):
+     first the facets beside a line (follow_candidates), since a step that
+     squashes none of them gets no moves (near an equilibrium, nearly every
+     step); then all of them, for how far, and whether one inside a surface
+     is squashed (below) */
+  { facet_id f_id;
+    long k;
+    for ( k = 0 ; k < fw_ncand ; k++ )
+    { REAL q;
+      long c[3];
+      vertex_id v[3];
+      follow_walk(fw_cand[k],v);
+      if ( follow_squash(v,&q,c) && q < squash ) squash = q;
+    }
+    if ( !(squash < FOLLOW_NONE) ) return;
+    FOR_ALL_FACETS(f_id)
+    { REAL q;
+      long c[3];
+      vertex_id v[3];
+      follow_walk(f_id,v);
+      if ( follow_squash(v,&q,c) && q < squash ) squash = q;
+    }
+  }
 
   /* the movable corner vertices, their mesh directions and neighbours */
   list = (long*)malloc(nv*sizeof(long));
@@ -1771,44 +1892,18 @@ void fl_follow_end(void)
     list[n++] = o;
   }
   if ( n == 0 ) goto done;
-  /* how far the plain step squashes the facets of fair shape (corners
-     only), and whether one inside a surface is among them (see above) */
+  /* whether a squashed facet is inside a surface (all its corners with two
+     mesh directions): then none (see above) */
   { facet_id f_id;
-    int inside = 0;
     FOR_ALL_FACETS(f_id)
-    { facetedge_id fe = get_facet_fe(f_id);
-      vertex_id c[3];
-      REAL a0[MAXCOORD], b0[MAXCOORD], a1[MAXCOORD], b1[MAXCOORD], n0[MAXCOORD], n1[MAXCOORD];
-      REAL *x0, *x1, *x2, *y0, *y1, *y2, nn;
-      c[0] = get_fe_tailv(fe);
-      c[1] = get_fe_headv(fe);
-      c[2] = get_fe_headv(get_next_edge(fe));
-      x0 = fw_old + loc_ordinal(c[0])*SDIM;
-      x1 = fw_old + loc_ordinal(c[1])*SDIM;
-      x2 = fw_old + loc_ordinal(c[2])*SDIM;
-      y0 = get_coord(c[0]); y1 = get_coord(c[1]); y2 = get_coord(c[2]);
-      for ( j = 0 ; j < SDIM ; j++ )
-      { a0[j] = x1[j] - x0[j]; b0[j] = x2[j] - x0[j];
-        a1[j] = y1[j] - y0[j]; b1[j] = y2[j] - y0[j];
-      }
-      cross_prod(a0,b0,n0);
-      cross_prod(a1,b1,n1);
-      nn = SDIM_dot(n0,n0);
-      { REAL e2 = SDIM_dot(a0,a0) + SDIM_dot(b0,b0), cc[MAXCOORD];
-        for ( j = 0 ; j < SDIM ; j++ ) cc[j] = b0[j] - a0[j];
-        e2 += SDIM_dot(cc,cc);
-        /* shape before the step: 1 equilateral, 0 a sliver */
-        if ( !(e2 > 0.0) || 2.0*sqrt(3.0)*sqrt(nn)/e2 < FOLLOW_SHAPE ) continue;
-      }
-      if ( nn > 0.0 )
-      { REAL q = SDIM_dot(n0,n1)/nn;
-        if ( q < squash ) squash = q;
-        if ( q < FOLLOW_NONE && dim[loc_ordinal(c[0])] >= 2 && dim[loc_ordinal(c[1])] >= 2
-             && dim[loc_ordinal(c[2])] >= 2 )
-          inside = 1;
-      }
+    { REAL q;
+      long c[3];
+      vertex_id v[3];
+      follow_walk(f_id,v);
+      if ( follow_squash(v,&q,c) && q < FOLLOW_NONE
+           && dim[c[0]] >= 2 && dim[c[1]] >= 2 && dim[c[2]] >= 2 )
+        goto done;
     }
-    if ( !(squash < FOLLOW_NONE) || inside ) goto done;
   }
   /* neighbours (corner to corner), CSR by position in list */
   for ( i = 0 ; i < n ; i++ ) start[i] = 0;
