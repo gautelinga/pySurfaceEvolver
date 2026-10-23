@@ -170,11 +170,13 @@ The liquid just before the jump (left) and just after it (right), at the same vo
   ends with a warning, "the run's budget spent". A longer run, or a finer mesh's,
   passes a larger `budget` (or `None`). A descent that goes on past 100000 passes
   counts as failed, and the run backs up.
-- **Liquid cut off is not yet held at its own volume.** A piece a cut leaves can be
-  folded back into the body it shares the most solids with (in a pack, nearly always
-  the draining one); a dry patch that cuts a region off doesn't make it a body of
-  its own, so it drains with the rest; and a merge keeps the measured volume
-  continuous by changing the body's constant, which hides what the mesh lost. So
-  the liquid left behind (the residual saturation after breakthrough) and the
-  volumes after the first cut-off are not to be trusted yet; the steps up to it,
-  each an equilibrium at its volume, are.
+- **Liquid cut off keeps its volume.** After every change the liquid's clusters
+  (its surface's pieces, joined where the liquid between the walls joins them, found
+  on a grid of the pore space at half the edge length) are made bodies. The liquid
+  reaching `outlet=` (here `"bottom"`) is the run's body and drains; every other
+  cluster is held at the volume it had when it was cut off and relaxed with the rest
+  at each step, rejoining the run's body if it merges with it. `Step.trapped` is
+  their volume. The run ends, with a warning, when no liquid reaches the outlet. A
+  layer of liquid thinner than the grid doesn't join pieces, and where the surface
+  touches walls other than planes, spheres and cylinders, the clusters are its
+  surface pieces (with a warning).

@@ -17,7 +17,15 @@ work (`_core.work()`, passes over the surface; deterministic): a descent at 1000
 (12-17): time runs on an idle machine, or compare passes. A laptop suspend shows as the
 same ~4100 s gap in every log.
 
-**Next:** trapped liquid (section below), before releasing.
+**Trapped liquid done (2026-10-23, section below):** `outlet=`, `Step.trapped`,
+`_clusters.py`. Wide set (`~/pyse_scratch/wide_trap`): 18/18 to breakthrough at 1 thread,
+3 back-ups; 0-1.12 of liquid trapped in 0-17 bodies, held to ~1e-15; no reconcile changed
+the targets' total; passes 5.22M vs wide_w3's 4.97M (+5%); wall time not comparable
+(loaded machine), an idle rerun of s4_t25 125 s vs 165 s; clusters cost ~2.5 s a run.
+Small set (`~/pyse_scratch/small_trap`): 18/18, books to 1.6e-11, nothing trapped.
+Breakthrough volumes moved in a few runs (s0_t20 49.2 vs 53.6).
+
+**Next:** merge/push/release (the user).
 
 **Open:** s1_t15 just over the 15-minute target; branch steps are ~60% of a run's time,
 and failed correctors about half their Newton work (a stall exit made them cheaper but
@@ -199,7 +207,7 @@ Open, for the user to pick (proposed 2026-10-13, updated after 0.7.5):
 
 Ask the user before each step; run scripts with OMP_NUM_THREADS=4 or less.
 
-## Next: trapped liquid keeps its volume (planned 2026-10-23, not started)
+## Done: trapped liquid keeps its volume (planned and done 2026-10-23)
 
 Before the next release (the user: fix this first). Today a piece a cut leaves can be
 folded back into the draining body (`_rejoin_strays`), dry patches/contacts/sheet

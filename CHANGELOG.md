@@ -58,13 +58,16 @@
   bridge, a dry patch opening on a sphere inside a draining drop; a pilot bead-pack
   pore drained from volume 0.69 to 0.05 through ten drying changes (a coarse mesh;
   one level finer it got to 0.41).
-  **Limitation:** liquid cut off is not yet held at its own volume in general. A
-  piece a cut leaves can be folded back into the body it shares the most solids with
-  (in a bead pack, nearly always the draining one), a dry patch that cuts a region
-  off doesn't make it a body of its own, and a merge keeps the measured volume
-  continuous by changing the body's constant, which hides what the mesh lost. The
-  residual liquid after breakthrough isn't to be trusted yet (docs:
-  drainage_topology).
+  Liquid cut off keeps its volume: after every change the liquid's clusters (its
+  surface's pieces joined through the liquid between the walls, found on a grid of
+  the pore space) are made bodies, each trapped one held at its volume and relaxed
+  every step; a trapped cluster that merges with the run's body rejoins it, and a
+  crumb's liquid goes to the nearest body. `arclength(..., outlet=)` names the
+  wall(s) the draining liquid reaches (without it, the largest cluster drains); the
+  run ends, with a warning, when no liquid reaches the outlet. `Step.trapped` is the
+  trapped clusters' volume. On the 16-bead packs to breakthrough (18/18), trapped
+  bodies stay at their targets to 1e-15 and the targets' total changes only by the
+  run's steps (to 2e-11).
 
 - `constraints.sphere(axis=...)`: the sphere's integrals singular only at its north
   pole, `center + radius*axis`, so that it can point at a neighbouring bead where a
@@ -408,6 +411,11 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- Bodies keep their volume targets when a change makes new bodies: Evolver's
+  `rebody` reset every body's target to its current volume, so a fixed body that
+  had not relaxed to its target lost the difference. Bodies removed whole give their
+  target to the nearest fixed body instead of dropping it.
 
 - Descents: a dry patch closed in the tidying is kept shut (its contact not made
   again there) for 20 iterations, as a change put off is, not for the rest of the
