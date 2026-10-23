@@ -503,6 +503,13 @@
   spike's tip may be up to three vertices joined only to the ring and each other: a
   tip of two, cut as a neck, left two vertices ("2 left") and the neck uncut.
 
+- Where a descent's run passes the surface through itself and no event within the
+  events' factor is there, the change made instead is looked for there within twice
+  the factor (elsewhere still within it): a 16-bead run's two tongues of contact line
+  on a side wall, 0.55 edges apart, crossed in every run of three gradient steps with
+  no event there, the changes were made far off, and the descent crept on a step at a
+  time for 2000 s until it gave up ("no stable state").
+
 - The relaxing after a cut (`pinch_off`'s, and `arclength`'s after a neck it cuts)
   makes no changes of topology of its own, as a descent's runs don't: `relax()`'s
   pops and edge collapses after a sheet's footprint on a side wall was dried left a

@@ -3277,8 +3277,9 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
     0.03 apart, and the descent, held back run after run, ran away. Where
     the last run judged crossed went through itself (_note_crossed), the
     events there come first, nearest the place first (the changes made
-    instead had been elsewhere). (Within factor's gaps only: taken out to
-    two edges there, a pack's descent made contacts 0.35 from beads;
+    instead had been elsewhere), those within twice factor's gaps there
+    where none is within it. (Within factor's gaps only elsewhere: taken
+    out to two edges, a pack's descent made contacts 0.35 from beads;
     runs that cross are followed in shorter ones first, see _descend.)
     ``later``: whether an event's change is put off (_put_off), tried after
     the others there or elsewhere; ``other``: whether to make its other
@@ -3294,6 +3295,16 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
             d = float(np.linalg.norm(places - np.asarray(e.where, float), axis=1).min())
             if d < 2*float(e.scale):
                 there.append((d, e))
+        if not there:
+            # (none there within factor: those within twice it, there only;
+            # a pack's two tongues of contact line on a side wall, 0.55
+            # edges apart, crossed in every run of three gradient steps, no
+            # event there, and the descent crept on a step a run, changes
+            # made far off, for 2000 s)
+            for e in ev.events(2*factor):
+                d = float(np.linalg.norm(places - np.asarray(e.where, float), axis=1).min())
+                if d < 2*float(e.scale):
+                    there.append((d, e))
         there.sort(key=lambda t: t[0])
         first = {key(e) for _, e in there}
         found = [e for _, e in there] + [e for e in found if key(e) not in first]

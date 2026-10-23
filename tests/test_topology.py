@@ -1193,6 +1193,24 @@ def test_settling_makes_no_changes_of_topology_of_its_own():
     assert held and all(held) and not ev._topology_held
 
 
+def test_where_a_run_crossed_the_change_there_is_looked_for_further(monkeypatch):
+    # two spheres 0.3 apart on edges of 0.44 (0.68 edges: no event within
+    # half an edge); where the last run went through itself there, the
+    # touch there within twice that is the change tried (a pack's tongues
+    # of contact line 0.55 edges apart crossed in every run, no event
+    # there); elsewhere, nothing
+    from pysurfaceevolver import _surgery
+    ev = _two_spheres(0.3)
+    assert not ev.events(0.5)
+    tried = []
+    monkeypatch.setattr(_surgery, "_try_change", lambda ev, e, *args: tried.append(e) or "")
+    _surgery._CROSSED_AT[:] = [np.array([[3.0, 0.0, 0.0]])]
+    assert _surgery._change_nearest(ev, 0.5, None) is None and not tried
+    _surgery._CROSSED_AT[:] = [np.zeros((1, 3))]
+    made = _surgery._change_nearest(ev, 0.5, None)
+    assert made is not None and made.kind == "touch" and tried == [made]
+
+
 def test_a_run_evolver_fails_in_is_undone_and_implausible():
     # (a pack's relax() run met an internal error, cone_analyze on a mesh a
     # failed change left; the descent goes on as from a run gone wrong)
