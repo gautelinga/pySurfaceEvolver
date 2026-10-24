@@ -305,6 +305,9 @@ def make_datafile(
 
     # ---- constraints and boundaries ----------------------------------------
     cons = {_key(k, "constraint"): spec for k, spec in (constraints or {}).items()}
+    slab_lines = ""
+    if periods is not None:
+        cons, slab_lines = _periodic.assemble(cons, periods)
     if vertex_constraints is not None and not isinstance(vertex_constraints, Mapping):
         if len(vertex_constraints) != nv:
             raise ValueError("vertex_constraints as a sequence needs one entry per vertex")
@@ -330,7 +333,8 @@ def make_datafile(
     declared = set(parameters or {}) | set(re.findall(
         r"^\s*(?:optimizing_)?parameter\s+(\w+)", header, re.MULTILINE | re.I))
     # the least contact angle relax() can raise small ones to (constraints.ANGLE_FLOOR)
-    floor = any(getattr(spec, "floored", False) for spec in cons.values()) \
+    floor = (any(getattr(spec, "floored", False) for spec in cons.values())
+             or ANGLE_FLOOR in slab_lines) \
         and ANGLE_FLOOR not in declared
     declared |= {ANGLE_FLOOR} if floor else set()
     for c, spec in cons.items():
@@ -451,7 +455,6 @@ def make_datafile(
     if header:
         out.append(header.rstrip() + "\n")
     if periods is not None:
-        cons, slab_lines = _periodic.assemble(cons, periods)
         out.append(slab_lines)
     # spheres without poles (constraints.sphere(gauge="flux")): their facet
     # integrals, and every wall's line integrals for them

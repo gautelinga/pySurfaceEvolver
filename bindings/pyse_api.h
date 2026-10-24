@@ -149,6 +149,14 @@ void pyse_native_enable(int on);
    spare). 0 if it can't be registered. */
 int pyse_native_flux(const char *method, int con, int which, int base, const double *bc,
                      int nbc, const double *terms, int nterm);
+/* the flux gauge in a periodic slab (pyse_slabflux.c, _periodic.py) */
+int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *beads,
+                        double floor_angle, double floor_tension, const double *prm,
+                        int ns, const double *stencil, int nh, const double *H,
+                        const double *pinv);
+int pyse_slabflux_key(const char *method, int con, int which, int kind, int wall);
+int pyse_slabflux_probe(const double *x, double *out);
+int pyse_slabflux_field(int kind, int wall, const double *x, double *out);
 /* the flux gauge's sums over the spheres with AVX2 where the processor has
    it (1, the default) or the scalar kernels (0), which agree to the bit;
    returns the previous setting */

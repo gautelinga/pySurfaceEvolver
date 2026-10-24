@@ -706,6 +706,40 @@ NB_MODULE(_core, m) {
                                  terms.data(), int(terms.size()/11)));
   }, "method"_a, "con"_a, "which"_a, "base"_a, "bc"_a, "terms"_a,
   "Register a flux-gauge integrand for evaluation in C (see _flux.native_specs).");
+  m.def("slabflux_setup", [](std::vector<double> L, double zf, std::vector<double> beads,
+                             double floor_angle, double floor_tension, std::vector<double> prm,
+                             std::vector<double> stencil, int nh, std::vector<double> H,
+                             std::vector<double> pinv) {
+    Lock lock;
+    if ( L.size() != 2 || beads.size() % 6 || prm.size() != 7 || stencil.size() % 3
+         || pinv.size() != size_t(nh)*stencil.size() || nh <= 0 || H.size() % size_t(nh) )
+      throw std::invalid_argument("slabflux_setup(): bad sizes");
+    return bool(pyse_slabflux_setup(L.data(), zf, int(beads.size()/6), beads.data(), floor_angle,
+                                    floor_tension, prm.data(), int(stencil.size()/3),
+                                    stencil.data(), nh, H.data(), pinv.data()));
+  }, "L"_a, "zf"_a, "beads"_a, "floor_angle"_a, "floor_tension"_a, "prm"_a, "stencil"_a,
+     "nh"_a, "H"_a, "pinv"_a,
+     "The flux gauge's fields in a periodic slab (_periodic.slab_flux): set up.");
+  m.def("slabflux_key", [](std::string method, int con, int which, int kind, int wall) {
+    Lock lock;
+    return bool(pyse_slabflux_key(method.c_str(), con, which, kind, wall));
+  }, "method"_a, "con"_a, "which"_a, "kind"_a, "wall"_a,
+     "Register a periodic flux-gauge integrand (kind 0 facets' volume, 1 their wetting, "
+     "2 a sphere's energy, 3 its content).");
+  m.def("slabflux_probe", [](std::vector<double> x) {
+    Lock lock;
+    double out[2*3*8];
+    if ( x.size() != 3 ) throw std::invalid_argument("slabflux_probe(): a point");
+    int n = pyse_slabflux_probe(x.data(), out);
+    return std::vector<double>(out, out + 6*(n > 0 ? n : 0));
+  }, "x"_a, "The periodic flux gauge's class fields at x by its regions and by Ewald's sum.");
+  m.def("slabflux_field", [](int kind, int wall, std::vector<double> x) {
+    Lock lock;
+    double out[39];
+    if ( x.size() != 3 ) throw std::invalid_argument("slabflux_field(): a point");
+    if ( !pyse_slabflux_field(kind, wall, x.data(), out) ) return std::vector<double>();
+    return std::vector<double>(out, out + 39);
+  }, "kind"_a, "wall"_a, "x"_a, "A periodic flux-gauge integrand at x: value, derivatives (3+9+27).");
   m.def("native_formula", [](int con, int kind, std::vector<double> p) {
     Lock lock;
     if ( p.size() != 4 )

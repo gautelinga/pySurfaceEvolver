@@ -45,7 +45,8 @@ def _bead(periods, gauge="axis", zf=0.0):
     top, bot = np.asarray(sh.rims["top"]), np.asarray(sh.rims["bottom"])
     d = v[top] - c
     v[top] = c + R*d/np.linalg.norm(d, axis=1)[:, None]
-    kw = dict(axis=(0, 0, 1)) if gauge == "axis" else dict(wet_poles=("south",))
+    kw = (dict(axis=(0, 0, 1)) if gauge == "axis" else dict(gauge="flux") if gauge == "flux"
+          else dict(wet_poles=("south",)))
     cons = {"bottom": C.plane((0, 0, 1), zf, contact_angle=50.0),
             "bead": C.sphere(tuple(c), R, contact_angle=40.0, **kw)}
     ev = pyse.Evolver()
@@ -107,7 +108,8 @@ def test_walls_a_slab_cant_have():
     for cons, match in [({"wall": C.plane((1, 0, 0), 0.0)}, "floor"),
                         ({"low": C.plane((0, 0, 1), 0.0), "high": C.plane((0, 0, 1), 1.0)},
                          "one floor"),
-                        ({"ball": C.sphere((0, 0, 1), 0.5, gauge="flux")}, "flux")]:
+                        ({"ball": C.sphere((0, 0, 1), 0.5, gauge="flux"),
+                          "bead": C.sphere((0, 0, 3), 0.5, axis=(0, 0, 1))}, "mixed")]:
         with pytest.raises(ValueError, match=match):
             pyse.make_datafile(v, [[0, 1, 2]], constraints=cons, periods=PERIODS)
 
@@ -124,3 +126,62 @@ def test_a_vertex_moved_to_another_image_keeps_the_surface():
     assert np.allclose(m.vertices[5] - x, [PERIODS[0], -PERIODS[1], 0])
     assert abs(ev.energy - e) < 1e-14 and abs(ev.body(1).volume - v) < 1e-14
     assert m.edge_lengths().max() < 0.2
+
+
+def _bead_flux(periods):
+    return _bead(periods, gauge="flux")
+
+
+def test_the_flux_gauges_fields_are_ewalds_sum():
+    # (the regions' near sources and polynomials against Ewald's sum over the
+    # lattice, at points around the bead and its mirror; derivatives against
+    # differences)
+    from pysurfaceevolver import _core
+    _bead(PERIODS, gauge="flux")
+    rng = np.random.default_rng(0)
+    for x in rng.uniform([0, 0, 0.05], [PERIODS[0], PERIODS[1], 1.5], (30, 3)):
+        if min(np.linalg.norm(x - [a, b, 0.55]) for a in (0, PERIODS[0]) for b in (0, PERIODS[1])) < 0.5:
+            continue
+        o = np.array(_core.slabflux_probe(list(x)))
+        n = len(o)//2
+        assert np.abs(o[:n] - o[n:]).max() < 1e-9*np.abs(o[n:]).max()
+    for kind, x in [(0, [0.6, 0.7, 0.3]), (1, [0.6, 0.7, 0.3]), (2, [0.1, 0.2, 0.1]),
+                    (3, [0.1, 0.2, 0.1])]:
+        f = lambda y: np.array(_core.slabflux_field(kind, 0, list(y)))
+        o, e = f(x), 1e-5
+        d1 = np.array([(f(x + e*d)[:3] - f(x - e*d)[:3])/(2*e) for d in np.eye(3)]).T
+        d2 = np.array([(f(x + e*d)[3:12] - f(x - e*d)[3:12]).reshape(3, 3)/(2*e)
+                       for d in np.eye(3)]).transpose(1, 2, 0)
+        assert np.abs(o[3:12].reshape(3, 3) - d1).max() < 1e-8
+        assert np.abs(o[12:].reshape(3, 3, 3) - d2).max() < 1e-7
+
+
+def test_the_periodic_flux_gauge_is_the_flux_gauge_to_its_quadrature():
+    # (the images' and the mirror's fields through the facets by Gauss
+    # points: the same surface's values apart by h^4, 16 times less a
+    # refinement)
+    gaps = []
+    for refine in (0, 1, 2):
+        found = []
+        for periods in (None, PERIODS):
+            ev = _bead_flux(periods)
+            for _ in range(refine):
+                ev.command("r")
+            found.append(np.array([ev.energy, ev.body(1).volume]))
+        gaps.append(np.abs(found[0] - found[1]))
+    assert gaps[0].max() < 1e-6
+    assert np.all(gaps[1] < gaps[0]/10) and np.all(gaps[2] < gaps[1]/10)
+
+
+@pytest.mark.parametrize("gauge", ["axis", "flux"])
+def test_newton_steps_far_from_equilibrium_follow_the_lines(gauge):
+    # (the Newton step's line following, once off under any symmetry: the
+    # slab's steps went their own way, and diverged)
+    found = []
+    for periods in (None, PERIODS):
+        ev = _bead(periods, gauge=gauge)
+        for c in ["g 1"]*3 + ["hessian"]*5:
+            ev.command(c)
+        found.append((ev.energy, ev.residual()))
+    assert found[1][1] < 1e-8
+    assert abs(found[0][0] - found[1][0]) < (1e-12 if gauge == "axis" else 1e-6)

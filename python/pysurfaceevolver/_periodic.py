@@ -117,8 +117,6 @@ def assemble(cons: Dict[Any, Any], periods) -> Tuple[Dict[Any, Any], str]:
     floor_key, z_f, k_f = None, 0.0, None
     for key, spec in cons.items():
         shape = getattr(spec, "shape", None)
-        if getattr(spec, "flux", None) is not None:
-            raise ValueError(f"constraint {key}: spheres with gauge='flux' aren't periodic yet")
         if shape is None:
             raise ValueError(f"constraint {key}: with periods, walls must come from "
                              "pysurfaceevolver.constraints (a floor plane and spheres)")
@@ -137,6 +135,10 @@ def assemble(cons: Dict[Any, Any], periods) -> Tuple[Dict[Any, Any], str]:
     ke = None
     if k_f:
         ke = f"(-{k_f.times(1.0)})" if k_f.expr is not None else _n(-float(k_f.value or 0.0))
+    flux = [key for key, spec in cons.items()
+            if getattr(spec, "flux", None) is not None or getattr(spec, "slabflux", None)]
+    if flux:
+        return _assemble_flux(cons, flux, floor_key, z_f, k_f)
     out = dict(cons)
     for key, spec in cons.items():
         if getattr(spec, "slab", False):
@@ -196,3 +198,164 @@ def move_near(ev, vertex_ids, points) -> None:
             for v, s in zip(np.asarray(vertex_ids).ravel(), shift) if s.any()]
     if cmds:
         ev.command("; ".join(cmds))
+
+
+def _assemble_flux(cons, flux, floor_key, z_f, k_f) -> Tuple[Dict[Any, Any], str]:
+    """assemble() with spheres of gauge="flux": their fields periodic (the
+    lattice sums, mirrored in the floor), all integrands but the floor's
+    evaluated in C (pyse_slabflux.c, registered at load: slab_flux); the
+    datafile's are placeholders."""
+    from .constraints import ANGLE_FLOOR, ANGLE_FLOOR_TOP
+    spheres = [k for k, spec in cons.items() if k != floor_key]
+    if set(spheres) != set(flux):
+        raise ValueError("with periods, spheres with gauge='flux' can't be mixed with other "
+                         "spheres: mixed gauges (give them all gauge='flux')")
+    small = False
+    wet = bool(k_f)
+    out = dict(cons)
+    for key in spheres:
+        spec = cons[key]
+        data = spec.slabflux or spec.flux
+        c, R, angle, tension = data
+        if isinstance(angle, str):
+            raise ValueError(f"constraint {key}: in a periodic slab, a flux sphere's contact "
+                             "angle must be a number")
+        if angle is not None and np.cos(np.radians(float(angle))) != 0:
+            wet = True
+            small |= 0 < float(angle) < ANGLE_FLOOR_TOP
+        out[key] = dataclasses.replace(spec, flux=None, slabflux=tuple(data), slab=True,
+                                       native=None, content=["0", "0", "0"])
+    if k_f and k_f.expr is not None:
+        if isinstance(cons[floor_key].contact_angle, str):
+            raise ValueError("in a periodic slab with flux spheres, the floor's contact angle "
+                             "must be a number")
+        small = True
+    for key in spheres:
+        if wet:
+            out[key] = dataclasses.replace(out[key], energy=["0", "0", "0"])
+    if floor_key is not None:
+        out[floor_key] = dataclasses.replace(cons[floor_key], energy=None, content=None,
+                                             slab=True, native=None)
+    # (three Gauss points a facet, as _flux's)
+    lines = ["integral_order_2d 2\n",
+             f"method_instance {VOLUME_METHOD} method facet_vector_integral\n",
+             "vector_integrand:\nq1: 0\nq2: 0\n",
+             f"q3: z - {_n(z_f)}\n" if z_f else "q3: z\n",
+             f'volume_method_name "{VOLUME_METHOD}"\n']
+    if wet:
+        lines += [f"quantity {WETTING_QUANTITY} energy method facet_vector_integral global\n",
+                  "vector_integrand:\nq1: 0\nq2: 0\nq3: 0\n"]
+    if small:
+        lines.append(f"// (C raises small angles to {ANGLE_FLOOR})\n")
+    return out, "".join(lines)
+
+
+# the fast sum's settings (pyse_slabflux.c): boxes of side ~2h (h a quarter of
+# the smallest radius), sources within kappa box radii summed directly, the
+# rest to degree p; a sphere's within kappa_w radii, to degree p_w; explicit
+# images |n| <= M, the tail per layer to degree p_T. Errors ~1e-11 of the
+# field (scratch tests against Ewald's sum, 2026-10-24).
+SLAB_FLUX = dict(kappa=6.0, p=10, kappa_w=5.0, p_w=14, M=3, p_T=16)
+
+_FIT: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
+
+def _monomials(p: int):
+    return [(a, b, n - a - b) for n in range(p + 1) for a in range(n, -1, -1)
+            for b in range(n - a, -1, -1)]
+
+
+def _fit(p: int):
+    """The tail's fit at degree p: sample directions (on the unit sphere),
+    harmonic polynomials H (monomials x basis; no constant) and the
+    pseudo-inverse taking the samples of grad (3 a point) to H's
+    coefficients."""
+    if p in _FIT:
+        return _FIT[p]
+    mono = _monomials(p)
+    index = {m: i for i, m in enumerate(mono)}
+    cols = []
+    for n in range(1, p + 1):
+        ms = [m for m in mono if sum(m) == n]
+        lo = [m for m in mono if sum(m) == n - 2]
+        if n < 2:
+            ns = np.eye(len(ms))
+        else:
+            lap = np.zeros((len(lo), len(ms)))
+            for j, m in enumerate(ms):
+                for q in range(3):
+                    if m[q] >= 2:
+                        t = list(m)
+                        t[q] -= 2
+                        lap[lo.index(tuple(t)), j] += m[q]*(m[q] - 1)
+            _, sv, vt = np.linalg.svd(lap)
+            ns = vt[int((sv > 1e-10*sv[0]).sum()):].T
+        for v in ns.T:
+            col = np.zeros(len(mono))
+            for j, m in enumerate(ms):
+                col[index[m]] = v[j]
+            cols.append(col)
+    H = np.array(cols).T
+    nh = H.shape[1]
+    k = np.arange(2*nh) + 0.5
+    phi, th = np.arccos(1 - 2*k/(2*nh)), np.pi*(1 + 5**0.5)*k
+    u = np.c_[np.cos(th)*np.sin(phi), np.sin(th)*np.sin(phi), np.cos(phi)]
+    G = np.zeros((len(u), 3, len(mono)))
+    for j, m in enumerate(mono):
+        for q in range(3):
+            if m[q]:
+                e = list(m)
+                e[q] -= 1
+                G[:, q, j] = m[q]*u[:, 0]**e[0]*u[:, 1]**e[1]*u[:, 2]**e[2]
+    A = (G @ H).reshape(-1, nh)
+    _FIT[p] = (u, H, np.linalg.pinv(A))
+    return _FIT[p]
+
+
+def slab_flux(walls: Dict[Any, Any], number: Dict[Any, int], periods, bodies) -> bool:
+    """Set up the periodic flux gauge's fields in C and register the
+    integrands (after a load; number: wall key -> constraint number). False
+    where there is nothing to set up."""
+    from . import _core
+    beads = [(k, w) for k, w in walls.items() if getattr(w, "slabflux", None)]
+    if not beads:
+        return False
+    floor = [w for w in walls.values() if getattr(w, "shape", (None,))[0] == "plane"]
+    zf, fa, ft = float("nan"), float("nan"), 1.0
+    if floor:
+        zf = float(floor[0].shape[2])
+        if floor[0].contact_angle is not None:
+            fa = float(floor[0].contact_angle)
+        ft = float(floor[0].frame[4]) if floor[0].frame else 1.0
+    rows = []
+    for _, w in beads:
+        c, R, angle, tension = w.slabflux
+        rows += [*map(float, c), float(R), float("nan") if angle is None else float(angle),
+                 float(tension)]
+    radii = [float(w.slabflux[1]) for _, w in beads]
+    h = min(radii)/4
+    s = SLAB_FLUX
+    u, H, pinv = _fit(int(s["p_T"]))
+    ok = _core.slabflux_setup(list(map(float, periods)), zf, rows, fa, ft,
+                              [h, s["kappa"], s["p"], s["kappa_w"], s["p_w"], s["M"], s["p_T"]],
+                              list(u.ravel()), int(H.shape[1]), list(H.ravel()),
+                              list(pinv.ravel()))
+    if not ok:
+        raise RuntimeError("the periodic flux gauge's fields couldn't be set up (memory?)")
+    keys = [(VOLUME_METHOD, 0, 0, 0, 0)] + [(f"body_{int(b)}_vol_meth", 0, 0, 0, 0)
+                                             for b in bodies]
+    done = [_core.slabflux_key(*k) for k in keys]
+    if not done[0]:
+        raise RuntimeError("the periodic flux gauge's volume couldn't be registered")
+    for name in (f"{WETTING_QUANTITY}1_facet_vector_integral", f"{WETTING_QUANTITY}_inst",
+                 WETTING_QUANTITY):
+        if _core.slabflux_key(name, 0, 0, 1, 0):
+            break
+    for j, (key, w) in enumerate(beads):
+        if key not in number:
+            continue
+        if w.energy is not None and not _core.slabflux_key("", number[key], 0, 2, j):
+            raise RuntimeError(f"the periodic flux gauge: wall {key}'s energy not registered")
+        if not _core.slabflux_key("", number[key], 1, 3, j):
+            raise RuntimeError(f"the periodic flux gauge: wall {key}'s content not registered")
+    return True

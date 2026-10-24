@@ -831,6 +831,14 @@ class _Engine:
         """The sphere(axis=) walls' contact-line integrands evaluated in C
         (bindings/pyse_native.c), registered by constraint number: after a
         load and as move_poles makes copies."""
+        if hasattr(_core, "slabflux_setup") and any(
+                getattr(w, "slabflux", None) for w in surface.walls.values()):
+            from ._periodic import slab_flux
+            nums, _, _, names = self._constraint_gaps()
+            if slab_flux(dict(surface.walls),
+                         {(name or int(c)): int(c) for c, name in zip(nums, names)},
+                         self.periods, list(self.bodies().ids)):
+                self.command("recalc")      # (the load's values were the placeholders')
         if hasattr(_core, "native_flux"):
             self._register_native_flux()
         self._register_native_formulas()

@@ -1641,6 +1641,15 @@ void fl_hessian_deflate(struct linsys *S, REAL *X)
 #define FOLLOW_TOL 0.005    /* sweeps stop below this correction per edge */
 #define FOLLOW_SWEEPS 200
 
+/* a slab periodic in x and y (pySE's periods=, bindings/pyse_api.c): its
+   periods into L; 0 elsewhere (and in Evolver without the glue) */
+#if defined(__GNUC__)
+extern int pyse_slab(REAL *L) __attribute__((weak));
+#define follow_slab(L) (pyse_slab ? pyse_slab(L) : 0)
+#else
+#define follow_slab(L) 0
+#endif
+
 static REAL *fw_old = NULL;   /* coordinates before the step, by vertex ordinal */
 static long fw_size = 0;
 static int fw_off = 0;        /* fl_set_follow(0): plain Newton steps */
@@ -1721,7 +1730,8 @@ static long follow_candidates(void)
 int fl_follow_begin(void)
 { vertex_id v_id;
   long n;
-  if ( fw_off || follow_disabled() || web.representation != SOAPFILM || web.symmetry_flag || SDIM != 3
+  if ( fw_off || follow_disabled() || web.representation != SOAPFILM
+       || (web.symmetry_flag && !follow_slab(NULL)) || SDIM != 3
        || (web.modeltype != LINEAR && web.modeltype != QUADRATIC) )
     return 0;
   if ( follow_candidates() <= 0 ) return 0;    /* nothing can start the moves */
@@ -1811,8 +1821,17 @@ static int follow_squash(const vertex_id *v, REAL *q, long *c)
   for ( j = 0 ; j < SDIM ; j++ )
   { a0[j] = x1[j] - x0[j]; b0[j] = x2[j] - x0[j];
     a1[j] = y1[j] - y0[j]; b1[j] = y2[j] - y0[j];
-    cc[j] = b0[j] - a0[j];
   }
+  if ( follow_slab(NULL) )
+  { /* (a slab periodic in x and y: the sides at the minimum image) */
+    REAL L[2];
+    follow_slab(L);
+    for ( j = 0 ; j < 2 ; j++ )
+    { a0[j] -= L[j]*floor(a0[j]/L[j] + 0.5); b0[j] -= L[j]*floor(b0[j]/L[j] + 0.5);
+      a1[j] -= L[j]*floor(a1[j]/L[j] + 0.5); b1[j] -= L[j]*floor(b1[j]/L[j] + 0.5);
+    }
+  }
+  for ( j = 0 ; j < SDIM ; j++ ) cc[j] = b0[j] - a0[j];
   cross_prod(a0,b0,n0);
   cross_prod(a1,b1,n1);
   nn = SDIM_dot(n0,n0);

@@ -132,6 +132,11 @@ int pyse_native_sphere(int con, const double *c, double R, const double *e1,
 
 static int flux_eval(struct expnode *key, REAL *x, int order, REAL *val,
                      REAL (*d)[MAXCOORD], REAL ***s);
+/* the flux gauge in a periodic slab (pyse_slabflux.c): evaluated whether or
+   not native evaluation is on (Evolver's interpreter can't sum the lattice) */
+int pyse_slabflux_eval(struct expnode *key, REAL *x, int order, REAL *val, REAL (*d)[MAXCOORD],
+                       REAL ***s);
+int pyse_slabflux_active(void);
 
 /* the integrand vector of the wall whose integrand key is (its first
    node), at x: values, and with order 1 or 2 their first (and second)
@@ -142,6 +147,8 @@ int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
   int i, j, m, content = 0;
   dual a, b, h, D, rr, lead, area[3];
   REAL off;
+  if ( key && SDIM == 3 && pyse_slabflux_active() && pyse_slabflux_eval(key,x,order,val,d,s) )
+    return 1;
   if ( !native_on || !key || SDIM != 3 ) return 0;
   if ( native_load == pyse_load_serial() )
     for ( i = 0 ; i < native_count ; i++ )

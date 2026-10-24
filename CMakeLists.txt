@@ -263,7 +263,8 @@ endif()
 # glue and Evolver call each other: as two static archives, the linker
 # would not resolve the hooks Evolver calls.
 add_library(pyse_glue OBJECT bindings/pyse_api.c bindings/pyse_check.c
-            bindings/pyse_edit.c bindings/pyse_native.c bindings/pyse_events.c)
+            bindings/pyse_edit.c bindings/pyse_native.c bindings/pyse_events.c
+            bindings/pyse_slabflux.c)
 target_include_directories(pyse_glue PUBLIC bindings)
 find_package(Threads REQUIRED)   # the SIGINT handler forwards between threads
 target_link_libraries(pyse_glue PUBLIC evolver_core Threads::Threads)

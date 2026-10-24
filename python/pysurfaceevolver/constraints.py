@@ -123,6 +123,9 @@ class Constraint:
     frame: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
     # made periodic-invariant for a slab (_periodic.assemble): not again
     slab: bool = field(default=False, compare=False, repr=False)
+    # a sphere(gauge="flux")'s (centre, radius, angle, tension) in a periodic
+    # slab, whose integrands C evaluates (pyse_slabflux.c)
+    slabflux: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
 
     @property
     def floored(self) -> bool:
