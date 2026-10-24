@@ -705,6 +705,11 @@ void eval_second(
           { stacktop->value = 0.0;
             if ( y > 2.0 )
             { int i,j;  FIRST = 0.0; SECOND = 0.0; }
+            else if ( y == 2.0 ) /* pySE: was left as the base's */
+            { int i,j;
+              SECOND = 2*stacktop[0].deriv[i]*stacktop[0].deriv[j];
+              FIRST = 0.0;
+            }
             else if ( y < 2.0 )
             { sprintf(errmsg,"Negative power (%f) of zero in second derivative.\n",
                       (DOUBLE)(y-2));
@@ -724,10 +729,10 @@ void eval_second(
             stacktop->value = pow(x,y);
             SECOND = ((log(fabs(x))*stacktop[1].deriv[i]+y/x*stacktop[0].deriv[i])
                  *(log(fabs(x))*stacktop[1].deriv[j]+y/x*stacktop[0].deriv[j])
-                 +log(fabs(x))*stacktop->second[i][j] 
+                 +log(fabs(x))*stacktop[1].second[i][j]  /* pySE: was the base's (stacktop->second) */
                  + stacktop[0].deriv[i]* stacktop[1].deriv[j]/x
                  + stacktop[0].deriv[j]* stacktop[1].deriv[i]/x
-                 + stacktop[0].deriv[i]* stacktop[0].deriv[j]*y/x/x
+                 - stacktop[0].deriv[i]* stacktop[0].deriv[j]*y/x/x  /* pySE: was +, the second derivative y(y+1) u^(y-2) for y(y-1) */
                  + stacktop[0].second[i][j]*y/x)*stacktop->value;
             FIRST = (log(fabs(x))*stacktop[1].deriv[i]
                    + y/x*stacktop[0].deriv[i]) *stacktop->value;

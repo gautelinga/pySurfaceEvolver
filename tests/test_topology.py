@@ -1930,14 +1930,19 @@ def test_the_flux_gauge_in_c_is_the_datafiles_with_many_spheres(radii):
             _core.native_enable(True)
     assert np.allclose(found[:2], found[2:], rtol=1e-10, atol=1e-10)
     # second derivatives: Newton steps converge as with C's 40 spheres, 0.29
-    # to 6.5e-11 in six (the interpreter's second derivatives of these powers
-    # are wrong: 2e-6)
-    ev.restore(saved)
-    ev.command("pyse_angle_floor := 0; recalc")
-    ev.command("g 10")
-    for _ in range(6):
-        ev.command("hessian")
-    assert ev.residual() < 1e-9
+    # to 6.5e-11 in six, in C and in the interpreter (whose second derivatives
+    # of these powers were wrong: 2e-6)
+    for native in (True, False):
+        _core.native_enable(native)
+        try:
+            ev.restore(saved)
+            ev.command("pyse_angle_floor := 0; recalc")
+            ev.command("g 10")
+            for _ in range(6):
+                ev.command("hessian")
+            assert ev.residual() < 1e-9
+        finally:
+            _core.native_enable(True)
 
 
 @pytest.mark.parametrize("radii", [[0.2]*70, list(np.linspace(0.1, 0.25, 70))])

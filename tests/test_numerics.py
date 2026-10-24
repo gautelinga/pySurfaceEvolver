@@ -188,3 +188,37 @@ def test_conformal_metric_string_force_is_energy_gradient(load, fe_dir, tmp_path
             ev.command(f"set vertex[{v}] {c} {x0!r}")
             grad = (ep - em) / (2 * h)
             assert abs(grad + force[k]) <= 1e-6 * max(1.0, abs(grad))
+
+
+# Evolver's interpreter took u^y's second derivative with +y u_i u_j/u^2 for
+# -y u_i u_j/u^2 (y(y+1) u^(y-2) for y(y-1)) and log(u) times the base's second
+# derivatives for the exponent's; at u = 0, y = 2 it kept the base's. A free
+# vertex whose energy is one such power: a Newton step is -H^-1 g, with H and
+# g by differences.
+@pytest.mark.parametrize("expr", [
+    "(x^2+y^2+z^2+0.3)^1.5", "(x^2+y^2+1)^(-0.7)", "(x^2+1)^(z+2)", "(2+x)^(y*z)",
+    "maximum(x^2+y^2+z^2, 0.1)^1.5", "(x-0.31)^2.0*y", "sqrt(x^2+y^2+z^2+0.5)"])
+def test_interpreter_second_derivatives_of_powers(load, tmp_path, expr):
+    path = tmp_path / "power.fe"
+    path.write_text("quantity qq energy method vertex_scalar_integral global\n"
+                    f"scalar_integrand: ({expr}) + 2*(x^2+y^2+z^2)\n\n"
+                    "vertices\n1 0.31 0.47 0.53\n")
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")          # (no edges)
+        ev = load(str(path))
+    x0 = np.array([0.31, 0.47, 0.53])
+
+    def energy(x):
+        ev.vertices = np.array([x])
+        return ev.energy
+
+    h, e = 1e-4, np.eye(3)*1e-4
+    g = np.array([(energy(x0 + e[i]) - energy(x0 - e[i]))/(2*h) for i in range(3)])
+    H = np.array([[(energy(x0 + e[i] + e[j]) - energy(x0 + e[i] - e[j])
+                    - energy(x0 - e[i] + e[j]) + energy(x0 - e[i] - e[j]))/(4*h*h)
+                   for j in range(3)] for i in range(3)])
+    ev.vertices = np.array([x0])
+    ev.command("hessian_normal off; hessian")
+    want = -np.linalg.solve(H, g)
+    assert np.linalg.norm(np.asarray(ev.vertices)[0] - x0 - want) < 1e-6*np.linalg.norm(want)

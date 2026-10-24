@@ -425,6 +425,13 @@
 
 ### Fixes
 
+- Evolver's expression interpreter takes the second derivatives of real powers
+  (`u^y` with `y` not an integer, or a variable) right: it had `y(y+1)` for `y(y-1)`
+  and the base's second derivatives for the exponent's, so Newton steps on any
+  energy, constraint or integral with such a power (`(x^2+y^2)^1.5`) converged
+  slowly or not at all (a 71-sphere flux-gauge drop stalled at 2e-6; now 6.5e-11 in
+  six steps, as with the C evaluator). `0^2` had kept the base's derivatives.
+
 - Bodies keep their volume targets when a change makes new bodies: Evolver's
   `rebody` reset every body's target to its current volume, so a fixed body that
   had not relaxed to its target lost the difference. Bodies removed whole give their
