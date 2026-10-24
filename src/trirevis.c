@@ -1267,20 +1267,40 @@ static int collapse_keeps_manifold(edge_id short_edge)
 *  Output:  1 if acceptable, 0 if not
 */
 
+/* pySE: a slab periodic in x and y (bindings/pyse_api.c; 0 without the
+   glue): differences of nearby points at the minimum image */
+#if defined(__GNUC__)
+extern int pyse_slab(REAL *L) __attribute__((weak));
+#define CKS_SLAB(L) (pyse_slab ? pyse_slab(L) : 0)
+#else
+#define CKS_SLAB(L) 0
+#endif
+static int cks_slab;
+static REAL cks_L[2];
+static void cks_diff(const REAL *a, const REAL *b, REAL *d)   /* b - a */
+{ int i;
+  for ( i = 0 ; i < SDIM ; i++ ) d[i] = b[i] - a[i];
+  if ( cks_slab )
+    for ( i = 0 ; i < 2 ; i++ ) d[i] -= cks_L[i]*floor(d[i]/cks_L[i] + 0.5);
+}
+
 static int collapse_keeps_shape(vertex_id keep_v, vertex_id elim_v, int midpoint)
-{ REAL p[MAXCOORD];
+{ REAL p[MAXCOORD], de[MAXCOORD];
   REAL *xk,*xe;
   REAL cosmax;
   int i,pass;
 
   if ( collapse_max_tilt <= 0.0 && collapse_max_edge <= 0.0 ) return 1;
-  if ( web.torus_flag || web.symmetry_flag || (SDIM != 3) || (web.modeltype != LINEAR) )
+  cks_slab = web.torus_flag && CKS_SLAB(cks_L);
+  if ( ((web.torus_flag || web.symmetry_flag) && !cks_slab) || (SDIM != 3)
+       || (web.modeltype != LINEAR) )
     return 1;
   cosmax = (collapse_max_tilt > 0.0) ? cos(collapse_max_tilt*M_PI/180) : -2.0;
   xk = get_coord(keep_v);
   xe = get_coord(elim_v);
+  cks_diff(xk,xe,de);
   for ( i = 0 ; i < SDIM ; i++ )
-    p[i] = midpoint ? (xk[i] + xe[i])/2 : xk[i];
+    p[i] = midpoint ? (cks_slab ? xk[i] + de[i]/2 : (xk[i] + xe[i])/2) : xk[i];
 
   for ( pass = 0 ; pass < 2 ; pass++ )
   { vertex_id v = pass ? elim_v : keep_v;
@@ -1295,9 +1315,10 @@ static int collapse_keeps_shape(vertex_id keep_v, vertex_id elim_v, int midpoint
         facetedge_id fe = fe0;
         int guard2 = 0;
         if ( collapse_max_edge > 0.0 )
-        { REAL *xo = get_coord(other);
+        { REAL *xo = get_coord(other), dd[MAXCOORD];
           REAL d2 = 0.0;
-          for ( i = 0 ; i < SDIM ; i++ ) d2 += (p[i]-xo[i])*(p[i]-xo[i]);
+          cks_diff(p,xo,dd);
+          for ( i = 0 ; i < SDIM ; i++ ) d2 += dd[i]*dd[i];
           if ( d2 > collapse_max_edge*collapse_max_edge ) return 0;
         }
         if ( valid_id(fe0) && (collapse_max_tilt > 0.0) )
@@ -1317,11 +1338,9 @@ static int collapse_keeps_shape(vertex_id keep_v, vertex_id elim_v, int midpoint
                 ffe = get_next_edge(ffe);
               }
               if ( hit == 1 )   /* facets on the edge itself go away */
-              { for ( k = 0 ; k < 3 ; k++ )
-                { a[k] = x[1][k] - x[0][k]; b[k] = x[2][k] - x[0][k]; }
+              { cks_diff(x[0],x[1],a); cks_diff(x[0],x[2],b);
                 cross_prod(a,b,n0);
-                for ( k = 0 ; k < 3 ; k++ )
-                { a[k] = y[1][k] - y[0][k]; b[k] = y[2][k] - y[0][k]; }
+                cks_diff(y[0],y[1],a); cks_diff(y[0],y[2],b);
                 cross_prod(a,b,n1);
                 dot = n0[0]*n1[0] + n0[1]*n1[1] + n0[2]*n1[2];
                 nn0 = sqrt(n0[0]*n0[0] + n0[1]*n0[1] + n0[2]*n0[2]);

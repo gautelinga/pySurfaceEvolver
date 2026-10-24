@@ -1118,7 +1118,9 @@ static void gaps_body(void *arg)
   vertex_id *vs;
   int *slot;
   long row;
-  int c, native = 1, threads;
+  int c, native = 1, threads, slab;
+  REAL L[2];
+  slab = pyse_slab(L);
   for ( c = 0 ; c < a->ncon ; c++ )
     if ( a->nums[c] < 0 || a->nums[c] >= web.maxcon
          || !(get_constraint(a->nums[c])->attr & IN_USE) )
@@ -1141,6 +1143,22 @@ static void gaps_body(void *arg)
     for ( k = 0 ; k < a->ncon ; k++ )
     { double *o = a->out + (size_t)row*a->ncon + k;
       if ( v_on_constraint(v_id,a->nums[k]) ) *o = NAN;
+      else if ( slab )
+      { /* (a slab: the wall's image nearest the vertex, a floor and spheres,
+           whose solid side is negative: the least gap of the 3 x 3 images) */
+        int ix, iy;
+        double best = NAN;
+        for ( ix = -1 ; ix <= 1 ; ix++ )
+          for ( iy = -1 ; iy <= 1 ; iy++ )
+          { REAL y[MAXCOORD], f = 0.0, grad[MAXCOORD], g = 0.0;
+            for ( i = 0 ; i < SDIM ; i++ ) y[i] = x[i];
+            y[0] += ix*L[0]; y[1] += iy*L[1];
+            formula_at(a->nums[k],slot[k],y,v_id,&f,grad);
+            for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
+            if ( g > 0.0 && !(f/sqrt(g) >= best) ) best = f/sqrt(g);
+          }
+        *o = best;
+      }
       else
       { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
         formula_at(a->nums[k],slot[k],x,v_id,&f,grad);
@@ -1226,9 +1244,11 @@ static void cnormals_body(void *arg)
 { struct cnormals_args *a = (struct cnormals_args *)arg;
   vertex_id *vs;
   long k, count = a->rows ? a->nrows : a->n;
-  int i, slot;
+  int i, slot, slab;
+  REAL L[2];
   if ( a->num < 0 || a->num >= web.maxcon || !(get_constraint(a->num)->attr & IN_USE) )
     inconsistent("no such constraint");
+  slab = pyse_slab(L);
   for ( k = 0 ; a->rows && k < a->nrows ; k++ )
     if ( a->rows[k] < 0 || a->rows[k] >= a->n ) inconsistent("vertex row out of range");
   vs = vertex_list(a->n);
@@ -1238,7 +1258,25 @@ static void cnormals_body(void *arg)
     REAL f = 0.0, grad[MAXCOORD], g = 0.0;
     double *o = a->out + (size_t)k*3;
     for ( i = 0 ; i < MAXCOORD ; i++ ) grad[i] = 0.0;
-    formula_at(a->num,slot,get_coord(v_id),v_id,&f,grad);
+    if ( slab )
+    { /* (a slab: at the wall's image nearest the vertex, as gaps_body) */
+      int ix, iy;
+      double best = HUGE_VAL;
+      for ( ix = -1 ; ix <= 1 ; ix++ )
+        for ( iy = -1 ; iy <= 1 ; iy++ )
+        { REAL y[MAXCOORD], fy = 0.0, gy[MAXCOORD], gg = 0.0, *x = get_coord(v_id);
+          for ( i = 0 ; i < MAXCOORD ; i++ ) gy[i] = 0.0;
+          for ( i = 0 ; i < SDIM ; i++ ) y[i] = x[i];
+          y[0] += ix*L[0]; y[1] += iy*L[1];
+          formula_at(a->num,slot,y,v_id,&fy,gy);
+          for ( i = 0 ; i < SDIM ; i++ ) gg += gy[i]*gy[i];
+          if ( gg > 0.0 && fy/sqrt(gg) < best )
+          { best = fy/sqrt(gg); f = fy;
+            for ( i = 0 ; i < SDIM ; i++ ) grad[i] = gy[i];
+          }
+        }
+    }
+    else formula_at(a->num,slot,get_coord(v_id),v_id,&f,grad);
     for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
     g = sqrt(g);
     for ( i = 0 ; i < 3 ; i++ )

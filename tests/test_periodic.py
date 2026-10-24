@@ -200,3 +200,35 @@ def test_a_bodys_volconst_survives_equiangulation():
     ev.vertices = ev.vertices + 0.02*np.random.default_rng(0).normal(size=ev.vertices.shape)*[1, 1, 0]
     assert "switched" in ev.command("u")
     assert abs(b.volconst - (v + 0.25)) < 1e-15
+
+
+def test_a_walls_gap_is_at_its_nearest_image():
+    # (Evolver evaluates a constraint at a vertex's coordinates: a vertex at
+    # another image than a sphere's looked a period away from it)
+    from pysurfaceevolver import _periodic
+    ev = _bead(PERIODS)
+    m = ev.mesh()
+    free = np.flatnonzero(~ev.on_constraint("bead") & ~ev.on_constraint("bottom"))[:5]
+
+    def gaps():
+        _, _, dist, names = ev._constraint_gaps()
+        return np.asarray(dist)[free, names.index("bead")]
+
+    before = gaps()
+    _periodic.move_near(ev, m.vertex_ids[free], m.vertices[free] + [PERIODS[0], PERIODS[1], 0])
+    assert np.allclose(gaps(), before, atol=1e-12) and np.all(np.abs(before) < 0.5)
+
+
+@pytest.mark.parametrize("make", [_drop, _bead])
+def test_adapt_merges_and_splits_as_without_periods(make):
+    # (merges were refused under any symmetry: Evolver's shape check took no
+    # periods; it takes a slab's at the minimum image now)
+    found = []
+    for periods in (None, PERIODS):
+        ev = make(periods)
+        ev.command("r; g 20")
+        n = ev.adapt()
+        ev.relax()
+        found.append((n, len(ev.mesh().facets), ev.energy, ev.body(1).volume))
+    assert found[0][:2] == found[1][:2] and found[0][0] > 0
+    assert np.allclose(found[0][2:], found[1][2:], rtol=1e-11)

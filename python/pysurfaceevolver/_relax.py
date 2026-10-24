@@ -1025,13 +1025,13 @@ class _Relaxing(_Analysis):
         """Merge interior edges shorter than ``merge_below`` along which the
         surface turns by less than ``flat`` degrees (refused by the engine if a
         facet would tilt by more than ``tilt`` or flip, or an edge grow longer
-        than ``longest``; not on a torus or with symmetry, where the engine
-        can't check), then split edges turning more than ``split_turn`` or
+        than ``longest``; not on a torus or with symmetry other than a
+        periodic slab, where the engine can't check), then split edges turning more than ``split_turn`` or
         longer than ``split_above`` (not ``no_refine`` ones), equiangulate.
         Returns the edges merged plus split."""
         m = self.mesh()
         merged = 0
-        if merge_below is not None and not _core.symmetry():
+        if merge_below is not None and (not _core.symmetry() or self.periods is not None):
             valence = m.edge_valence()
             turn, judged = _edge_turn(m)
             mark = judged & (valence == 2) & (turn < flat) & (m.edge_lengths() < merge_below)
