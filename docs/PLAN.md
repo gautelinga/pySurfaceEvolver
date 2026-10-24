@@ -47,7 +47,23 @@ batch. Approved as a batch: all phases, report at the end.
   threaded loops refuse torus (serial in slabs); agents' notes: body volume stale after a
   dissolve+recalc in a slab (not reproduced by coordinate moves), equiangulation 62 vs 63
   switches (round-off ties); a periodic pack's drainage end to end not yet run.
-* P4 the same engine without the lattice: the fast sum for large packs.
+* P4 done (2196429): make_datafile(flux_sum=), the engine with given sources (a box's
+  walls at 90 degrees by reflections: a lattice of twice the box). Fast = direct to
+  1e-13 among spheres. Cost a point ~constant 2.3 us vs the direct SIMD sums' linear:
+  0.5 us at 256 spheres, 1.2 at 1024 (values only); crossover ~2000, "auto" there.
+  Faster expansions (SIMD, fewer derivative orders for gradient steps) would move it.
+  Also found: Evolver's linear_metric_setup switched the session's solver for good
+  (b23d434: put back); a periodic two-bead drainage runs end to end (docs/periodic.md).
+* P5/P6 open, for the user (2026-10-24): a lid (closed box) and general shapes meet
+  topological limits. With a lid, every sphere's flux must leave through some wall,
+  whose wetted part then needs a primitive of a form that isn't exact there (a pole,
+  or bookkeeping when a contact line goes round it); a lid wetted only inside, away
+  from the side walls and not round the cell, works with down-pointing strings (the
+  lattice sum of their potentials) and the volume's identity giving the lid's own area
+  (A_lid from V: the volume field's flux through the lid is H A_lid less the spheres'
+  R/3 fluxes). Cylinders: line sources (2D log potentials, harmonic in 3D) fit the
+  engine for spheres' line integrals, but a cylinder crossing a plane makes that
+  plane's form non-exact again. Both need the user's scope.
 * P5 closed box: source-sink pairs (a box with a lid).
 * P6 general shapes: infinite cylinders by line sources.
 * P7 docs and examples (a periodic pack), timings.

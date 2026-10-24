@@ -17,6 +17,8 @@ Parts (all by default):
          bench/topology/series.py wrote (--series DIR; made with
          ``series.py --seed 2 --theta 20 --frames 150``, about ten minutes):
          drainage_pack.mp4 and drainage_pack_shapes.png
+  periodic  the two beads in a periodic cell (periodic.md): periodic_ring.mp4,
+         periodic_ring_shapes.png (the cell tiled 2 x 2)
   packs  the wide set's runs (bench/topology/corpus.py --set wide), from their
          logs (--logs DIR) into drainage_packs.npz, or from that file:
          drainage_packs.png (the trapped liquid as each run drains)
@@ -42,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "docs"))
 from packing_helpers import _pore_surface, _on  # noqa: E402
 import ring_helpers  # noqa: E402
+import periodic_helpers  # noqa: E402
 
 STATIC = os.path.join(HERE, "..", "docs", "_static")
 CENTRES = np.array([[-0.6123, 1.1001, 0.3757], [1.2879, 0.1557, 0.1317],
@@ -354,6 +357,63 @@ def packs(logs):
     plt.close(fig)
     print(f"wrote drainage_packs.png ({len(data)} runs)")
 
+
+
+# ---- the two beads in a periodic cell (periodic.md) ---------------------------
+
+def periodic_tiles(p, corners, body, n=2):
+    """The liquid's facets (corners at one image each, moved into the cell),
+    the cell tiled n x n, and the beads with it."""
+    import pyvista as pv
+    L = periodic_helpers.L
+    c = np.array(corners, float)
+    c[:, :, :2] -= (np.floor(c[:, 0, :2]/L)*L)[:, None, :]
+    x = c.reshape(-1, 3)
+    f = np.arange(len(x)).reshape(-1, 3)
+    for a in range(n):
+        for b in range(n):
+            liquid(p, x + [a*L, b*L, 0], f, body)
+            for centre in periodic_helpers.BEADS:
+                p.add_mesh(pv.Sphere(radius=1.0, center=np.add(centre, [a*L, b*L, 0]),
+                                     theta_resolution=36, phi_resolution=36), **BEAD)
+    p.add_mesh(pv.Plane(center=(n*L/2, n*L/2, 0), direction=(0, 0, 1), i_size=n*L,
+                        j_size=n*L), color="#dddddd")
+    p.add_mesh(pv.Box(bounds=(0, L, 0, L, 0, 4.2)), style="wireframe", color="#555555")
+
+
+PERIODIC_CAMERA = [(15.0, -9.0, 9.5), (3.0, 3.0, 1.6), (0, 0, 1)]
+
+
+def periodic():
+    warnings.simplefilter("ignore")
+    ev = periodic_helpers.two_beads(theta=20.0)
+    steps, meshes = [], []
+    for s in recipes.arclength(ev, ev.body(1), -0.5, 200, topology=True, outlet="bottom"):
+        m = ev.mesh()
+        steps.append(s)
+        meshes.append((np.array(m.facet_corners()), np.asarray(m.facet_bodies).max(axis=1)))
+        if ev.on_constraint("bottom").any():
+            break
+    V = np.array([s.value for s in steps])
+    T = np.array([s.trapped for s in steps])
+    cut = int(np.flatnonzero(T > 0)[0])
+    import pyvista as pv
+    pv.OFF_SCREEN = True
+    p = pv.Plotter(off_screen=True, shape=(1, 3), window_size=(1500, 600), border=False)
+    for col, i in enumerate((cut - 3, cut, len(steps) - 1)):
+        p.subplot(0, col)
+        periodic_tiles(p, *meshes[i])
+        p.add_text(f"volume {V[i]:.2f}" + (f", ring {T[i]:.3f}" if T[i] else ""), font_size=11)
+        p.camera_position = PERIODIC_CAMERA
+    p.screenshot(os.path.join(STATIC, "periodic_ring_shapes.png"))
+    p.close()
+
+    def draw(pl, i):
+        periodic_tiles(pl, *meshes[i])
+        pl.add_text(f"volume {V[i]:.2f}" + (f", ring {T[i]:.3f}" if T[i] else ""),
+                    font_size=11)
+    movie(os.path.join(STATIC, "periodic_ring.mp4"), range(len(steps)), draw,
+          PERIODIC_CAMERA)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])

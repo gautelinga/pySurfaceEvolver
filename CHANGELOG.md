@@ -4,6 +4,25 @@
 
 ### API
 
+- Slabs periodic in x and y: `load_arrays(..., periods=(Lx, Ly))` (and
+  `make_datafile`), Evolver's torus with a z period far beyond the surface. Edges run
+  to the nearest copy of their other end; the walls may be a floor and spheres (any
+  gauge), their integrals made blind to the cell's sides (the volume z dx dy as a facet
+  integral, the floor's wetting the flux of z-hat, a sphere's vertices kept at its
+  centre's copy). `Evolver.periods`, `Mesh.periods`, `Mesh.delta` (differences at the
+  nearest copy) and `Mesh.facet_corners`. Events, the checked edits and the remesher,
+  the topology check, the changes of topology, clusters, plotting and export work
+  across the cell's sides as without periods. Spheres of `gauge="flux"` in a slab: each
+  one's field the lattice sum of its source and its mirror in the floor, to ~1e-10 of
+  the field (near sources directly, the rest by local harmonic expansions, the
+  lattice's tail by Ewald's sum). New page: Periodic slabs.
+
+- `make_datafile(flux_sum=)` ("auto", "direct", "fast"): spheres of `gauge="flux"`
+  summed by the same expansions without periods, the spheres' images in the floor and
+  in a box's walls at 90 degrees (no line integrals on the walls). Its cost a point is
+  about constant, the direct sums' linear in the spheres: "auto" takes it from 2000
+  spheres.
+
 - `constraints.Boundary`, `curve()` and `circle()` take a `content` integral: the
   volume of a face that bounds a body but isn't in the surface, such as the disk a
   bridge is pinned on (Evolver's content integral on a boundary).
@@ -424,6 +443,17 @@
     axisymmetric equations and Langmuir's puddle thickness.
 
 ### Fixes
+
+- A stability check (`stability()` of an unstable surface, `modes()`) no longer
+  switches the session to Evolver's own sparse factoring for good (Evolver's
+  linear_metric does): every later Newton step, on any surface, ran on it.
+
+- Torus models (Evolver's): the Newton step's line following, off under any symmetry,
+  runs in slabs (their steps far from equilibrium diverged); `fix_volconst` and the
+  volume adjustments by whole cell volumes, which zeroed walls' volconsts after an
+  equiangulation, skip slabs; `torus_unwrap_edge` (edge deletion, `t1_swap`) no longer
+  moves vertices by the z period; constraint gaps and normals are taken at a wall's
+  nearest copy; `adapt()`'s merges are checked at the minimum image.
 
 - Evolver's expression interpreter takes the second derivatives of real powers
   (`u^y` with `y` not an integer, or a variable) right: it had `y(y+1)` for `y(y-1)`

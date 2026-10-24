@@ -62,7 +62,7 @@ def main() -> int:
     ap.add_argument("pages", nargs="*", default=[os.path.join(DOCS, name) for name in
                                                  ("stress_cases.md", "several_surfaces.md",
                                                   "bridge_rupture.md", "packing.md",
-                                                  "drainage_topology.md")])
+                                                  "drainage_topology.md", "periodic.md")])
     ap.add_argument("--update", action="store_true")
     ap.add_argument("--rel", type=float, default=1e-3)
     ap.add_argument("--jobs", type=int, default=1)
