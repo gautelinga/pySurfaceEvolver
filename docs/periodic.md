@@ -10,8 +10,8 @@ The vertices may sit anywhere: each edge runs to the nearest copy of its other e
 every edge must be shorter than half a period (the mesh is checked). The walls may be a
 floor (a plane facing up) and spheres, with any gauge. A sphere's vertices are kept at
 the copy of it whose centre is given; everything that moves vertices onto it (contact,
-the changes of topology) moves them there first. {attr}`Evolver.periods`, and
-{attr}`Mesh.periods` with {meth}`Mesh.delta` (differences at the nearest copy), say
+the changes of topology) moves them there first. {attr}`~pysurfaceevolver.Evolver.periods`, and
+{attr}`~pysurfaceevolver.Mesh.periods` with {meth}`~pysurfaceevolver.Mesh.delta` (differences at the nearest copy), say
 where a surface is periodic. Plotting and export draw a piece that doesn't wrap whole,
 and a sheet that wraps as one cell's worth.
 
