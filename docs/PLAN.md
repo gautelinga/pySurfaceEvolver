@@ -32,6 +32,21 @@ batch. Approved as a batch: all phases, report at the end.
   (prototype in the session's scratch matched for every splitting parameter), local
   expansions per box and per sphere (the line integrals' primitive of a harmonic field in
   a ball: B = -sum_l (x - c) x grad P_l/(l + 1), no strings), near sources direct.
+* Status 2026-10-24 (stage-f-pack): P1 done (1319611, ff916c1). P2 done by four agents in
+  worktrees, cherry-picked: events bb1ae19, mesh 8f14173, surgery f7bb2ec/5f8ebe7, edits
+  142a280; then 657c082 (Evolver's torus_unwrap_edge moved vertices by the z period: one
+  end to the other's image now; _cut's ring at one image; mesh_quality from the slab's
+  mesh) and af0204a (constraint gaps/normals at the nearest image; adapt() merges, its
+  shape check at the minimum image). P3 done (17e07f3): pyse_slabflux.c, fields within
+  1e-9 of Ewald, gauge without periods matched to h^4; the Newton step's line following
+  ran under no symmetry (slab steps diverged far from equilibrium): on in slabs now.
+  ec90ca2: fix_volconst/torus volume adjustments skipped in slabs (they zeroed volconsts).
+  707 tests. Open: the slab flux gauge ~10x the plain gauge a step at one bead (polynomial
+  degree 10 everywhere; lower orders for gradients, smaller near lists); axis spheres'
+  native C integrands off where a slab adds the floor's terms (interpreter); fasthess's
+  threaded loops refuse torus (serial in slabs); agents' notes: body volume stale after a
+  dissolve+recalc in a slab (not reproduced by coordinate moves), equiangulation 62 vs 63
+  switches (round-off ties); a periodic pack's drainage end to end not yet run.
 * P4 the same engine without the lattice: the fast sum for large packs.
 * P5 closed box: source-sink pairs (a box with a lid).
 * P6 general shapes: infinite cylinders by line sources.
