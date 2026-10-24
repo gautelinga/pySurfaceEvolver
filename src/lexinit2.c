@@ -1450,12 +1450,21 @@ return; /* temporary turn off */
 *                torus volume of their true value
 */
 
+/* pySE: a slab periodic in x and y (bindings/pyse_api.c): its volumes are
+   z dx dy, exact, never a cell's volume off (0 without the glue) */
+#if defined(__GNUC__)
+extern int pyse_slab(REAL *L) __attribute__((weak));
+#define PYSE_SLAB() (pyse_slab ? pyse_slab(NULL) : 0)
+#else
+#define PYSE_SLAB() 0
+#endif
+
 void fix_volconst()
 {
   REAL adjust;
   body_id b_id;
 
-  if ( web.pressure_flag ) return;
+  if ( web.pressure_flag || PYSE_SLAB() ) return;
 
   /* get volume of piece of unit cell */
   if ( SDIM == 2 )

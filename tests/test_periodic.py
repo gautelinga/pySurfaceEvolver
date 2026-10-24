@@ -185,3 +185,18 @@ def test_newton_steps_far_from_equilibrium_follow_the_lines(gauge):
         found.append((ev.energy, ev.residual()))
     assert found[1][1] < 1e-8
     assert abs(found[0][0] - found[1][0]) < (1e-12 if gauge == "axis" else 1e-6)
+
+
+def test_a_bodys_volconst_survives_equiangulation():
+    # (Evolver's fix_volconst, at the load and after 'u' flips an edge,
+    # rounded every volconst to a multiple of the torus cell's volume: in a
+    # slab, Lx Ly 1e6, the walls' closures went; and its volume adjustments
+    # put a negative volume a cell's volume up)
+    ev = _bead(PERIODS, gauge="pole")
+    b = ev.body(1)
+    v = b.volconst
+    assert v > 0.1                       # (the wet south pole's closure)
+    b.volconst = v + 0.25
+    ev.vertices = ev.vertices + 0.02*np.random.default_rng(0).normal(size=ev.vertices.shape)*[1, 1, 0]
+    assert "switched" in ev.command("u")
+    assert abs(b.volconst - (v + 0.25)) < 1e-15

@@ -14,6 +14,14 @@
 
 #include "include.h"
 #include "fastloops.h"
+/* pySE: a slab periodic in x and y (bindings/pyse_api.c): its volumes are
+   z dx dy, exact, never a cell's volume off (0 without the glue) */
+#if defined(__GNUC__)
+extern int pyse_slab(REAL *L) __attribute__((weak));
+#define PYSE_SLAB() (pyse_slab ? pyse_slab(NULL) : 0)
+#else
+#define PYSE_SLAB() 0
+#endif
 
 #ifdef THREADS
 /******************************************************************
@@ -688,7 +696,7 @@ REAL calc_content (
   #endif
   local_calc_content(mode);
 
-  if ( web.torus_flag )
+  if ( web.torus_flag && !PYSE_SLAB() )
   { /* do volume adjust to get continuity with old volume, or fixed volume */
      FOR_ALL_BODIES(b_id)
      { REAL vol = get_body_volume(b_id);
