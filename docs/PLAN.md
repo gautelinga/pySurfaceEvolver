@@ -5,6 +5,18 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
+## Released: 0.8.0 (2026-10-24, tag v0.8.0)
+
+Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG
+0.8.0). Before tagging, CI replicated in fresh venvs (Python 3.11-3.14, latest
+dependencies; Sphinx, snippets, sanitizers, a cp312 wheel by cibuildwheel under
+podman): it found NumPy 2's repr in slab datafiles, 3.11-only mypy errors, a scipy
+import in a test and crumbs left at a descent's end (21323ea). Open after it: the
+Newton step 7-14% slower than 0.7.5's in separate runs (the same at eefbb2a: not the
+slabs' hooks; unexplained); test_drops_on_a_plane_merge... failed once in 120 file
+runs at 4 threads after the crumb fix (cause not caught); the flux gauge's lattice
+sums ~10x its direct ones; P5 lid and P6 cylinders (below) for the user to scope.
+
 ## Resume here (2026-10-24): periodic slab and flux gauge batch
 
 The user's choices (2026-10-24): an **x,y periodic slab** (floor below, free liquid on

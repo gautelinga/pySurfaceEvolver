@@ -185,31 +185,31 @@ gradient step at 64 beads 23.5 -> 5.8 us a facet). On the wide set of 16-bead pa
 the whole set from about 8000 s to 5500 s (the machine's load not matched
 between the two).
 
-For the established workload, relaxing a large surface, it is slower so far: against
+For the established workload, relaxing a large surface, it is a little slower: against
 0.7.5 (built from its tag, with the same numpy 1.26), the cube near equilibrium, 2
 threads, the median of five rounds with the versions alternated, an idle machine,
-the same energies to round-off; seconds (measured 2026-10-24):
+the same energies to round-off; seconds (measured 2026-10-24, at 0.8.0):
 
-| surface | operation | 0.7.5 | now | |
+| surface | operation | 0.7.5 | 0.8.0 | |
 |---|---|---|---|---|
-| cube, linear, 98k facets | `g 1` | 0.022 | 0.019 | -10% |
-| | Newton step | 0.221 | 0.255 | +16% |
-| | `relax()` | 1.36 | 1.45 | +6% |
-| cube, linear, 393k facets | Newton step | 1.15 | 1.39 | +21% |
-| | `relax()` | 9.46 | 9.67 | +2% |
-| cube, Lagrange 2, 24k facets | `relax()` | 0.73 | 0.76 | +4% |
-| cube, Lagrange 2, 98k facets | `relax()` | 4.13 | 4.21 | +2% |
+| cube, linear, 98k facets | `g 1` | 0.019 | 0.020 | +2% |
+| | Newton step | 0.205 | 0.234 | +14% |
+| | `relax()` | 1.31 | 1.37 | +5% |
+| cube, linear, 393k facets | Newton step | 1.11 | 1.21 | +10% |
+| | `relax()` | 8.93 | 8.94 | 0% |
+| cube, Lagrange 2, 24k facets | `relax()` | 0.68 | 0.71 | +5% |
+| cube, Lagrange 2, 98k facets | `relax()` | 3.87 | 3.92 | +1% |
 
-Most of the Newton step's slowdown was the step's following of moving contact and
+Part of the Newton step's slowdown was the step's following of moving contact and
 triple lines (after 0.7.5): after every step it copied every vertex and looked at
 every facet to see whether the mesh beside a line had been squashed, on surfaces
 without lines too. It now looks only at the facets beside a line (kept until the
 mesh changes) and copies nothing on a surface without them, with the same results
 to the bit: the Newton step's instructions are back to 0.7.5's (98k facets), and
-switching the following on and off within one run no longer changes its time
-(before: 6% at 393k facets). Timed in separate runs, the 393k step is still about
-5% slower than 0.7.5's with the following on (the same instructions and results;
-not yet explained).
+switching the following on and off within one run no longer changes its time.
+Timed in separate runs, the step is still 7-14% slower than 0.7.5's (the same
+results; the periodic slabs' changes to Evolver's core add nothing to it, measured
+against the fix's own commit); not yet explained.
 
 ## Threads and the Newton solver
 

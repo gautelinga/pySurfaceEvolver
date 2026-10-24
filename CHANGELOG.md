@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-10-24)
+
+Changes of topology: `Evolver.events()` finds the cuts, merges and contacts coming,
+`pinch_off()`, `merge()` and `contact()` make them, and `recipes.arclength(...,
+topology=True)` goes on through them (liquid cut off keeps its volume, `outlet=` lets
+the rest drain); 16-bead packs drain to breakthrough. Slabs periodic in x and y
+(`periods=`); spheres without poles (`gauge="flux"`), with a fast sum for large packs,
+and spheres with a chosen axis (`axis=`). Newton steps are 7-14% slower than 0.7.5's
+on large surfaces, `relax()` 0-5% (docs/performance.md). No breaking changes.
 
 ### API
 
