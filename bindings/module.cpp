@@ -709,16 +709,19 @@ NB_MODULE(_core, m) {
   m.def("slabflux_setup", [](std::vector<double> L, double zf, std::vector<double> beads,
                              double floor_angle, double floor_tension, std::vector<double> prm,
                              std::vector<double> stencil, int nh, std::vector<double> H,
-                             std::vector<double> pinv) {
+                             std::vector<double> pinv, std::vector<double> sources,
+                             std::vector<double> grid) {
     Lock lock;
     if ( L.size() != 2 || beads.size() % 6 || prm.size() != 7 || stencil.size() % 3
-         || pinv.size() != size_t(nh)*stencil.size() || nh <= 0 || H.size() % size_t(nh) )
+         || pinv.size() != size_t(nh)*stencil.size() || nh <= 0 || H.size() % size_t(nh)
+         || sources.size() % 5 || grid.size() != 4 )
       throw std::invalid_argument("slabflux_setup(): bad sizes");
     return bool(pyse_slabflux_setup(L.data(), zf, int(beads.size()/6), beads.data(), floor_angle,
                                     floor_tension, prm.data(), int(stencil.size()/3),
-                                    stencil.data(), nh, H.data(), pinv.data()));
+                                    stencil.data(), nh, H.data(), pinv.data(),
+                                    int(sources.size()/5), sources.data(), grid.data()));
   }, "L"_a, "zf"_a, "beads"_a, "floor_angle"_a, "floor_tension"_a, "prm"_a, "stencil"_a,
-     "nh"_a, "H"_a, "pinv"_a,
+     "nh"_a, "H"_a, "pinv"_a, "sources"_a, "grid"_a,
      "The flux gauge's fields in a periodic slab (_periodic.slab_flux): set up.");
   m.def("slabflux_key", [](std::string method, int con, int which, int kind, int wall) {
     Lock lock;

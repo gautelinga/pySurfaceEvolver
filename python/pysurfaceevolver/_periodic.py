@@ -31,7 +31,7 @@ periodic-invariant walls here.
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -191,7 +191,9 @@ def move_near(ev, vertex_ids, points) -> None:
     if periods is None:
         return
     m = ev.mesh()
-    rows = np.searchsorted(m.vertex_ids, np.asarray(vertex_ids))
+    ids = np.asarray(m.vertex_ids)
+    order = np.argsort(ids, kind="stable")      # (ids aren't sorted after changes)
+    rows = order[np.searchsorted(ids, np.asarray(vertex_ids).ravel(), sorter=order)]
     L = np.asarray(periods)
     shift = np.round((np.atleast_2d(points)[:, :2] - m.vertices[rows, :2])/L).astype(int)
     cmds = [f"wrap_vertex({int(v)},{wrap_code(s)})"
@@ -320,7 +322,8 @@ def slab_flux(walls: Dict[Any, Any], number: Dict[Any, int], periods, bodies) ->
     beads = [(k, w) for k, w in walls.items() if getattr(w, "slabflux", None)]
     if not beads:
         return False
-    floor = [w for w in walls.values() if getattr(w, "shape", (None,))[0] == "plane"]
+    floor = [w for w in walls.values() if getattr(w, "shape", (None,))[0] == "plane"
+             and not isinstance(w.shape[1], str) and float(w.shape[1][2]) > 0.5]
     zf, fa, ft = float("nan"), float("nan"), 1.0
     if floor:
         zf = float(floor[0].shape[2])
@@ -336,10 +339,43 @@ def slab_flux(walls: Dict[Any, Any], number: Dict[Any, int], periods, bodies) ->
     h = min(radii)/4
     s = SLAB_FLUX
     u, H, pinv = _fit(int(s["p_T"]))
-    ok = _core.slabflux_setup(list(map(float, periods)), zf, rows, fa, ft,
+    sources: List[float] = []
+    if periods is not None:
+        lattice, grid = list(map(float, periods)), [0.0, 0.0, *map(float, periods)]
+    else:
+        # without periods (_flux.assemble_fast): each sphere's source and its
+        # images in the floor and, in a box, in its walls (their fields' flux
+        # through the walls 0: a lattice of twice the box), the grid over the
+        # box; else the spheres' bounds, every source outside it
+        from ._flux import _fast_walls
+        layout = _fast_walls(walls)
+        if layout is None:
+            raise RuntimeError("the fast flux sum: walls it can't take")
+        box = layout[1]
+        c = np.array([w.slabflux[0] for _, w in beads], float)
+        for i, (_, w) in enumerate(beads):
+            xs, ys = [c[i, 0]], [c[i, 1]]
+            if box is not None:
+                xs.append(2*box[0] - c[i, 0])
+                ys.append(2*box[1] - c[i, 1])
+            zs = [c[i, 2]] + ([2*zf - c[i, 2]] if floor else [])
+            for a, x in enumerate(xs):
+                for b, y in enumerate(ys):
+                    for k, z in enumerate(zs):
+                        sources += [x, y, z, float(i), float(a == b == k == 0)]
+        if box is not None:
+            lattice = [2*(box[2] - box[0]), 2*(box[3] - box[1])]
+            grid = [box[0] - 2*h, box[1] - 2*h, box[2] - box[0] + 4*h, box[3] - box[1] + 4*h]
+        else:
+            lattice = [0.0, 0.0]
+            lo, hi = (c - np.array(radii)[:, None]).min(axis=0), \
+                (c + np.array(radii)[:, None]).max(axis=0)
+            m = 3*max(radii)
+            grid = [lo[0] - m, lo[1] - m, hi[0] - lo[0] + 2*m, hi[1] - lo[1] + 2*m]
+    ok = _core.slabflux_setup(lattice, zf, rows, fa, ft,
                               [h, s["kappa"], s["p"], s["kappa_w"], s["p_w"], s["M"], s["p_T"]],
                               list(u.ravel()), int(H.shape[1]), list(H.ravel()),
-                              list(pinv.ravel()))
+                              list(pinv.ravel()), sources, grid)
     if not ok:
         raise RuntimeError("the periodic flux gauge's fields couldn't be set up (memory?)")
     keys = [(VOLUME_METHOD, 0, 0, 0, 0)] + [(f"body_{int(b)}_vol_meth", 0, 0, 0, 0)

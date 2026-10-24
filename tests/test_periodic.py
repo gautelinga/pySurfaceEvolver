@@ -243,3 +243,58 @@ def test_the_flux_gauges_field_far_above_the_beads():
         o = np.array(_core.slabflux_probe([0.3, 0.4, z]))
         n = len(o)//2
         assert np.abs(o[:n] - o[n:]).max() < 1e-9*np.abs(o[n:]).max()
+
+
+def _drop_among_spheres(mode, n, floor=False, box=False):
+    from pysurfaceevolver import shapes as S
+    cap = S.cap(0.5, 0.25, nr=4, nt=12)
+    v = cap.vertices + [0, 0, 1.0]
+    rim = np.asarray(cap.rims["rim"])
+    v[rim] /= np.linalg.norm(v[rim], axis=1)[:, None]
+    cons = {"ball": C.sphere((0, 0, 0), 1.0, contact_angle=60.0, gauge="flux")}
+    for i in range(n):
+        cons[f"s{i}"] = C.sphere((0.6*(i % 9) - 2.4, 0.6*(i//9) - 2.4, -2.0 - 0.1*(i % 3)), 0.2,
+                                 contact_angle=60.0, gauge="flux")
+    if floor:
+        cons["bottom"] = C.plane((0, 0, 1), -3.0, contact_angle=90.0)
+    if box:
+        for k, (n_, d) in enumerate([((1, 0, 0), -4.0), ((-1, 0, 0), -4.0),
+                                     ((0, 1, 0), -4.0), ((0, -1, 0), -4.0)]):
+            cons[f"side{k}"] = C.plane(n_, d, contact_angle=90.0)
+    ev = pyse.Evolver()
+    ev.load_arrays(v, cap.faces, constraints=cons, vertex_constraints={"ball": rim},
+                   bodies=[pyse.Body(volume=None)], flux_sum=mode)
+    ev.body(1).target = ev.body(1).volume
+    return ev
+
+
+@pytest.mark.parametrize("n", [10, 70])
+def test_the_fast_flux_sum_is_the_direct_one(n):
+    # (spheres only: the near ones directly, the far ones by local
+    # expansions, against every sphere's sum, through steps and Newton)
+    found = []
+    for mode in ("direct", "fast"):
+        ev = _drop_among_spheres(mode, n)
+        out = [(ev.energy, ev.body(1).volume)]
+        for c in ["g 5", "r", "g 10", "hessian", "hessian"]:
+            ev.command(c)
+            out.append((ev.energy, ev.body(1).volume))
+        found.append(np.array(out))
+    assert np.abs(found[0] - found[1]).max() < 1e-11
+
+
+def test_the_fast_flux_sum_in_a_box():
+    # (the spheres' images in the floor and the box's walls, a lattice of
+    # twice the box: no line integrals on the walls; the same as the direct
+    # sums' to the facets' quadrature of the images' fields)
+    found = []
+    for mode in ("direct", "fast"):
+        ev = _drop_among_spheres(mode, 20, floor=True, box=True)
+        ev.command("g 5; r; g 10; hessian; hessian")
+        found.append((ev.energy, ev.body(1).volume, ev.residual()))
+    assert found[1][2] < 2*found[0][2] + 1e-12
+    assert abs(found[0][0] - found[1][0]) < 1e-5 and abs(found[0][1] - found[1][1]) < 1e-5
+    with pytest.raises(ValueError, match="fast"):
+        pyse.make_datafile(np.eye(3), [[0, 1, 2]], flux_sum="fast", constraints={
+            "ball": C.sphere((0, 0, 0), 1.0, gauge="flux"),
+            "tilted": C.plane((1, 0, 1), 0.0)})

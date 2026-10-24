@@ -289,3 +289,77 @@ def native_specs(walls: Dict[Any, Any]) -> "tuple[list, list]":
     if wet:
         facets.append((ENERGY_QUANTITY, 0, wet))
     return lines, facets
+
+
+# the fast sum (pyse_slabflux.c, without periods): from this many spheres on
+# with flux_sum="auto". Its cost a point is about constant (2.3 us on a
+# sheet over a layer of beads), the direct sums' (SIMD) linear in the
+# spheres: 0.5 against 2.3 us at 256, 1.2 against 2.3 at 1024 (2026-10-24)
+FAST_SPHERES = 2000
+
+
+def _fast_walls(cons: Dict[Any, Any]):
+    """The walls' layout for the fast sum, or None where it can't take them:
+    (the floor's key or None, the box (x0, y0, x1, y1) or None). It takes
+    spheres with gauge="flux", at most one floor (a plane facing up), and
+    either no other plane or the four walls of a box at 90 degrees."""
+    floor, sides = None, []
+    for key, spec in cons.items():
+        shape = getattr(spec, "shape", None)
+        if getattr(spec, "flux", None) is not None or getattr(spec, "slabflux", None):
+            continue
+        if shape is None or shape[0] != "plane" or isinstance(shape[1], str):
+            return None
+        n = np.asarray(shape[1], float)
+        if abs(n[0]) < 1e-12 and abs(n[1]) < 1e-12 and n[2] > 0:
+            if floor is not None:
+                return None
+            floor = key
+        elif abs(n[2]) < 1e-12 and (abs(abs(n[0]) - 1) < 1e-12 or abs(abs(n[1]) - 1) < 1e-12):
+            angle = spec.contact_angle
+            if angle is not None and (isinstance(angle, str) or abs(np.cos(np.radians(angle))) > 1e-12):
+                return None
+            sides.append((n, float(shape[2])))
+        else:
+            return None
+    box = None
+    if sides:
+        if len(sides) != 4:
+            return None
+        x = sorted(d*n[0] for n, d in sides if abs(n[0]) > 0.5)
+        y = sorted(d*n[1] for n, d in sides if abs(n[1]) > 0.5)
+        if len(x) != 2 or len(y) != 2 or not (x[1] > x[0] and y[1] > y[0]):
+            return None
+        box = (x[0], y[0], x[1], y[1])
+    return floor, box
+
+
+def assemble_fast(cons: Dict[Any, Any], mode: str) -> "Tuple[Dict[Any, Any], str] | None":
+    """assemble() by the fast sum (mode "fast", or "auto" from FAST_SPHERES
+    spheres), or None for the direct sums."""
+    from ._periodic import _assemble_flux
+    from .constraints import _Coefficient
+    spheres = [k for k, spec in cons.items()
+               if getattr(spec, "flux", None) or getattr(spec, "slabflux", None)]
+    done = any(getattr(cons[k], "slabflux", None) for k in spheres)   # (made so before)
+    if not done and (mode == "direct" or not spheres
+                     or (mode == "auto" and len(spheres) < FAST_SPHERES)):
+        return None
+    layout = _fast_walls(cons)
+    if layout is None:
+        if mode == "fast":
+            raise ValueError("flux_sum='fast' takes spheres with gauge='flux', a floor and the "
+                             "four walls of a box at 90 degrees (or none)")
+        return None
+    floor, box = layout
+    z_f, k_f = 0.0, None
+    if floor is not None:
+        z_f = float(cons[floor].shape[2])
+        frame = cons[floor].frame
+        k_f = _Coefficient(cons[floor].contact_angle, frame[4] if frame else 1.0)
+    rest = {k: v for k, v in cons.items() if k == floor or k in spheres}
+    out, lines = _assemble_flux(rest, spheres, floor, z_f, k_f)
+    for key, spec in cons.items():
+        if key not in rest:
+            out[key] = dataclasses.replace(spec, slab=True)
+    return out, lines

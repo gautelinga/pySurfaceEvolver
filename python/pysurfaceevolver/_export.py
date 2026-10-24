@@ -138,6 +138,12 @@ class _Export(_Engine):
             from ._periodic import assemble
             kwargs = dict(kwargs, constraints=assemble(
                 {k: c for k, c in kwargs["constraints"].items()}, kwargs["periods"])[0])
+        elif kwargs.get("constraints"):
+            # (likewise the fast sum's, without periods)
+            from ._flux import assemble_fast
+            fast = assemble_fast(dict(kwargs["constraints"]), kwargs.get("flux_sum", "auto"))
+            if fast is not None:
+                kwargs = dict(kwargs, constraints=fast[0])
         output = self.load_string(make_datafile(vertices, faces, **kwargs))
         _surface.walls = {k: c for k, c in (kwargs.get("constraints") or {}).items()
                          if getattr(c, "shape", None) is not None}

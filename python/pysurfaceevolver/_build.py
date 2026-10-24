@@ -163,6 +163,7 @@ def make_datafile(
     header: str = "",
     commands: str = "",
     periods: Optional[Sequence[float]] = None,
+    flux_sum: str = "auto",
 ) -> str:
     """Write Surface Evolver datafile text for a surface given as arrays.
 
@@ -225,6 +226,13 @@ def make_datafile(
         each edge runs to the nearest image of its head, so every edge must
         be shorter than half a period. The walls may be one floor (a plane
         facing up) and spheres; see :mod:`pysurfaceevolver._periodic`.
+    flux_sum:
+        How spheres with ``gauge="flux"`` sum their fields without periods:
+        ``"direct"`` (every sphere's at every point), ``"fast"`` (near
+        spheres directly, far ones by local expansions, to ~1e-10 of the
+        field; spheres, a floor and the four walls of a box at 90 degrees),
+        or ``"auto"`` (fast from ``_flux.FAST_SPHERES`` spheres where the
+        walls allow it). With periods the sum is always the fast one.
 
     Edges are numbered in this order: explicit ``edges`` first, then edges
     derived from faces in order of first use.
@@ -458,8 +466,14 @@ def make_datafile(
         out.append(slab_lines)
     # spheres without poles (constraints.sphere(gauge="flux")): their facet
     # integrals, and every wall's line integrals for them
-    from ._flux import assemble
-    cons, flux_lines = assemble(cons)
+    from ._flux import assemble, assemble_fast
+    if flux_sum not in ("auto", "direct", "fast"):
+        raise ValueError("flux_sum must be 'auto', 'direct' or 'fast'")
+    fast = None if periods is not None else assemble_fast(cons, flux_sum)
+    if fast is not None:
+        cons, flux_lines = fast
+    else:
+        cons, flux_lines = assemble(cons)
     out.append(flux_lines)
     for number, spec in cons.items():
         out.append(_constraint_text(number, spec))

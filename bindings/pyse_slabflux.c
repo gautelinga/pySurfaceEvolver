@@ -93,7 +93,8 @@ static struct
 { long load;
   int on;
   REAL L[2], zf, z0;            /* periods, the floor (NaN: none), boxes' base height */
-  int mirror;
+  int mirror, lattice;            /* the floor's images; periodic in x and y */
+  REAL ox, oy;                    /* the boxes' grid's corner */
   int nbead;
   REAL (*bead)[3]; REAL *R;
   int ncls, nen;                /* classes: nen energy ones, then the volume's */
@@ -116,6 +117,9 @@ static struct
   struct sf_layer **layer;
   /* walls (one per sphere) */
   struct sf_region **wall;
+  /* every explicit source, near (outside the grid without a lattice) */
+  struct sf_region all;
+  REAL all_phi[SF_MAXCLS];
 } sf;
 
 static long sf_gen = 1;          /* bumped at each setup (the caches' key) */
@@ -326,7 +330,7 @@ static struct sf_layer *sf_layer_make(int il)
   int nm = NMONO(sf.pT), k, m, cl, ns = sf.ns;
   REAL *samples, *coef, E[3];
   if ( !t ) return NULL;
-  t->c[0] = sf.L[0]/2; t->c[1] = sf.L[1]/2; t->c[2] = sf.z0 + (il + 0.5)*sf.hl;
+  t->c[0] = sf.ox + sf.L[0]/2; t->c[1] = sf.oy + sf.L[1]/2; t->c[2] = sf.z0 + (il + 0.5)*sf.hl;
   t->rho = 1.05*sqrt(sf.L[0]*sf.L[0]/4 + sf.L[1]*sf.L[1]/4 + sf.hl*sf.hl/4);
   t->phi = (REAL*)calloc((size_t)sf.ncls*nm,sizeof(REAL));
   samples = (REAL*)calloc((size_t)sf.ncls*3*ns,sizeof(REAL));
@@ -422,10 +426,12 @@ static struct sf_region *sf_region_make(const REAL *c, REAL r, REAL kappa, int p
     else sf_taylor_add(c,e->c,p,r,e->q,sf.ncls,g->phi,nm,work);
   }
   /* the tail, from the layer at the region's height */
-  t = sf_layer_at(c[2]);
-  if ( !t ) goto fail;
-  for ( cl = 0 ; cl < sf.ncls ; cl++ )
-    sf_shift_add(t->phi + cl*NMONO(sf.pT),sf.pT,t->c,t->rho,c,r,p,g->phi + cl*nm);
+  if ( sf.lattice )
+  { t = sf_layer_at(c[2]);
+    if ( !t ) goto fail;
+    for ( cl = 0 ; cl < sf.ncls ; cl++ )
+      sf_shift_add(t->phi + cl*NMONO(sf.pT),sf.pT,t->c,t->rho,c,r,p,g->phi + cl*nm);
+  }
   free(work);
   return g;
 fail:
@@ -436,11 +442,16 @@ fail:
 static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
 { int ix, iy, iz, i;
   struct sf_region *g;
-  xc[0] = x[0] - sf.L[0]*floor(x[0]/sf.L[0]);
-  xc[1] = x[1] - sf.L[1]*floor(x[1]/sf.L[1]);
-  xc[2] = x[2];
-  ix = (int)floor(xc[0]/sf.bx); if ( ix >= sf.nx ) ix = sf.nx - 1; if ( ix < 0 ) ix = 0;
-  iy = (int)floor(xc[1]/sf.by); if ( iy >= sf.ny ) iy = sf.ny - 1; if ( iy < 0 ) iy = 0;
+  xc[0] = x[0]; xc[1] = x[1]; xc[2] = x[2];
+  if ( sf.lattice )
+  { xc[0] -= sf.L[0]*floor((x[0] - sf.ox)/sf.L[0]);
+    xc[1] -= sf.L[1]*floor((x[1] - sf.oy)/sf.L[1]);
+  }
+  ix = (int)floor((xc[0] - sf.ox)/sf.bx);
+  iy = (int)floor((xc[1] - sf.oy)/sf.by);
+  if ( sf.lattice && ix == sf.nx && sf.nx*sf.bx >= sf.L[0]*(1 - 1e-12) ) ix = sf.nx - 1;
+  if ( sf.lattice && iy == sf.ny && sf.ny*sf.by >= sf.L[1]*(1 - 1e-12) ) iy = sf.ny - 1;
+  if ( ix < 0 || ix >= sf.nx || iy < 0 || iy >= sf.ny ) return NULL;
   iz = (int)floor((xc[2] - sf.z0)/sf.bz) - sf.izmin;
   if ( iz < 0 || iz >= sf.nz ) return NULL;
   i = (iz*sf.ny + iy)*sf.nx + ix;
@@ -451,7 +462,8 @@ static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
 #endif
   { g = sf.box[i];
     if ( !g )
-    { REAL c[3] = { (ix + 0.5)*sf.bx, (iy + 0.5)*sf.by, sf.z0 + (iz + sf.izmin + 0.5)*sf.bz };
+    { REAL c[3] = { sf.ox + (ix + 0.5)*sf.bx, sf.oy + (iy + 0.5)*sf.by,
+                    sf.z0 + (iz + sf.izmin + 0.5)*sf.bz };
       REAL r = 0.5*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
       g = sf_region_make(c,r,sf.kappa,sf.p,-1);
       __atomic_store_n(&sf.box[i],g,__ATOMIC_RELEASE);
@@ -505,7 +517,7 @@ static struct sf_region *sf_wall_make(int j)
 int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *beads,
                         double floor_angle, double floor_tension, const double *prm,
                         int ns, const double *stencil, int nh, const double *H,
-                        const double *pinv)
+                        const double *pinv, int nsrc, const double *src, const double *grid)
 { int i, j, k, cl;
   REAL zmin = HUGE_VAL, zmax = -HUGE_VAL, Lmin;
   sf_monos();
@@ -516,9 +528,10 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   sf_free();
   sf.load = pyse_load_serial();
   sf.L[0] = L[0]; sf.L[1] = L[1];
+  sf.lattice = L[0] > 0 && L[1] > 0;
   sf.zf = zf; sf.mirror = !isnan(zf);
   sf.h = prm[0]; sf.kappa = prm[1]; sf.p = (int)prm[2]; sf.kappa_w = prm[3]; sf.pw = (int)prm[4];
-  sf.M = (int)prm[5]; sf.pT = (int)prm[6];
+  sf.M = sf.lattice ? (int)prm[5] : 0; sf.pT = (int)prm[6];
   if ( sf.p > SF_PMAX || sf.pw > SF_PMAX || sf.pT > SF_PMAX || nbead <= 0
        || NMONO(sf.pT)*nh <= 0 ) return 0;
   sf.nbead = nbead;
@@ -545,19 +558,29 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   sf.ncls = sf.nen + 1;
   sf.floor_energy = !isnan(floor_angle) && cos(floor_angle*M_PI/180.0) != 0;
   sf.floor_angle = floor_angle; sf.floor_tension = floor_tension;
-  /* the base sources, and the explicit images */
-  sf.nbase = nbead*(sf.mirror ? 2 : 1);
+  /* the base sources (given: x, y, z, bead, own; else each bead's and its
+     mirror in the floor), and the explicit images */
+  sf.nbase = nsrc > 0 ? nsrc : nbead*(sf.mirror ? 2 : 1);
   sf.base = (struct sf_src*)calloc(sf.nbase,sizeof(struct sf_src));
   sf.nexp = sf.nbase*(2*sf.M + 1)*(2*sf.M + 1);
   sf.exp = (struct sf_src*)calloc(sf.nexp,sizeof(struct sf_src));
   if ( !sf.base || !sf.exp ) { sf_free(); return 0; }
-  for ( i = 0, k = 0 ; i < nbead ; i++ )
-  { const double *b = beads + 6*i;
-    int mi;
-    for ( mi = 0 ; mi < (sf.mirror ? 2 : 1) ; mi++, k++ )
+  for ( i = 0, k = 0 ; i < (nsrc > 0 ? nsrc : nbead) ; i++ )
+  { int bi = nsrc > 0 ? (int)src[5*i+3] : i, mi;
+    const double *b;
+    if ( bi < 0 || bi >= nbead ) { sf_free(); return 0; }
+    b = beads + 6*bi;
+    for ( mi = 0 ; mi < (nsrc > 0 ? 1 : sf.mirror ? 2 : 1) ; mi++, k++ )
     { struct sf_src *s = sf.base + k;
-      s->c[0] = b[0]; s->c[1] = b[1]; s->c[2] = mi ? 2*zf - b[2] : b[2];
-      s->bead = i; s->own = !mi;
+      if ( nsrc > 0 )
+      { s->c[0] = src[5*i]; s->c[1] = src[5*i+1]; s->c[2] = src[5*i+2];
+        s->own = src[5*i+4] != 0;
+      }
+      else
+      { s->c[0] = b[0]; s->c[1] = b[1]; s->c[2] = mi ? 2*zf - b[2] : b[2];
+        s->own = !mi;
+      }
+      s->bead = bi;
       s->K2 = SF_CORE*SF_CORE*b[3]*b[3]; s->iK3 = 1.0/(s->K2*SF_CORE*b[3]);
       s->q[sf.nen] = -b[3]*b[3]*b[3]/3.0;
       if ( !isnan(b[4]) && cos(b[4]*M_PI/180.0) != 0 )
@@ -577,10 +600,12 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
       }
   }
   /* Ewald: erfc(alpha r) and the k-space terms down to ~1e-17 */
-  Lmin = sf.L[0] < sf.L[1] ? sf.L[0] : sf.L[1];
-  sf.alpha = sqrt(M_PI/(sf.L[0]*sf.L[1]));
-  sf.nr = (int)ceil(6.0/(sf.alpha*Lmin) + 0.5);
-  sf.nk = (int)ceil(12.0*sf.alpha*(sf.L[0] > sf.L[1] ? sf.L[0] : sf.L[1])/(2*M_PI));
+  Lmin = sf.lattice ? (sf.L[0] < sf.L[1] ? sf.L[0] : sf.L[1]) : grid[2] < grid[3] ? grid[2] : grid[3];
+  if ( sf.lattice )
+  { sf.alpha = sqrt(M_PI/(sf.L[0]*sf.L[1]));
+    sf.nr = (int)ceil(6.0/(sf.alpha*Lmin) + 0.5);
+    sf.nk = (int)ceil(12.0*sf.alpha*(sf.L[0] > sf.L[1] ? sf.L[0] : sf.L[1])/(2*M_PI));
+  }
   /* the tail's fit */
   sf.ns = ns; sf.nh = nh;
   sf.stencil = (REAL*)malloc((size_t)3*ns*sizeof(REAL));
@@ -592,8 +617,11 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   for ( i = 0 ; i < nh*3*ns ; i++ ) sf.pinv[i] = pinv[i];
   /* boxes: the cell in x and y, layers of 2h from below the lowest bead (or
      the floor) to well above the highest */
-  sf.nx = (int)ceil(sf.L[0]/(2*sf.h)); sf.ny = (int)ceil(sf.L[1]/(2*sf.h));
-  sf.bx = sf.L[0]/sf.nx; sf.by = sf.L[1]/sf.ny; sf.bz = 2*sf.h;
+  /* (the grid: grid[0..1] its corner, [2..3] its size in x and y; with a
+     lattice, points are taken into it by whole periods) */
+  sf.ox = grid[0]; sf.oy = grid[1];
+  sf.nx = (int)ceil(grid[2]/(2*sf.h)); sf.ny = (int)ceil(grid[3]/(2*sf.h));
+  sf.bx = grid[2]/sf.nx; sf.by = grid[3]/sf.ny; sf.bz = 2*sf.h;
   sf.z0 = sf.mirror ? zf : zmin;
   sf.izmin = (int)floor((zmin - sf.z0)/sf.bz) - 2;
   if ( sf.izmin > -2 ) sf.izmin = -2;
@@ -608,6 +636,10 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   if ( !sf.box || !sf.layer || !sf.wall ) { sf_free(); return 0; }
   for ( i = 0 ; i < nbead ; i++ )
     if ( !(sf.wall[i] = sf_wall_make(i)) ) { sf_free(); return 0; }
+  memset(&sf.all,0,sizeof(sf.all));
+  memset(sf.all_phi,0,sizeof(sf.all_phi));
+  sf.all.rho = 1.0; sf.all.p = 0; sf.all.nnear = sf.nexp; sf.all.near = sf.exp;
+  sf.all.phi = sf.all_phi;
   sf.on = 1;
   sf_gen++;
   return 1;
@@ -665,6 +697,10 @@ static int sf_fields(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL
 { REAL xc[3], u[3], D[20], mv[(SF_PMAX + 1)*(SF_PMAX + 2)*(SF_PMAX + 3)/6];
   struct sf_region *g = sf_box_at(x,xc);
   int cl, s, m, i, j, nm;
+  if ( !g && !sf.lattice )
+  { g = &sf.all;               /* (outside the grid, no lattice: every source) */
+    for ( m = 0 ; m < 3 ; m++ ) xc[m] = x[m];
+  }
   if ( !g ) return 0;
   memset(V,0,sf.ncls*sizeof(*V));
   if ( order >= 1 ) memset(G,0,sf.ncls*sizeof(*G));
@@ -736,7 +772,8 @@ static void sf_wall_fields(int j, const REAL *x0, int order, REAL V[][3], REAL G
   int s, cl, m, i, k, nm = NMONO(g->p);
   /* (the image of x nearest the sphere: its vertices are kept there) */
   for ( m = 0 ; m < 3 ; m++ ) x[m] = x0[m];
-  for ( m = 0 ; m < 2 ; m++ ) x[m] = c[m] + (x[m] - c[m]) - sf.L[m]*floor((x[m] - c[m])/sf.L[m] + 0.5);
+  if ( sf.lattice )
+    for ( m = 0 ; m < 2 ; m++ ) x[m] = c[m] + (x[m] - c[m]) - sf.L[m]*floor((x[m] - c[m])/sf.L[m] + 0.5);
   memset(V,0,sf.ncls*sizeof(*V));
   if ( order >= 1 ) memset(G,0,sf.ncls*sizeof(*G));
   if ( order >= 2 ) memset(S,0,sf.ncls*sizeof(*S));
@@ -895,8 +932,9 @@ static int sf_eval(const struct sf_key *k, const REAL *x, int order, REAL *v, RE
       REAL X, Y, Z, B[3], dB[3][3], f = k->kind == 2 ? -kf : -zf;
       REAL xx[3];
       for ( m = 0 ; m < 3 ; m++ ) xx[m] = x[m];
-      for ( m = 0 ; m < 2 ; m++ )
-        xx[m] = c[m] + (x[m] - c[m]) - sf.L[m]*floor((x[m] - c[m])/sf.L[m] + 0.5);
+      if ( sf.lattice )
+        for ( m = 0 ; m < 2 ; m++ )
+          xx[m] = c[m] + (x[m] - c[m]) - sf.L[m]*floor((x[m] - c[m])/sf.L[m] + 0.5);
       X = xx[0] - c[0]; Y = xx[1] - c[1]; Z = xx[2] - c[2];
       /* B = (x - c) x z-hat/2 = (Y/2, -X/2, 0) */
       B[0] = Y/2; B[1] = -X/2; B[2] = 0;

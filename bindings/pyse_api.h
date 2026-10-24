@@ -153,7 +153,7 @@ int pyse_native_flux(const char *method, int con, int which, int base, const dou
 int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *beads,
                         double floor_angle, double floor_tension, const double *prm,
                         int ns, const double *stencil, int nh, const double *H,
-                        const double *pinv);
+                        const double *pinv, int nsrc, const double *src, const double *grid);
 int pyse_slabflux_key(const char *method, int con, int which, int kind, int wall);
 int pyse_slabflux_probe(const double *x, double *out);
 int pyse_slabflux_field(int kind, int wall, const double *x, double *out);
