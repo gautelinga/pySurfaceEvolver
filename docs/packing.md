@@ -283,7 +283,8 @@ for base in (0.03, 0.01):
     V, curvature, z = np.array(rows).T
     k = int(np.argmax(curvature))
     print(f"bottom gaps {base}: the curvature peaks at {curvature[k]:.3f} (volume {V[k]:.3f}); "
-          f"the bottom meniscus at {z[k]:+.3f} there, {z[-1]:+.3f} at the end")
+          f"the bottom meniscus at {z[k]:+.3f} there, then "
+          + ("on into the pore" if z[-1] > z[k] else "back out"))
     turns = np.flatnonzero(np.diff(V[k:]) > 0)       # a fold: the volume turns back up
     print("   " + (f"the branch turns at volume {V[k + turns[0]]:.4f}" if len(turns)
                    else "the branch doesn't turn")
@@ -293,9 +294,9 @@ for base in (0.03, 0.01):
 ```
 
 ```text
-bottom gaps 0.03: the curvature peaks at 9.532 (volume 0.292); the bottom meniscus at -0.184 there, -0.091 at the end
+bottom gaps 0.03: the curvature peaks at 9.532 (volume 0.292); the bottom meniscus at -0.184 there, then on into the pore
    the branch turns at volume 0.2878; a negative mode at volume 0.291
-bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.253); the bottom meniscus at -0.294 there, -0.346 at the end
+bottom gaps 0.01: the curvature peaks at 10.002 (volume 0.253); the bottom meniscus at -0.294 there, then back out
    the branch doesn't turn; the surface about to touch mirror_0 at volume 0.204
 ```
 
