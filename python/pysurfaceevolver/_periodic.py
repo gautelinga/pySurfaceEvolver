@@ -172,3 +172,27 @@ def assemble(cons: Dict[Any, Any], periods) -> Tuple[Dict[Any, Any], str]:
         lines += [f"quantity {WETTING_QUANTITY} energy method facet_vector_integral global\n",
                   "vector_integrand:\nq1: 0\nq2: 0\n", f"q3: {ke}\n"]
     return out, "".join(lines)
+
+
+def wrap_code(shift) -> int:
+    """Evolver's wrap (group element) for a shift by whole periods (kx, ky):
+    TWRAPBITS = 6 bits a period, two's complement in 5."""
+    kx, ky = (int(k) for k in shift)
+    return (kx & 0o37) | ((ky & 0o37) << 6)
+
+
+def move_near(ev, vertex_ids, points) -> None:
+    """Move vertices to their images nearest points (rows), their edges'
+    wraps kept right (Evolver's wrap_vertex): before putting a vertex on a
+    sphere, whose vertices are kept near its centre."""
+    periods = ev.periods
+    if periods is None:
+        return
+    m = ev.mesh()
+    rows = np.searchsorted(m.vertex_ids, np.asarray(vertex_ids))
+    L = np.asarray(periods)
+    shift = np.round((np.atleast_2d(points)[:, :2] - m.vertices[rows, :2])/L).astype(int)
+    cmds = [f"wrap_vertex({int(v)},{wrap_code(s)})"
+            for v, s in zip(np.asarray(vertex_ids).ravel(), shift) if s.any()]
+    if cmds:
+        ev.command("; ".join(cmds))

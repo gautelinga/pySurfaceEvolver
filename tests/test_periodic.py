@@ -110,3 +110,17 @@ def test_walls_a_slab_cant_have():
                         ({"ball": C.sphere((0, 0, 1), 0.5, gauge="flux")}, "flux")]:
         with pytest.raises(ValueError, match=match):
             pyse.make_datafile(v, [[0, 1, 2]], constraints=cons, periods=PERIODS)
+
+
+def test_a_vertex_moved_to_another_image_keeps_the_surface():
+    from pysurfaceevolver import _periodic
+    ev = _drop(PERIODS)
+    e, v = ev.energy, ev.body(1).volume
+    m = ev.mesh()
+    x = m.vertices[5].copy()
+    _periodic.move_near(ev, [int(m.vertex_ids[5])], [x + [PERIODS[0], -PERIODS[1], 0]])
+    ev.command("recalc")
+    m = ev.mesh()
+    assert np.allclose(m.vertices[5] - x, [PERIODS[0], -PERIODS[1], 0])
+    assert abs(ev.energy - e) < 1e-14 and abs(ev.body(1).volume - v) < 1e-14
+    assert m.edge_lengths().max() < 0.2
