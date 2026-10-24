@@ -732,6 +732,12 @@ NB_MODULE(_core, m) {
   m.def("modeltype", []() { Lock lock; return pyse_modeltype(); });
   m.def("lagrange_order", []() { Lock lock; return pyse_lagrange_order(); });
   m.def("torus", []() { Lock lock; return bool(pyse_torus()); });
+  m.def("slab_periods", []() -> nb::object {
+    Lock lock;
+    double L[2];
+    if ( !pyse_slab_periods(L) ) return nb::none();
+    return nb::make_tuple(L[0], L[1]);
+  }, "(Lx, Ly) of a slab periodic in x and y (periods= in make_datafile), or None.");
   m.def("crystalline", []() { Lock lock; return bool(pyse_crystalline()); });
   m.def("symmetry", []() { Lock lock; return bool(pyse_symmetry()); });
   m.def("topology_stamp", []() { Lock lock; return pyse_topology_stamp(); });

@@ -1835,6 +1835,68 @@ int pyse_lagrange_order(void) { return web.lagrange_order; }
 int pyse_torus(void) { return web.torus_flag; }
 int pyse_crystalline(void) { return web.wulff_flag; }
 int pyse_symmetry(void) { return web.torus_flag || web.symmetry_flag; }
+
+/* ---- slabs periodic in x and y (pySE's periods=, _periodic.py) ----------
+   Evolver's torus with periods (Lx,0,0), (0,Ly,0) and a z period far beyond
+   the surface (1e5 or more): every edge shorter than half a period, so the
+   difference of two nearby vertices' coordinates is taken at its minimum
+   image, and an edge's wrap follows from its ends' coordinates. */
+static long slab_load = -2;
+static int slab_is = 0;
+static REAL slab_L[2];
+
+int pyse_slab(REAL *L)
+{ if ( slab_load != pyse_load_serial() )
+  { slab_load = pyse_load_serial();
+    slab_is = web.torus_flag && SDIM == 3 && web.torus_period
+      && web.torus_period[0][1] == 0 && web.torus_period[0][2] == 0
+      && web.torus_period[1][0] == 0 && web.torus_period[1][2] == 0
+      && web.torus_period[2][0] == 0 && web.torus_period[2][1] == 0
+      && web.torus_period[0][0] > 0 && web.torus_period[1][1] > 0
+      && web.torus_period[2][2] >= 1e5;
+    if ( slab_is ) { slab_L[0] = web.torus_period[0][0]; slab_L[1] = web.torus_period[1][1]; }
+  }
+  if ( slab_is && L ) { L[0] = slab_L[0]; L[1] = slab_L[1]; }
+  return slab_is;
+}
+
+/* d = b - a, in x and y at the minimum image in a slab */
+void pyse_delta(const REAL *a, const REAL *b, REAL *d)
+{ int i;
+  for ( i = 0 ; i < SDIM ; i++ ) d[i] = b[i] - a[i];
+  if ( pyse_slab(NULL) )
+    for ( i = 0 ; i < 2 ; i++ ) d[i] -= slab_L[i]*floor(d[i]/slab_L[i] + 0.5);
+}
+
+/* the wrap that takes head's coordinates to the image nearest tail's (0
+   outside a slab) */
+WRAPTYPE pyse_wrap_between(vertex_id tail, vertex_id head)
+{ REAL *a, *b;
+  WRAPTYPE w = 0;
+  int i;
+  if ( !pyse_slab(NULL) ) return 0;
+  a = get_coord(tail); b = get_coord(head);
+  for ( i = 1 ; i >= 0 ; i-- )
+  { int k = -(int)floor((b[i] - a[i])/slab_L[i] + 0.5);
+    w = (w << TWRAPBITS) | ((WRAPTYPE)k & WRAPMASK);
+  }
+  return w;
+}
+
+int pyse_slab_periods(double *L)
+{ REAL l[2];
+  if ( !pyse_slab(l) ) return 0;
+  L[0] = l[0]; L[1] = l[1];
+  return 1;
+}
+
+/* an edge's wrap set from its ends' coordinates (an edge pySE made: Evolver's
+   new_edge leaves it 0) */
+void pyse_edge_rewrap(edge_id e)
+{ if ( pyse_slab(NULL) )
+    set_edge_wrap(positive_id(e),pyse_wrap_between(get_edge_tailv(positive_id(e)),
+                                                   get_edge_headv(positive_id(e))));
+}
 long pyse_topology_stamp(void) { return top_timestamp; }
 /* The n lowest eigenpairs of the Hessian with the constraints held (as
    saddle and eigenprobe set it up, with linear_metric or area normalization

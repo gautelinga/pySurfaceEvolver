@@ -503,9 +503,20 @@ class Mesh:
     edge_node_index: Optional[np.ndarray] = None   # (order+1, 2) barycentric
     facet_nodes: Optional[np.ndarray] = None       # (k, nodes) vertex rows
     facet_node_index: Optional[np.ndarray] = None  # (nodes, 3) barycentric
+    # (Lx, Ly) of a slab periodic in x and y (make_datafile(periods=)), else
+    # None: vertices may sit at any image, and differences of nearby
+    # vertices' coordinates are taken at the minimum image (delta)
+    periods: Optional[Tuple[float, float]] = None
     # arrays computed from the mesh, kept with it (see _cached)
     _cache: Dict[str, np.ndarray] = field(default_factory=dict, init=False, repr=False,
                                           compare=False)
+
+    def delta(self, a, b) -> np.ndarray:
+        """``b - a`` for points or rows of points (coordinates), at the
+        minimum image in a periodic slab: the vector from a to the nearest
+        copy of b."""
+        from ._periodic import delta
+        return delta(a, b, self.periods)
 
     def _cached(self, name: str, compute) -> np.ndarray:
         if name not in self._cache:
@@ -517,8 +528,8 @@ class Mesh:
     def edge_lengths(self) -> np.ndarray:
         """The length of each edge (straight, between its end vertices),
         aligned with :attr:`edges`. Read-only (kept with the mesh)."""
-        return self._cached("edge_lengths", lambda: np.linalg.norm(
-            self.vertices[self.edges[:, 0]] - self.vertices[self.edges[:, 1]], axis=1))
+        return self._cached("edge_lengths", lambda: np.linalg.norm(self.delta(
+            self.vertices[self.edges[:, 0]], self.vertices[self.edges[:, 1]]), axis=1))
 
     def edge_valence(self) -> np.ndarray:
         """The number of facets on each edge (all 0 without facets), aligned
@@ -546,8 +557,22 @@ class Mesh:
             assert self.facets is not None
             p = _as_3d(self.vertices)
             a, b, c = (p[self.facets[:, i]] for i in range(3))
-            return 0.5*np.linalg.norm(np.cross(b - a, c - a), axis=1)
+            return 0.5*np.linalg.norm(np.cross(self.delta(a, b), self.delta(a, c)), axis=1)
         return self._cached("facet_areas", compute)
+
+    def facet_corners(self) -> np.ndarray:
+        """Each facet's corner coordinates, ``(k, 3, 3)``, at one image: in a
+        periodic slab the second and third corners moved to the copies
+        nearest the first (elsewhere just the corners). Read-only."""
+        if self.facets is None:
+            raise ValueError("facet_corners() needs facets (the soapfilm model)")
+        def compute() -> np.ndarray:
+            assert self.facets is not None
+            p = _as_3d(self.vertices)
+            a = p[self.facets[:, 0]]
+            return np.stack([a, a + self.delta(a, p[self.facets[:, 1]]),
+                             a + self.delta(a, p[self.facets[:, 2]])], axis=1)
+        return self._cached("facet_corners", compute)
 
     def _repr_html_(self) -> str:
         order = "linear" if self.order == 1 else f"order {self.order}"

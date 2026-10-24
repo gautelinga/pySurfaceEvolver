@@ -11,6 +11,12 @@ void pyse_surface_changed(void);
 
 /* which load the surface is (pyse_api.c): pySE's state keyed to it */
 long pyse_load_serial(void);
+/* slabs periodic in x and y (pyse_api.c): the periods, a minimum-image
+   difference, a wrap from coordinates, an edge's wrap set from them */
+int pyse_slab(REAL *L);
+void pyse_delta(const REAL *a, const REAL *b, REAL *d);
+WRAPTYPE pyse_wrap_between(vertex_id tail, vertex_id head);
+void pyse_edge_rewrap(edge_id e);
 
 /* changes to the native integrands (pyse_native.c): registrations, toggles */
 long pyse_native_serial(void);

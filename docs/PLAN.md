@@ -5,6 +5,38 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
+## Resume here (2026-10-24): periodic slab and flux gauge batch
+
+The user's choices (2026-10-24): an **x,y periodic slab** (floor below, free liquid on
+top; Evolver's torus with a z period far beyond the surface); the flux gauge scaled by a
+**fast sum to tolerance** (near sources direct, far ones by local expansions, ~1e-12,
+exact derivatives of the approximation for Newton); **periodic first**; and the
+**closed box**, the **interpreter's eval_second** and **general shapes** in the same
+batch. Approved as a batch: all phases, report at the end.
+
+* P0 done (b313ca5): u^y's second derivatives in Evolver's interpreter (two errors).
+* P1 foundation: `load_arrays(periods=(Lx, Ly))` (edges keyed by vertex pair and wrap,
+  wraps by minimum image: every edge shorter than half a period); volume by the facet
+  integral (0, 0, z) (no torus volume algorithm), walls' content to match; `Mesh` carries
+  the periods and wraps, minimum-image helpers in Python and C, new edges' wraps set in C.
+  Walls: spheres kept at their home image (vertices on a sphere's constraint near its
+  centre; events move a vertex there when it lands); a horizontal floor's own wetting by
+  the flux of z-hat (a facet integral, plus -(x - c) x z-hat/2 along each sphere's
+  contact lines), since plane()'s line integral isn't invariant under the periods. Axis-
+  and pole-gauge spheres are local: no lattice sums needed for them.
+* P2 geometry layer: ~140 sites (inventory 2026-10-24: pyse_edit/events/check.c, _surgery,
+  _events, _clusters, _mesh, _analysis, _relax, recipes, _geometry): minimum-image
+  differences, periodic grids, wrap upkeep; then lift the torus refusals.
+* P3 periodic flux gauge: each sphere's field the lattice sum of its source and its
+  mirror across the floor (F . z = 0 on the floor: no floor terms), 2D Ewald at setup
+  (prototype in the session's scratch matched for every splitting parameter), local
+  expansions per box and per sphere (the line integrals' primitive of a harmonic field in
+  a ball: B = -sum_l (x - c) x grad P_l/(l + 1), no strings), near sources direct.
+* P4 the same engine without the lattice: the fast sum for large packs.
+* P5 closed box: source-sink pairs (a box with a lid).
+* P6 general shapes: infinite cylinders by line sources.
+* P7 docs and examples (a periodic pack), timings.
+
 ## Resume here (2026-10-23)
 
 **Topology runs, 16-bead packs to breakthrough (stage-f-pack, unpushed):** the wide set

@@ -106,6 +106,12 @@ class _Export(_Engine):
         """Load a surface given as arrays; see :func:`make_datafile` for options.
         The walls among ``constraints`` (from :mod:`pysurfaceevolver.constraints`)
         are remembered for ``plot(walls=True)``."""
+        if kwargs.get("periods") is not None and kwargs.get("constraints"):
+            # (the walls made periodic-invariant once: the datafile's and the
+            # ones kept, whose data C evaluates, the same)
+            from ._periodic import assemble
+            kwargs = dict(kwargs, constraints=assemble(
+                {k: c for k, c in kwargs["constraints"].items()}, kwargs["periods"])[0])
         output = self.load_string(make_datafile(vertices, faces, **kwargs))
         _surface.walls = {k: c for k, c in (kwargs.get("constraints") or {}).items()
                          if getattr(c, "shape", None) is not None}

@@ -47,7 +47,7 @@ class Body:
 
 
 def _outward(rows: List[int], face_loops: List[List[int]], edge_list: List[tuple],
-             vertices: np.ndarray) -> List[int]:
+             vertices: np.ndarray, periods=None) -> List[int]:
     """Signs (+1/-1) that orient the faces ``rows`` consistently and outward,
     if they close a surface (each edge on exactly two of them); else all +1."""
     x = np.asarray(vertices, dtype=float)
@@ -85,9 +85,18 @@ def _outward(rows: List[int], face_loops: List[List[int]], edge_list: List[tuple
     volume = 0.0
     for k, r in enumerate(rows):
         loop = [edge_list[abs(e) - 1][0 if e > 0 else 1] for e in face_loops[r]]
-        p = x[loop]
+        if periods is not None:
+            from ._periodic import unwrap_loop
+            p = unwrap_loop(loop, x, periods)
+        else:
+            p = x[loop]
         for i in range(1, len(p) - 1):
-            volume += signs[k]*np.dot(p[0], np.cross(p[i], p[i + 1]))/6
+            if periods is not None:
+                # (z dx dy: invariant under the periods, as x . n isn't)
+                a, b = p[i] - p[0], p[i + 1] - p[0]
+                volume += signs[k]*(p[0][2] + p[i][2] + p[i + 1][2])/3*(a[0]*b[1] - a[1]*b[0])/2
+            else:
+                volume += signs[k]*np.dot(p[0], np.cross(p[i], p[i + 1]))/6
     return signs if volume >= 0 else [-s for s in signs]
 
 
@@ -153,6 +162,7 @@ def make_datafile(
     string: bool = False,
     header: str = "",
     commands: str = "",
+    periods: Optional[Sequence[float]] = None,
 ) -> str:
     """Write Surface Evolver datafile text for a surface given as arrays.
 
@@ -209,6 +219,12 @@ def make_datafile(
         options, ...).
     commands:
         Commands placed after ``read`` at the end of the file.
+    periods:
+        ``(Lx, Ly)``: the surface lives in a slab periodic in x and y (Evolver's
+        torus model; nothing wraps in z). Coordinates may lie at any image:
+        each edge runs to the nearest image of its head, so every edge must
+        be shorter than half a period. The walls may be one floor (a plane
+        facing up) and spheres; see :mod:`pysurfaceevolver._periodic`.
 
     Edges are numbered in this order: explicit ``edges`` first, then edges
     derived from faces in order of first use.
@@ -217,6 +233,11 @@ def make_datafile(
     if vertices.ndim != 2:
         raise ValueError("vertices must be an (n, sdim) array")
     nv, sdim = vertices.shape
+    if periods is not None:
+        from . import _periodic
+        periods = tuple(float(p) for p in _periodic.periods_of(periods))
+        if sdim != 3 or string:
+            raise ValueError("periods: a soapfilm surface in 3D only")
 
     def mask_of(sel, size, what="vertex") -> np.ndarray:
         if sel is None:
@@ -350,6 +371,16 @@ def make_datafile(
                       & (on_boundary[ev[:, 0]] == on_boundary[ev[:, 1]]),
                       on_boundary[ev[:, 0]], 0)
 
+    if periods is not None:
+        # spheres' vertices at the image near the centre (their integrands
+        # are evaluated there), then each edge's wrap by the minimum image
+        vertices = vertices.copy()
+        for c, m in vcons.items():
+            shape = getattr(cons.get(c), "shape", None)
+            if shape is not None and shape[0] == "sphere" and m.any():
+                vertices[m] = _periodic.home(vertices[m], shape[1], periods)
+        edge_wraps = _periodic.wraps(ev[:, 0], ev[:, 1], vertices, periods)
+
     # ---- bodies ------------------------------------------------------------
     body_list = [b if isinstance(b, Body) else Body(**b) for b in (bodies or [])]
     if len(body_list) > 1 and any(b.faces is None for b in body_list):
@@ -379,7 +410,7 @@ def make_datafile(
     stray = sorted(closing - set(toucher_count), key=str)
     for i, (b, (rows, corners, touched)) in enumerate(zip(body_list, info)):
         signs = ([int(s) for s in b.orientation] if b.orientation is not None
-                 else _outward(rows, face_loops, edge_list, vertices))
+                 else _outward(rows, face_loops, edge_list, vertices, periods))
         if len(signs) != len(rows) or any(s not in (1, -1) for s in signs):
             raise ValueError(f"body {i + 1}: orientation needs one +1/-1 per face")
         _check_walls(i + 1, touched, cons, vertices[corners])
@@ -415,8 +446,13 @@ def make_datafile(
         out.append(f"parameter {ANGLE_FLOOR} = 0\n")
     if gravity is not None:
         out.append(f"gravity_constant {float(gravity)!r}\n")
+    if periods is not None:
+        out.append(_periodic.header(periods))
     if header:
         out.append(header.rstrip() + "\n")
+    if periods is not None:
+        cons, slab_lines = _periodic.assemble(cons, periods)
+        out.append(slab_lines)
     # spheres without poles (constraints.sphere(gauge="flux")): their facet
     # integrals, and every wall's line integrals for them
     from ._flux import assemble
@@ -443,7 +479,8 @@ def make_datafile(
     out.append("\nedges\n")
     for i, (u, v) in enumerate(edge_list):
         extra = f" boundary {ebound[i]}" if ebound[i] else ""
-        out.append(f"{i + 1} {u + 1} {v + 1}" + extra + attrs(i, efixed, econs) + "\n")
+        wrap = " " + _periodic.wrap_text(edge_wraps[i]) if periods is not None else ""
+        out.append(f"{i + 1} {u + 1} {v + 1}" + wrap + extra + attrs(i, efixed, econs) + "\n")
     if face_loops:
         out.append("\nfaces\n")
         for i, loop in enumerate(face_loops):

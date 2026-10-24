@@ -731,6 +731,12 @@ class _Engine:
         return _core.torus()
 
     @property
+    def periods(self) -> Optional[Tuple[float, float]]:
+        """``(Lx, Ly)`` when the surface lives in a slab periodic in x and y
+        (``load_arrays(..., periods=)``), else None."""
+        return _core.slab_periods()  # type: ignore[return-value]
+
+    @property
     def total_energy(self) -> float:
         """Total energy as of the last iteration or recalculation."""
         self._check_handle(3)
@@ -815,8 +821,11 @@ class _Engine:
         fixed = fixed.astype(bool)
         _read_only(xyz, edges, faces, vids, eids, fids, fbodies, fixed,
                    edge_nodes, edge_index, facet_nodes, facet_index)
+        periods: Optional[Tuple[float, float]] = (_core.slab_periods()  # type: ignore[assignment]
+                                                  if hasattr(_core, "slab_periods") else None)
         return Mesh(xyz, edges, faces, vids, eids, fids, fbodies, fixed,
-                    order, bezier, edge_nodes, edge_index, facet_nodes, facet_index)
+                    order, bezier, edge_nodes, edge_index, facet_nodes, facet_index,
+                    periods=periods)
 
     def _register_native(self) -> None:
         """The sphere(axis=) walls' contact-line integrands evaluated in C
