@@ -419,13 +419,18 @@ class _Analysis(_Engine):
         vertices' chain on it), joined into polylines of vertex positions,
         longest first; a closed line repeats its first point. Curved models:
         through the corner vertices. For a drop's contact radius, say,
-        ``np.linalg.norm(line[:-1, :2] - line[:-1, :2].mean(axis=0), axis=1).mean()``."""
+        ``np.linalg.norm(line[:-1, :2] - line[:-1, :2].mean(axis=0), axis=1).mean()``.
+        In a periodic slab each line is unwrapped along itself from its first
+        vertex (a line round the cell ends a period from where it starts)."""
         m = self.mesh()
         on = self.on_constraint(constraint)
         e = m.edges
         mask = on[e[:, 0]] & on[e[:, 1]]
         if m.facets is not None and len(m.facets):
             mask &= m.edge_valence() == 1
+        if m.periods is not None:
+            from ._periodic import unwrap_loop
+            return [unwrap_loop(path, m.vertices, m.periods) for path in _chains(e[mask])]
         return [m.vertices[path] for path in _chains(e[mask])]
 
     def contact_angles(self, constraint: Union[int, str], body: Optional[int] = None) -> np.ndarray:
@@ -464,7 +469,7 @@ class _Analysis(_Engine):
                             np.where(m.facet_bodies[:, 1] == body, -1.0, 0.0))
         xyz = m.vertices[:, :3]
         a, b, c = (xyz[m.facets[:, i]] for i in range(3))
-        normals = np.cross(b - a, c - a)*sign[:, None]
+        normals = np.cross(m.delta(a, b), m.delta(a, c))*sign[:, None]
         vn = np.zeros_like(xyz)
         for k in range(3):
             np.add.at(vn, m.facets[:, k], normals)

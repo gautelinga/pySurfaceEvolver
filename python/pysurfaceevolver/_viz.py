@@ -59,8 +59,8 @@ def surface_dataset(ev: "Evolver", scalars: Scalars = None, element: Optional[st
 def _unwrap(ev: "Evolver", mesh: "Mesh") -> bool:
     """Whether to show the facets one by one, unwrapped: in a torus model
     (linear facets), where wrapped coordinates would stretch the facets
-    across the cell."""
-    return ev.torus and mesh.facets is not None and mesh.order == 1
+    across the cell. (A periodic slab's mesh draws its facets whole itself.)"""
+    return ev.torus and mesh.periods is None and mesh.facets is not None and mesh.order == 1
 
 
 def _unwrapped(ev: "Evolver", mesh: "Mesh", point_values: dict,
@@ -250,7 +250,7 @@ class LiveView:
         point_values, cell_values, name = _scalar_values(self.ev, mesh, self.scalars,
                                                          self.element)
         tess = self._tess
-        self.dataset.points = _as_3d(tess.sample(mesh.vertices))
+        self.dataset.points = _as_3d(tess.coordinates(mesh.vertices))
         for key, vals in point_values.items():
             self.dataset.point_data[key] = tess.sample(np.asarray(vals, float))
         if cell_values:

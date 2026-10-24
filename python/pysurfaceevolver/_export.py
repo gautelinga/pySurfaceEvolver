@@ -59,18 +59,44 @@ def _target_format(path: str, file_format: Optional[str]) -> "tuple[Optional[str
         flavor = "linear"
     return file_format, flavor
 
-def _vertex_index(vertices: np.ndarray, tol: float = 1e-9):
-    """Lookup from (rounded) position to vertex row, for :func:`_rows_of`."""
+def _in_cell(points: np.ndarray, periods) -> np.ndarray:
+    """Points moved into a periodic slab's cell [0, Lx) x [0, Ly)."""
+    L = np.asarray(periods, float)
+    p = np.array(points, dtype=float)
+    p[:, :2] -= L*np.floor(p[:, :2]/L)
+    return p
+
+
+def _vertex_index(vertices: np.ndarray, tol: float = 1e-9, periods=None):
+    """Lookup from (rounded) position to vertex row, for :func:`_rows_of`
+    (in a periodic slab, a point at any image of the vertex)."""
+    if periods is not None:
+        vertices = _in_cell(vertices, periods)
     step = tol * (float(np.abs(vertices).max()) or 1.0)
     keys = np.round(vertices / step).astype(np.int64)
-    return step, {tuple(k): i for i, k in enumerate(keys.tolist())}
+    return step, {tuple(k): i for i, k in enumerate(keys.tolist())}, periods
 
 
 def _rows_of(index, points: np.ndarray) -> np.ndarray:
     """Vertex row at the position of each point, or -1."""
-    step, rows = index
-    keys = np.round(np.asarray(points, float) / step).astype(np.int64)
-    return np.array([rows.get(tuple(k), -1) for k in keys.tolist()], dtype=np.int64)
+    step, rows, periods = index
+
+    def find(p):
+        keys = np.round(p / step).astype(np.int64)
+        return np.array([rows.get(tuple(k), -1) for k in keys.tolist()], dtype=np.int64)
+    points = np.asarray(points, float)
+    if periods is None:
+        return find(points)
+    points = _in_cell(points, periods)
+    found = find(points)
+    for shift in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)):
+        miss = np.flatnonzero(found < 0)     # (on the cell's side: the other side's)
+        if not len(miss):
+            break
+        q = points[miss].copy()
+        q[:, :2] += np.asarray(shift)*np.asarray(periods, float)
+        found[miss] = find(q)
+    return found
 
 
 def _merge_points(points: np.ndarray, faces: np.ndarray, tolerance: float):
@@ -138,6 +164,10 @@ class _Export(_Engine):
 
         Other keyword arguments go to :func:`make_datafile`.
         """
+        if kwargs.get("periods") is not None and volume is not None:
+            # (the points merged and the volume measured as they are)
+            raise ValueError("load_mesh_file: volume= with periods: give the body with "
+                             "load_arrays(periods=)")
         meshio = _import_meshio()
         mesh = meshio.read(os.fspath(path))
         tris = []
@@ -225,7 +255,7 @@ class _Export(_Engine):
             if key not in constraint_of:
                 if not lookup:
                     lookup["on"] = self._vertex_constraints()
-                    lookup["index"] = _vertex_index(mesh.vertices)
+                    lookup["index"] = _vertex_index(mesh.vertices, periods=mesh.periods)
                 constraint_of[key] = self._loop_constraint(lookup["index"], lookup["on"],
                                                            loop_points)
             return constraint_of[key]

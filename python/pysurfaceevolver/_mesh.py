@@ -233,6 +233,84 @@ def is_watertight(triangles: np.ndarray) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Periodic slabs: where to draw each element whole
+
+def _graph_shifts(x: np.ndarray, a, b, periods) -> "tuple[np.ndarray, np.ndarray]":
+    """Vertex rows unwrapped along links (a[i], b[i]), each shorter than half
+    a period, breadth first from the lowest row of each linked group: the
+    whole periods to add to each row's coordinates, (n, 2) integers (0 off
+    the links); and whether each row's group wraps round the cell in x and
+    in y (a loop of links that gains a period), (n, 2) bools."""
+    from ._clusters import components
+    n = len(x)
+    L = np.asarray(periods, dtype=float)
+    a, b = np.asarray(a, np.intp).ravel(), np.asarray(b, np.intp).ravel()
+    tail, head = np.r_[a, b], np.r_[b, a]
+    # (the periods a link adds to its head's image: s[head] = s[tail] + w)
+    w = -np.round((x[head, :2] - x[tail, :2])/L).astype(np.int64)
+    order = np.argsort(tail, kind="stable")
+    tail, head, w = tail[order], head[order], w[order]
+    start = np.searchsorted(tail, np.arange(n + 1))
+    label = components(n, a, b)
+    s = np.zeros((n, 2), np.int64)
+    seen = label == np.arange(n)          # each group's lowest row: its root
+    frontier = np.flatnonzero(seen)
+    while len(frontier):
+        count = start[frontier + 1] - start[frontier]
+        link = np.repeat(start[frontier] - (np.cumsum(count) - count), count) \
+            + np.arange(int(count.sum()))
+        link = link[~seen[head[link]]]
+        h, first = np.unique(head[link], return_index=True)
+        link = link[first]
+        s[h] = s[tail[link]] + w[link]
+        seen[h] = True
+        frontier = h
+    wraps = np.zeros((n, 2), bool)
+    np.logical_or.at(wraps, label[tail], s[head] - s[tail] != w)
+    return s, wraps[label]
+
+
+def _element_shifts(x: np.ndarray, nodes: np.ndarray, ref: int, s: np.ndarray,
+                    wraps: np.ndarray, periods) -> np.ndarray:
+    """Where to draw elements (vertex rows ``nodes``, (k, m); column ``ref``
+    a corner) whole: at the image of the reference corner's unwrapped
+    coordinates (x + s L, from :func:`_graph_shifts`), the other nodes at
+    their images nearest it; along an axis the element's group wraps round
+    the cell in, at the image with the nodes' mean in [0, L). The whole
+    periods to add to each node's coordinates, (k, m, 2) integers."""
+    from ._periodic import delta
+    L = np.asarray(periods, dtype=float)
+    r = nodes[:, ref]
+    p = (x[r, :2] + s[r]*L)[:, None, :] + delta(x[r, None, :2], x[nodes, :2], periods)
+    c = p.mean(axis=1)
+    p -= (np.where(wraps[r], np.floor(c/L), 0.0)*L)[:, None, :]
+    return np.round((p - x[nodes, :2])/L).astype(np.int64)
+
+
+def _placed_points(x: np.ndarray, rows: np.ndarray, shifts: np.ndarray, periods
+                   ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+    """Vertex rows at the images ``shifts`` (whole periods, one pair per
+    entry of ``rows``) give: each (row, image) once. Returns the points,
+    ``rows``' entries as indices into them, and each point's row."""
+    key = np.c_[rows.reshape(-1), shifts.reshape(-1, 2)]
+    uniq, inverse = np.unique(key, axis=0, return_inverse=True)
+    points = np.array(x[uniq[:, 0]], dtype=float)
+    points[:, :2] += uniq[:, 1:]*np.asarray(periods, dtype=float)
+    return points, inverse.reshape(rows.shape), uniq[:, 0]
+
+
+def _bounds_region(points: np.ndarray, triangles: np.ndarray, periods) -> bool:
+    """Whether closed triangles (each whole, at one image) in a periodic slab
+    bound a region: z-hat's flux through them is none (a layer across the
+    cell, closed round it, passes the cell's area)."""
+    p = _as_3d(points)
+    a, b, c = (p[triangles[:, i]] for i in range(3))
+    u, v = b - a, c - a
+    flux = 0.5*float((u[:, 0]*v[:, 1] - u[:, 1]*v[:, 0]).sum())
+    return abs(flux) < 0.5*float(np.prod(periods))
+
+
+# ---------------------------------------------------------------------------
 # Data classes
 
 @dataclass
@@ -256,6 +334,9 @@ class BodySurface:
     cap_ids: Optional[np.ndarray] = None   # k on cells of cap k, 0 elsewhere
     cap_constraints: Dict[int, Optional[int]] = field(default_factory=dict)
     # the constraint cap k lies on (None: a flat cap)
+    # (Lx, Ly) in a periodic slab: each cell drawn whole at one image, a
+    # body round the cell as one cell's worth (see Mesh.body_surfaces)
+    periods: Optional[Tuple[float, float]] = None
 
     def _triangles(self) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
         if self.cell_type != "triangle":
@@ -282,6 +363,11 @@ class BodySurface:
         if not self.watertight:
             return float("nan")
         a, b, c = self._triangles()
+        if self.periods is not None:
+            # (z dx dy: invariant under the periods, as x . n isn't)
+            u, v = b - a, c - a
+            return float(((a[:, 2] + b[:, 2] + c[:, 2])*(u[:, 0]*v[:, 1] - u[:, 1]*v[:, 0]))
+                         .sum()/6)
         return float(np.einsum("ij,ij->i", a, np.cross(b, c)).sum()/6)
 
     def to_meshio(self, flavor: str = "gmsh") -> "meshio.Mesh":
@@ -315,6 +401,8 @@ class BodySurface:
             raise ValueError("volume_mesh() needs flat triangles (curved='tessellate')")
         if not self.watertight:
             raise ValueError("the surface isn't closed (see body_surfaces(cap=True))")
+        if self.periods is not None and not is_watertight(self.cells):
+            raise ValueError("the body reaches round the periodic cell: no volume to mesh")
         try:
             import gmsh
         except ImportError:
@@ -391,13 +479,23 @@ class _Tessellation:
     point's place in the facet lattice."""
 
     def __init__(self, weights: np.ndarray, nodes: np.ndarray, triangles: np.ndarray,
-                 ids: Optional[np.ndarray], total: int):
+                 ids: Optional[np.ndarray], total: int, offsets: Optional[np.ndarray] = None,
+                 torus: Optional[np.ndarray] = None, image: Optional[np.ndarray] = None):
         """weights: (P, nodes) basis values at the P lattice points; nodes:
         (k, nodes) vertex rows of each facet; triangles: (k*n*n, 3) into the
         sampled points; ids: merged point of each (facet, lattice point), or
-        None (unmerged); total: number of sampled points."""
+        None (unmerged); total: number of sampled points. In a periodic
+        slab, offsets: (k, nodes, sdim), what to add to each node's
+        coordinates to draw its facet whole; torus: each merged point's
+        number with the images of one point not told apart; image: (total,
+        2), the image it is drawn at (its corner's, in whole periods)."""
         self.triangles = triangles
         self.total = total
+        self.torus = torus
+        self.image = image
+        self.offset: Optional[np.ndarray] = None   # added to sampled coordinates
+        if offsets is not None:
+            self.offset = np.zeros((total, offsets.shape[2]))
         k, per_facet = len(nodes), len(weights)
         if ids is None:
             first = np.arange(total)
@@ -416,9 +514,21 @@ class _Tessellation:
             cols = np.flatnonzero(np.abs(weights[p]) > 1e-15)   # one on a node
             rows = nodes[first[dest] // per_facet][:, cols]
             self.groups.append((dest, rows, weights[p, cols]))
+            if self.offset is not None and offsets is not None:
+                self.offset[dest] = np.einsum("dcs,c->ds", offsets[first[dest] // per_facet][:, cols],
+                                              weights[p, cols])
+
+    def coordinates(self, vertices: np.ndarray) -> np.ndarray:
+        """The points, from the vertex rows' coordinates (in a periodic slab
+        each facet drawn whole: see :meth:`Mesh.tessellate`)."""
+        points = self.sample(vertices)
+        if self.offset is not None:
+            points += self.offset
+        return points
 
     def sample(self, values: np.ndarray) -> np.ndarray:
-        """Per-vertex-row ``values`` (coordinates, or data) at the points."""
+        """Per-vertex-row ``values`` (data; coordinates through
+        :meth:`coordinates`) at the points."""
         values = np.asarray(values, dtype=float)
         out = np.empty((self.total,) + values.shape[1:])
         for dest, rows, w in self.groups:
@@ -569,10 +679,36 @@ class Mesh:
         def compute() -> np.ndarray:
             assert self.facets is not None
             p = _as_3d(self.vertices)
+            if self.periods is None:
+                return p[self.facets]
             a = p[self.facets[:, 0]]
             return np.stack([a, a + self.delta(a, p[self.facets[:, 1]]),
                              a + self.delta(a, p[self.facets[:, 2]])], axis=1)
         return self._cached("facet_corners", compute)
+
+    def _node_shifts(self, sel: Optional[np.ndarray] = None) -> np.ndarray:
+        """In a periodic slab, where to draw each facet whole: the whole
+        periods to add to the coordinates of each of its nodes
+        (:attr:`facet_nodes`), ``(k, nodes, 2)`` integers. Facets joined
+        into a group that doesn't wrap round the cell come out in one piece,
+        as without periods (at the image of the group's lowest vertex row);
+        along an axis a group wraps round the cell in, as one cell's worth
+        (each facet at the image with its nodes' mean in [0, L)). ``sel``: a
+        mask of facets placed among themselves (the others as with all)."""
+        faces, nodes, index = self._facet_data()
+        assert self.periods is not None
+        ref = int(np.flatnonzero(index[:, 0] == self.order)[0])
+
+        def compute(f: np.ndarray, rows: np.ndarray) -> np.ndarray:
+            s, wraps = _graph_shifts(self.vertices, f.ravel(), f[:, [1, 2, 0]].ravel(),
+                                     self.periods)
+            return _element_shifts(self.vertices, rows, ref, s, wraps, self.periods)
+        every = self._cached("node_shifts", lambda: compute(faces, nodes))
+        if sel is None:
+            return every
+        out = np.array(every)
+        out[sel] = compute(faces[sel], nodes[sel])
+        return out
 
     def _repr_html_(self) -> str:
         order = "linear" if self.order == 1 else f"order {self.order}"
@@ -588,6 +724,9 @@ class Mesh:
                        if self.facets is not None else []))),
                 ("order", order),
                 ("fixed vertices", _html.number(int(self.fixed.sum())))]
+        if self.periods is not None:
+            rows.append(("periods", " × ".join(_html.number(p) for p in self.periods)
+                         + " (x, y; vertices at any image)"))
         if len(self.vertices):
             lo, hi = self.vertices.min(axis=0), self.vertices.max(axis=0)
             rows.append(("bounds", " × ".join(f"[{_html.number(a)}, {_html.number(b)}]"
@@ -606,6 +745,8 @@ class Mesh:
         """
         if self.order != 1:
             raise ValueError("mirrored() needs a linear mesh; plot(mirror=...) works for any")
+        if self.periods is not None:
+            raise ValueError("mirrored(): not in a periodic slab")
         mats = mirror_matrices(planes)
         xyz = _as_3d(self.vertices)
         n = len(xyz)
@@ -640,7 +781,7 @@ class Mesh:
             return MeshQuality(float(lengths.min()), float(np.median(lengths)),
                                float(lengths.max()), nan, nan, 0, 0, skinny_angle)
         p = [_as_3d(self.vertices)[self.facets[:, i]] for i in range(3)]
-        sides = [p[(i + 1) % 3] - p[i] for i in range(3)]
+        sides = [self.delta(p[i], p[(i + 1) % 3]) for i in range(3)]
         angles = []
         for i in range(3):
             a, b = sides[i], -sides[(i + 2) % 3]
@@ -691,18 +832,37 @@ class Mesh:
         (quadratic, Lagrange) facets are cut through :meth:`tessellate` (with
         its ``n``). Vertices lying in the plane belong to the curve, so a
         mirror plane's own vertices come out as its curve.
+
+        In a periodic slab each facet is cut at its image nearest ``point``
+        (within half a period in x and y): the curves around ``point``, one
+        cell's worth.
         """
         if self.facets is None:
             raise ValueError("slice() needs facets (the soapfilm model)")
-        if self.order == 1:
-            points, tris = _as_3d(self.vertices), self.facets
-        else:
-            points, tris = self.tessellate(n)
-            points = _as_3d(points)
         nrm = np.asarray(normal, dtype=float)
         if nrm.shape != (3,) or not np.linalg.norm(nrm) > 0:
             raise ValueError("normal must be a nonzero 3-vector")
         nrm = nrm/np.linalg.norm(nrm)
+        if self.periods is not None:
+            # each (flat) triangle whole, moved to its image nearest point;
+            # points the same where they are one point at one image
+            tess = self._tessellation(self._default_n(n))
+            points, tris = _as_3d(tess.coordinates(self.vertices)), tess.triangles
+            assert tess.torus is not None and tess.image is not None
+            L = np.asarray(self.periods, dtype=float)
+            centre = points[tris].mean(axis=1)[:, :2]
+            k = -np.round((centre - np.asarray(point, dtype=float)[:2])/L).astype(np.int64)
+            key = np.c_[tess.torus[tris].ravel(),
+                        (tess.image[tris] + k[:, None]).reshape(-1, 2)]
+            _, first, inverse = np.unique(key, axis=0, return_index=True, return_inverse=True)
+            points = np.array(points[tris.ravel()[first]])
+            points[:, :2] += np.repeat(k, 3, axis=0)[first]*L
+            tris = inverse.reshape(-1, 3)
+        elif self.order == 1:
+            points, tris = _as_3d(self.vertices), self.facets
+        else:
+            points, tris = self.tessellate(n)
+            points = _as_3d(points)
         dist = (points - np.asarray(point, dtype=float)) @ nrm
         above = dist >= 0
         # the triangles' edges that cross, keyed by their crossing point: the
@@ -789,12 +949,18 @@ class Mesh:
         ``(n_vertices, c)``), are interpolated like the coordinates and
         returned as a third item.
 
-        In torus models, facets that cross the periodic boundary aren't
-        unwrapped.
+        In a periodic slab every facet is drawn whole (its corners at nearby
+        images, not across the cell): facets joined into a piece that
+        doesn't wrap round the cell (a drop across the cell's side) come out
+        in one piece, as without periods; a piece that wraps round the cell
+        (a layer across it) comes out as one cell's worth, facets at the
+        images with their middles in the cell [0, Lx) x [0, Ly), and points
+        on its seams twice, once on either side. In other torus models,
+        facets that cross the periodic boundary aren't unwrapped.
         """
         n = self._default_n(n)
         t = self._tessellation(n, merge)
-        points = t.sample(self.vertices)
+        points = t.coordinates(self.vertices)
         if values is not None:
             vals = np.asarray(values, dtype=float)
             if vals.shape[0] != len(self.vertices):
@@ -802,10 +968,19 @@ class Mesh:
             return points, t.triangles, t.sample(vals)
         return points, t.triangles
 
-    def _tessellation(self, n: int, merge: bool = True) -> "_Tessellation":
+    def _tessellation(self, n: int, merge: bool = True,
+                      shifts: Optional[np.ndarray] = None) -> "_Tessellation":
         """The structure of :meth:`tessellate`, which depends only on the
-        connectivity: reusable for new coordinates or values."""
+        connectivity (and, in a periodic slab, on the images the facets are
+        drawn at: ``shifts``, default :meth:`_node_shifts`): reusable for new
+        coordinates or values."""
         faces, nodes, index = self._facet_data()
+        offsets = None
+        if self.periods is not None:
+            if shifts is None:
+                shifts = self._node_shifts()
+            offsets = np.zeros(shifts.shape[:2] + (self.vertices.shape[1],))
+            offsets[..., :2] = shifts*np.asarray(self.periods, dtype=float)
         _check_tessellation_size(len(nodes), n, self.vertices.shape[1])
         lattice = _lattice(n, 2)
         weights = _basis(index, self.order, self.bezier, lattice / n)   # (P, nodes)
@@ -816,22 +991,33 @@ class Mesh:
         tris[flip] = tris[flip][:, :, ::-1]
         tris += (np.arange(k) * per_facet)[:, None, None]
         tris = tris.reshape(-1, 3)
-        ids, total = None, k * per_facet
+        ids, total, torus, image = None, k * per_facet, None, None
         if merge:
-            ids, total = self._lattice_point_ids(nodes, index, n, lattice)
+            ids, total, ref = self._lattice_point_ids(nodes, index, n, lattice)
+            if shifts is not None:
+                # (a point shared at different images: one point at each;
+                # the image of an edge's or facet's points by its corner's)
+                rows = np.arange(k)[:, None]
+                key = np.c_[ids, shifts[rows, ref].reshape(-1, 2)]
+                uniq, ids = np.unique(key, axis=0, return_inverse=True)
+                ids, total, torus, image = ids.reshape(-1), len(uniq), uniq[:, 0], uniq[:, 1:]
             tris = ids[tris]
-        return _Tessellation(weights, nodes, tris, ids, total)
+        return _Tessellation(weights, nodes, tris, ids, total, offsets, torus, image)
 
-    def _lattice_point_ids(self, nodes, index, n, lattice) -> "tuple[np.ndarray, int]":
+    def _lattice_point_ids(self, nodes, index, n, lattice
+                           ) -> "tuple[np.ndarray, int, np.ndarray]":
         """Merged point number of every (facet, lattice point), flattened.
 
         Numbered from the topology: facet corners by vertex, points inside
         edges by edge and position, points inside facets by facet. Points a
-        facet shares with its neighbours get the same number.
+        facet shares with its neighbours get the same number. Also each
+        (facet, lattice point)'s corner, ``(k, points)`` columns of
+        ``nodes``: itself, an edge's lower-numbered end, or the first.
         """
         k, nv = len(nodes), len(self.vertices)
-        corners = np.stack([nodes[:, int(np.flatnonzero(index[:, i] == self.order)[0])]
-                            for i in range(3)], axis=1)                  # (k, 3)
+        column = [int(np.flatnonzero(index[:, i] == self.order)[0]) for i in range(3)]
+        corners = np.stack([nodes[:, c] for c in column], axis=1)       # (k, 3)
+        ref = np.full((k, len(lattice)), column[0], dtype=np.int64)
         used = np.zeros(nv, dtype=bool)
         used[corners.ravel()] = True
         corner_id = np.cumsum(used) - 1
@@ -851,16 +1037,19 @@ class Mesh:
             nonzero = [i for i in range(3) if a[i] > 0]
             if len(nonzero) == 1:
                 ids[:, p] = corner_id[corners[:, nonzero[0]]]
+                ref[:, p] = column[nonzero[0]]
             elif len(nonzero) == 2:
                 i, j = nonzero
                 side = sides.index((i, j)) if (i, j) in sides else sides.index((j, i))
                 # steps from the lower-numbered end of the edge
-                t = np.where(corners[:, i] < corners[:, j], a[j], a[i])
+                lower = corners[:, i] < corners[:, j]
+                t = np.where(lower, a[j], a[i])
                 ids[:, p] = n_corner + edge_of_side[:, side] * (n - 1) + t - 1
+                ref[:, p] = np.where(lower, column[i], column[j])
             else:
                 ids[:, p] = interior_base + f * per_interior + q
                 q += 1
-        return ids.ravel(), interior_base + k * per_interior
+        return ids.ravel(), interior_base + k * per_interior, ref
 
     def tessellate_edges(self, n: Optional[int] = None, *, merge: bool = True,
                          values: Optional[np.ndarray] = None):
@@ -877,7 +1066,17 @@ class Mesh:
         n = self._default_n(n)
         lam = _lattice(n, 1)
         weights = _basis(index, self.order, self.bezier, lam / n)
-        points = np.einsum("pn,knd->kpd", weights, self.vertices[nodes])
+        shifts = None
+        if self.periods is None:
+            points = np.einsum("pn,knd->kpd", weights, self.vertices[nodes])
+        else:
+            # each edge whole, placed as tessellate() places facets
+            s, wraps = _graph_shifts(self.vertices, self.edges[:, 0], self.edges[:, 1],
+                                     self.periods)
+            shifts = _element_shifts(self.vertices, nodes, 0, s, wraps, self.periods)
+            x = np.array(self.vertices[nodes], dtype=float)
+            x[..., :2] += shifts*np.asarray(self.periods, dtype=float)
+            points = np.einsum("pn,knd->kpd", weights, x)
         m = points.shape[0]
         sampled = None
         if values is not None:
@@ -888,14 +1087,20 @@ class Mesh:
         seg = (seg[None, :, :] + (np.arange(m) * (n + 1))[:, None, None]).reshape(-1, 2)
         points = points.reshape(-1, points.shape[-1])
         if merge:
-            # endpoints by vertex, interior points by edge
+            # endpoints by vertex (and image), interior points by edge
             ends = np.stack([nodes[:, 0], nodes[:, -1]], axis=1)
-            used = np.zeros(len(self.vertices), dtype=bool)
-            used[ends.ravel()] = True
-            end_id = np.cumsum(used) - 1
-            n_end = int(used.sum())
+            if shifts is None:
+                used = np.zeros(len(self.vertices), dtype=bool)
+                used[ends.ravel()] = True
+                end_id = np.cumsum(used) - 1
+                n_end = int(used.sum())
+                end_ids = end_id[ends]
+            else:
+                key = np.c_[ends.ravel(), shifts[:, [0, -1]].reshape(-1, 2)]
+                uniq, inverse = np.unique(key, axis=0, return_inverse=True)
+                end_ids, n_end = inverse.reshape(-1, 2), len(uniq)
             ids = np.empty((m, n + 1), dtype=np.int64)
-            ids[:, 0], ids[:, n] = end_id[ends[:, 0]], end_id[ends[:, 1]]
+            ids[:, 0], ids[:, n] = end_ids[:, 0], end_ids[:, 1]
             for t in range(1, n):
                 ids[:, t] = n_end + np.arange(m) * (n - 1) + t - 1
             ids = ids.ravel()
@@ -920,19 +1125,34 @@ class Mesh:
         Returns ``(cell_type, cells)`` with meshio cell type names
         (``"triangle"``, ``"triangle6"``, ``"triangle10"``, ...) and cells
         indexing ``vertices``. With ``reorient``, cells follow the facet
-        orientation of ``facets``.
+        orientation of ``facets``. In a periodic slab the cells index the
+        vertex rows as they are (see :meth:`to_meshio` for them drawn whole).
         """
-        faces, nodes, index = self._facet_data()
+        return self._native_cells(self._facet_data()[1], reorient)
+
+    def _native_cells(self, nodes: np.ndarray, reorient: bool = True) -> Tuple[str, np.ndarray]:
+        """native_cells() of ``nodes`` laid out as :attr:`facet_nodes` (its
+        rows, or points made of them)."""
+        faces, facet_nodes, index = self._facet_data()
         p = self.order
         column = {tuple(int(x) for x in row): c for c, row in enumerate(index)}
         perm = [column[m] for m in _recursive_triangle_order(p)]
         cells = nodes[:, perm]
         if reorient:
-            flip = _reversed_facets(faces, nodes, index, p)
+            flip = _reversed_facets(faces, facet_nodes, index, p)
             swapped = [column[(a, c, b)] for a, b, c in _recursive_triangle_order(p)]
             cells[flip] = nodes[flip][:, swapped]
         n_nodes = len(perm)
         return ("triangle" if p == 1 else f"triangle{n_nodes}"), cells
+
+    def _placed_nodes(self, shifts: Optional[np.ndarray] = None
+                      ) -> "tuple[np.ndarray, np.ndarray, np.ndarray]":
+        """In a periodic slab, the facets' nodes at the images ``shifts``
+        (default :meth:`_node_shifts`) give: the points, :attr:`facet_nodes`
+        as indices into them, and each point's vertex row."""
+        assert self.facet_nodes is not None and self.periods is not None
+        return _placed_points(self.vertices, self.facet_nodes,
+                              self._node_shifts() if shifts is None else shifts, self.periods)
 
     def native_edge_cells(self) -> Tuple[str, np.ndarray]:
         """Edges as high-order lines in Gmsh/VTK order (ends, then interior)."""
@@ -961,7 +1181,19 @@ class Mesh:
         it follow a curved one (:meth:`Evolver.body_surfaces` does this for
         loops on a constraint). ``cap_ids`` tells the caps apart. Check
         ``watertight``.
+
+        In a periodic slab each body's facets are placed among themselves
+        as :meth:`tessellate` places a piece: a body that doesn't reach round
+        the cell (a drop across its side) comes out whole, as without
+        periods. Boundary loops and ``watertight`` count the images of a
+        point as one (on the torus); a body round the cell (a layer across
+        it) comes out as one cell's worth, open at the seams, its volume
+        z dx dy; it is ``watertight`` when it encloses a region (a layer
+        between two films, not one on a floor). A loop round the cell isn't
+        capped.
         """
+        if self.periods is not None:
+            return self._slab_body_surfaces(curved, n, cap, project)
         faces, nodes, index = self._facet_data()
         bodies = self.facet_bodies
         assert bodies is not None
@@ -1016,6 +1248,111 @@ class Mesh:
                                      len(_boundary_loops(corners)), self.order, self.bezier)
         return out
 
+    def _slab_body_surfaces(self, curved: str, n: Optional[int], cap: bool,
+                            project) -> Dict[int, BodySurface]:
+        """body_surfaces() in a periodic slab (see there)."""
+        faces, nodes, index = self._facet_data()
+        bodies = self.facet_bodies
+        assert bodies is not None and self.periods is not None
+        if curved not in ("tessellate", "native"):
+            raise ValueError("curved must be 'tessellate' or 'native'")
+        if cap and curved != "tessellate":
+            raise ValueError("cap=True needs curved='tessellate'")
+        L = np.asarray(self.periods, dtype=float)
+        out: Dict[int, BodySurface] = {}
+        for b in sorted({int(b) for b in bodies.ravel() if b > 0}):
+            front, back = bodies[:, 0] == b, bodies[:, 1] == b
+            sel = front | back
+            shifts = self._node_shifts(sel)
+            fids = self.facet_ids[sel] if self.facet_ids is not None else np.flatnonzero(sel)
+            if curved == "native":
+                points, placed, row = self._placed_nodes(shifts)
+                cell_type, cells = self._native_cells(placed)
+                _, rev = self._native_reversal()
+                body_cells = cells[sel].copy()
+                flip = back[sel] & ~front[sel]
+                body_cells[flip] = body_cells[flip][:, rev]
+                used, body_cells = _compact(body_cells, len(points))
+                on_torus = row[used][body_cells[:, :3]]
+                closed = is_watertight(on_torus) and _bounds_region(
+                    points[used], body_cells[:, :3], self.periods)
+                out[b] = BodySurface(b, points[used], body_cells, cell_type, np.asarray(fids),
+                                     closed, len(_boundary_loops(on_torus)), self.order,
+                                     self.bezier, periods=self.periods)
+                continue
+            n_ = self._default_n(n)
+            tess = self._tessellation(n_, True, shifts)
+            points, tris, torus = tess.coordinates(self.vertices), tess.triangles, tess.torus
+            assert torus is not None
+            facet_of = np.arange(len(tris)) // (n_*n_)
+            mine = sel[facet_of]
+            body_tris = tris[mine].copy()
+            flip = (back & ~front)[facet_of][mine]
+            body_tris[flip] = body_tris[flip][:, ::-1]
+            fids = self.facet_ids[facet_of[mine]] if self.facet_ids is not None \
+                else facet_of[mine]
+            used, body_tris = _compact(body_tris, len(points))
+            body_points, body_torus = points[used], torus[used]
+            loops = _boundary_loops(body_torus[body_tris])          # on the torus
+            cap_ids = np.zeros(len(body_tris), dtype=np.int64)
+            capped: List[List[int]] = []
+            if cap and loops:
+                # each loop at one image (a copy of a point where the body's
+                # seams put it elsewhere); the loops round the cell left open
+                by_torus = np.argsort(body_torus, kind="stable")
+                sorted_torus = body_torus[by_torus]
+                extra: List[np.ndarray] = []
+                extra_torus: List[int] = []
+                offsets = []
+                assert self.facets is not None
+                corner_rows = np.unique(self.facets)     # (a corner's torus id: its rank)
+                for loop in loops:
+                    at: List[int] = []
+                    pos: List[np.ndarray] = []
+                    new: List[Tuple[np.ndarray, int]] = []
+                    for t in loop:
+                        lo, hi = np.searchsorted(sorted_torus, [t, t + 1])
+                        copies = by_torus[lo:hi]
+                        want = np.array(body_points[copies[0]], dtype=float)
+                        if pos:     # (its image nearest the loop's last point)
+                            want[:2] += np.round((pos[-1][:2] - want[:2])/L)*L
+                        hit = [int(i) for i in copies
+                               if np.all(np.abs(body_points[i, :2] - want[:2]) < L/4)]
+                        if hit:
+                            at.append(hit[0])
+                        else:
+                            at.append(len(body_points) + len(extra) + len(new))
+                            new.append((want, int(t)))
+                        pos.append(want)
+                    if np.round((pos[-1][:2] - pos[0][:2])/L).any():
+                        continue                               # round the cell
+                    extra += [p for p, _ in new]
+                    extra_torus += [t for _, t in new]
+                    # (projected at the image of the loop's vertices' own
+                    # coordinates, where its constraint is)
+                    i = next(i for i, t in enumerate(loop) if t < len(corner_rows))
+                    raw = _as_3d(self.vertices)[corner_rows[loop[i]]]
+                    shift = np.zeros(body_points.shape[1])
+                    shift[:2] = np.round((pos[i][:2] - raw[:2])/L)*L
+                    offsets.append(shift)
+                    capped.append(at)
+                if extra:
+                    body_points = np.vstack([body_points, np.array(extra)])
+                    body_torus = np.r_[body_torus, extra_torus]
+            if capped:
+                count = len(body_points)
+                body_points, body_tris, fids, cap_ids = _cap_loops(
+                    body_points, body_tris, fids, capped, project, offsets)
+                fresh = body_torus.max(initial=0) + 1 + np.arange(len(body_points) - count)
+                body_torus = np.r_[body_torus, fresh]
+            closed = is_watertight(body_torus[body_tris]) and _bounds_region(
+                body_points, body_tris, self.periods)
+            out[b] = BodySurface(b, body_points, body_tris, "triangle", np.asarray(fids),
+                                 closed, len(loops), cap_ids=cap_ids,
+                                 cap_constraints={k: None for k in range(1, len(capped) + 1)}
+                                 if cap else {}, periods=self.periods)
+        return out
+
     def _native_reversal(self):
         """Permutation of native cell columns that reverses orientation."""
         order = _recursive_triangle_order(self.order)
@@ -1035,6 +1372,8 @@ class Mesh:
         Gmsh tags (``gmsh:physical`` = front body, ``gmsh:geometrical`` =
         Evolver element id). ``flavor`` (``"gmsh"``, ``"vtk"``, ``"xdmf"``
         or ``"linear"``) picks native cell names for the target format.
+        In a periodic slab the facets are drawn whole, as :meth:`tessellate`
+        draws them (points on a seam twice).
         """
         import meshio
         if self.facets is not None and self.facet_nodes is not None:
@@ -1045,10 +1384,16 @@ class Mesh:
                 facet_of = np.arange(len(tris)) // (n_ * n_)
                 cells = [("triangle", tris)]
             elif curved == "native":
-                _, native = self.native_cells()
                 cell_type = native_cell_name("triangle", self.order, self.bezier, flavor)
-                used, local = _compact(native, len(self.vertices))
-                points = self.vertices[used]
+                if self.periods is not None:    # (each facet whole, see tessellate)
+                    placed_points, placed, _ = self._placed_nodes()
+                    _, native = self._native_cells(placed)
+                    used, local = _compact(native, len(placed_points))
+                    points = placed_points[used]
+                else:
+                    _, native = self.native_cells()
+                    used, local = _compact(native, len(self.vertices))
+                    points = self.vertices[used]
                 cells = [(cell_type, local)]
                 facet_of = np.arange(len(native))
             else:
@@ -1089,6 +1434,8 @@ class Mesh:
         data ``edge_id``). ``point_values`` (one value per vertex row) are
         interpolated onto the tessellation; ``cell_values`` (one per facet,
         or per edge in the string model) are repeated for its sub-cells.
+        In a periodic slab the facets are drawn whole, as :meth:`tessellate`
+        draws them.
         """
         import pyvista as pv
         point_values = point_values or {}
@@ -1125,7 +1472,7 @@ class Mesh:
         assert self.facet_bodies is not None and self.facet_ids is not None
         tris = tess.triangles
         faces = np.hstack([np.full((len(tris), 1), 3), tris]).ravel()
-        poly = pv.PolyData(_as_3d(tess.sample(self.vertices)), faces=faces)
+        poly = pv.PolyData(_as_3d(tess.coordinates(self.vertices)), faces=faces)
         facet_of = np.arange(len(tris)) // (n * n)
         poly.cell_data["facet_id"] = self.facet_ids[facet_of]
         poly.cell_data["front_body"] = self.facet_bodies[facet_of, 0]
@@ -1138,17 +1485,19 @@ class Mesh:
 
     def _same_facets(self, other: "Mesh") -> bool:
         """Whether ``other`` has the same facets, nodes and bodies (so the
-        same tessellation)."""
+        same tessellation; in a periodic slab, drawn at the same images)."""
         if other is self:
             return True
-        if (self.order, self.bezier, len(self.vertices)) != (other.order, other.bezier,
-                                                             len(other.vertices)):
+        if (self.order, self.bezier, len(self.vertices), self.periods) != (
+                other.order, other.bezier, len(other.vertices), other.periods):
             return False
-        return all(a is not None and b is not None and np.array_equal(a, b)
+        same = all(a is not None and b is not None and np.array_equal(a, b)
                    for a, b in ((self.facets, other.facets),
                                 (self.facet_nodes, other.facet_nodes),
                                 (self.facet_ids, other.facet_ids),
                                 (self.facet_bodies, other.facet_bodies)))
+        return same and (self.periods is None
+                         or np.array_equal(self._node_shifts(), other._node_shifts()))
 
 
 def _zip_rings(outer, s_outer, inner, s_inner):
@@ -1171,13 +1520,17 @@ def _zip_rings(outer, s_outer, inner, s_inner):
     return tris
 
 
-def _cap_loops(points, tris, fids, loops, project=None):
+def _cap_loops(points, tris, fids, loops, project=None, offsets=None):
     """Close each boundary loop with a cap: rings of points between the loop
     and its centre, fewer points on inner rings (spacing about that of the
     loop), the centre last. With ``project(points, loop_points)``, every new
     point is projected onto the surface the loop lies on; without, the cap
     is flat for planar loops. Returns points, triangles, facet ids (0 on caps)
-    and cap ids (k on cap k, 0 elsewhere)."""
+    and cap ids (k on cap k, 0 elsewhere). ``offsets``: per loop, a shift
+    by whole periods from where its constraint is (in a periodic slab):
+    projected there."""
+    def shifted(shift):
+        return lambda p, q: project(p - shift, q - shift) + shift
     points = [np.asarray(points, float)]
     count = len(points[0])
     new_tris = [np.asarray(tris)]
@@ -1192,7 +1545,8 @@ def _cap_loops(points, tris, fids, loops, project=None):
         s_loop = length[:-1] / length[-1]
         centre = P.mean(axis=0)
         if project is not None:
-            centre = project(centre[None], P)[0]
+            to = project if offsets is None else shifted(offsets[k - 1])
+            centre = to(centre[None], P)[0]
         rings = max(1, int(round(np.linalg.norm(P - centre, axis=1).mean() / edge.mean())))
         outer, s_outer = list(loop), s_loop
         cap = []
@@ -1210,7 +1564,7 @@ def _cap_loops(points, tris, fids, loops, project=None):
             outer, s_outer = inner, t
         if new:     # all ring points at once
             ring_points = np.vstack(new)
-            points.append(project(ring_points, P) if project is not None else ring_points)
+            points.append(to(ring_points, P) if project is not None else ring_points)
         points.append(centre[None])
         c = count
         count += 1

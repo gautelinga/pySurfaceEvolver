@@ -21,6 +21,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence
 
 import numpy as np
 
+from . import _periodic
 from ._engine import GUARD_PREFIX, surface
 
 _log = logging.getLogger("pysurfaceevolver.topology")
@@ -145,27 +146,34 @@ def _solids(ev) -> "tuple[list, list]":
     return solids, other
 
 
-def _gap(kind: str, data, p: np.ndarray) -> np.ndarray:
-    """Signed distance of points p from a solid's surface (negative inside)."""
+def _gap(kind: str, data, p: np.ndarray, periods=None) -> np.ndarray:
+    """Signed distance of points p from a solid's surface (negative inside;
+    in a periodic slab from its nearest image)."""
     if kind == "plane":
         return p @ data[0] - data[1]
-    q = p - data[0]
+    q = p - data[0] if periods is None else _periodic.delta(data[0], p, periods)
     if kind == "cylinder":
         q = q - np.outer(q @ data[1], data[1])
     return np.sqrt(np.einsum("ij,ij->i", q, q)) - data[-1]
 
 
-def _near(kind: str, data, lo: np.ndarray, s: float, shape, reach: float) -> np.ndarray:
+def _near(kind: str, data, lo: np.ndarray, s, shape, reach: float,
+          periodic=(False, False, False)) -> np.ndarray:
     """The nodes (flat indices) that can be within ``reach`` of a solid's
-    surface or inside it: a sphere's box, else all."""
+    surface or inside it: a sphere's box (round the grid along a periodic
+    axis: its images), else all."""
     if kind != "sphere":
         return np.arange(int(np.prod(shape)))
     c, R = data
-    a = np.maximum(np.floor((c - R - reach - lo)/s).astype(int), 0)
-    b = np.minimum(np.ceil((c + R + reach - lo)/s).astype(int), np.array(shape) - 1)
+    cyc = np.asarray(periodic, bool)
+    a = np.floor((c - R - reach - lo)/s).astype(int)
+    b = np.ceil((c + R + reach - lo)/s).astype(int)
+    a = np.where(cyc, a, np.maximum(a, 0))
+    b = np.where(cyc, b, np.minimum(b, np.array(shape) - 1))
     if (b < a).any():
         return np.zeros(0, np.intp)
-    axes = [np.arange(a[k], b[k] + 1) for k in range(3)]
+    axes = [np.unique(np.arange(a[k], b[k] + 1) % shape[k]) if cyc[k]
+            else np.arange(a[k], b[k] + 1) for k in range(3)]
     i, j, k = np.meshgrid(*axes, indexing="ij")
     return np.ravel_multi_index((i.ravel(), j.ravel(), k.ravel()), shape)
 
@@ -191,21 +199,42 @@ def _box(x: np.ndarray, solids: list, s: float) -> "tuple[np.ndarray, np.ndarray
     return lo - (2 - _OFFSET)*s, hi + 2*s
 
 
-def _crossings(v: np.ndarray, f: np.ndarray, shape) -> "tuple[np.ndarray, ...]":
-    """Where the facets cross the grid's segments, v the vertices in grid
-    units (nodes at the integers): per crossing the axis, the segment's
-    lower node (flat index), how far along it, the facet row and the sign
-    of the facet's normal along the axis."""
-    tri = v[f]
+def _grid(x: np.ndarray, solids: list, s: float, periods
+          ) -> "tuple[np.ndarray, np.ndarray, np.ndarray, tuple]":
+    """The grid: its box, spacing along each axis and nodes along each
+    (see _box). In a periodic slab x and y cover one cell, a whole number of
+    nodes per period (the node after the last the first's image)."""
+    lo, hi = _box(x, solids, s)
+    if periods is None:
+        shape = tuple(int(n) for n in np.floor((hi - lo)/s).astype(int) + 1)
+        return lo, hi, np.full(3, s), shape
+    L = np.asarray(periods, float)
+    n = np.maximum(np.round(L/s), 3).astype(int)
+    sp = np.r_[L/n, s]
+    lo[:2] = -_OFFSET*sp[:2]
+    hi[:2] = lo[:2] + L - sp[:2]
+    return lo, hi, sp, (int(n[0]), int(n[1]), int(np.floor((hi[2] - lo[2])/s)) + 1)
+
+
+def _crossings(tri: np.ndarray, shape, periodic=(False, False, False)
+               ) -> "tuple[np.ndarray, ...]":
+    """Where the facets cross the grid's segments, tri the facets' corners
+    in grid units (nodes at the integers; (k, 3, 3)): per crossing the axis,
+    the segment's lower node (flat index), how far along it, the facet row
+    and the sign of the facet's normal along the axis. Along a periodic
+    axis the grid is one period, its last node's segment going to its
+    first (a facet may reach past the last node)."""
     normal = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
     out: list = [[], [], [], [], []]
     for k in range(3):
         i, j = [a for a in range(3) if a != k]
         use = np.flatnonzero(np.abs(normal[:, k]) > 1e-12)
         p = tri[use][:, :, [i, j]]
-        lo = np.maximum(np.ceil(p.min(axis=1)).astype(np.intp), 0)
-        hi = np.minimum(np.floor(p.max(axis=1)).astype(np.intp),
-                        np.array([shape[i] - 1, shape[j] - 1]))
+        cyc = np.array([periodic[i], periodic[j]])
+        lo = np.ceil(p.min(axis=1)).astype(np.intp)
+        hi = np.floor(p.max(axis=1)).astype(np.intp)
+        lo = np.where(cyc, lo, np.maximum(lo, 0))
+        hi = np.where(cyc, hi, np.minimum(hi, np.array([shape[i] - 1, shape[j] - 1])))
         ni, nj = np.maximum(hi[:, 0] - lo[:, 0] + 1, 0), np.maximum(hi[:, 1] - lo[:, 1] + 1, 0)
         count = ni*nj
         rep = np.repeat(np.arange(len(use)), count)
@@ -225,12 +254,21 @@ def _crossings(v: np.ndarray, f: np.ndarray, shape) -> "tuple[np.ndarray, ...]":
         tk = tri[use[rep], :, k]
         z = tk[:, 0] + u*(tk[:, 1] - tk[:, 0]) + w*(tk[:, 2] - tk[:, 0])
         seg = np.floor(z).astype(np.intp)
-        ok = (seg >= 0) & (seg <= shape[k] - 2)
+        frac = z - seg
+        if periodic[i]:
+            gi = gi % shape[i]
+        if periodic[j]:
+            gj = gj % shape[j]
+        if periodic[k]:
+            seg = seg % shape[k]
+            ok = np.ones(len(seg), bool)
+        else:
+            ok = (seg >= 0) & (seg <= shape[k] - 2)
         idx = np.zeros((int(ok.sum()), 3), np.intp)
         idx[:, i], idx[:, j], idx[:, k] = gi[ok], gj[ok], seg[ok]
         out[0].append(np.full(len(idx), k))
         out[1].append(np.ravel_multi_index(tuple(idx.T), shape))
-        out[2].append((z - seg)[ok])
+        out[2].append(frac[ok])
         out[3].append(use[rep[ok]])
         out[4].append(np.sign(normal[use[rep[ok]], k]).astype(np.intp))
     if not out[0]:
@@ -283,36 +321,60 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
     # the first descent's to set)
     h = surface.edge_scale if surface.edge_scale is not None else _median_edge(m)
     s = float(spacing) if spacing is not None else _SPACING*float(h)
-    lo, hi = _box(x, solids, s)
-    shape = tuple(int(n) for n in np.floor((hi - lo)/s).astype(int) + 1)
+    periods = m.periods
+    lo, hi, sp, shape = _grid(x, solids, s, periods)
     while np.prod(shape, dtype=float) > _NODES:
         s *= 1.25
-        lo, hi = _box(x, solids, s)
-        shape = tuple(int(n) for n in np.floor((hi - lo)/s).astype(int) + 1)
+        lo, hi, sp, shape = _grid(x, solids, s, periods)
         _log.debug("clusters: the grid's spacing grown to %.3g (%s nodes)", s, shape)
+    periodic = (periods is not None,)*2 + (False,)
     nodes = int(np.prod(shape))
-    p = lo + s*np.stack(np.unravel_index(np.arange(nodes), shape), axis=1)
-    # each solid's nodes near it and their gaps
+    p = lo + sp*np.stack(np.unravel_index(np.arange(nodes), shape), axis=1)
+    # each solid's nodes near it and their gaps (in a periodic slab, near
+    # any of its images)
     near_solid = []
     solid = np.zeros(nodes, bool)
     for _, kind, data in solids:
-        idx = _near(kind, data, lo, s, shape, _NEAR*s)
-        gap = _gap(kind, data, p[idx])
+        idx = _near(kind, data, lo, sp, shape, _NEAR*s, periodic)
+        gap = _gap(kind, data, p[idx], periods)
         solid[idx[gap < 0]] = True
         near_solid.append((idx, gap))
-    axis, low, frac, row, sign = _crossings((x - lo)/s, f, shape)
+    if periods is None:
+        tri = ((x - lo)/s)[f]
+    else:
+        # each facet whole, its first corner in the grid's cell
+        tri = np.array(m.facet_corners())
+        L = np.asarray(periods, float)
+        tri[:, :, :2] -= (L*np.floor((tri[:, 0, :2] - lo[:2])/L))[:, None, :]
+        tri = (tri - lo)/sp
+    axis, low, frac, row, sign = _crossings(tri, shape, periodic)
     strides = np.array([shape[1]*shape[2], shape[2], 1])
+
+    def up(node: np.ndarray, k) -> np.ndarray:
+        """The next node along axis k (round the grid along a periodic one)."""
+        if periods is None:
+            return node + strides[k]
+        k = np.broadcast_to(k, node.shape)
+        idx = np.stack(np.unravel_index(node, shape), axis=1)
+        idx[np.arange(len(node)), k] += 1
+        idx %= np.array(shape)          # (z's last node has no segment)
+        return np.ravel_multi_index(tuple(idx.T), shape)
+
     # links between neighbouring nodes in the liquid or gas
     t = np.linspace(0, 1, 9)[1:-1]
     a_all, b_all = [], []
     for k in range(3):
         idx = np.arange(nodes).reshape(shape)
-        a = idx[tuple(slice(0, -1) if d == k else slice(None) for d in range(3))].ravel()
-        b = a + strides[k]
+        a = idx[tuple(slice(0, -1) if d == k and not periodic[k] else slice(None)
+                      for d in range(3))].ravel()
+        b = up(a, k)
         cut = np.zeros(nodes, bool)
         cut[low[axis == k]] = True
         cut |= solid
-        cut[:-strides[k]] |= solid[strides[k]:]
+        if periodic[k]:
+            cut[a] |= solid[b]
+        else:
+            cut[:-strides[k]] |= solid[strides[k]:]
         for (_, kind, data), (idx, gap) in zip(solids, near_solid):
             # (a sphere or cylinder can bulge between two nodes outside it)
             if kind == "plane":
@@ -320,8 +382,8 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
             close = idx[(gap >= 0) & (gap < s)]
             close = close[~cut[close]]
             if len(close):
-                q = p[close][:, None, :] + s*t[None, :, None]*np.eye(3)[k]
-                inside = (_gap(kind, data, q.reshape(-1, 3)) < 0).reshape(-1, len(t))
+                q = p[close][:, None, :] + sp[k]*t[None, :, None]*np.eye(3)[k]
+                inside = (_gap(kind, data, q.reshape(-1, 3), periods) < 0).reshape(-1, len(t))
                 cut[close[inside.any(axis=1)]] = True
         ok = ~cut[a]
         a_all.append(a[ok])
@@ -333,7 +395,7 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
     first = np.r_[True, key[1:] != key[:-1]]
     last = np.r_[key[1:] != key[:-1], True]
     fo, la = order[first], order[last]
-    node = np.r_[low[fo], low[la] + strides[axis[la]]]
+    node = np.r_[low[fo], up(low[la], axis[la])]
     side = np.r_[np.where(sign[fo] > 0, 0, 1), np.where(sign[la] > 0, 1, 0)]
     frow = np.r_[row[fo], row[la]]
     keep = ~solid[node]
@@ -371,7 +433,8 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
         for wall in near_walls:
             if _base(wall) == _base(key):
                 reached |= near_walls[wall] > 0
-    return _gather(piece, body_of, label, reached, size, near_walls, s, mixed)
+    return _gather(piece, body_of, label, reached, size, near_walls,
+                   s if periods is None else float(np.prod(sp))**(1/3), mixed)
 
 
 def _gather(piece, body_of, label, reached, size, near_walls, s, mixed) -> Clusters:
