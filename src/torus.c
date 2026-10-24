@@ -145,6 +145,14 @@ WRAPTYPE torus_inverse(WRAPTYPE wrap  /* the element invert */)
 *          topology change) so endpoints near as possible in 
 *          a fundamental region.
 */
+/* pySE: a slab periodic in x and y (bindings/pyse_api.c; 0 without the glue) */
+#if defined(__GNUC__)
+extern int pyse_slab(REAL *L) __attribute__((weak));
+#define TORUS_SLAB() (pyse_slab ? pyse_slab(NULL) : 0)
+#else
+#define TORUS_SLAB() 0
+#endif
+
 void torus_unwrap_edge(edge_id e_id)
 { edge_id pos_e = positive_id(e_id);
   vertex_id tailv,headv;
@@ -157,6 +165,19 @@ void torus_unwrap_edge(edge_id e_id)
   if ( wrap == 0 ) return;
   tailv = get_edge_tailv(pos_e);
   headv = get_edge_headv(pos_e);
+  if ( TORUS_SLAB() )
+  { /* pySE: a slab periodic in x and y (bindings/pyse_api.c): one end moved
+       to the other's image, not both into the cell, and never by the z
+       period (a vertex below z = 0 went up by it); the head, unless only it
+       is on a constraint (a sphere's vertices are kept near its centre) */
+    if ( (get_vattr(headv) & CONSTRAINT) && !(get_vattr(tailv) & CONSTRAINT) )
+      tailwrap = torus_inverse(wrap);
+    else tailwrap = 0;
+    headwrap = torus_compose(tailwrap,wrap);
+    if ( tailwrap ) wrap_vertex(tailv,tailwrap);
+    if ( headwrap ) wrap_vertex(headv,headwrap);
+    return;
+  }
   x = get_coord(tailv);
   matvec_mul(web.inverse_periods,x,u,SDIM,SDIM);
   tailwrap = 0;

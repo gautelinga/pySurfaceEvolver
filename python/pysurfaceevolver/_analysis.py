@@ -374,9 +374,11 @@ class _Analysis(_Engine):
 
     def mesh_quality(self, skinny_angle: float = 15.0) -> "MeshQuality":
         """Edge lengths and facet shapes; see :meth:`Mesh.quality`. In a torus
-        or quotient space, from Evolver's own edge lengths (vertex coordinates
-        are wrapped, so facets across the cell's sides would look torn)."""
-        if not _core.symmetry():
+        or quotient space other than a periodic slab (whose mesh measures
+        itself at the minimum image), from Evolver's own edge lengths (vertex
+        coordinates are wrapped, so facets across the cell's sides would look
+        torn)."""
+        if not _core.symmetry() or self.periods is not None:
             return self.mesh().quality(skinny_angle)
         lengths = self.values("edge", "length")
         nan = float("nan")

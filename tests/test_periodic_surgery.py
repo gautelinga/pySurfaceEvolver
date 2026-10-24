@@ -16,7 +16,6 @@ from pysurfaceevolver._events import Event
 PERIODS = (1.9, 2.3)
 WIDE = (3.1, 2.9)
 HOUR = (4.5, 4.3)          # (the hourglass's edges are up to 1.7 long)
-NEEDS_EDITS = pytest.mark.xfail(strict=False, reason="needs the periodic edits/events")
 
 
 def _into_cell(v, periods):
@@ -462,7 +461,6 @@ def _dumbbell(periods, neck=0.06):
     return ev
 
 
-@NEEDS_EDITS
 def test_a_neck_across_the_corner_pinches_off_as_without_periods():
     found = []
     for periods in (None, WIDE):
@@ -474,10 +472,12 @@ def test_a_neck_across_the_corner_pinches_off_as_without_periods():
             made = ev.pinch_off(necks[0])
         assert len(made) == 1
         found.append(sorted(ev.bodies().volume))
-    assert np.allclose(found[0], found[1], rtol=1e-6)
+    # (the symmetric neck's closest pairs tie: round-off picks the place, and
+    # the cut, differently; the liquid is the same)
+    assert sum(found[0]) == pytest.approx(sum(found[1]), rel=1e-10)
+    assert np.allclose(found[0], found[1], rtol=1e-3)
 
 
-@NEEDS_EDITS
 def test_a_neck_collapsed_below_the_mesh_across_the_corner_is_cut():
     found = []
     for periods in (None, HOUR):
@@ -510,7 +510,6 @@ def _two_drops(periods, theta, gap, R=0.84):
     return ev
 
 
-@NEEDS_EDITS
 def test_drops_merging_across_the_side_are_one_cap_as_without_periods():
     found = []
     for periods in (None, (5.0, 3.0)):
@@ -528,7 +527,6 @@ def test_drops_merging_across_the_side_are_one_cap_as_without_periods():
     assert np.allclose(found[0], found[1], rtol=1e-3)
 
 
-@NEEDS_EDITS
 def test_a_drop_growing_onto_a_sphere_across_the_corner_wets_it():
     # (test_topology's drop under a sphere: the bridge it becomes, at volume
     # 2.5, the exact one: pressure 1.396298, energy 5.812735)
@@ -576,7 +574,7 @@ def _layer(periods, h=0.4, n=10):
     return ev
 
 
-@pytest.mark.parametrize("events", [False, pytest.param(True, marks=NEEDS_EDITS)])
+@pytest.mark.parametrize("events", [False, True])
 def test_arclength_on_a_periodic_liquid_layer(events):
     # (a flat layer at any volume: its area the cell's, no pressure)
     ev = _layer(PERIODS)

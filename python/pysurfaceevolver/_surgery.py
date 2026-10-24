@@ -1341,6 +1341,12 @@ def _cut(ev, x, ring, centre, scale) -> None:
     moved = _put_at(x, ring, centre, _slab(ev))
     doubled = _doubled_edges(ev)
     ev.vertices = moved
+    if _slab(ev) is not None:
+        # (all at one image: the collapsed edges then don't wrap, which
+        # Evolver's deletion would unwrap, moving the point by a period)
+        from ._periodic import move_near
+        move_near(ev, np.asarray(ev.mesh().vertex_ids)[np.asarray(ring)],
+                  np.repeat(np.asarray(centre)[None, :], len(ring), axis=0))
     tiny = 1e-9*scale
     count = ev.counts["edges"]
     for _ in range(len(ring)):
