@@ -317,11 +317,13 @@ int pyse_crossings(int far, long *count, double *where, long max);
    Each returns 0, -1 when memory ran out, -2 for a row out of range;
    arrays returned through pointers are malloc'ed, the caller frees them.
    threads: at most that many OpenMP threads, where the work is enough.
+   L: a slab's periods in x and y (coordinates at any image, differences
+   of nearby points at the minimum image), or NULL.
 
    frame: the facets' unique edges (smaller end first, sorted), each
    vertex's unit normal (the facets' areas summed) and whether it lies in a
    fold (a facet round it facing against it). */
-int pyse_events_frame(long n, const double *x, long nf, const int64_t *f,
+int pyse_events_frame(long n, const double *x, long nf, const int64_t *f, const double *L,
                       int64_t **edges, long *ne, double *normal, unsigned char *folded);
 /* self: the surface close to itself, (vertex, facet) pairs in order (vi,
    ti): vi in vmask, a corner of the facet in pmask facing vi (normals
@@ -333,8 +335,8 @@ int pyse_events_frame(long n, const double *x, long nf, const int64_t *f,
    vi along the mesh (edges). neck: a body lies across (with_bodies;
    behind/ahead: the bodies on each side of each vertex), or (without)
    the gap is behind vi. */
-int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne,
-                     const int64_t *edges, const double *normal, const double *r,
+int pyse_events_self(long n, const double *x, long nf, const int64_t *f, const double *L,
+                     long ne, const int64_t *edges, const double *normal, const double *r,
                      const unsigned char *vmask, const unsigned char *pmask,
                      const unsigned char *folded, const int64_t *behind, const int64_t *ahead,
                      int with_bodies, double R, double reach, double neck_factor, int threads,
@@ -348,11 +350,13 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
    lines or farther apart along theirs than three times that or their
    distance (d). */
 int pyse_events_lines(long n, const double *x, const double *h, long ne, const int64_t *edges,
-                      double factor, long *nl, int64_t **line_vertices, long *np,
+                      double factor, const double *L, long *nl, int64_t **line_vertices,
+                      long *np,
                       int64_t **pi, int64_t **pj, double **pd, double **pscale);
-/* segments: each point's distance to the nearest of the segments (a, b) */
+/* segments: each point's distance to the nearest of the segments (a, b)
+   (in a slab, of their images) */
 int pyse_events_segments(long np, const double *p, long ns, const double *a, const double *b,
-                         int threads, double *out);
+                         const double *L, int threads, double *out);
 /* groups: the connected groups of masked vertices, joined by links (nl
    pairs) between masked ones: per vertex its group's smallest member (-1
    where not masked). */

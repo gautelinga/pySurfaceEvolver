@@ -19,6 +19,13 @@
  *
  * Each returns 0, or -1 if memory ran out (-2: a row out of range).
  * Arrays returned through pointers are malloc'ed; the caller frees them.
+ *
+ * L: a slab's periods in x and y (pySE's periods=, _periodic.py), or NULL.
+ * In a slab the coordinates are any image's: differences of nearby
+ * points are taken at the minimum image (every edge is shorter than half
+ * a period), a facet's corners at the image of its first, and the grids
+ * and sweeps bin positions wrapped into the cell, their neighbours across
+ * its sides. Without L, the same arithmetic as before.
  */
 
 #include <math.h>
@@ -40,6 +47,38 @@ static double dot3(const double *a, const double *b)
 
 static void sub3(const double *a, const double *b, double *c)
 { c[0] = a[0] - b[0]; c[1] = a[1] - b[1]; c[2] = a[2] - b[2]; }
+
+/* a - b, in x and y at the minimum image in a slab (L; NULL: none) */
+static void wsub3(const double *L, const double *a, const double *b, double *c)
+{ sub3(a,b,c);
+  if ( L )
+  { c[0] -= L[0]*floor(c[0]/L[0] + 0.5);
+    c[1] -= L[1]*floor(c[1]/L[1] + 0.5);
+  }
+}
+
+/* a coordinate wrapped into [0, period) */
+static double wrap1(double a, double period)
+{ return a - period*floor(a/period); }
+
+/* triangle t's corners (rows t[0..2] of x) at one image: in a slab, the
+   first's nearest near (or its own, near NULL), the others nearest it,
+   in q (9 numbers); else the rows themselves */
+static void corners3(const double *L, const double *x, const int64_t *t, const double *near,
+                     double *q, const double **c)
+{ int d, j;
+  if ( !L ) { c[0] = x + 3*t[0]; c[1] = x + 3*t[1]; c[2] = x + 3*t[2]; return; }
+  if ( near )
+  { wsub3(L,x + 3*t[0],near,q);
+    for ( d = 0 ; d < 3 ; d++ ) q[d] += near[d];
+  }
+  else memcpy(q,x + 3*t[0],3*sizeof(double));
+  for ( j = 1 ; j < 3 ; j++ )
+  { wsub3(L,x + 3*t[j],q,q + 3*j);
+    for ( d = 0 ; d < 3 ; d++ ) q[3*j+d] += q[d];
+  }
+  c[0] = q; c[1] = q + 3; c[2] = q + 6;
+}
 
 static void cross3(const double *a, const double *b, double *c)
 { c[0] = a[1]*b[2] - a[2]*b[1];
@@ -93,7 +132,7 @@ static void sort_short(int64_t *a, long n)
   }
 }
 
-int pyse_events_frame(long n, const double *x, long nf, const int64_t *f,
+int pyse_events_frame(long n, const double *x, long nf, const int64_t *f, const double *L,
                       int64_t **edges, long *ne, double *normal, unsigned char *folded)
 { long *start = NULL, *fill = NULL, t, v, k, m = 0;
   int64_t *hi = NULL, *e = NULL;
@@ -105,7 +144,8 @@ int pyse_events_frame(long n, const double *x, long nf, const int64_t *f,
   for ( t = 0 ; t < 3*nf ; t++ )
     if ( f[t] < 0 || f[t] >= n ) return -2;
   /* the edges by their smaller end (a counting sort), each one's larger
-     ends sorted and once: the order of a unique over the rows */
+     ends sorted and once: the order of a unique over the rows (in a slab
+     too: two vertices are joined at their nearest images only) */
   start = (long *)calloc((size_t)n + 1,sizeof(long));
   fill = (long *)malloc(at_least_one(n)*sizeof(long));
   hi = (int64_t *)malloc(at_least_one(3*nf)*sizeof(int64_t));
@@ -145,8 +185,8 @@ int pyse_events_frame(long n, const double *x, long nf, const int64_t *f,
   for ( t = 0 ; t < nf ; t++ )
   { const double *p0 = x + 3*f[3*t], *p1 = x + 3*f[3*t+1], *p2 = x + 3*f[3*t+2];
     double u[3], w[3], c[3];
-    sub3(p1,p0,u);
-    sub3(p2,p0,w);
+    wsub3(L,p1,p0,u);
+    wsub3(L,p2,p0,w);
     cross3(u,w,c);
     for ( i = 0 ; i < 3 ; i++ ) area[3*t+i] = 0.5*c[i];
   }
@@ -181,10 +221,12 @@ fail:
 
 /* ---- a uniform grid of points ------------------------------------------------ */
 
-struct grid { double lo[3], cell; long n[3]; long *start; int64_t *items; };
+/* (in a slab, x and y periodic: per[d] the period, the cells dividing it,
+   positions wrapped into it; per[d] 0 elsewhere) */
+struct grid { double lo[3], cell[3], per[3]; long n[3]; long *start; int64_t *items; };
 
 static long grid_cell(const struct grid *g, const double *p, int d)
-{ double c = floor((p[d] - g->lo[d])/g->cell);
+{ double c = floor(((g->per[d] > 0 ? wrap1(p[d],g->per[d]) : p[d]) - g->lo[d])/g->cell[d]);
   return !(c > 0) ? 0 : c > g->n[d] - 1 ? g->n[d] - 1 : (long)c;
 }
 
@@ -195,13 +237,15 @@ static void grid_free(struct grid *g)
 { free(g->start); free(g->items); g->start = NULL; g->items = NULL; }
 
 /* the points (those with use[i] nonzero and finite) in cells of about
-   cell, at most 128 a side; each cell's items increasing */
+   cell, at most 128 a side (in a slab x and y in cells of at least cell
+   dividing the period, at most 128 of them); each cell's items
+   increasing */
 static int grid_make(struct grid *g, const double *p, long np, const unsigned char *use,
-                     double cell)
-{ double top[3] = { 0, 0, 0 };
+                     double cell, const double *L)
+{ double top[3] = { 0, 0, 0 }, base;
   long i, ncells, *fill;
-  int d, any = 0;
-  for ( d = 0 ; d < 3 ; d++ ) g->lo[d] = 0.0;
+  int d, any = 0, nper = L ? 2 : 0;
+  for ( d = 0 ; d < 3 ; d++ ) { g->lo[d] = 0.0; g->per[d] = 0.0; }
   for ( i = 0 ; i < np ; i++ )
   { const double *q = p + 3*i;
     if ( !use[i] ) continue;
@@ -211,11 +255,21 @@ static int grid_make(struct grid *g, const double *p, long np, const unsigned ch
     }
     any = 1;
   }
-  g->cell = cell > 0 && isfinite(cell) ? cell : 1.0;
+  base = cell > 0 && isfinite(cell) ? cell : 1.0;
+  for ( d = nper ; d < 3 ; d++ )
+    if ( (top[d] - g->lo[d])/128 > base ) base = (top[d] - g->lo[d])/128;
   for ( d = 0 ; d < 3 ; d++ )
-    if ( (top[d] - g->lo[d])/128 > g->cell ) g->cell = (top[d] - g->lo[d])/128;
-  for ( d = 0 ; d < 3 ; d++ )
-  { double cells = floor((top[d] - g->lo[d])/g->cell) + 1;
+  { double cells;
+    if ( d < nper )
+    { cells = floor(L[d]/base);
+      g->n[d] = !(cells > 1) ? 1 : cells > 128 ? 128 : (long)cells;
+      g->lo[d] = 0.0;
+      g->per[d] = L[d];
+      g->cell[d] = L[d]/(double)g->n[d];
+      continue;
+    }
+    g->cell[d] = base;
+    cells = floor((top[d] - g->lo[d])/base) + 1;
     g->n[d] = !(cells > 1) ? 1 : cells > 129 ? 129 : (long)cells;
   }
   ncells = g->n[0]*g->n[1]*g->n[2];
@@ -233,15 +287,27 @@ static int grid_make(struct grid *g, const double *p, long np, const unsigned ch
   return 0;
 }
 
-/* the box of cells within r of p: lo[d] to hi[d] */
+/* the box of cells within r of p: lo[d] to hi[d]; along a period, cells
+   counted on past its ends (taken modulo n[d]: grid_wrap), all of them
+   once where the box spans it */
 static void grid_box(const struct grid *g, const double *p, double r, long *lo, long *hi)
 { int d;
   for ( d = 0 ; d < 3 ; d++ )
-  { double a = floor((p[d] - r - g->lo[d])/g->cell), b = floor((p[d] + r - g->lo[d])/g->cell);
+  { double q = g->per[d] > 0 ? wrap1(p[d],g->per[d]) : p[d];
+    double a = floor((q - r - g->lo[d])/g->cell[d]), b = floor((q + r - g->lo[d])/g->cell[d]);
+    if ( g->per[d] > 0 )
+    { if ( !(b - a + 1 < g->n[d]) ) { lo[d] = 0; hi[d] = g->n[d] - 1; }
+      else { lo[d] = (long)a; hi[d] = (long)b; }
+      continue;
+    }
     lo[d] = !(a > 0) ? 0 : a > g->n[d] - 1 ? g->n[d] - 1 : (long)a;
     hi[d] = !(b < g->n[d] - 1) ? g->n[d] - 1 : b < 0 ? 0 : (long)b;
   }
 }
+
+/* a cell's index counted past a period's ends, taken back into it */
+static long grid_wrap(const struct grid *g, long c, int d)
+{ return g->per[d] > 0 ? ((c % g->n[d]) + g->n[d]) % g->n[d] : c; }
 
 /* ---- the surface close to itself --------------------------------------------- */
 
@@ -294,22 +360,25 @@ static int compare_hits(const void *a, const void *b)
 /* Per facet: its centroid, its farthest corner's distance from it, its
    side (its corners' normals summed, made unit: an inverted facet's own
    normal faces back into the surface) and whether it can be across a gap
-   (no corner in a fold, a finite centroid). */
+   (no corner in a fold, a finite centroid). In a slab, at the image of
+   its first corner. */
 static void facet_frames(long nf, const int64_t *f, const double *x, const double *normal,
-                         const unsigned char *folded, double *centre, double *radius, double *tn,
-                         unsigned char *usable)
+                         const unsigned char *folded, const double *L, double *centre,
+                         double *radius, double *tn, unsigned char *usable)
 { long t;
   for ( t = 0 ; t < nf ; t++ )
   { const int64_t *c = f + 3*t;
-    double *m = centre + 3*t, *s = tn + 3*t, len, far = 0.0;
+    const double *p[3];
+    double *m = centre + 3*t, *s = tn + 3*t, len, far = 0.0, q[9];
     int d, j;
+    corners3(L,x,c,NULL,q,p);
     for ( d = 0 ; d < 3 ; d++ )
-    { m[d] = (x[3*c[0]+d] + x[3*c[1]+d] + x[3*c[2]+d])/3;
+    { m[d] = (p[0][d] + p[1][d] + p[2][d])/3;
       s[d] = normal[3*c[0]+d] + normal[3*c[1]+d] + normal[3*c[2]+d];
     }
     for ( j = 0 ; j < 3 ; j++ )
     { double u[3];
-      sub3(x + 3*c[j],m,u);
+      sub3(p[j],m,u);
       far = j ? nan_max(far,sqrt(dot3(u,u))) : sqrt(dot3(u,u));
     }
     radius[t] = far;
@@ -361,7 +430,7 @@ static int self_bin_away(int b, const double *nw)
 }
 
 struct self_args
-{ const double *x, *normal, *r, *centre, *radius, *tn;
+{ const double *x, *normal, *r, *centre, *radius, *tn, *L;
   const double *gc[SELF_BINS];    /* the centroids in each grid's order */
   const int64_t *f, *behind, *ahead, *nbr;
   const long *nstart;
@@ -374,7 +443,7 @@ struct self_args
 static int vertex_hits(const struct self_args *s, long w, long *stamp, struct buf *out)
 { const double *p = s->x + 3*w, *nw = s->normal + 3*w;
   double near = s->reach*s->r[w], q, q2, R2 = s->R*s->R;
-  long lo[3], hi[3], b, c, first = out->count;
+  long lo[3], hi[3], bb, c, first = out->count;
   int ringed = 0, bin;
   if ( !finite3(p) || near != near ) return 0;
   q = (fmin(near,s->R) + s->rmax)*(1 + 1e-9);
@@ -384,18 +453,28 @@ static int vertex_hits(const struct self_args *s, long w, long *stamp, struct bu
     if ( !g->start || self_bin_away(bin,nw) ) continue;
     grid_box(g,p,q,lo,hi);
   /* a row of cells along x is one run of the grid's items, their
-     centroids copied in that order: read straight through */
+     centroids copied in that order: read straight through (in a slab, a
+     row past the period's ends two runs, to its end and from its start) */
   for ( c = lo[2] ; c <= hi[2] ; c++ )
-  for ( b = lo[1] ; b <= hi[1] ; b++ )
-  { long row = (c*g->n[1] + b)*g->n[0], k, end = g->start[row + hi[0] + 1];
-    for ( k = g->start[row + lo[0]] ; k < end ; k++ )
-    { const double *m = s->gc[bin] + 3*k;
+  for ( bb = lo[1] ; bb <= hi[1] ; bb++ )
+  { long b = grid_wrap(g,bb,1), row = (c*g->n[1] + b)*g->n[0], k, end, run, runs = 1;
+    long from[2], to[2];
+    from[0] = lo[0]; to[0] = hi[0];
+    if ( lo[0] < 0 || hi[0] > g->n[0] - 1 )
+    { from[0] = grid_wrap(g,lo[0],0); to[0] = g->n[0] - 1;
+      from[1] = 0; to[1] = grid_wrap(g,hi[0],0);
+      runs = 2;
+    }
+    for ( run = 0 ; run < runs ; run++ )
+    for ( k = g->start[row + from[run]], end = g->start[row + to[run] + 1] ; k < end ; k++ )
+    { const double *m = s->gc[bin] + 3*k, *cn[3];
       int64_t t;
       const int64_t *fc;
-      double u[3], cp[3], gap, along;
+      double u[3], cp[3], gap, along, q9[9];
       int j, ok = 0, neck;
       struct self_hit hit;
-      u[0] = m[0] - p[0]; u[1] = m[1] - p[1]; u[2] = m[2] - p[2];
+      if ( s->L ) wsub3(s->L,m,p,u);
+      else { u[0] = m[0] - p[0]; u[1] = m[1] - p[1]; u[2] = m[2] - p[2]; }
       if ( dot3(u,u) > q2 ) continue;
       t = g->items[k];
       fc = s->f + 3*t;
@@ -406,12 +485,14 @@ static int vertex_hits(const struct self_args *s, long w, long *stamp, struct bu
       { int64_t o = fc[j];
         double dv[3];
         if ( !s->pmask[o] ) continue;
-        sub3(p,s->x + 3*o,dv);
+        wsub3(s->L,p,s->x + 3*o,dv);
         ok = dot3(nw,s->normal + 3*o) < -0.5 && dot3(dv,dv) < R2;
       }
       if ( !ok ) continue;
-      /* the gap; a neck when a body lies across (no bodies: behind) */
-      closest_on_triangle(p,s->x + 3*fc[0],s->x + 3*fc[1],s->x + 3*fc[2],cp);
+      /* the gap; a neck when a body lies across (no bodies: behind) (in a
+         slab, the facet at its image nearest the vertex) */
+      corners3(s->L,s->x,fc,p,q9,cn);
+      closest_on_triangle(p,cn[0],cn[1],cn[2],cp);
       sub3(cp,p,u);
       gap = sqrt(dot3(u,u));
       along = dot3(u,nw);
@@ -447,8 +528,8 @@ static int vertex_hits(const struct self_args *s, long w, long *stamp, struct bu
   return 0;
 }
 
-int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne,
-                     const int64_t *edges, const double *normal, const double *r,
+int pyse_events_self(long n, const double *x, long nf, const int64_t *f, const double *L,
+                     long ne, const int64_t *edges, const double *normal, const double *r,
                      const unsigned char *vmask, const unsigned char *pmask,
                      const unsigned char *folded, const int64_t *behind, const int64_t *ahead,
                      int with_bodies, double R, double reach, double neck_factor, int threads,
@@ -479,7 +560,7 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
   tn = (double *)malloc((size_t)nf*3*sizeof(double));
   usable = (unsigned char *)malloc((size_t)nf);
   if ( !centre || !radius || !tn || !usable ) goto fail;
-  facet_frames(nf,f,x,normal,folded,centre,radius,tn,usable);
+  facet_frames(nf,f,x,normal,folded,L,centre,radius,tn,usable);
   for ( t = 0 ; t < nf ; t++ )
     if ( usable[t] && radius[t] > rmax ) rmax = radius[t];
   /* a facet within reach of a vertex has its centroid within reach plus
@@ -500,7 +581,7 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
       any += inbin[t];
     }
     if ( !any ) continue;          /* (g[bin].start NULL: nothing to search) */
-    if ( grid_make(g + bin,centre,nf,inbin,qsum/nq) ) goto fail;
+    if ( grid_make(g + bin,centre,nf,inbin,qsum/nq,L) ) goto fail;
     items = g[bin].start[g[bin].n[0]*g[bin].n[1]*g[bin].n[2]];
     gc[bin] = (double *)malloc(at_least_one(items)*3*sizeof(double));
     if ( !gc[bin] ) goto fail;
@@ -521,6 +602,7 @@ int pyse_events_self(long n, const double *x, long nf, const int64_t *f, long ne
   }
 
   s.x = x; s.normal = normal; s.r = r; s.centre = centre; s.radius = radius; s.tn = tn;
+  s.L = L;
   for ( bin = 0 ; bin < SELF_BINS ; bin++ ) { s.gc[bin] = gc[bin]; s.g[bin] = g + bin; }
   s.f = f; s.behind = behind; s.ahead = ahead; s.nstart = nstart; s.nbr = nbr;
   s.pmask = pmask; s.with_bodies = with_bodies; s.R = R; s.reach = reach;
@@ -663,7 +745,7 @@ static int compare_pairs(const void *a, const void *b)
 }
 
 int pyse_events_lines(long n, const double *x, const double *h, long ne, const int64_t *edges,
-                      double factor, long *nl, int64_t **line_vertices, long *np,
+                      double factor, const double *L, long *nl, int64_t **line_vertices, long *np,
                       int64_t **pi, int64_t **pj, double **pd, double **pscale)
 { long *slot = NULL, *astart = NULL, *apos = NULL, *line = NULL;
   int64_t *order = NULL, *adj = NULL, *keys = NULL, *verts = NULL, *lv = NULL;
@@ -672,7 +754,7 @@ int pyse_events_lines(long n, const double *x, const double *h, long ne, const i
   struct path *paths = NULL;
   struct sweep *sw = NULL;
   struct buf pairs = { NULL, 0, 0, sizeof(struct pair) };
-  long nv = 0, k, nkeys = 0, npaths = 0, nverts = 0, L = 0, kept = 0, pass;
+  long nv = 0, k, nkeys = 0, npaths = 0, nverts = 0, nlv = 0, kept = 0, pass;
   double hmax = 0.0, rr;
 
   *nl = 0; *np = 0;
@@ -761,16 +843,16 @@ int pyse_events_lines(long n, const double *x, const double *h, long ne, const i
     double cum = 0.0, length;
     for ( j = 0 ; j + 1 < len ; j++ )
     { double d[3];
-      sub3(x + 3*p[j+1],x + 3*p[j],d);
+      wsub3(L,x + 3*p[j+1],x + 3*p[j],d);
       seg[j] = sqrt(dot3(d,d));
     }
     length = pairwise_sum(seg,len - 1);
     keep = loop ? len - 1 : len;
     for ( j = 0 ; j < keep ; j++ )
-    { lv[L] = p[j]; s[L] = cum; total[L] = length; closed[L] = (unsigned char)loop;
-      line[L] = k;
-      hmax = L ? nan_max(hmax,h[p[j]]) : h[p[j]];
-      L++;
+    { lv[nlv] = p[j]; s[nlv] = cum; total[nlv] = length; closed[nlv] = (unsigned char)loop;
+      line[nlv] = k;
+      hmax = nlv ? nan_max(hmax,h[p[j]]) : h[p[j]];
+      nlv++;
       if ( j + 1 < len ) cum += seg[j];
     }
   }
@@ -778,28 +860,42 @@ int pyse_events_lines(long n, const double *x, const double *h, long ne, const i
   /* pairs closer than factor times the largest edge there (sorted along
      x, each against those after it within that), in order (i, j); kept:
      closer than factor times their own edges, and far apart along the
-     lines (more than three times that or their distance) or on two */
+     lines (more than three times that or their distance) or on two. In a
+     slab x wrapped into the cell, those within that of its start again a
+     period on (the pairs across its side), the pairs once */
   rr = factor*hmax;
-  if ( L >= 2 && rr > 0 )
+  if ( nlv >= 2 && rr > 0 )
   { long a, nsw = 0;
-    sw = (struct sweep *)malloc((size_t)L*sizeof(struct sweep));
+    sw = (struct sweep *)malloc((size_t)(L ? 2 : 1)*nlv*sizeof(struct sweep));
     if ( !sw ) goto fail;
-    for ( a = 0 ; a < L ; a++ )
-      if ( finite3(x + 3*lv[a]) ) { sw[nsw].x = x[3*lv[a]]; sw[nsw].i = a; nsw++; }
+    for ( a = 0 ; a < nlv ; a++ )
+      if ( finite3(x + 3*lv[a]) )
+      { sw[nsw].x = L ? wrap1(x[3*lv[a]],L[0]) : x[3*lv[a]]; sw[nsw].i = a; nsw++; }
+    if ( L )
+      for ( a = 0, k = nsw ; a < k ; a++ )
+        if ( sw[a].x <= rr*(1 + 1e-9) ) { sw[nsw].x = sw[a].x + L[0]; sw[nsw].i = sw[a].i; nsw++; }
     qsort(sw,(size_t)nsw,sizeof(struct sweep),compare_sweep);
     for ( a = 0 ; a < nsw ; a++ )
     { long b;
       for ( b = a + 1 ; b < nsw && sw[b].x - sw[a].x <= rr*(1 + 1e-9) ; b++ )
       { struct pair pr;
         double d[3];
+        if ( sw[a].i == sw[b].i ) continue;       /* (a point and its copy) */
         pr.i = sw[a].i < sw[b].i ? sw[a].i : sw[b].i;
         pr.j = sw[a].i < sw[b].i ? sw[b].i : sw[a].i;
-        sub3(x + 3*lv[pr.i],x + 3*lv[pr.j],d);
+        wsub3(L,x + 3*lv[pr.i],x + 3*lv[pr.j],d);
         if ( sqrt(dot3(d,d)) < rr && buf_push(&pairs,&pr) ) goto fail;
       }
     }
     if ( pairs.count > 1 )
       qsort(pairs.data,(size_t)pairs.count,sizeof(struct pair),compare_pairs);
+    if ( L && pairs.count > 1 )
+    { struct pair *pr = (struct pair *)pairs.data;
+      long u = 1;
+      for ( k = 1 ; k < pairs.count ; k++ )
+        if ( pr[k].i != pr[u-1].i || pr[k].j != pr[u-1].j ) pr[u++] = pr[k];
+      pairs.count = u;
+    }
   }
   if ( pairs.count )
   { const struct pair *pr = (const struct pair *)pairs.data;
@@ -811,7 +907,7 @@ int pyse_events_lines(long n, const double *x, const double *h, long ne, const i
     for ( k = 0 ; k < pairs.count ; k++ )
     { int64_t i = pr[k].i, j = pr[k].j;
       double d[3], dist, scale, apart;
-      sub3(x + 3*lv[i],x + 3*lv[j],d);
+      wsub3(L,x + 3*lv[i],x + 3*lv[j],d);
       dist = sqrt(dot3(d,d));
       scale = 0.5*(h[lv[i]] + h[lv[j]]);
       if ( !(dist < factor*scale) ) continue;
@@ -826,7 +922,7 @@ int pyse_events_lines(long n, const double *x, const double *h, long ne, const i
   free(verts); free(paths); free(s); free(total); free(seg); free(closed); free(line);
   free(sw); free(pairs.data);
   *line_vertices = lv;
-  *nl = L;
+  *nl = nlv;
   *np = kept;
   return 0;
 fail:
@@ -926,9 +1022,8 @@ static double box_d2(const struct seg_node *nd, const double *p)
 }
 
 static double seg_nearest_d2(const struct seg_node *node, const long *idx, const double *p,
-                             const double *a, const double *ab)
+                             const double *a, const double *ab, double best)
 { long stack[SEG_STACK], top = 0, k;
-  double best = INFINITY;
   stack[top++] = 0;
   while ( top )
   { const struct seg_node *nd = node + stack[--top];
@@ -949,44 +1044,75 @@ static double seg_nearest_d2(const struct seg_node *node, const long *idx, const
   return best;
 }
 
+/* In a slab, the segments and points wrapped into the cell (a segment by
+   its start), each point's nearest among the segments' images about the
+   cell: the point's nine images (its own first) against the segments, the
+   best so far kept from one to the next. */
+static const double image9[9][2] = { {0, 0}, {-1, 0}, {1, 0}, {0, -1}, {0, 1},
+                                     {-1, -1}, {-1, 1}, {1, -1}, {1, 1} };
+
 int pyse_events_segments(long np, const double *p, long ns, const double *a, const double *b,
-                         int threads, double *out)
+                         const double *L, int threads, double *out)
 { double *ab = (double *)malloc(at_least_one(ns)*4*sizeof(double));
   long *idx = NULL, i, k;
   struct seg_node *node = NULL;
-  double *key = NULL;
-  int finite = 1;
+  double *key = NULL, *wa = NULL, *wp = NULL;
+  int finite = 1, images = L ? 9 : 1;
   if ( !ab ) return -1;
+  if ( L )
+  { wa = (double *)malloc(at_least_one(ns)*3*sizeof(double));
+    wp = (double *)malloc(at_least_one(np)*3*sizeof(double));
+    if ( !wa || !wp ) { free(ab); free(wa); free(wp); return -1; }
+    for ( k = 0 ; k < ns ; k++ )
+    { wa[3*k] = wrap1(a[3*k],L[0]); wa[3*k+1] = wrap1(a[3*k+1],L[1]); wa[3*k+2] = a[3*k+2]; }
+    for ( i = 0 ; i < np ; i++ )
+    { wp[3*i] = wrap1(p[3*i],L[0]); wp[3*i+1] = wrap1(p[3*i+1],L[1]); wp[3*i+2] = p[3*i+2]; }
+  }
   /* each segment's direction and its length squared */
   for ( k = 0 ; k < ns ; k++ )
-  { sub3(b + 3*k,a + 3*k,ab + 4*k);
+  { wsub3(L,b + 3*k,a + 3*k,ab + 4*k);
     ab[4*k+3] = at_least(dot3(ab + 4*k,ab + 4*k),1e-300);
     finite = finite && finite3(a + 3*k) && finite3(b + 3*k);
   }
+  if ( L ) { a = wa; p = wp; }
   /* (the tree for more than a few, all finite: else each point against
      all of them, as before, NaN for a NaN among them) */
   if ( finite && ns > 2*SEG_LEAF )
-  { idx = (long *)malloc((size_t)ns*sizeof(long));
+  { double *wb = NULL;
+    idx = (long *)malloc((size_t)ns*sizeof(long));
     node = (struct seg_node *)malloc((size_t)2*ns*sizeof(struct seg_node));
     key = (double *)malloc((size_t)ns*sizeof(double));
-    if ( !idx || !node || !key ) { free(ab); free(idx); free(node); free(key); return -1; }
-    seg_tree(ns,a,b,idx,node,key);
+    if ( L ) wb = (double *)malloc((size_t)ns*3*sizeof(double));
+    if ( !idx || !node || !key || (L && !wb) )
+    { free(ab); free(idx); free(node); free(key); free(wa); free(wp); free(wb); return -1; }
+    if ( L )             /* (the ends at the starts' images) */
+      for ( k = 0 ; k < ns ; k++ )
+      { wb[3*k] = a[3*k] + ab[4*k]; wb[3*k+1] = a[3*k+1] + ab[4*k+1];
+        wb[3*k+2] = a[3*k+2] + ab[4*k+2];
+      }
+    seg_tree(ns,a,L ? wb : b,idx,node,key);
+    free(wb);
   }
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) \
-      num_threads((double)np*(node ? 16 : ns) >= PAR_MIN_WORK && threads > 1 ? threads : 1)
+      num_threads((double)np*(node ? 16 : ns)*images >= PAR_MIN_WORK && threads > 1 ? threads : 1)
 #endif
   for ( i = 0 ; i < np ; i++ )
-  { double best = INFINITY;
+  { double best = INFINITY, q[3];
     long j;
-    if ( node && finite3(p + 3*i) )
-      best = seg_nearest_d2(node,idx,p + 3*i,a,ab);
-    else
-      for ( j = 0 ; j < ns ; j++ )
-        best = nan_min(segment_d2(p + 3*i,a,ab,j),best);
+    int m;
+    for ( m = 0 ; m < images ; m++ )
+    { q[0] = p[3*i]; q[1] = p[3*i+1]; q[2] = p[3*i+2];
+      if ( L ) { q[0] += image9[m][0]*L[0]; q[1] += image9[m][1]*L[1]; }
+      if ( node && finite3(q) )
+        best = seg_nearest_d2(node,idx,q,a,ab,best);
+      else
+        for ( j = 0 ; j < ns ; j++ )
+          best = nan_min(segment_d2(q,a,ab,j),best);
+    }
     out[i] = sqrt(best);
   }
-  free(ab); free(idx); free(node); free(key);
+  free(ab); free(idx); free(node); free(key); free(wa); free(wp);
   return 0;
 }
 

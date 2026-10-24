@@ -6,6 +6,7 @@ from typing import Dict
 
 import numpy as np
 
+from . import _periodic
 from ._mesh import Mesh
 
 # a few vertices (this fraction at most) on the other side of an equality
@@ -47,9 +48,12 @@ def _grow(mask: np.ndarray, edges: np.ndarray, rings: int) -> np.ndarray:
     return out
 
 
-def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> float:
+def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float,
+              periods=None) -> float:
     """The smallest distance, in units of h, between used vertices more than
-    two edges apart (inf if none are closer than h/2)."""
+    two edges apart (inf if none are closer than h/2). periods: a slab's
+    (Mesh.periods): distances at the nearest images, across the cell's
+    sides too."""
     idx = np.flatnonzero(used)
     if len(idx) < 2 or len(edges) == 0:
         return float("inf")
@@ -59,9 +63,21 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
     # closer than r in the full space are closer in those too
     grid = np.zeros((len(p), 3))
     grid[:, :min(3, p.shape[1])] = p[:, :3]
-    cell = np.floor(grid/r).astype(np.int64)
-    cell -= cell.min(axis=0) - 1                 # a margin: neighbours never wrap
-    dims = cell.max(axis=0) + 2
+    if periods is None:
+        cell = np.floor(grid/r).astype(np.int64)
+        cell -= cell.min(axis=0) - 1                 # a margin: neighbours never wrap
+        dims = cell.max(axis=0) + 2
+    else:
+        # in a slab, x and y wrapped into the cell, in cells dividing the
+        # period (at least r), their neighbours across its sides
+        L = np.asarray(periods, dtype=float)
+        nper = np.maximum(np.floor(L/r), 1).astype(np.int64)
+        cell = np.zeros((len(p), 3), dtype=np.int64)
+        cell[:, :2] = np.minimum(np.floor((grid[:, :2] - L*np.floor(grid[:, :2]/L))/(L/nper)),
+                                 nper - 1).astype(np.int64)
+        cell[:, 2] = np.floor(grid[:, 2]/r).astype(np.int64)
+        cell[:, 2] -= cell[:, 2].min() - 1
+        dims = np.r_[nper, cell[:, 2].max() + 2]
     k = (cell[:, 0]*dims[1] + cell[:, 1])*dims[2] + cell[:, 2]
     order = np.argsort(k, kind="stable")
     sk = k[order]
@@ -70,7 +86,14 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
     offsets = offsets[[tuple(o) >= (0, 0, 0) for o in offsets]]   # each pair of cells once
     for off in offsets:
         same = not off.any()
-        nk = sk + (off[0]*dims[1] + off[1])*dims[2] + off[2]       # sorted, like sk
+        if periods is None:
+            nk = sk + (off[0]*dims[1] + off[1])*dims[2] + off[2]       # sorted, like sk
+        else:
+            # (a period of one or two cells: a neighbour cell the cell itself
+            # or listed twice, its pairs found twice; the least is the same)
+            c = cell[order]
+            nk = (((c[:, 0] + off[0]) % dims[0])*dims[1] + (c[:, 1] + off[1]) % dims[1])*dims[2] \
+                + c[:, 2] + off[2]
         lo = np.searchsorted(sk, nk, "left")
         cnt = np.searchsorted(sk, nk, "right") - lo
         if not cnt.any():
@@ -80,7 +103,8 @@ def _self_gap(x: np.ndarray, edges: np.ndarray, used: np.ndarray, h: float) -> f
         j = order[np.repeat(lo, cnt) + within]
         keep = i < j if same else i != j
         i, j = i[keep], j[keep]
-        d = np.linalg.norm(p[i] - p[j], axis=1)
+        d = np.linalg.norm(p[i] - p[j] if periods is None else
+                           _periodic.delta(p[j], p[i], periods), axis=1)
         close = d < r
         found_i.append(i[close])
         found_j.append(j[close])
@@ -111,10 +135,11 @@ def _edge_turn(m: Mesh) -> "tuple[np.ndarray, np.ndarray]":
     ends, and whether it was judged: not for edges touching a vertex where
     three or more facets meet on an edge (their angle is 0). Vertex normals:
     area-weighted facet normals, each sign-aligned with one facet at the
-    vertex (facet orientations needn't agree across a sheet)."""
+    vertex (facet orientations needn't agree across a sheet). (In a slab,
+    each facet's sides at their nearest images.)"""
     f, x = m.facets, m.vertices
     assert f is not None
-    n = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
+    n = np.cross(m.delta(x[f[:, 0]], x[f[:, 1]]), m.delta(x[f[:, 0]], x[f[:, 2]]))
     ref = np.zeros_like(x)
     for k in range(3):
         ref[f[:, k]] = n

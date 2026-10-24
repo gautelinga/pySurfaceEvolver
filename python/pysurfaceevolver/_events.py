@@ -31,13 +31,14 @@ class Event:
     patches about to join or split). ``gap``: the distance across, the
     smallest found; for ``"solid"`` negative where vertices have gone
     through. ``scale``: the edge length there, which ``gap`` was compared
-    with. ``where``: the middle of the gap. ``vertices``: the vertices (rows
-    of :attr:`Evolver.vertices`) close to each other or to the solid.
-    ``constraint``: the solid's number or name (``"solid"``, ``"contact
-    lines"``). ``between``: for ``"solid"``, what lies between the surface
-    and the solid, ``"body"`` (a film of liquid thinning: the solid is about
-    to dry there) or ``"outside"`` (the liquid is about to touch it); None
-    without bodies.
+    with. ``where``: the middle of the gap (in a periodic slab, at the
+    image of one of its vertices: compare places with :meth:`Mesh.delta`).
+    ``vertices``: the vertices (rows of :attr:`Evolver.vertices`) close to
+    each other or to the solid. ``constraint``: the solid's number or name
+    (``"solid"``, ``"contact lines"``). ``between``: for ``"solid"``, what
+    lies between the surface and the solid, ``"body"`` (a film of liquid
+    thinning: the solid is about to dry there) or ``"outside"`` (the liquid
+    is about to touch it); None without bodies.
     """
 
     kind: str
@@ -66,11 +67,14 @@ def find(ev, factor: float, self_factor: Optional[float] = None) -> List[Event]:
     """The events on ``ev``'s surface, closest (relative to the edges) first;
     the surface close to itself within ``self_factor`` (default factor:
     its search grows as the cube of it, 34 ms of a 16-bead pack's 50 ms at
-    4, one thread)."""
+    4, one thread). In a slab periodic in x and y, the same events as
+    the surface's unwrapped copy would have, a surface coming close to its
+    own image among them; other symmetry groups and tori aren't searched."""
     if not factor > 0:
         raise ValueError("events() needs factor > 0")
     m = ev.mesh()
-    if m.facets is None or len(m.facets) == 0 or _core.symmetry():
+    periods = m.periods
+    if m.facets is None or len(m.facets) == 0 or (_core.symmetry() and periods is None):
         return []
     x = np.ascontiguousarray(m.vertices, dtype=float)
     if x.shape[1] != 3:
@@ -81,9 +85,9 @@ def find(ev, factor: float, self_factor: Optional[float] = None) -> List[Event]:
     # them facing opposite ways: their normal means nothing, and they face
     # the surface by mistake); in C, pyse_events.c: the unique alone was
     # 18 ms of a 15k-facet surface's 80 ms search
-    e, normal, folded = _core.events_frame(x, f)
+    e, normal, folded = _core.events_frame(x, f, periods)
     n = len(x)
-    length = np.linalg.norm(x[e[:, 0]] - x[e[:, 1]], axis=1)
+    length = np.linalg.norm(m.delta(x[e[:, 0]], x[e[:, 1]]), axis=1)
     count = np.bincount(e.ravel(), minlength=n)
     used = count > 0
     # each vertex's edge length, from its edges between vertices free to move
@@ -108,12 +112,12 @@ def find(ev, factor: float, self_factor: Optional[float] = None) -> List[Event]:
     moving = used & ~np.asarray(m.fixed, bool)
     events = _self(x, f, e, h, normal, behind, ahead, with_bodies, moving & ~folded,
                    folded, factor if self_factor is None else self_factor,
-                   NECK/max(int(m.order), 1))
+                   NECK/max(int(m.order), 1), periods)
     nums, attrs, dist, names, copies = _one_per_solid(*ev._constraint_gaps())
     found = _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
                    nums, attrs, dist, names)
     found += _contact_lines(m, x, e, h, used, factor, nums, dist, names)
-    events += [_on_copy(event, copies) for event in found]
+    events += [_on_copy(event, copies, periods) for event in found]
     return sorted(events, key=lambda ev_: ev_.gap/ev_.scale)
 
 
@@ -164,11 +168,12 @@ def _one_per_solid(nums, attrs, dist, names):
             [names[c] for c in first], copies)
 
 
-def _on_copy(event: Event, copies: dict) -> Event:
+def _on_copy(event: Event, copies: dict, periods=None) -> Event:
     """An event on a solid with copies named by the copy whose pole is
     farthest from it (a contact made there leaves its new line clear of
     the integrals' singular pole)."""
     from ._engine import surface
+    from ._periodic import delta
     keys = copies.get(event.constraint)
     if not keys:
         return event
@@ -177,7 +182,7 @@ def _on_copy(event: Event, copies: dict) -> Event:
         shape, pole = getattr(wall, "shape", None), getattr(wall, "pole_axis", None)
         if shape is None or pole is None or shape[0] != "sphere":
             return -1.0
-        u = np.asarray(event.where, float) - np.asarray(shape[1], float)
+        u = delta(np.asarray(shape[1], float), np.asarray(event.where, float), periods)
         u = u/max(float(np.linalg.norm(u)), 1e-300)
         return float(np.linalg.norm(u - np.asarray(pole, float)))
     return replace(event, constraint=max(keys, key=clearance))
@@ -186,7 +191,7 @@ def _on_copy(event: Event, copies: dict) -> Event:
 # ---- the surface close to itself ---------------------------------------------------
 
 def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
-          factor, neck_factor) -> List[Event]:
+          factor, neck_factor, periods=None) -> List[Event]:
     """Vertices close to a facet across the surface (facing it, the gap along
     the normal; not within two edges of it, where a fold of the mesh can
     face back): a neck when a body lies across, a touch when the outside
@@ -203,7 +208,8 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
     times that a 16-bead pack's sheets against a side wall ruptured 1-1.8
     edges thick; the liquid came back over the cut, the lines joined again
     and the sheet ruptured again, four times in a descent that then ran
-    away)."""
+    away). In a slab, across the cell's sides too: the facet at its image
+    nearest the vertex, a surface close to its own image."""
     r = factor*h
     reach = max(neck_factor, 1.0)
     if not moving.any():
@@ -219,7 +225,7 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
     # not neighbours along a smooth surface
     vi, ti, gap, c, neck = _core.events_self(
         x, f, e, normal, r, moving, moving | ~folded, folded, behind, ahead, with_bodies,
-        reach*float(r[moving].max()) + float(h.max()), reach, neck_factor)
+        reach*float(r[moving].max()) + float(h.max()), reach, neck_factor, periods)
     if len(vi) == 0:
         return []
     # each connected piece of the surface, to tell a local event from a mesh
@@ -241,14 +247,14 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
             if k is None or 2*len(members) > size[piece[members]].max():
                 continue
             if kind == "neck" and g[k] >= r[a[k]] and sheet(
-                    normal[waist(x, members, (x[a[k]] + cc[k])/2, g[k], h[a[k]])]):
+                    normal[waist(x, members, (x[a[k]] + cc[k])/2, g[k], h[a[k]], periods)]):
                 continue
             events.append(Event(kind, float(g[k]), float(h[a[k]]), (x[a[k]] + cc[k])/2,
                                 np.asarray(members)))
     return events
 
 
-def waist(x, members, where, gap: float, scale: float) -> np.ndarray:
+def waist(x, members, where, gap: float, scale: float, periods=None) -> np.ndarray:
     """A neck's waist: its vertices (members) within its gap and two edges of
     its narrowest point (where), as many as three of them; else all of them.
     (All of them, a pack's neck 0.008 across on edges of 0.04 was 344
@@ -256,9 +262,11 @@ def waist(x, members, where, gap: float, scale: float) -> np.ndarray:
     turned enough to be a tube's, the tube's ring came out in two pieces,
     its collapse left two vertices, refused nine times in a descent that
     then ran away; at the narrowest point the film's two faces are a sheet's,
-    which ruptures by a hole.)"""
+    which ruptures by a hole.) periods: a slab's (distances at the nearest
+    images)."""
+    from ._periodic import delta
     members = np.asarray(members, int)
-    near = members[np.linalg.norm(x[members] - np.asarray(where, float), axis=1)
+    near = members[np.linalg.norm(delta(np.asarray(where, float), x[members], periods), axis=1)
                    < max(float(gap), 2*float(scale))]
     return near if len(near) >= 3 else members
 
@@ -346,7 +354,7 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
             # edges, in C: in NumPy, in blocks of vertices, it was 4 ms of a
             # 15k-facet pack's search; a vertex at a time before that, the
             # most called function of its descent, 4.8 million calls)
-            s_ = _core.events_segments(x[near], x[lines[:, 0]], x[lines[:, 1]])
+            s_ = _core.events_segments(x[near], x[lines[:, 0]], x[lines[:, 1]], m.periods)
             wedge = np.full(len(near), float(angle)) if outside is None else \
                 np.where(outside[near], 180.0 - angle, float(angle))
             flag[near] = g[near] < WEDGE*s_*np.sin(np.radians(wedge))
@@ -393,7 +401,7 @@ def _contact_lines(m, x, e, h, used, factor, nums, dist, names) -> List[Event]:
         # shorter way round) or on two lines: in C (pyse_events.c; in
         # Python and NumPy, two fifths of a 16-bead pack's search at 0.5)
         line_vertices, i, j, d, scale = _core.events_lines(
-            x, h, np.ascontiguousarray(edges[mask], dtype=np.int64), float(factor))
+            x, h, np.ascontiguousarray(edges[mask], dtype=np.int64), float(factor), m.periods)
         if len(i) == 0:
             continue
         pts = x[line_vertices]
@@ -405,8 +413,11 @@ def _contact_lines(m, x, e, h, used, factor, nums, dist, names) -> List[Event]:
         for group, members in _split(label):
             k = nearest[group]
             key: Union[int, str] = names[c] or int(nums[c])
-            events.append(Event("contact lines", float(d[k]), float(scale[k]),
-                                (pts[i[k]] + pts[j[k]])/2, np.asarray(members), key))
+            # (in a slab the middle at the first's image)
+            mid = (pts[i[k]] + pts[j[k]])/2 if m.periods is None else \
+                pts[i[k]] + m.delta(pts[i[k]], pts[j[k]])/2
+            events.append(Event("contact lines", float(d[k]), float(scale[k]), mid,
+                                np.asarray(members), key))
     return events
 
 

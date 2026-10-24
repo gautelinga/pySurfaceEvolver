@@ -886,37 +886,49 @@ NB_MODULE(_core, m) {
   // ---- the topology events' loops (pyse_events.c) ----------------------------
   // On arrays only: no Evolver lock (they run beside a call), the GIL
   // released. The threads setting is read without the lock (an int).
-  m.def("events_frame", [](In<double, 2> x, In<int64_t, 2> f) {
+  // periods: a slab's (Lx, Ly) (Mesh.periods), or None.
+  auto slab = [](nb::handle periods, double *L) -> const double * {
+    if (periods.is_none()) return nullptr;
+    auto t = nb::cast<std::tuple<double, double>>(periods);
+    L[0] = std::get<0>(t); L[1] = std::get<1>(t);
+    if (!(L[0] > 0 && L[1] > 0)) throw std::invalid_argument("periods must be two positive numbers");
+    return L;
+  };
+  m.def("events_frame", [slab](In<double, 2> x, In<int64_t, 2> f, nb::handle periods) {
     if (x.shape(1) != 3 || f.shape(1) != 3)
       throw std::invalid_argument("events_frame: x (n, 3), f (nf, 3)");
     long n = long(x.shape(0)), nf = long(f.shape(0)), ne = 0;
+    double Lb[2];
+    const double *L = slab(periods, Lb);
     int64_t *edges = nullptr;
     auto *normal = static_cast<double *>(std::malloc(size_t(n > 0 ? n : 1) * 3 * sizeof(double)));
     auto *folded = static_cast<unsigned char *>(std::malloc(size_t(n > 0 ? n : 1)));
     int status = -1;
     if (normal && folded) {
       nb::gil_scoped_release release;
-      status = pyse_events_frame(n, x.data(), nf, f.data(), &edges, &ne, normal, folded);
+      status = pyse_events_frame(n, x.data(), nf, f.data(), L, &edges, &ne, normal, folded);
     }
     if (status != 0) { std::free(normal); std::free(folded); }
     events_status(status, "events_frame");
     return nb::make_tuple(from_malloc<int64_t>(edges, {size_t(ne), size_t(2)}),
                           from_malloc<double>(normal, {size_t(n), size_t(3)}),
                           from_malloc<bool>(folded, {size_t(n)}));
-  }, "x"_a, "f"_a,
+  }, "x"_a, "f"_a, "periods"_a = nb::none(),
      "(edges (ne, 2): the facets' unique edges, smaller end first, sorted; normals (n, 3): "
      "the facets' areas summed, unit; folded (n,): a facet round it facing against it)");
-  m.def("events_self", [](In<double, 2> x, In<int64_t, 2> f, In<int64_t, 2> edges,
+  m.def("events_self", [slab](In<double, 2> x, In<int64_t, 2> f, In<int64_t, 2> edges,
                           In<double, 2> normal, In<double, 1> r, In<bool, 1> vmask,
                           In<bool, 1> pmask, In<bool, 1> folded, In<int64_t, 1> behind,
                           In<int64_t, 1> ahead, bool with_bodies, double R, double reach,
-                          double neck_factor) {
+                          double neck_factor, nb::handle periods) {
     size_t n = x.shape(0);
     if (x.shape(1) != 3 || f.shape(1) != 3 || edges.shape(1) != 2 || normal.shape(0) != n
         || normal.shape(1) != 3 || r.shape(0) != n || vmask.shape(0) != n
         || pmask.shape(0) != n || folded.shape(0) != n || behind.shape(0) != n
         || ahead.shape(0) != n)
       throw std::invalid_argument("events_self: arrays of the wrong shapes");
+    double Lb[2];
+    const double *L = slab(periods, Lb);
     int threads = pyse_threads();
     long count = 0;
     int64_t *vi = nullptr, *ti = nullptr;
@@ -926,7 +938,7 @@ NB_MODULE(_core, m) {
     {
       nb::gil_scoped_release release;
       status = pyse_events_self(
-          long(n), x.data(), long(f.shape(0)), f.data(), long(edges.shape(0)), edges.data(),
+          long(n), x.data(), long(f.shape(0)), f.data(), L, long(edges.shape(0)), edges.data(),
           normal.data(), r.data(), reinterpret_cast<const unsigned char *>(vmask.data()),
           reinterpret_cast<const unsigned char *>(pmask.data()),
           reinterpret_cast<const unsigned char *>(folded.data()), behind.data(), ahead.data(),
@@ -938,13 +950,15 @@ NB_MODULE(_core, m) {
                           from_malloc<double>(gap, {k}), from_malloc<double>(closest, {k, size_t(3)}),
                           from_malloc<bool>(neck, {k}));
   }, "x"_a, "f"_a, "edges"_a, "normal"_a, "r"_a, "vmask"_a, "pmask"_a, "folded"_a, "behind"_a,
-     "ahead"_a, "with_bodies"_a, "R"_a, "reach"_a, "neck_factor"_a,
+     "ahead"_a, "with_bodies"_a, "R"_a, "reach"_a, "neck_factor"_a, "periods"_a = nb::none(),
      "(vertex rows, facet rows, gaps, closest points, neck) of the surface close to itself, "
      "in order (vertex, facet): see pyse_api.h");
-  m.def("events_lines", [](In<double, 2> x, In<double, 1> h, In<int64_t, 2> edges,
-                           double factor) {
+  m.def("events_lines", [slab](In<double, 2> x, In<double, 1> h, In<int64_t, 2> edges,
+                               double factor, nb::handle periods) {
     if (x.shape(1) != 3 || h.shape(0) != x.shape(0) || edges.shape(1) != 2)
       throw std::invalid_argument("events_lines: arrays of the wrong shapes");
+    double Lb[2];
+    const double *L = slab(periods, Lb);
     long nl = 0, np = 0;
     int64_t *lv = nullptr, *pi = nullptr, *pj = nullptr;
     double *pd = nullptr, *pscale = nullptr;
@@ -952,30 +966,34 @@ NB_MODULE(_core, m) {
     {
       nb::gil_scoped_release release;
       status = pyse_events_lines(long(x.shape(0)), x.data(), h.data(), long(edges.shape(0)),
-                                 edges.data(), factor, &nl, &lv, &np, &pi, &pj, &pd, &pscale);
+                                 edges.data(), factor, L, &nl, &lv, &np, &pi, &pj, &pd, &pscale);
     }
     events_status(status, "events_lines");
     size_t k = size_t(np);
     return nb::make_tuple(from_malloc<int64_t>(lv, {size_t(nl)}), from_malloc<int64_t>(pi, {k}),
                           from_malloc<int64_t>(pj, {k}), from_malloc<double>(pd, {k}),
                           from_malloc<double>(pscale, {k}));
-  }, "x"_a, "h"_a, "edges"_a, "factor"_a,
+  }, "x"_a, "h"_a, "edges"_a, "factor"_a, "periods"_a = nb::none(),
      "(line vertices, i, j, distances, scales): contact-line vertices close to each other "
      "while far apart along the lines (pairs of rows of the line vertices); see pyse_api.h");
-  m.def("events_segments", [](In<double, 2> p, In<double, 2> a, In<double, 2> b) {
+  m.def("events_segments", [slab](In<double, 2> p, In<double, 2> a, In<double, 2> b,
+                                  nb::handle periods) {
     if (p.shape(1) != 3 || a.shape(1) != 3 || b.shape(1) != 3 || a.shape(0) != b.shape(0))
       throw std::invalid_argument("events_segments: p (n, 3), a and b (m, 3)");
     size_t n = p.shape(0);
+    double Lb[2];
+    const double *L = slab(periods, Lb);
     std::vector<double> dist(n);
     int threads = pyse_threads(), status;
     {
       nb::gil_scoped_release release;
       status = pyse_events_segments(long(n), p.data(), long(a.shape(0)), a.data(), b.data(),
-                                    threads, dist.data());
+                                    L, threads, dist.data());
     }
     events_status(status, "events_segments");
     return array_1d(std::move(dist));
-  }, "p"_a, "a"_a, "b"_a, "each point's distance to the nearest of the segments (a, b)");
+  }, "p"_a, "a"_a, "b"_a, "periods"_a = nb::none(),
+     "each point's distance to the nearest of the segments (a, b) (in a slab, of their images)");
   m.def("events_groups", [](In<bool, 1> mask, In<int64_t, 2> links) {
     if (links.shape(1) != 2) throw std::invalid_argument("events_groups: links (m, 2)");
     size_t n = mask.shape(0);
