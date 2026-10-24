@@ -393,8 +393,12 @@ class _Engine:
 
     @contextlib.contextmanager
     def _toggle(self, name: str, on: bool) -> Iterator[None]:
-        """One of Evolver's toggles on (or off) for a block; restored after."""
+        """One of Evolver's toggles on (or off) for a block; restored after.
+        (And the solver: Evolver's linear_metric switches the session to its
+        own factoring, for good, at the first use; a stability check of an
+        unstable surface left every later Newton step on it.)"""
         before = self.eval(name) != 0
+        solver = _core.solver() if hasattr(_core, "solver") else None
         if before != on:
             self.command(f"{name} {'on' if on else 'off'}")
         try:
@@ -402,6 +406,8 @@ class _Engine:
         finally:
             if before != on and _core.surface_valid():
                 self.command(f"{name} {'on' if before else 'off'}")
+            if solver is not None and _core.solver() != solver:
+                _core.set_solver(solver)
 
     def refine(self, times: int = 1) -> None:
         """Refine the surface: split every edge and facet (Evolver's ``r``)."""

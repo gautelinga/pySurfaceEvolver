@@ -1953,7 +1953,7 @@ static void modes_body(void *arg)
   REAL *rhs = NULL, **vecs = NULL, t;
   struct oldcoord saver;
   vertex_id v_id;
-  int k, i, quiet = quiet_flag;
+  int k, i, quiet = quiet_flag, solver;
   long row;
 
   memset(&S,0,sizeof(S));
@@ -1965,6 +1965,7 @@ static void modes_body(void *arg)
   (*sp_AIJ_setup_func)(S.A_rows,&S);
   (*sp_constraint_setup_func)(web.skel[BODY].max_ord+1 + gen_quant_count,&S);
   if ( sp_ordering_func ) (*sp_ordering_func)(&S);
+  solver = ysmp_flag;
   if ( hessian_linear_metric_flag ) linear_metric_setup(&S,&Met);
   else if ( web.area_norm_flag ) star_metric_setup(&S,&Met);
 
@@ -2018,6 +2019,14 @@ static void modes_body(void *arg)
   free_system(&S);
   if ( hessian_linear_metric_flag || web.area_norm_flag ) free_system(&Met);
   temp_free((char*)rhs);
+  if ( ysmp_flag != solver )
+  { /* (linear_metric_setup switches to Evolver's own factoring, for good:
+       the session's solver back) */
+    int q = quiet_flag;
+    quiet_flag = 1;
+    change_hessian_functions(ysmp_flag,solver);
+    quiet_flag = q;
+  }
   recalc();
 }
 

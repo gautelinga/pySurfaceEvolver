@@ -745,3 +745,18 @@ def test_mesh_slice():
     cube.relax()
     cube.command("lagrange 2")
     assert len(cube.mesh().slice()) == 1           # curved facets through tessellate()
+
+
+def test_a_stability_check_keeps_the_solver():
+    # (Evolver's linear_metric switches the session to its own factoring for
+    # good: a check of an unstable column left every later Newton step,
+    # other surfaces' too, on it; a flat periodic sheet's arclength failed)
+    from pysurfaceevolver import _core
+    if not hasattr(_core, "solver"):
+        pytest.skip("no solver switch")
+    before = _core.solver()
+    ev = _column(0.25)
+    with pytest.warns(pyse.UnstableEquilibriumWarning):
+        ev.relax()
+    ev.modes(1)
+    assert _core.solver() == before
