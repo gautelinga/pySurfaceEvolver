@@ -380,7 +380,7 @@ static struct sf_layer *sf_layer_at(REAL z)
   t = __atomic_load_n(&sf.layer[il],__ATOMIC_ACQUIRE);
   if ( t ) return t;
 #ifdef _OPENMP
-#pragma omp critical(pyse_slabflux_make)
+#pragma omp critical(pyse_slabflux_layer)   /* (a box's lock is held: another name) */
 #endif
   { t = sf.layer[il];
     if ( !t )

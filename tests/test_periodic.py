@@ -232,3 +232,14 @@ def test_adapt_merges_and_splits_as_without_periods(make):
         found.append((n, len(ev.mesh().facets), ev.energy, ev.body(1).volume))
     assert found[0][:2] == found[1][:2] and found[0][0] > 0
     assert np.allclose(found[0][2:], found[1][2:], rtol=1e-11)
+
+
+def test_the_flux_gauges_field_far_above_the_beads():
+    # (a box in a layer not made yet: the layer's lock was the box's own,
+    # taken again inside it, and the step hung)
+    from pysurfaceevolver import _core
+    _bead(PERIODS, gauge="flux")
+    for z in (2.0, 3.5, 5.0):
+        o = np.array(_core.slabflux_probe([0.3, 0.4, z]))
+        n = len(o)//2
+        assert np.abs(o[:n] - o[n:]).max() < 1e-9*np.abs(o[n:]).max()
