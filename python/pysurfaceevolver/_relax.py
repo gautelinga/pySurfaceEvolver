@@ -17,6 +17,7 @@ from .constraints import ANGLE_FLOOR, ANGLE_FLOOR_TOP
 from ._engine import _threads_for_call, surface
 from ._errors import EvolverError, EvolverWarning, UnstableEquilibriumWarning, _num
 from ._geometry import _edge_turn, _long_spokes
+from ._periodic import delta
 from ._results import Health, IterationResult, _Coords, _Trace
 
 if TYPE_CHECKING:
@@ -789,7 +790,7 @@ class _Relaxing(_Analysis):
             if kind == "sphere":
                 c = np.array([float(self.eval(v)) if isinstance(v, str) else float(v)
                               for v in shape[1]])
-                depth = shape[2] - np.linalg.norm(x[free] - c, axis=1)
+                depth = shape[2] - np.linalg.norm(delta(c, x[free], self.periods), axis=1)
             elif kind == "cylinder":
                 p, d = np.asarray(shape[1], float), np.asarray(shape[2], float)
                 r = x[free] - p

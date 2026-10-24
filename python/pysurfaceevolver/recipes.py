@@ -196,17 +196,20 @@ def _through(found: list) -> list:
     return [e for e in found if e.kind == "solid" and e.gap < 0]
 
 
-def _coming(found: list, before: list) -> list:
+def _coming(found: list, before: list, periods=None) -> list:
     """The events at this point that were at the last one too (the same kind,
-    on the same constraint, within a few edge lengths) and are closer now, by
-    a hundredth of an edge at least: a neck that widens after a merge, or a
-    gap that stays as it is while its flag comes and goes (a vertex next to
-    a contact line, about as close as the line's wedge), isn't coming."""
+    on the same constraint, within a few edge lengths, at the nearest images
+    in a slab: ``periods``) and are closer now, by a hundredth of an edge at
+    least: a neck that widens after a merge, or a gap that stays as it is
+    while its flag comes and goes (a vertex next to a contact line, about as
+    close as the line's wedge), isn't coming."""
+    from ._periodic import delta
     out = []
     for e in found:
         same = [b.gap - 0.01*max(b.scale, e.scale) for b in before
                 if b.kind == e.kind and b.constraint == e.constraint
-                and np.linalg.norm(np.asarray(b.where) - np.asarray(e.where))
+                and np.linalg.norm(delta(np.asarray(e.where, float), np.asarray(b.where, float),
+                                         periods))
                 < 4*max(b.scale, e.scale)]
         if same and e.gap < min(same):
             out.append(e)
@@ -351,7 +354,7 @@ def continuation(ev, what: Any, values: Iterable[Any], *,
                     np.array(bodies.pressure), result, substeps=substeps,
                     predicted=predicted, events=found)
         done.append(step)
-        coming = _coming(found, before)
+        coming = _coming(found, before, ev.periods)
         before = found
         yield step
         if checkpoint is not None:
@@ -441,7 +444,7 @@ def _normal_part(ev, dx: np.ndarray) -> np.ndarray:
     if m.facets is None or m.vertices.shape[1] != 3 or m.order != 1:
         return dx
     x, f = m.vertices, m.facets
-    cross = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
+    cross = np.cross(m.delta(x[f[:, 0]], x[f[:, 1]]), m.delta(x[f[:, 0]], x[f[:, 2]]))
     normals = np.zeros_like(x)
     for k in range(3):
         np.add.at(normals, f[:, k], cross)
@@ -1083,7 +1086,7 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                 lost = True
                 break
             kept(step, moved)
-            coming = _coming(step.events, last[-2].events) if len(last) > 1 else []
+            coming = _coming(step.events, last[-2].events, ev.periods) if len(last) > 1 else []
             coming += [e for e in step.events if _resting(e) and not any(e is c for c in coming)]
             if coming:
                 event = coming[0]       # (the run would stop here: made instead)
@@ -1439,7 +1442,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
     v = float(_current(ev, what))
     points.append((v, ev.vertices))
     crossed = crossings()
-    coming = _coming(found, before)
+    coming = _coming(found, before, ev.periods)
     before = found
     yield step(1, v, iterations, negative, residual, found)
     if coming:
@@ -1538,7 +1541,7 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
         v = float(_current(ev, what))       # (settling back can move it a little)
         points = [points[-1], (v, ev.vertices)]
         crossed = crossings()
-        coming = _coming(found, before)
+        coming = _coming(found, before, ev.periods)
         before = found
         yield step(index, v, iterations, negative, residual, found)
         if coming:

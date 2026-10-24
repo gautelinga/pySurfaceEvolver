@@ -15,6 +15,7 @@ from . import _core
 from ._clusters import reconcile
 from ._engine import GUARD_PREFIX, _guards_only_changed, surface
 from ._errors import _num
+from ._periodic import delta as _delta, move_near as _move_near
 
 _SEAM = 3.0     # the cut's tips are tidied within this many median edges
 _TOUCH = 0.05   # a solid this close (in its event's edges): the surface resting on it
@@ -38,6 +39,112 @@ _STRUCTURAL = {1: "an edge on no facet", 2: "an edge on more than two facets",
 _GEOMETRIC = {8: "a degenerate facet", 9: "a fold", 10: "a vertex inside a solid",
               11: "an edge through a solid", 12: "an edge through a facet"}
 _TYPES = {0: "vertex", 1: "edge", 2: "facet"}
+
+# In a slab periodic in x and y (periods, (Lx, Ly); None elsewhere) the
+# vertices sit at any image: differences of nearby points are taken at the
+# minimum image (_delta(a, b, periods), b - a; exactly b - a without periods),
+# and the middles of nearby points about one of them (below). Without periods
+# each gives what the plain arithmetic gave, to the bit.
+
+
+def _slab(ev):
+    """The slab's periods, (Lx, Ly), or None."""
+    return getattr(ev, "periods", None)
+
+
+def _mid(a, b, periods):
+    """The middles of a and b (rows of points, or one): at a's image."""
+    if periods is None:
+        return (a + b)/2
+    return a + _delta(a, b, periods)/2
+
+
+def _middle(points, periods, axis: int = 0):
+    """The mean of nearby points along axis, at the first one's image."""
+    if periods is None:
+        return points.mean(axis=axis)
+    first = np.take(points, [0], axis=axis)
+    return np.take(first, 0, axis=axis) + _delta(first, points, periods).mean(axis=axis)
+
+
+def _corners(x, f, periods, near=None):
+    """Each facet's corners, (k, 3, 3), at one image: the second and third
+    nearest the first, and with ``near`` (a point) the first nearest that."""
+    if periods is None:
+        return x[f]
+    a = x[f[:, 0]] if near is None else near + _delta(near, x[f[:, 0]], periods)
+    return np.stack([a, a + _delta(x[f[:, 0]], x[f[:, 1]], periods),
+                     a + _delta(x[f[:, 0]], x[f[:, 2]], periods)], axis=1)
+
+
+def _cross(x, f, periods):
+    """Each facet's (b - a) x (c - a), its corners a, b, c."""
+    a = x[f[:, 0]]
+    return np.cross(_delta(a, x[f[:, 1]], periods), _delta(a, x[f[:, 2]], periods))
+
+
+def _put_at(x, rows, point, periods):
+    """x with the vertices at rows moved to point, each to its image of it
+    nearest where it is (the wraps of its edges stay right)."""
+    moved = x.copy()
+    moved[rows] = point if periods is None else x[rows] + _delta(x[rows], point, periods)
+    return moved
+
+
+def _sphere_centre(key) -> "np.ndarray | None":
+    """The centre of wall key if it is a sphere with a fixed one, else None."""
+    shape = getattr(surface.walls.get(key), "shape", None)
+    if shape is None or shape[0] != "sphere" or any(isinstance(v, str) for v in shape[1]):
+        return None
+    return np.asarray(shape[1], float)
+
+
+def _move_home(ev, m, rows, key) -> bool:
+    """In a slab, the vertices at rows (of mesh m) moved to their images
+    nearest the centre of sphere wall key: where its vertices are kept (its
+    integrals are evaluated there), so before one is put on it or on its
+    guard (_periodic.move_near: their edges' wraps kept). Whether any moved
+    (m's coordinates then old)."""
+    centre = _sphere_centre(key)
+    if _slab(ev) is None or centre is None or not len(rows):
+        return False
+    vids = np.asarray(m.vertex_ids)[np.asarray(rows)]
+    x = np.asarray(m.vertices, float)[np.asarray(rows)]
+    if not np.round((centre[:2] - x[:, :2])/np.asarray(_slab(ev))).any():
+        return False
+    _move_near(ev, vids, centre)
+    return True
+
+
+def _lifted(x, f, periods):
+    """A connected piece's corners (facets f, rows of x) unwrapped along its
+    edges from its first vertex, by minimum images: the vertices' places
+    (rows of x; the others as in x), and whether the piece wraps round the
+    cell (a period's shift round a loop of its edges: no one image of it)."""
+    out = np.array(x, dtype=float)
+    vs = np.unique(f)
+    e = np.unique(np.sort(np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]], axis=1), axis=0)
+    tail, head = np.r_[e[:, 0], e[:, 1]], np.r_[e[:, 1], e[:, 0]]
+    order = np.argsort(tail, kind="stable")
+    tail, head = tail[order], head[order]
+    start = np.searchsorted(tail, np.arange(len(x)))
+    count = np.searchsorted(tail, np.arange(len(x)), side="right") - start
+    known = np.zeros(len(x), dtype=bool)
+    known[vs[0]] = True
+    front = vs[:1]
+    while len(front):
+        n = count[front]
+        src = np.repeat(front, n)
+        at = start[src] + np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
+        dst = head[at]
+        new = ~known[dst]
+        dst, first = np.unique(dst[new], return_index=True)
+        src = src[new][first]
+        out[dst] = out[src] + _delta(x[src], x[dst], periods)
+        known[dst] = True
+        front = dst
+    off = (out[e[:, 1]] - out[e[:, 0]]) - _delta(x[e[:, 0]], x[e[:, 1]], periods)
+    return out, bool(np.abs(off[:, :2]).max(initial=0.0) > 1e-6*float(np.min(periods)))
 
 
 class TopologyCheckError(RuntimeError):
@@ -123,6 +230,8 @@ def guard(ev) -> None:
             seen.add(_base(k))
     if not walls:
         return
+    if _slab(ev) is not None:
+        _home_by_spheres(ev, list(walls))
     nums, _, dist, names = ev._constraint_gaps(guards=True)
     names = [str(n) for n in names]
     defined = []
@@ -231,6 +340,33 @@ def guard(ev) -> None:
     _set_guards(ev, [int(nums[i]) for i in gcols], chosen & ~now, True)
 
 
+def _home_by_spheres(ev, keys) -> None:
+    """In a slab, the vertices within _GUARD_REACH edges of a sphere among
+    the walls keys moved to their images by its centre (_move_home), so its
+    guard holds them; not those on a sphere (or its guard) already, at its
+    home, nor fixed ones."""
+    m = ev.mesh()
+    nums, _, dist, names = ev._constraint_gaps(guards=True)
+    homed = np.zeros(len(m.vertices), dtype=bool)
+    for col, n in enumerate(names):
+        key = n or int(nums[col])
+        if isinstance(key, str) and key.startswith(GUARD_PREFIX):
+            key = key[len(GUARD_PREFIX):]
+            key = int(key) if key.isdigit() else key
+        if _sphere_centre(key) is not None:
+            homed |= np.isnan(dist[:, col])
+    free = ~homed & ~np.asarray(m.fixed, dtype=bool)
+    reach = _GUARD_REACH*_edge_scale(ev)
+    for key in keys:
+        centre = _sphere_centre(key)
+        if centre is None:
+            continue
+        R = float(getattr(surface.walls[key], "shape")[2])
+        d = np.linalg.norm(_delta(centre, np.asarray(m.vertices, float), _slab(ev)), axis=1)
+        if _move_home(ev, m, np.flatnonzero(free & (d < R + reach)), key):
+            m = ev.mesh()
+
+
 def _runs(keys: np.ndarray) -> tuple:
     """The runs of equal values in sorted keys: (each run's value, start, stop)."""
     if not len(keys):
@@ -264,7 +400,7 @@ def _pole_lines(ev):
     if not any(getattr(w, "south_regular", False) for w in surface.walls.values()):
         return []       # (no poles: sphere(gauge="flux") and planes; 6% of a pack's descent)
     nums, _, dist, names = ev._constraint_gaps()
-    x = ev.vertices
+    x, L = ev.vertices, _slab(ev)
     f = np.asarray(ev.mesh().facets)
     turns = np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]
     _, inverse, counts = np.unique(np.sort(turns, axis=1), axis=0, return_inverse=True,
@@ -285,10 +421,10 @@ def _pole_lines(ev):
         if not on.any():
             continue                # no contact line: no integral to keep off the pole
         centre, R = np.asarray(shape[1], float), float(shape[2])
-        line = (x[on] - centre)/R
+        line = _delta(centre, x[on], L)/R
         mine = on[edges[:, 0]] & on[edges[:, 1]]
         e = edges[mine]
-        a, b = (x[e[:, 0]] - centre)/R, (x[e[:, 1]] - centre)/R
+        a, b = (_delta(centre, x[e[:, k]], L)/R for k in (0, 1))
         pole = np.asarray(getattr(wall, "pole_axis"), float)
         t = np.clip(np.einsum("ij,ij->i", pole - a, b - a)
                     / np.maximum(np.einsum("ij,ij->i", b - a, b - a), 1e-300), 0.0, 1.0)
@@ -345,7 +481,7 @@ def move_poles(ev, force=(), ahead=None) -> list:
         if near >= _POLE_MARGIN and key not in force:
             continue
         pole = np.asarray(getattr(wall, "pole_axis"), float)
-        unit = lambda p: (p - centre)/R     # noqa: E731
+        unit = lambda p: _delta(centre, p, _slab(ev))/R    # noqa: E731
         swept = key in force and there_all is not None
         loops = []
         for rows in _loop_rows(e):
@@ -432,7 +568,7 @@ def _onto_copy(ev, event) -> None:
         _, wall, old, centre, R, _, _, _, a, b, sides, on, e = lines[k]
         for rows in _loop_rows(e):
             vs = np.unique(e[rows])
-            if not ((np.linalg.norm(x[vs] - where, axis=1) < radius).any()
+            if not ((np.linalg.norm(_delta(where, x[vs], _slab(ev)), axis=1) < radius).any()
                     or mine & set(int(v) for v in vs)):
                 continue
             if m is None:
@@ -615,7 +751,8 @@ def _crossed(ev, before: tuple, p) -> bool:
     if not kept:
         return True
     a, b = np.asarray(kept).T
-    moved = float(np.linalg.norm(np.asarray(m.vertices)[b] - x[a], axis=1).max())/R
+    moved = float(np.linalg.norm(_delta(x[a], np.asarray(m.vertices)[b], _slab(ev)),
+                                 axis=1).max())/R
     return bool(moved >= near)
 
 
@@ -636,7 +773,7 @@ def _moved_since(ev, before: tuple) -> np.ndarray:
     rows = np.array([old.get(int(i), -1) for i in now])
     out = np.zeros_like(here)
     seen = rows >= 0
-    out[seen] = here[seen] - x[rows[seen]]
+    out[seen] = _delta(x[rows[seen]], here[seen], _slab(ev))
     return out
 
 
@@ -679,7 +816,8 @@ def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int
         raise ValueError("pinch_off() cuts at a neck: an Event of kind 'neck'")
     m = ev.mesh()
     x, f, edges = np.asarray(m.vertices, float), np.asarray(m.facets), np.asarray(m.edges)
-    if _sheet(x, f, event):
+    L = _slab(ev)
+    if _sheet(x, f, event, L):
         # (a sheet of liquid thinning, gas either side, not a tube: it
         # ruptures, a hole opening through it at its thinnest, the liquid
         # one body round it. Cut as a tube, along an axis its normals don't
@@ -720,7 +858,7 @@ def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int
             warnings.warn("pinch_off(): the surface didn't relax after the hole opened (it is "
                           "left out of equilibrium)", UserWarning, stacklevel=3)
         return []
-    ring, centre, side = _ring(x, f, edges, event)
+    ring, centre, side = _ring(x, f, edges, event, periods=L)
     if len(ring) < 3:
         raise ValueError("pinch_off(): no ring of edges round the neck found")
     border = np.zeros(len(x), dtype=bool)
@@ -741,11 +879,11 @@ def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int
         # cut, until the descent ran away)
         nums, _, _, _ = ev._constraint_gaps()
         at_wall = ring[on[ring, walls[0]]]
-        k = at_wall[np.argmin(np.linalg.norm(x[at_wall] - centre, axis=1))]
+        k = at_wall[np.argmin(np.linalg.norm(_delta(centre, x[at_wall], L), axis=1))]
         _, grad = ev._call(_core.constraint_normals, int(nums[walls[0]]))
         normal = np.asarray(grad.data, float)[k]
         if np.linalg.norm(normal) > 0:
-            ring, centre, side = _ring(x, f, edges, event, normal/np.linalg.norm(normal))
+            ring, centre, side = _ring(x, f, edges, event, normal/np.linalg.norm(normal), L)
             if len(ring) < 3:
                 raise ValueError("pinch_off(): no ring of edges round the neck found")
             walls = np.flatnonzero(on[ring].any(axis=0))
@@ -774,7 +912,7 @@ def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int
             raise ValueError("pinch_off(): the neck reaches a fixed vertex, two constraints "
                              "or the surface's free border")
         at_wall = ring[on[ring, walls[0]]]
-        centre = x[at_wall[np.argmin(np.linalg.norm(x[at_wall] - centre, axis=1))]]
+        centre = x[at_wall[np.argmin(np.linalg.norm(_delta(centre, x[at_wall], L), axis=1))]]
         try:
             made = _pinch_ring(ev, m, x, f, ring, centre, side, float(event.scale))
         except ValueError as error:
@@ -809,7 +947,7 @@ def _pinch_ring(ev, m, x, f, ring, centre, side, scale: float,
     # what the collapse takes from each side: the tetrahedra from the centre to
     # the facets round the ring, which collapse onto it (signed as the body's
     # volume counts them: facet normals point out of the front body)
-    a, b, c = (x[f[touching, k]] - centre for k in range(3))
+    a, b, c = (_delta(centre, x[f[touching, k]], _slab(ev)) for k in range(3))
     vol = np.einsum("ij,ij->i", a, np.cross(b, c))/6
     if body:
         vol = np.where(np.asarray(m.facet_bodies)[touching, 0] == body, vol, -vol)
@@ -906,7 +1044,9 @@ def _dry_neck(ev, m, x, f, ring, walls, gaps, event, side, error) -> List[int]:
     start = ev._save()
     try:
         _dry_footprint(ev, m, x, ring, walls, gaps, event, "neck against a wall")
-        if any(e.kind == "neck" and np.linalg.norm(np.asarray(e.where) - where) < _PLACE*scale
+        if any(e.kind == "neck"
+               and np.linalg.norm(_delta(where, np.asarray(e.where, float), _slab(ev)))
+               < _PLACE*scale
                for e in ev.events(EVENT_FACTOR)):
             raise ValueError("the neck still there")
         made = _split_body(ev, body, before, near, {-1.0: 0.0, 1.0: 0.0})
@@ -933,13 +1073,14 @@ def _dry_footprint(ev, m, x, ring, walls, gaps, event, what="neck against two so
     nums, _, _, names = ev._constraint_gaps()
     edges, valence = np.asarray(m.edges), m.edge_valence()
     on = np.isnan(gaps)
+    L = _slab(ev)
     pairs = []
     for c in walls:
         line = edges[(valence == 1) & on[edges[:, 0], c] & on[edges[:, 1], c]]
         pos: dict = {}
         for k, path in enumerate(_chains(line)):
             p = np.asarray(path)
-            s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(x[p], axis=0), axis=1))]
+            s = np.r_[0.0, np.cumsum(np.linalg.norm(_delta(x[p[:-1]], x[p[1:]], L), axis=1))]
             for v, t in zip(p, s):
                 pos.setdefault(int(v), (k, float(t)))
         mine = [int(v) for v in ring[on[ring, c]] if int(v) in pos]
@@ -948,7 +1089,7 @@ def _dry_footprint(ev, m, x, ring, walls, gaps, event, what="neck against two so
             for j in mine:
                 if i < j:
                     (ki, si), (kj, sj) = pos[i], pos[j]
-                    d = float(np.linalg.norm(x[i] - x[j]))
+                    d = float(np.linalg.norm(_delta(x[j], x[i], L)))
                     if (ki != kj or abs(si - sj) > 3*float(event.scale)) \
                             and (best is None or d < best[0]):
                         best = (d, i, j)
@@ -956,7 +1097,7 @@ def _dry_footprint(ev, m, x, ring, walls, gaps, event, what="neck against two so
             pairs.append((best, names[c] or int(nums[c])))
     why = "no strands either side of it"
     for (d, i, j), key in sorted(pairs, key=lambda p: p[0][0]):
-        join = Event("contact lines", d, float(event.scale), (x[i] + x[j])/2,
+        join = Event("contact lines", d, float(event.scale), _mid(x[i], x[j], L),
                      np.array([i, j]), key)
         start = ev._save()
         try:
@@ -991,10 +1132,11 @@ def _domed(ev, m, x, a: int, b: int, num: int, key, h: float) -> bool:
     the wedge between a side wall and a bead: its ring is cut by both solids,
     the lines were joined, and the descent made 60 contacts and never
     settled.)"""
+    L = _slab(ev)
     xa, xb = x[a], x[b]
-    width = float(np.linalg.norm(xa - xb))
+    width = float(np.linalg.norm(_delta(xb, xa, L)))
     reach = 3*width + 2*h
-    p = (xa + xb)/2
+    p = _mid(xa, xb, L)
     _, grad = ev._call(_core.constraint_normals, num)
     g = np.asarray(grad.data, float)
     n = g[a] + g[b]
@@ -1002,13 +1144,14 @@ def _domed(ev, m, x, a: int, b: int, num: int, key, h: float) -> bool:
         return True
     n = n/np.linalg.norm(n)
     f = np.asarray(m.facets)
+    corners = _corners(x, f, L, p)              # (at their images nearest p)
     at = np.isin(f, [a, b]).any(axis=1)
-    if at.any() and float((x[f[at]].mean(axis=(0, 1)) - p) @ n) < 0:
+    if at.any() and float((corners[at].mean(axis=(0, 1)) - p) @ n) < 0:
         n = -n                                  # (towards the surface's side)
     # the facets: Moller-Trumbore, for those within reach
-    near = np.linalg.norm(x[f].mean(axis=1) - p, axis=1) < reach + 2*h
+    near = np.linalg.norm(_delta(p, corners.mean(axis=1), L), axis=1) < reach + 2*h
     if near.any():
-        t0, t1, t2 = x[f[near, 0]], x[f[near, 1]], x[f[near, 2]]
+        t0, t1, t2 = corners[near, 0], corners[near, 1], corners[near, 2]
         e1, e2 = t1 - t0, t2 - t0
         q = np.cross(n, e2)
         det = np.einsum("ij,ij->i", e1, q)
@@ -1029,7 +1172,7 @@ def _domed(ev, m, x, a: int, b: int, num: int, key, h: float) -> bool:
             continue
         if shape[0] == "sphere" and not any(isinstance(c, str) for c in shape[1]):
             c, R = np.asarray(shape[1], float), float(shape[2])
-            dc = p - c
+            dc = _delta(c, p, L)
             bq = float(dc @ n)
             disc = bq*bq - (float(dc @ dc) - R*R)
             if disc >= 0:
@@ -1053,14 +1196,15 @@ def _sheet_hole(ev, m, x, f, p, reach: float, allowed=None) -> bool:
     the mesh folded there: a pack's sheet 0.00075 thin refused four times
     so, the surface then through itself in every run, and the descent gave
     up). Whether it opened."""
-    centre = x[f].mean(axis=1)
-    near = np.linalg.norm(centre - p, axis=1) <= reach
+    L = _slab(ev)
+    centre = _middle(x[f], L, axis=1)
+    near = np.linalg.norm(_delta(p, centre, L), axis=1) <= reach
     ok = near if allowed is None else (near & allowed)
     for _ in range(_HOLE_TRIES):
         if not ok.any():
             return False
         try:
-            a, b = _facing_facets(x, f, p, behind=True, reach=reach, allowed=ok)
+            a, b = _facing_facets(x, f, p, behind=True, reach=reach, allowed=ok, periods=L)
         except ValueError:
             return False
         if _tube(ev, m, a, b, None, sheet=True) is not None:
@@ -1082,7 +1226,7 @@ def _sheet_at_wall(ev, m, x, event) -> bool:
         return False
     on = np.isnan(gaps)
     p = np.asarray(event.where, float)
-    d = np.linalg.norm(x - p, axis=1)
+    d = np.linalg.norm(_delta(p, x, _slab(ev)), axis=1)
     reach = float(event.gap) + float(event.scale)
     walls = [c for c in range(on.shape[1]) if (on[:, c] & (d < reach)).any()]
     if not walls:
@@ -1115,12 +1259,12 @@ def _join_across(ev, event) -> None:
     _separate_pinches(ev, num, left)
 
 
-def _waist_normals(x, f, event) -> np.ndarray:
+def _waist_normals(x, f, event, periods=None) -> np.ndarray:
     """The unit vertex normals at a neck's waist: its vertices within its
     gap and two edges of its narrowest point (_events.waist), else those
     near it."""
     p = np.asarray(event.where, float)
-    cross = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
+    cross = _cross(x, f, periods)
     normal = np.zeros_like(x)
     for k in range(3):
         np.add.at(normal, f[:, k], cross)
@@ -1128,21 +1272,24 @@ def _waist_normals(x, f, event) -> np.ndarray:
     normal = np.divide(normal, length[:, None], out=np.zeros_like(normal),
                        where=length[:, None] > 0)
     from ._events import waist as near_waist
-    waist = near_waist(x, np.asarray(event.vertices, int), p, float(event.gap),
+    # (the vertices at their images nearest the neck, for waist()'s distances)
+    here = x if periods is None else p + _delta(p, x, periods)
+    waist = near_waist(here, np.asarray(event.vertices, int), p, float(event.gap),
                        float(event.scale))
     if len(waist) < 3:
-        waist = np.flatnonzero(np.linalg.norm(x - p, axis=1) < max(event.gap, 2*event.scale))
+        waist = np.flatnonzero(np.linalg.norm(_delta(p, x, periods), axis=1)
+                               < max(event.gap, 2*event.scale))
     return normal[waist]
 
 
-def _sheet(x, f, event) -> bool:
+def _sheet(x, f, event, periods=None) -> bool:
     """Whether a neck is a sheet thinning rather than a tube (_events.sheet
     of its waist's normals)."""
     from ._events import sheet
-    return sheet(_waist_normals(x, f, event))
+    return sheet(_waist_normals(x, f, event, periods))
 
 
-def _ring(x, f, edges, event, mirror=None):
+def _ring(x, f, edges, event, mirror=None, periods=None):
     """The vertices to collapse at a neck: the ends of the edges crossing the
     plane through the neck's narrowest point, across its axis, there (two
     rows; collapsing one left slivers that didn't relax); the point they
@@ -1151,11 +1298,12 @@ def _ring(x, f, edges, event, mirror=None):
     axis then along the wall)."""
     p = np.asarray(event.where, float)
     reach = max(3*event.gap, 3*event.scale)
+    d = _delta(p, x, periods)                   # (x - p)
     # the axis: the direction the normals round the waist are all across
     waist = np.asarray(event.vertices, int)
     if len(waist) < 3:
-        waist = np.flatnonzero(np.linalg.norm(x - p, axis=1) < max(event.gap, 2*event.scale))
-    normals = _waist_normals(x, f, event)
+        waist = np.flatnonzero(np.linalg.norm(d, axis=1) < max(event.gap, 2*event.scale))
+    normals = _waist_normals(x, f, event, periods)
     moment = normals.T @ normals
     if mirror is not None:
         # (along the wall: the direction across it never the axis)
@@ -1163,11 +1311,11 @@ def _ring(x, f, edges, event, mirror=None):
         moment = along @ moment @ along + (np.trace(moment) + 1.0)*np.outer(mirror, mirror)
     _, vectors = np.linalg.eigh(moment)
     axis = vectors[:, 0]
-    s = (x - p) @ axis
-    radial = np.linalg.norm((x - p) - np.outer(s, axis), axis=1)
+    s = d @ axis
+    radial = np.linalg.norm(d - np.outer(s, axis), axis=1)
     # the edges crossing the plane near the neck, in the piece of the mesh
     # round it that the waist's vertices are in
-    inside = np.linalg.norm(x - p, axis=1) < reach
+    inside = np.linalg.norm(d, axis=1) < reach
     local = edges[inside[edges].all(axis=1)]
     reached = np.zeros(len(x), dtype=bool)
     reached[waist[inside[waist]]] = True
@@ -1184,14 +1332,13 @@ def _ring(x, f, edges, event, mirror=None):
     plus = np.unique(np.where(s[crossing[:, 0]] > 0, crossing[:, 0], crossing[:, 1]))
     minus = np.unique(np.where(s[crossing[:, 0]] > 0, crossing[:, 1], crossing[:, 0]))
     ring = np.union1d(plus, minus)
-    return ring, x[ring].mean(axis=0), s
+    return ring, _middle(x[ring], periods), s
 
 
 def _cut(ev, x, ring, centre, scale) -> None:
     """Collapse the ring to its centre, delete the edges that collapsed and
     pop the vertex where the two sides now meet."""
-    moved = x.copy()
-    moved[ring] = centre
+    moved = _put_at(x, ring, centre, _slab(ev))
     doubled = _doubled_edges(ev)
     ev.vertices = moved
     tiny = 1e-9*scale
@@ -1207,7 +1354,8 @@ def _cut(ev, x, ring, centre, scale) -> None:
     if _doubled_edges(ev) > doubled:
         raise ValueError("pinch_off(): collapsing the ring joined two vertices by two edges")
     m = ev.mesh()
-    at = np.flatnonzero(np.linalg.norm(np.asarray(m.vertices) - centre, axis=1) < 1e3*tiny)
+    at = np.flatnonzero(np.linalg.norm(_delta(centre, np.asarray(m.vertices), _slab(ev)),
+                                       axis=1) < 1e3*tiny)
     f = np.asarray(m.facets)
     # (a neck against a wall: its ring's two ends on the wall's contact line
     # stay two vertices, Evolver deleting no edge between two of a border's
@@ -1276,10 +1424,13 @@ def _tidy_seam(ev, centre, h: float) -> None:
     and the cones' facets all meet at the tips. Deletes the edges there
     shorter than h/2 (not on the border; Evolver refuses unsafe merges),
     equiangulating after each pass, then averages and equiangulates there."""
+    L = _slab(ev)
+
     def near_edges() -> str:
         m = ev.mesh()
         x, e = np.asarray(m.vertices), np.asarray(m.edges)
-        return ev._mark(_core.EDGE, np.linalg.norm(x[e].mean(axis=1) - centre, axis=1) < _SEAM*h)
+        return ev._mark(_core.EDGE, np.linalg.norm(_delta(centre, _middle(x[e], L, axis=1), L),
+                                                   axis=1) < _SEAM*h)
 
     for _ in range(10):
         count = ev.counts["edges"]
@@ -1290,7 +1441,7 @@ def _tidy_seam(ev, centre, h: float) -> None:
             break
     x = ev.vertices
     ev.command("vertex_average vertex"
-               + ev._mark(_core.VERTEX, np.linalg.norm(x - centre, axis=1) < _SEAM*h))
+               + ev._mark(_core.VERTEX, np.linalg.norm(_delta(centre, x, L), axis=1) < _SEAM*h))
     ev.command(f"equiangulate edge{near_edges()}")
 
 
@@ -1550,7 +1701,7 @@ def merge(ev, event, keep=None) -> int:
         raise ValueError("merge() glues at a touch: an Event of kind 'touch'")
     m = ev.mesh()
     x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
-    a, b = _facing_facets(x, f, np.asarray(event.where, float))
+    a, b = _facing_facets(x, f, np.asarray(event.where, float), periods=_slab(ev))
     made = _tube(ev, m, a, b, keep)
     if made is not None:
         return made
@@ -1656,7 +1807,8 @@ def _inner_facets(ev, m) -> np.ndarray:
     return ~(border | on)[f].any(axis=1)
 
 
-def _facing_facets(x, f, p, behind: bool = False, reach: float = np.inf, allowed=None):
+def _facing_facets(x, f, p, behind: bool = False, reach: float = np.inf, allowed=None,
+                   periods=None):
     """The two facets either side of a touch: the facet nearest its middle,
     and on the side its normal points to, the nearest facet facing back.
     With ``behind`` (a sheet's two faces, across the body: the normals point
@@ -1664,22 +1816,22 @@ def _facing_facets(x, f, p, behind: bool = False, reach: float = np.inf, allowed
     nearly straight across (a sheet 0.002 thin on facets of 0.05, the facet
     across nearest the middle was offset along the sheet, the tube joining
     the two lay all but flat and folded the mesh, refused at every pair)."""
-    centre = x[f].mean(axis=1)
-    normal = np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]])
+    centre = _middle(x[f], periods, axis=1)
+    normal = _cross(x, f, periods)
     normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-300)[:, None]
-    dist = np.linalg.norm(centre - p, axis=1)
+    dist = np.linalg.norm(_delta(p, centre, periods), axis=1)
     if allowed is not None:
         dist = np.where(allowed, dist, np.inf)
     a = int(np.argmin(dist))
-    across = (centre - centre[a]) @ normal[a]
+    offset = _delta(centre[a], centre, periods)     # (centre - centre[a])
+    across = offset @ normal[a]
     if behind:
         facing = (normal @ normal[a] < -0.5) & (across < 0) \
-            & (np.linalg.norm(centre - centre[a], axis=1) < reach)
+            & (np.linalg.norm(offset, axis=1) < reach)
         if allowed is not None:
             facing &= allowed
         if not facing.any():
             raise ValueError("pinch_off(): no facet across the sheet from its nearest one")
-        offset = centre - centre[a]
         aside = np.linalg.norm(offset - np.outer(offset @ normal[a], normal[a]), axis=1)
         b = int(np.flatnonzero(facing)[np.argmin(aside[facing])])
         return a, b
@@ -1769,6 +1921,7 @@ def _contact(ev, event, keep=None, grow=()) -> None:
     num = int(nums[c])
     m = ev.mesh()
     x, f, edges = np.asarray(m.vertices, float), np.asarray(m.facets), np.asarray(m.edges)
+    L = _slab(ev)
     on = np.isnan(dist[:, c])
     rows = np.asarray(event.vertices, int)
     flat = None
@@ -1780,14 +1933,14 @@ def _contact(ev, event, keep=None, grow=()) -> None:
             # are then two (a pore's contact lines on one bead after its
             # liquid jumped)
             return
-        a, b = _closest_pair(x, rows, on)
+        a, b = _closest_pair(x, rows, on, L)
         if _wet_between(ev, m, x, f, on, num, a, b):
-            core = _strip(x, a, b, on, float(event.scale))
+            core = _strip(x, a, b, on, float(event.scale), L)
         else:
             # facets lying on the solid between the lines there (all three
             # corners on it: a dry channel roofed over), else a point contact
-            near = np.linalg.norm(x[f].mean(axis=1) - (x[a] + x[b])/2, axis=1) \
-                < 2*float(event.scale)
+            near = np.linalg.norm(_delta(_mid(x[a], x[b], L), _middle(x[f], L, axis=1), L),
+                                  axis=1) < 2*float(event.scale)
             flat = on[f].all(axis=1) & near
             if not flat.any():
                 if not _bridge_lines(ev, m, num, a, b, keep):
@@ -1807,8 +1960,9 @@ def _contact(ev, event, keep=None, grow=()) -> None:
         # facets lying on the solid taken away, else the lines joined; a
         # pack's lines on a bead 0.0014 apart were refused as "on other
         # constraints", and the descent ran away round them)
-        a, b = _closest_pair(x, rows, on)
-        near = np.linalg.norm(x[f].mean(axis=1) - (x[a] + x[b])/2, axis=1) < 2*float(event.scale)
+        a, b = _closest_pair(x, rows, on, L)
+        near = np.linalg.norm(_delta(_mid(x[a], x[b], L), _middle(x[f], L, axis=1), L),
+                              axis=1) < 2*float(event.scale)
         flat = on[f].all(axis=1) & near
         if not flat.any():
             if not _bridge_lines(ev, m, num, a, b, keep):
@@ -1955,14 +2109,18 @@ def _dissolve_onto(ev, m, gone, key) -> None:
     nums, _, dist, names = ev._constraint_gaps()
     c = _column(nums, names, key)
     num = int(nums[c])
-    x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
+    f = np.asarray(m.facets)
+    put = np.unique(f[gone])
+    if _move_home(ev, m, put[~np.isnan(dist[put, c])], key):
+        m = ev.mesh()                           # (the same elements, those moved home)
+        nums, _, dist, names = ev._constraint_gaps()
+    x = np.asarray(m.vertices, float)
     on = np.isnan(dist[:, c])
     # onto the solid first (so taking the facets away moves no liquid), then
     # the volumes the bodies hold, which the new contact line keeps
     _, grad = ev._call(_core.constraint_normals, num)
     normal = np.asarray(grad.data)
     moved = x.copy()
-    put = np.unique(f[gone])
     put = put[~on[put]]
     moved[put] -= (dist[put, c])[:, None]*normal[put]
     ev.vertices = moved
@@ -2030,7 +2188,7 @@ def drop_flat(ev, h: float, share: float = 0.01) -> int:
     if not len(f):
         return 0
     x = np.asarray(m.vertices, float)
-    area = 0.5*np.linalg.norm(np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]]), axis=1)
+    area = 0.5*np.linalg.norm(_cross(x, f, _slab(ev)), axis=1)
     small = area < share*h*h
     if not small.any():
         return 0
@@ -2189,7 +2347,8 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
             spokes = np.isin(edges, corners).any(axis=1)
             spokes[loop] = False
             local = min(h, float(np.median(lengths[spokes]))) if spokes.any() else h
-            if np.linalg.norm(x[corners] - x[corners[0]], axis=1).max() > 0.2*local:
+            if np.linalg.norm(_delta(x[corners[0]], x[corners], _slab(ev)),
+                              axis=1).max() > 0.2*local:
                 continue
             a, b = edges[loop[0]]
             beside = np.flatnonzero(((f == a) & (np.roll(f, -1, axis=1) == b)).any(axis=1))
@@ -2214,7 +2373,7 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
                 continue
             closed += 1
             if out is not None:
-                out.append((key, x[corners].mean(axis=0)))
+                out.append((key, _middle(x[corners], _slab(ev))))
             _log.debug("patch closed on %s (%d edges)", key, len(loop))
             # (and the walls' edges again: a loop of 4 to 6 edges is
             # covered by facets round a new vertex, new edges, and the next
@@ -2249,7 +2408,7 @@ def _poles(ev, key, added) -> None:
     e1, e2 = _frame(e3) if e3[2] != 1.0 else (np.eye(3)[0], np.eye(3)[1])
     m = ev.mesh()
     rows = np.flatnonzero(np.isin(np.asarray(m.edge_ids), added))
-    x = np.asarray(m.vertices, float) - centre
+    x = _delta(centre, np.asarray(m.vertices, float), _slab(ev))
     edges = np.asarray(m.edges)[rows]
     phi = np.arctan2(x @ e2, x @ e1)
     turn = np.angle(np.exp(1j*(phi[edges[:, 1]] - phi[edges[:, 0]]))).sum()
@@ -2263,13 +2422,13 @@ def _poles(ev, key, added) -> None:
     surface.energy_shift.append((int(np.sign(sign)), str(getattr(wall, "pole_energy"))))
 
 
-def _closest_pair(x, rows, on):
+def _closest_pair(x, rows, on, periods=None):
     """The two vertices on the constraint among an event's, closest together
     and not neighbours along the line (the event's two stretches)."""
     pts = rows[on[rows]]
     if len(pts) < 2:
         raise ValueError("contact(): the contact lines' vertices weren't found")
-    d = np.linalg.norm(x[pts][:, None, :] - x[pts][None, :, :], axis=2)
+    d = np.linalg.norm(_delta(x[pts][None, :, :], x[pts][:, None, :], periods), axis=2)
     np.fill_diagonal(d, np.inf)
     i, j = np.unravel_index(np.argmin(d), d.shape)
     return int(pts[i]), int(pts[j])
@@ -2288,17 +2447,23 @@ def _wet_between(ev, m, x, f, on, num, a, b) -> bool:
         for i in range(3):
             p, q = int(row[i]), int(row[(i + 1) % 3])
             if (p == a and on[q]) or (q == a and on[p]):
-                t = x[q] - x[p]
+                t = _delta(x[p], x[q], _slab(ev))
                 if fb.size and fb[r, 0] == 0 and fb[r, 1] > 0:
                     t = -t                  # the liquid behind the facet
-                return float(np.cross(n, t) @ (x[b] - x[a])) > 0
+                return float(np.cross(n, t) @ _delta(x[a], x[b], _slab(ev))) > 0
     raise ValueError("contact(): no facet along the contact line at the event")
 
 
-def _strip(x, a, b, on, h):
+def _strip(x, a, b, on, h, periods=None):
     """The vertices over a wet strip between two contact-line vertices: within
     an edge of the segment between them."""
     p, q = x[a], x[b]
+    if periods is not None:
+        # (from p: the others at their images nearest it)
+        d, pq = _delta(p, x, periods), _delta(p, q, periods)
+        t = np.clip((d @ pq)/max(float(pq @ pq), 1e-300), 0, 1)
+        near = np.linalg.norm(d - t[:, None]*pq, axis=1) < h + 0.5*np.linalg.norm(pq)
+        return np.flatnonzero(near & ~on)
     t = np.clip(((x - p) @ (q - p))/max(float((q - p) @ (q - p)), 1e-300), 0, 1)
     near = np.linalg.norm(x - (p + t[:, None]*(q - p)), axis=1) < h + 0.5*np.linalg.norm(q - p)
     return np.flatnonzero(near & ~on)
@@ -2360,7 +2525,8 @@ def _join_lines(ev, m, x, f, a, b, keep) -> None:
 
     # a's line edge and b's whose other ends are closest (the lines run
     # opposite ways where they face each other)
-    pairs = [(float(np.linalg.norm(x[p] - x[q])), ra, p, rb, q)
+    L = _slab(ev)
+    pairs = [(float(np.linalg.norm(_delta(x[q], x[p], L))), ra, p, rb, q)
              for ra, p in along(a) for rb, q in along(b) if p != q and p != b and q != a]
     if not pairs:
         raise ValueError("contact(): no facing contact-line edges at the meeting")
@@ -2368,8 +2534,8 @@ def _join_lines(ev, m, x, f, a, b, keep) -> None:
     # the lines side by side there (their next vertices about as close as
     # a and b); where they cross at an angle the merge would drag vertices
     # far
-    step = 0.5*(np.linalg.norm(x[a2] - x[a]) + np.linalg.norm(x[b2] - x[b]))
-    if np.linalg.norm(x[a2] - x[b2]) > np.linalg.norm(x[a] - x[b]) + 0.5*step:
+    step = 0.5*(np.linalg.norm(_delta(x[a], x[a2], L)) + np.linalg.norm(_delta(x[b], x[b2], L)))
+    if np.linalg.norm(_delta(x[b2], x[a2], L)) > np.linalg.norm(_delta(x[b], x[a], L)) + 0.5*step:
         raise ValueError("contact(): the contact lines meet at an angle, not side by side: "
                          "not joined there")
     # merging vertices with a neighbour in common doubles their edges to it,
@@ -2564,6 +2730,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     remeshing = not falling
     if h0 is None:
         h0 = _edge_scale(ev)
+    L = _slab(ev)
     if not falling:
         guard(ev)
     since, stuck = 0, False
@@ -2817,7 +2984,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # a neck coming (thinning: not a merge's, widening) that can be cut
             # (not one reaching a contact line: the neck that pinches comes later)
             neck = None
-            for e in _coming(found, before):
+            for e in _coming(found, before, L):
                 if e.kind == "neck":
                     # (not again where a change was made, undone or refused
                     # in this descent, unless nearer than then: _put_off)
@@ -2873,7 +3040,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
             # patch opened on a bead's top before the liquid had drained enough
             # shrank and closed, the surface lay on the bead again, and a pack's
             # run opened and closed patches there 37 times; its guard holds it)
-            resting = [e for e in found if _resting(e) and not _reopening(e, shut, h, turn)]
+            resting = [e for e in found if _resting(e) and not _reopening(e, shut, h, turn, L)]
             if falling:
                 # (a fall's path is the mode's, not the liquid's: only a surface
                 # gone through a solid counts, put back out beside a contact line,
@@ -2888,11 +3055,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     _checked(ev, "pushing the surface out of a solid")
             beside = [e for e in found if e.kind == "solid" and (falling or not _resting(e))
                       and _beside_line(ev, e, h)]
-            coming = resting + [e for e in _coming(found, before)
+            coming = resting + [e for e in _coming(found, before, L)
                                 if not any(e is r for r in resting)
                                 and (e.kind in ("touch", "contact lines")
                                      or (e.kind == "solid" and not any(e is b for b in beside)
-                                         and not _reopening(e, shut, h, turn)))]
+                                         and not _reopening(e, shut, h, turn, L)))]
             made = None
             for e in coming:
                 if again(e):
@@ -3078,7 +3245,8 @@ def _again(ev, e, made_at: list, refused_at: list, undone_at: list) -> bool:
 
     def count(at):
         return sum(k == e.kind and c == str(e.constraint)
-                   and float(np.linalg.norm(np.asarray(e.where) - w)) < h
+                   and float(np.linalg.norm(_delta(w, np.asarray(e.where, float), _slab(ev))))
+                   < h
                    for k, c, w in at)
     growing = e.kind == "solid" and 0 <= e.gap < _TOUCH*float(e.scale) \
         and _beside_line(ev, e, h)
@@ -3129,6 +3297,7 @@ def _lift_chords(ev) -> int:
         return 0
     lifted = 0
     guarded = None
+    L = _slab(ev)
     for _ in range(4):
         m = ev.mesh()
         edges = np.asarray(m.edges)
@@ -3148,9 +3317,9 @@ def _lift_chords(ev) -> int:
             chord = free & ~cut & on[edges[:, 0], c] & on[edges[:, 1], c]
             if not chord.any():
                 continue
-            mid = x[edges[chord]].mean(axis=1)
+            mid = _middle(x[edges[chord]], L, axis=1)
             axis, R = _axis_of(shape)
-            inside = R - np.linalg.norm(_radial(mid, shape, axis), axis=1) > 0.1*h
+            inside = R - np.linalg.norm(_radial(mid, shape, axis, L), axis=1) > 0.1*h
             cut[np.flatnonzero(chord)[inside]] = True
             mids += list(mid[inside])
             shapes += [shape]*int(inside.sum())
@@ -3167,9 +3336,9 @@ def _lift_chords(ev) -> int:
         x = np.array(m.vertices, dtype=float)
         middles = np.asarray(mids)
         for v in np.flatnonzero([i not in old for i in np.asarray(m.vertex_ids).tolist()]):
-            k = int(np.argmin(np.linalg.norm(middles - x[v], axis=1)))
+            k = int(np.argmin(np.linalg.norm(_delta(x[v], middles, L), axis=1)))
             axis, R = _axis_of(shapes[k])
-            r = _radial(x[v][None, :], shapes[k], axis)[0]
+            r = _radial(x[v][None, :], shapes[k], axis, L)[0]
             if np.linalg.norm(r) > 0:
                 x[v] += r/np.linalg.norm(r)*(R + 1e-3*h - np.linalg.norm(r))
         ev.vertices = x
@@ -3188,9 +3357,10 @@ def _axis_of(shape) -> tuple:
     return d/np.linalg.norm(d), float(shape[3])
 
 
-def _radial(points, shape, axis) -> np.ndarray:
-    """The points' offsets from a sphere's centre or a cylinder's axis."""
-    r = np.asarray(points, float) - np.asarray(shape[1], float)
+def _radial(points, shape, axis, periods=None) -> np.ndarray:
+    """The points' offsets from a sphere's centre or a cylinder's axis (at
+    the nearest images)."""
+    r = _delta(np.asarray(shape[1], float), np.asarray(points, float), periods)
     if axis is not None:
         r = r - np.outer(r @ axis, axis)
     return r
@@ -3386,7 +3556,8 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
             return (e.kind, e.constraint, tuple(np.round(np.asarray(e.where, float), 9)))
         there = []
         for e in ev.events(factor):
-            d = float(np.linalg.norm(places - np.asarray(e.where, float), axis=1).min())
+            d = float(np.linalg.norm(_delta(np.asarray(e.where, float), places, _slab(ev)),
+                                     axis=1).min())
             if d < 2*float(e.scale):
                 there.append((d, e))
         if not there:
@@ -3396,7 +3567,8 @@ def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None
             # event there, and the descent crept on a step a run, changes
             # made far off, for 2000 s)
             for e in ev.events(2*factor):
-                d = float(np.linalg.norm(places - np.asarray(e.where, float), axis=1).min())
+                d = float(np.linalg.norm(_delta(np.asarray(e.where, float), places, _slab(ev)),
+                                         axis=1).min())
                 if d < 2*float(e.scale):
                     there.append((d, e))
         there.sort(key=lambda t: t[0])
@@ -3530,7 +3702,7 @@ def _remesh_now(ev, h0: float, near=None) -> None:
             points = np.asarray(near, float).reshape(-1, 3)
             region = np.zeros(len(x), dtype=bool)
             for p in points:
-                region |= np.linalg.norm(x - p, axis=1) < _LOCAL*h0
+                region |= np.linalg.norm(_delta(p, x, _slab(ev)), axis=1) < _LOCAL*h0
             if len(edges):
                 ratio = m.edge_lengths()/sizes[edges].mean(axis=1)
                 region[edges[(ratio > 2) | (ratio < 0.5)].ravel()] = True
@@ -3762,8 +3934,9 @@ def _pinch_collapsed(ev) -> int:
             side = None if held[ring].any() or key in _PINCH_LEFT else _ring_sides(f, ring)
             if side is None:
                 continue
-            centre = x[ring].mean(axis=0)
-            across = float(np.linalg.norm(x[ring][:, None] - x[ring][None], axis=2).max())
+            centre = _middle(x[ring], _slab(ev))
+            across = float(np.linalg.norm(_delta(x[ring][None], x[ring][:, None], _slab(ev)),
+                                          axis=2).max())
             crossed, start, energy = _crossings(ev), ev._save(), ev.energy
             guarded = _guarded(ev)
             _unguard(ev)
@@ -3826,9 +3999,7 @@ def _take_spike(ev, x, ring, apex, centre, scale: float) -> None:
     three facets would be one point's: Evolver refused every edge, "3
     left", run after run, a 16-bead pack's descent going round them.) The
     spike enclosed nothing to speak of."""
-    moved = x.copy()
-    moved[ring] = centre
-    moved[apex] = centre
+    moved = _put_at(_put_at(x, ring, centre, _slab(ev)), apex, centre, _slab(ev))
     ev.vertices = moved
     tiny = 1e-9*scale
     count = ev.counts["edges"]
@@ -3839,7 +4010,8 @@ def _take_spike(ev, x, ring, apex, centre, scale: float) -> None:
             break
         count = now
     m = ev.mesh()
-    at = np.flatnonzero(np.linalg.norm(np.asarray(m.vertices) - centre, axis=1) < 1e3*tiny)
+    at = np.flatnonzero(np.linalg.norm(_delta(centre, np.asarray(m.vertices), _slab(ev)),
+                                       axis=1) < 1e3*tiny)
     if len(at) != 1 or _sides_at(np.asarray(m.facets), int(at[0])) != 1:
         raise ValueError(f"the spike didn't collapse to one point ({len(at)} left)")
 
@@ -3875,7 +4047,8 @@ def _drop_empty(ev) -> int:
         return 0
     gone = []
     lost = 0.0
-    areas = 0.5*np.linalg.norm(np.cross(x[f[:, 1]] - x[f[:, 0]], x[f[:, 2]] - x[f[:, 0]]), axis=1)
+    L = _slab(ev)
+    areas = 0.5*np.linalg.norm(_cross(x, f, L), axis=1)
     for c in np.unique(label):
         mine = label == c
         if (count[np.unique(edge[mine])] == 1).any():
@@ -3892,17 +4065,24 @@ def _drop_empty(ev) -> int:
         # edge on three facets the piece doesn't close, and its volume
         # depends on where it's measured from)
         vs = np.unique(f[mine])
-        middle = x[vs].mean(axis=0)
-        a, b, d = x[f[mine, 0]] - middle, x[f[mine, 1]] - middle, x[f[mine, 2]] - middle
+        xp = x
+        if L is not None:
+            # (in a slab, the piece unwrapped along its edges; one that
+            # wraps round the cell, a tube or a sheet across it, is no crumb)
+            xp, wraps = _lifted(x, f[mine], L)
+            if wraps:
+                continue
+        middle = xp[vs].mean(axis=0)
+        a, b, d = xp[f[mine, 0]] - middle, xp[f[mine, 1]] - middle, xp[f[mine, 2]] - middle
         volume = abs(float(np.einsum("ij,ij->i", a, np.cross(b, d)).sum()))/6
         area = 0.5*float(np.linalg.norm(np.cross(b - a, d - a), axis=1).sum())
-        spread = np.linalg.svd(x[vs] - middle, compute_uv=False)
+        spread = np.linalg.svd(xp[vs] - middle, compute_uv=False)
         flat = len(spread) == 3 and spread[2] < 1e-6*spread[0]
         # (or no size at all: that sheet's eight vertices were at one point;
         # or within two edges across, a crumb the mesh can't hold: necks cut
         # below the mesh left drops of 4 and 10 facets, volumes 1e-5 and
         # 1e-10, their own bodies, collapsing as their volumes were held)
-        size = float(np.ptp(x[vs], axis=0).max())
+        size = float(np.ptp(xp[vs], axis=0).max())
         if volume < 1e-6*area**1.5 or flat or spread[0] < 1e-6*h or size < 2*h:
             gone.append(mine)
             lost += volume
@@ -3934,7 +4114,7 @@ def _drop_empty(ev) -> int:
         empty = sorted({int(b) for b in fb[taken].ravel() if b > 0} - kept)
     # (a body that goes with them gives its target to the nearest body
     # left, the cluster it most likely came from: the liquid kept)
-    held = [(b, ev.body(b).target, x[np.unique(f[(fb == b).any(axis=1)])].mean(axis=0))
+    held = [(b, ev.body(b).target, _middle(x[np.unique(f[(fb == b).any(axis=1)])], L))
             for b in empty if ev.body(b).fixed]
     ev.command("; ".join(f"dissolve facet[{int(i)}]" for i in ids))
     ev.command("dissolve edges; dissolve vertices")
@@ -3960,8 +4140,8 @@ def _give_targets(ev, held: list) -> str:
     x, f, fb = np.asarray(m.vertices, float), np.asarray(m.facets), np.asarray(m.facet_bodies)
     gone = []
     for b, target, centre in held:
-        reach = {i: float(np.linalg.norm(x[np.unique(f[(fb == i).any(axis=1)])] - centre,
-                                         axis=1).min())
+        reach = {i: float(np.linalg.norm(_delta(centre, x[np.unique(f[(fb == i).any(axis=1)])],
+                                                _slab(ev)), axis=1).min())
                  for i in fixed if (fb == i).any()}
         if not reach:
             continue
@@ -3972,7 +4152,7 @@ def _give_targets(ev, held: list) -> str:
     return f" (targets: {', '.join(gone)})" if gone else ""
 
 
-def _reopening(e, shut: list, h: float, turn: Optional[int] = None) -> bool:
+def _reopening(e, shut: list, h: float, turn: Optional[int] = None, periods=None) -> bool:
     """Whether a solid event is a dry patch (the liquid between thinning)
     within 3 h of a patch closed on its solid; with ``turn`` (the descent's
     iteration), of one closed fewer than _PUT_OFF iterations ago (a shut
@@ -3981,7 +4161,8 @@ def _reopening(e, shut: list, h: float, turn: Optional[int] = None) -> bool:
     descent's runs got nowhere for its 200 iterations, 231 s, before the
     patch was made all the same.)"""
     return e.kind == "solid" and e.between == "body" and any(
-        str(s[0]) == str(e.constraint) and np.linalg.norm(np.asarray(e.where) - s[1]) < 3*h
+        str(s[0]) == str(e.constraint)
+        and np.linalg.norm(_delta(s[1], np.asarray(e.where, float), periods)) < 3*h
         and (turn is None or len(s) < 3 or turn - s[2] < _PUT_OFF)
         for s in shut)
 
@@ -3997,13 +4178,14 @@ class _Tried(NamedTuple):
     gap: float
     sense: int
     what: str
+    periods: Optional[tuple] = None     # (the slab's: places compared at the nearest images)
 
 
 def _tried(ev, e, what: str) -> _Tried:
     """e as a change tried (on the mesh it was found on: its vertices are
     rows of it)."""
     return _Tried(e.kind, _solids_at(ev, e), np.asarray(e.where, float), float(e.scale),
-                  float(e.gap)/max(float(e.scale), 1e-300), _sense(ev, e), what)
+                  float(e.gap)/max(float(e.scale), 1e-300), _sense(ev, e), what, _slab(ev))
 
 
 def _solids_at(ev, e) -> frozenset:
@@ -4018,7 +4200,8 @@ def _solids_at(ev, e) -> frozenset:
     if not dist.size:
         return frozenset()
     reach = abs(float(e.gap)) + 2*float(e.scale)
-    near = np.linalg.norm(ev.vertices - np.asarray(e.where, float), axis=1) < reach
+    near = np.linalg.norm(_delta(np.asarray(e.where, float), ev.vertices, _slab(ev)),
+                          axis=1) < reach
     on = np.isnan(dist[near]).any(axis=0)
     return frozenset(_base(names[c] or int(nums[c])) for c in np.flatnonzero(on))
 
@@ -4038,7 +4221,7 @@ def _sense(ev, e) -> int:
         m = ev.mesh()
         x, f = np.asarray(m.vertices, float), np.asarray(m.facets)
         on = np.isnan(dist[:, c])
-        a, b = _closest_pair(x, np.asarray(e.vertices, int), on)
+        a, b = _closest_pair(x, np.asarray(e.vertices, int), on, _slab(ev))
         return -1 if _wet_between(ev, m, x, f, on, int(nums[c]), a, b) else 1
     except (ValueError, IndexError):
         return 0
@@ -4049,7 +4232,7 @@ def _same_place(a: _Tried, b: _Tried, reach: Optional[float] = None) -> bool:
     or both on none, within ``reach`` (default _PLACE) of the larger of
     their edges."""
     return (bool(a.solids & b.solids) or not (a.solids or b.solids)) \
-        and float(np.linalg.norm(a.where - b.where)) \
+        and float(np.linalg.norm(_delta(b.where, a.where, a.periods))) \
         < (_PLACE if reach is None else reach)*max(a.scale, b.scale)
 
 
@@ -4093,9 +4276,9 @@ def _put_off(here: _Tried, history: list) -> bool:
                 or (here.kind != "solid" and here.gap <= 0))
 
 
-def _coming(found: list, before: list) -> list:
+def _coming(found: list, before: list, periods=None) -> list:
     from .recipes import _coming as coming
-    return coming(found, before)
+    return coming(found, before, periods)
 
 
 def _keep_edges(ev, h0: float, hi: Optional[float] = None) -> None:
@@ -4294,7 +4477,8 @@ def _sizes(ev, h0: float) -> np.ndarray:
                 # where its hole opens: left at edges of 0.19 over a gap of
                 # 0.0014, the facing facets' merge folded the mesh, refused
                 # at every pair, and the descent ran away)
-                near = np.linalg.norm(x[rows] - np.asarray(e.where, float), axis=1) < h0
+                near = np.linalg.norm(_delta(np.asarray(e.where, float), x[rows], _slab(ev)),
+                                      axis=1) < h0
                 rows = rows[near]
             size[rows] = np.minimum(size[rows], abs(float(e.gap)))
     # (coarsened back at most _COARSEN times a remeshing: a gap the finer mesh
@@ -4346,7 +4530,8 @@ def _beside_line(ev, event, h: float) -> bool:
         return False
     x = ev.vertices
     rows = np.asarray(event.vertices, int)
-    reach = np.linalg.norm(x[rows][:, None, :] - x[on][None, :, :], axis=2).min(axis=1)
+    reach = np.linalg.norm(_delta(x[on][None, :, :], x[rows][:, None, :], _slab(ev)),
+                           axis=2).min(axis=1)
     return bool((reach < 1.5*float(event.scale)).all())
 
 
@@ -4354,6 +4539,14 @@ def _push_out(ev, through: list, h: float) -> None:
     """Put the vertices that have gone through a solid back on the surface's
     side of it, along its normal, a thousandth of an edge out."""
     nums, _, dist, names = ev._constraint_gaps()
+    if _slab(ev) is not None:
+        # (in a slab, first at their images by a sphere's centre, where its
+        # normals are)
+        m, homed = ev.mesh(), False
+        for e in through:
+            homed = _move_home(ev, m, np.asarray(e.vertices, int), e.constraint) or homed
+        if homed:
+            nums, _, dist, names = ev._constraint_gaps()
     moved = ev.vertices
     for e in through:
         c = _column(nums, names, e.constraint)
