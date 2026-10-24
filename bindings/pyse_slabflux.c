@@ -45,6 +45,9 @@
 #include "include.h"
 #include "pyse_api.h"
 #include "pyse_internal.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #define SF_MAXCLS 8
 #define SF_PMAX 24
@@ -123,6 +126,8 @@ static struct
 } sf;
 
 static long sf_gen = 1;          /* bumped at each setup (the caches' key) */
+static double *sf_key = NULL;     /* the inputs the fields were made from */
+static size_t sf_key_n = 0;
 
 /* fields evaluated: by expression key */
 struct sf_key { struct expnode *key; int kind, wall; };
@@ -520,6 +525,32 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
                         const double *pinv, int nsrc, const double *src, const double *grid)
 { int i, j, k, cl;
   REAL zmin = HUGE_VAL, zmax = -HUGE_VAL, Lmin;
+  /* the same geometry as the fields made (a reload of the same surface, an
+     undo's): kept, their regions and layers with them, under the new load */
+  { size_t n = 0;
+    double *key;
+    n = 2 + 1 + 1 + 6*(size_t)nbead + 2 + 7 + 1 + 5*(size_t)(nsrc > 0 ? nsrc : 0) + 4 + 2;
+    key = (double*)malloc(n*sizeof(double));
+    if ( key )
+    { size_t m = 0;
+      key[m++] = L[0]; key[m++] = L[1]; key[m++] = zf; key[m++] = nbead;
+      for ( i = 0 ; i < 6*nbead ; i++ ) key[m++] = beads[i];
+      key[m++] = floor_angle; key[m++] = floor_tension;
+      for ( i = 0 ; i < 7 ; i++ ) key[m++] = prm[i];
+      key[m++] = nsrc;
+      for ( i = 0 ; i < 5*(nsrc > 0 ? nsrc : 0) ; i++ ) key[m++] = src[i];
+      for ( i = 0 ; i < 4 ; i++ ) key[m++] = grid[i];
+      key[m++] = ns; key[m++] = nh;
+      if ( sf.on && sf_key && sf_key_n == n && memcmp(sf_key,key,n*sizeof(double)) == 0 )
+      { free(key);
+        sf.load = pyse_load_serial();
+        return 1;
+      }
+      free(sf_key);
+      sf_key = key; sf_key_n = n;
+    }
+    else { free(sf_key); sf_key = NULL; sf_key_n = 0; }
+  }
   sf_monos();
   if ( !sf_dlists() ) return 0;
   for ( i = 0 ; i <= SF_PMAX ; i++ )
@@ -623,14 +654,16 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   sf.nx = (int)ceil(grid[2]/(2*sf.h)); sf.ny = (int)ceil(grid[3]/(2*sf.h));
   sf.bx = grid[2]/sf.nx; sf.by = grid[3]/sf.ny; sf.bz = 2*sf.h;
   sf.z0 = sf.mirror ? zf : zmin;
-  sf.izmin = (int)floor((zmin - sf.z0)/sf.bz) - 2;
+  /* (from below the lowest bead to far above the highest: a point outside
+     can't be taken, an error) */
+  sf.izmin = (int)floor((zmin - sf.z0)/sf.bz) - (int)ceil(2*Lmin/sf.bz) - 2;
   if ( sf.izmin > -2 ) sf.izmin = -2;
-  sf.nz = (int)ceil((zmax - sf.z0)/sf.bz) - sf.izmin + (int)ceil(4*Lmin/sf.bz) + 8;
+  sf.nz = (int)ceil((zmax - sf.z0)/sf.bz) - sf.izmin + (int)ceil(64*Lmin/sf.bz) + 8;
   sf.box = (struct sf_region**)calloc((size_t)sf.nx*sf.ny*sf.nz,sizeof(*sf.box));
   sf.hl = Lmin;
-  sf.ilmin = (int)floor((zmin - sf.z0)/sf.hl) - 1;
+  sf.ilmin = (int)floor((zmin - sf.z0)/sf.hl) - 3;
   if ( sf.ilmin > -1 ) sf.ilmin = -1;
-  sf.nl = (int)ceil((zmax - sf.z0)/sf.hl) - sf.ilmin + 6;
+  sf.nl = (int)ceil((zmax - sf.z0)/sf.hl) - sf.ilmin + 66;
   sf.layer = (struct sf_layer**)calloc(sf.nl,sizeof(*sf.layer));
   sf.wall = (struct sf_region**)calloc(nbead,sizeof(*sf.wall));
   if ( !sf.box || !sf.layer || !sf.wall ) { sf_free(); return 0; }
@@ -782,6 +815,7 @@ static void sf_wall_fields(int j, const REAL *x0, int order, REAL V[][3], REAL G
     REAL dd[3] = { e->c[0] - c[0], e->c[1] - c[1], e->c[2] - c[2] }, n, w[3], r2, r, dw, Dn, ph;
     REAL C[3], Di[3], Dij[3][3], phi_i[3], phi_ij[3][3], dC[3][3], q;
     n = sqrt(dd[0]*dd[0] + dd[1]*dd[1] + dd[2]*dd[2]);
+    if ( !(n > 0.0) ) continue;     /* (at the centre: refused at setup, _periodic) */
     for ( m = 0 ; m < 3 ; m++ ) { dd[m] /= n; w[m] = x[m] - e->c[m]; }
     r2 = w[0]*w[0] + w[1]*w[1] + w[2]*w[2]; r = sqrt(r2);
     dw = dd[0]*w[0] + dd[1]*w[1] + dd[2]*w[2];
@@ -906,8 +940,19 @@ static int sf_eval(const struct sf_key *k, const REAL *x, int order, REAL *v, RE
   { if ( k->kind <= 1 )
     { if ( !sf_fields(x,2 < order ? 2 : order,V,G,S) )
       { C->gen = 0;
-        kb_error(PYSE_ERR_BAD_ARGUMENT,"The periodic flux gauge's field was asked for far "
-                 "above the slab's beads.\n",RECOVERABLE);
+#ifdef _OPENMP
+        if ( omp_in_parallel() )
+        { /* (no longjmp out of a worker thread: NaN, which the runs' checks
+             refuse) */
+          for ( m = 0 ; m < 3 ; m++ )
+          { v[m] = NAN;
+            for ( i = 0 ; i < 3 ; i++ ) { g[m][i] = NAN; for ( j = 0 ; j < 3 ; j++ ) h[m][i][j] = NAN; }
+          }
+          return 1;
+        }
+#endif
+        kb_error(PYSE_ERR_BAD_ARGUMENT,"The flux gauge's fast sum was asked for its field "
+                 "outside the region it covers (far above the beads).\n",RECOVERABLE);
         return 0;
       }
     }

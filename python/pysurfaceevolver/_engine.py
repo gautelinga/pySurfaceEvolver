@@ -11,7 +11,7 @@ import tempfile
 import threading
 import warnings
 import weakref
-from typing import Callable, Dict, Iterator, Generator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, Generator, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -864,9 +864,26 @@ class _Engine:
         in closed form (pyse_native.c: Evolver's projection and the gap
         query evaluate them at every vertex; C checks each against the
         interpreter)."""
+        from ._surgery import GUARD_PREFIX
+        if self.periods is not None and hasattr(_core, "slab_set_home"):
+            # (a slab: where each wall, and its guard, wants its vertices,
+            # for C's unwrapping and gap queries: a sphere near its centre,
+            # a floor anywhere)
+            nums, _, _, names = self._constraint_gaps(guards=True)
+            for c, name in zip(nums, names):
+                key: Any = name or int(c)
+                if isinstance(key, str) and key.startswith(GUARD_PREFIX):
+                    key = key[len(GUARD_PREFIX):]
+                    key = next((k for k in surface.walls if str(k) == key), key)
+                shape = getattr(surface.walls.get(key), "shape", None)
+                if shape is None or any(isinstance(v, str) for v in np.ravel(shape[1])):
+                    continue
+                if shape[0] == "plane" and abs(shape[1][0]) < 1e-12 and abs(shape[1][1]) < 1e-12:
+                    _core.slab_set_home(int(c), 0, [0.0, 0.0, 0.0])
+                elif shape[0] == "sphere":
+                    _core.slab_set_home(int(c), 1, [float(v) for v in shape[1]])
         if not hasattr(_core, "native_formula"):
             return
-        from ._surgery import GUARD_PREFIX
         shapes = {}
         for key, w in surface.walls.items():
             shape = getattr(w, "shape", None)

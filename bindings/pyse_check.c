@@ -465,10 +465,13 @@ static void check_body(void *arg)
   for ( w = 0 ; w < a->nwalls ; w++ )
   { int c = a->walls[w];
     double side = a->sides[w] < 0 ? -1.0 : 1.0, depth;
-    REAL *ref = NULL;
+    REAL *ref = NULL, centre[3];
     if ( slab )
-    { FOR_ALL_VERTICES(v_id)
-        if ( v_on_constraint(v_id,c) ) { ref = get_coord(v_id); break; }
+    { int home = pyse_slab_home(c,centre);
+      if ( home == 1 ) ref = centre;          /* (a sphere's centre, registered) */
+      else if ( home < 0 )
+        FOR_ALL_VERTICES(v_id)
+          if ( v_on_constraint(v_id,c) ) { ref = get_coord(v_id); break; }
     }
     FOR_ALL_VERTICES(v_id)
     { if ( v_on_constraint(v_id,c) ) continue;

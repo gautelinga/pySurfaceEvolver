@@ -1118,8 +1118,8 @@ static void gaps_body(void *arg)
   vertex_id *vs;
   int *slot;
   long row;
-  int c, native = 1, threads, slab;
-  REAL L[2];
+  int c, native = 1, threads, slab, *homes;
+  REAL L[2], (*centre)[3];
   slab = pyse_slab(L);
   for ( c = 0 ; c < a->ncon ; c++ )
     if ( a->nums[c] < 0 || a->nums[c] >= web.maxcon
@@ -1127,9 +1127,12 @@ static void gaps_body(void *arg)
       inconsistent("constraint list changed");
   vs = vertex_list(a->n);
   slot = (int*)temp_calloc((size_t)a->ncon + 1,sizeof(int));
+  homes = (int*)temp_calloc((size_t)a->ncon + 1,sizeof(int));
+  centre = (REAL(*)[3])temp_calloc((size_t)a->ncon + 1,sizeof(*centre));
   for ( c = 0 ; c < a->ncon ; c++ )
   { slot[c] = pyse_native_formula_slot(get_constraint(a->nums[c])->formula);
     if ( slot[c] < 0 ) native = 0;
+    homes[c] = slab ? pyse_slab_home(a->nums[c],centre[c]) : 0;
   }
   /* (the interpreter's stack is one per thread only in Evolver's own loops) */
   threads = native && (double)a->n*a->ncon >= 200000.0 ? fl_threads() : 1;
@@ -1143,9 +1146,25 @@ static void gaps_body(void *arg)
     for ( k = 0 ; k < a->ncon ; k++ )
     { double *o = a->out + (size_t)row*a->ncon + k;
       if ( v_on_constraint(v_id,a->nums[k]) ) *o = NAN;
+      else if ( slab && homes[k] == 0 )
+      { REAL f = 0.0, grad[MAXCOORD], g = 0.0;      /* (the same at every copy) */
+        formula_at(a->nums[k],slot[k],x,v_id,&f,grad);
+        for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
+        *o = g > 0.0 ? (double)(f/sqrt(g)) : NAN;
+      }
+      else if ( slab && homes[k] == 1 )
+      { /* (a sphere: at the vertex's copy nearest its centre) */
+        REAL y[MAXCOORD], f = 0.0, grad[MAXCOORD], g = 0.0;
+        for ( i = 0 ; i < SDIM ; i++ ) y[i] = x[i];
+        for ( i = 0 ; i < 2 ; i++ )
+          y[i] -= L[i]*floor((x[i] - centre[k][i])/L[i] + 0.5);
+        formula_at(a->nums[k],slot[k],y,v_id,&f,grad);
+        for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
+        *o = g > 0.0 ? (double)(f/sqrt(g)) : NAN;
+      }
       else if ( slab )
-      { /* (a slab: the wall's image nearest the vertex, a floor and spheres,
-           whose solid side is negative: the least gap of the 3 x 3 images) */
+      { /* (a wall not registered: the least gap of the 3 x 3 images, a
+           floor's and spheres' solid sides negative) */
         int ix, iy;
         double best = NAN;
         for ( ix = -1 ; ix <= 1 ; ix++ )
@@ -1168,6 +1187,8 @@ static void gaps_body(void *arg)
     }
   }
   temp_free((char*)slot);
+  temp_free((char*)homes);
+  temp_free((char*)centre);
   temp_free((char*)vs);
 }
 
@@ -1244,11 +1265,12 @@ static void cnormals_body(void *arg)
 { struct cnormals_args *a = (struct cnormals_args *)arg;
   vertex_id *vs;
   long k, count = a->rows ? a->nrows : a->n;
-  int i, slot, slab;
-  REAL L[2];
+  int i, slot, slab, home = 0;
+  REAL L[2], centre[3];
   if ( a->num < 0 || a->num >= web.maxcon || !(get_constraint(a->num)->attr & IN_USE) )
     inconsistent("no such constraint");
   slab = pyse_slab(L);
+  if ( slab ) home = pyse_slab_home(a->num,centre);
   for ( k = 0 ; a->rows && k < a->nrows ; k++ )
     if ( a->rows[k] < 0 || a->rows[k] >= a->n ) inconsistent("vertex row out of range");
   vs = vertex_list(a->n);
@@ -1258,8 +1280,17 @@ static void cnormals_body(void *arg)
     REAL f = 0.0, grad[MAXCOORD], g = 0.0;
     double *o = a->out + (size_t)k*3;
     for ( i = 0 ; i < MAXCOORD ; i++ ) grad[i] = 0.0;
-    if ( slab )
-    { /* (a slab: at the wall's image nearest the vertex, as gaps_body) */
+    if ( slab && home == 0 )
+      formula_at(a->num,slot,get_coord(v_id),v_id,&f,grad);
+    else if ( slab && home == 1 )
+    { /* (a sphere: at the vertex's copy nearest its centre) */
+      REAL y[MAXCOORD], *x = get_coord(v_id);
+      for ( i = 0 ; i < SDIM ; i++ ) y[i] = x[i];
+      for ( i = 0 ; i < 2 ; i++ ) y[i] -= L[i]*floor((x[i] - centre[i])/L[i] + 0.5);
+      formula_at(a->num,slot,y,v_id,&f,grad);
+    }
+    else if ( slab )
+    { /* (a wall not registered: as gaps_body) */
       int ix, iy;
       double best = HUGE_VAL;
       for ( ix = -1 ; ix <= 1 ; ix++ )
@@ -1896,6 +1927,58 @@ int pyse_slab(REAL *L)
   }
   if ( slab_is && L ) { L[0] = slab_L[0]; L[1] = slab_L[1]; }
   return slab_is;
+}
+
+/* where a slab's walls want their vertices (registered from Python at each
+   load and as guards come: _register_native_formulas): kind 0 a wall the same
+   at every copy (the floor), 1 a sphere, its vertices at the copy near its
+   centre; unregistered walls unknown */
+static long home_load = -2;
+static int home_cap = 0;
+static signed char *home_kind = NULL;
+static REAL (*home_c)[3] = NULL;
+
+int pyse_slab_set_home(int con, int kind, const double *c)
+{ int i;
+  if ( home_load != pyse_load_serial() )
+  { for ( i = 0 ; i < home_cap ; i++ ) home_kind[i] = -1;
+    home_load = pyse_load_serial();
+  }
+  if ( con < 0 || con >= web.maxcon ) return 0;
+  if ( con >= home_cap )
+  { int cap = web.maxcon + 16;
+    signed char *k = (signed char*)realloc(home_kind,cap);
+    REAL (*cc)[3];
+    if ( !k ) return 0;
+    home_kind = k;
+    cc = (REAL(*)[3])realloc(home_c,cap*sizeof(*cc));
+    if ( !cc ) return 0;
+    home_c = cc;
+    for ( i = home_cap ; i < cap ; i++ ) home_kind[i] = -1;
+    home_cap = cap;
+  }
+  home_kind[con] = (signed char)kind;
+  for ( i = 0 ; i < 3 ; i++ ) home_c[con][i] = kind == 1 ? c[i] : 0.0;
+  return 1;
+}
+
+/* 0 for a wall the same at every copy, 1 for a sphere (its centre into c),
+   -1 unknown */
+int pyse_slab_home(int con, REAL *c)
+{ int i;
+  if ( home_load != pyse_load_serial() || con < 0 || con >= home_cap ) return -1;
+  if ( home_kind[con] == 1 && c ) for ( i = 0 ; i < 3 ; i++ ) c[i] = home_c[con][i];
+  return home_kind[con];
+}
+
+/* whether a vertex must stay at its copy: on a sphere, or on a wall not
+   known to be the same at every copy */
+int pyse_slab_pinned(vertex_id v_id)
+{ conmap_t *map = get_v_constraint_map(v_id);
+  int j;
+  for ( j = 1 ; j <= (int)map[0] ; j++ )
+    if ( pyse_slab_home((int)(map[j] & CONMASK),NULL) != 0 ) return 1;
+  return 0;
 }
 
 /* d = b - a, in x and y at the minimum image in a slab */

@@ -775,6 +775,12 @@ NB_MODULE(_core, m) {
     if ( !pyse_slab_periods(L) ) return nb::none();
     return nb::make_tuple(L[0], L[1]);
   }, "(Lx, Ly) of a slab periodic in x and y (periods= in make_datafile), or None.");
+  m.def("slab_set_home", [](int con, int kind, std::vector<double> c) {
+    Lock lock;
+    if ( c.size() != 3 ) throw std::invalid_argument("slab_set_home(): a centre");
+    return bool(pyse_slab_set_home(con, kind, c.data()));
+  }, "con"_a, "kind"_a, "centre"_a,
+     "Where a slab's wall wants its vertices: kind 0 the same at every copy, 1 a sphere.");
   m.def("crystalline", []() { Lock lock; return bool(pyse_crystalline()); });
   m.def("symmetry", []() { Lock lock; return bool(pyse_symmetry()); });
   m.def("topology_stamp", []() { Lock lock; return pyse_topology_stamp(); });

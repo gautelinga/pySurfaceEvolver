@@ -2824,14 +2824,31 @@ static void setup(struct ctx *c, struct edit_args *a)
     vertex_id v;
     c->wref = (REAL *)temp_calloc(3*(c->nwalls + 1),sizeof(REAL));
     c->wref_ok = (int *)temp_calloc(c->nwalls + 1,sizeof(int));
+    int left = 0;
+    /* (a sphere's centre where registered, _register_native_formulas; a wall
+       the same at every copy needs none; the others' from one pass over the
+       vertices, not one a wall: 30 walls and guards at 100k vertices) */
     for ( w = 0 ; w < c->nwalls ; w++ )
+    { int home = pyse_slab_home(c->walls[w],c->wref + 3*w);
+      if ( home == 1 ) c->wref_ok[w] = 1;
+      else if ( home < 0 ) { c->wref_ok[w] = -1; left++; }
+    }
+    if ( left )
       FOR_ALL_VERTICES(v)
-        if ( v_on_constraint(v,c->walls[w]) )
-        { REAL *x = get_coord(v);
-          c->wref[3*w] = x[0]; c->wref[3*w+1] = x[1]; c->wref[3*w+2] = x[2];
-          c->wref_ok[w] = 1;
-          break;
-        }
+      { conmap_t *map = get_v_constraint_map(v);
+        int j;
+        for ( j = 1 ; j <= (int)map[0] ; j++ )
+          for ( w = 0 ; w < c->nwalls ; w++ )
+            if ( c->wref_ok[w] < 0 && (int)(map[j] & CONMASK) == c->walls[w] )
+            { REAL *x = get_coord(v);
+              c->wref[3*w] = x[0]; c->wref[3*w+1] = x[1]; c->wref[3*w+2] = x[2];
+              c->wref_ok[w] = 1;
+              left--;
+            }
+        if ( !left ) break;
+      }
+    for ( w = 0 ; w < c->nwalls ; w++ )
+      if ( c->wref_ok[w] < 0 ) c->wref_ok[w] = 0;
   }
   c->h = a->params[8] > 0 ? a->params[8] : pyse_mean_edge();
   c->cos_turn = cos(a->params[0]*M_PI/180);

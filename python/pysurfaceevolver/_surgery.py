@@ -357,13 +357,21 @@ def _home_by_spheres(ev, keys) -> None:
             homed |= np.isnan(dist[:, col])
     free = ~homed & ~np.asarray(m.fixed, dtype=bool)
     reach = _GUARD_REACH*_edge_scale(ev)
-    for key in keys:
-        centre = _sphere_centre(key)
-        if centre is None:
-            continue
+    # (each vertex once, to the sphere it is nearest: one between two beads at
+    # different images went to both in turn, ending a period from the first's
+    # guard, which then never acted)
+    x = np.asarray(m.vertices, float)
+    near = np.full(len(x), -1)
+    gap = np.full(len(x), np.inf)
+    spheres = [(k, _sphere_centre(k)) for k in keys]
+    spheres = [(k, c) for k, c in spheres if c is not None]
+    for i, (key, centre) in enumerate(spheres):
         R = float(getattr(surface.walls[key], "shape")[2])
-        d = np.linalg.norm(_delta(centre, np.asarray(m.vertices, float), _slab(ev)), axis=1)
-        if _move_home(ev, m, np.flatnonzero(free & (d < R + reach)), key):
+        d = np.linalg.norm(_delta(centre, x, _slab(ev)), axis=1) - R
+        take = free & (d < reach) & (d < gap)
+        near[take], gap[take] = i, d[take]
+    for i, (key, _) in enumerate(spheres):
+        if _move_home(ev, m, np.flatnonzero(near == i), key):
             m = ev.mesh()
 
 

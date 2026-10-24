@@ -298,3 +298,113 @@ def test_the_fast_flux_sum_in_a_box():
         pyse.make_datafile(np.eye(3), [[0, 1, 2]], flux_sum="fast", constraints={
             "ball": C.sphere((0, 0, 0), 1.0, gauge="flux"),
             "tilted": C.plane((1, 0, 1), 0.0)})
+
+
+def _short_bridge(periods):
+    """_bead's bridge in one band: every edge from a floor vertex to a bead
+    vertex, across the cell's corner."""
+    R, c = 0.5, np.array([0.0, 0.0, 0.55])
+    sh = shapes.revolve([0.5, np.sqrt(R*R - 0.2**2)], [0.0, 0.35], nt=24)
+    v = sh.vertices.copy()
+    top, bot = np.asarray(sh.rims["top"]), np.asarray(sh.rims["bottom"])
+    d = v[top] - c
+    v[top] = c + R*d/np.linalg.norm(d, axis=1)[:, None]
+    cons = {"bottom": C.plane((0, 0, 1), 0.0, contact_angle=50.0),
+            "bead": C.sphere(tuple(c), R, contact_angle=40.0, axis=(0, 0, 1))}
+    ev = pyse.Evolver()
+    ev.load_arrays(_into_cell(v, periods), sh.faces, constraints=cons,
+                   vertex_constraints={"bottom": bot, "bead": top},
+                   bodies=[pyse.Body(volume=None)], periods=periods)
+    return ev
+
+
+def test_deleting_an_edge_keeps_a_spheres_vertices_at_its_centre():
+    # (Evolver's torus_unwrap_edge moved the head of a wrapped edge between
+    # the floor and a sphere, a sphere's vertex, a period from its centre)
+    ev = _short_bridge(PERIODS)
+    m = ev.mesh()
+    on_bead, on_floor = ev.on_constraint("bead"), ev.on_constraint("bottom")
+    x = np.asarray(m.vertices)
+    e = np.asarray(m.edges)
+    raw = np.linalg.norm(x[e[:, 1], :2] - x[e[:, 0], :2], axis=1)
+    pick = np.flatnonzero(on_floor[e[:, 0]] & on_bead[e[:, 1]] & (raw > 1.0))
+    assert len(pick)
+    ev.command(f"delete edge[{int(m.edge_ids[pick[0]])}]")
+    m = ev.mesh()
+    x = np.asarray(m.vertices)
+    r = np.linalg.norm(x[ev.on_constraint("bead")] - [0.0, 0.0, 0.55], axis=1)
+    assert np.allclose(r, 0.5, atol=1e-9)
+    assert m.edge_lengths().max() < 0.5
+
+
+def test_a_vertex_near_two_spheres_goes_to_the_nearer_ones_copy():
+    # (_home_by_spheres moved it to each in turn: a period from the first)
+    from pysurfaceevolver import _surgery as S
+    L = PERIODS
+    cap = shapes.cap(0.12, 0.08, nr=3, nt=12)
+    v, rim = cap.vertices.copy(), np.asarray(cap.rims["rim"])
+    v[rim, 2] = 0.0
+    cons = {"bottom": C.plane((0, 0, 1), 0.0, contact_angle=60.0),
+            "beadA": C.sphere((0.33, 0.0, 0.4), 0.3, contact_angle=40.0),
+            "beadB": C.sphere((L[0] - 0.33, 0.0, 0.4), 0.3, contact_angle=40.0)}
+    ev = pyse.Evolver()
+    ev.load_arrays(_into_cell(v + [0.02, 0.0, 0.0], L), cap.faces, constraints=cons,
+                   vertex_constraints={"bottom": rim}, bodies=[pyse.Body(volume=None)],
+                   periods=L)
+    S._home_by_spheres(ev, ["beadA", "beadB"])
+    x = np.asarray(ev.mesh().vertices)
+    for key in ("beadA", "beadB"):
+        c = np.asarray(cons[key].shape[1])
+        raw = np.linalg.norm(x - c, axis=1)
+        near = np.linalg.norm(_delta(c, x), axis=1)
+        other = np.asarray(cons["beadB" if key == "beadA" else "beadA"].shape[1])
+        closer = near < np.linalg.norm(_delta(other, x), axis=1)
+        # (each vertex at the copy of the sphere it is nearest)
+        assert np.allclose(raw[closer & (near < 0.5)], near[closer & (near < 0.5)])
+
+
+def _delta(c, x):
+    from pysurfaceevolver import _periodic
+    return _periodic.delta(c, x, PERIODS)
+
+
+def test_flux_spheres_crossing_the_floor_or_each_other_are_refused():
+    # (a source inside another sphere: its flux through the wetted part has
+    # no line integral; the mirror of a sphere on the floor sat at its centre:
+    # NaN)
+    v, f = np.array([[0, 0, 2.0], [0.2, 0, 2.0], [0, 0.2, 2.0]]), [[0, 1, 2]]
+    for cons in ({"bottom": C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                  "ball": C.sphere((0.5, 0.5, 0.0), 0.5, contact_angle=30.0, gauge="flux")},
+                 {"bottom": C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                  "ball": C.sphere((0.5, 0.5, 1.0), 0.5, contact_angle=30.0, gauge="flux"),
+                  "other": C.sphere((0.7, 0.5, 1.0), 0.5, contact_angle=30.0, gauge="flux")}):
+        ev = pyse.Evolver()
+        with pytest.raises(ValueError, match="must not cross"):
+            ev.load_arrays(v, f, constraints=cons, periods=PERIODS)
+
+
+def test_the_flux_gauge_far_above_and_beside_a_box():
+    # (points outside the grid raised an error inside the integrand, on any
+    # thread: the grid now covers far above the beads and, in a box, the
+    # whole cell of its images)
+    from pysurfaceevolver import _core
+    _bead(PERIODS, gauge="flux")
+    o = np.array(_core.slabflux_probe([0.3, 0.4, 30.0]))
+    n = len(o)//2
+    assert np.abs(o[:n] - o[n:]).max() < 1e-9*np.abs(o[n:]).max()
+    ev = _drop_among_spheres("fast", 20, floor=True, box=True)
+    e = ev.energy
+    ev.command("g 3")
+    assert np.isfinite(ev.energy) and np.isfinite(e)
+    for x in ([-4.2, 0.0, -1.0], [3.9, -4.1, 0.5]):
+        assert len(_core.slabflux_probe(x)) > 0
+
+
+def test_a_plane_given_by_expressions_is_refused_plainly():
+    # (plane() takes numbers; a hand-made wall whose normal has an expression
+    # got numpy's conversion error)
+    import dataclasses
+    slope = dataclasses.replace(C.plane((0, 0, 1), 0.0), shape=("plane", ("tilt", 0, 1), 0.0))
+    with pytest.raises(ValueError, match="floor"):
+        pyse.make_datafile(np.eye(3), [[0, 1, 2]], parameters={"tilt": 0.1},
+                           constraints={"slope": slope}, periods=PERIODS)

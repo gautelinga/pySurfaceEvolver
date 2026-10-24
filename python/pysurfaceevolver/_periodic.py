@@ -121,8 +121,9 @@ def assemble(cons: Dict[Any, Any], periods) -> Tuple[Dict[Any, Any], str]:
             raise ValueError(f"constraint {key}: with periods, walls must come from "
                              "pysurfaceevolver.constraints (a floor plane and spheres)")
         if shape[0] == "plane":
-            n = np.asarray(shape[1], dtype=float)
-            if isinstance(shape[1], str) or abs(n[0]) > 1e-12 or abs(n[1]) > 1e-12 or n[2] <= 0:
+            n = (None if isinstance(shape[1], str) or any(isinstance(v, str) for v in shape[1])
+                 else np.asarray(shape[1], dtype=float))
+            if n is None or abs(n[0]) > 1e-12 or abs(n[1]) > 1e-12 or n[2] <= 0:
                 raise ValueError(f"constraint {key}: with periods, the only plane may be a "
                                  "floor z = const facing up (normal (0, 0, 1))")
             if floor_key is not None:
@@ -365,13 +366,30 @@ def slab_flux(walls: Dict[Any, Any], number: Dict[Any, int], periods, bodies) ->
                         sources += [x, y, z, float(i), float(a == b == k == 0)]
         if box is not None:
             lattice = [2*(box[2] - box[0]), 2*(box[3] - box[1])]
-            grid = [box[0] - 2*h, box[1] - 2*h, box[2] - box[0] + 4*h, box[3] - box[1] + 4*h]
+            # (the whole lattice cell: no point falls outside it in x, y)
+            grid = [box[0], box[1], *lattice]
         else:
             lattice = [0.0, 0.0]
             lo, hi = (c - np.array(radii)[:, None]).min(axis=0), \
                 (c + np.array(radii)[:, None]).max(axis=0)
             m = 3*max(radii)
             grid = [lo[0] - m, lo[1] - m, hi[0] - lo[0] + 2*m, hi[1] - lo[1] + 2*m]
+    # every source but a sphere's own must lie outside it: its field's flux
+    # through the sphere's wetted part is a line integral only then (a sphere
+    # crossing the floor or a box's wall has its mirror inside it)
+    srcs = (np.array(sources, float).reshape(-1, 5) if sources else np.array(
+        [[*w.slabflux[0], i, 1.0] for i, (_, w) in enumerate(beads)]
+        + ([[w.slabflux[0][0], w.slabflux[0][1], 2*zf - w.slabflux[0][2], i, 0.0]
+            for i, (_, w) in enumerate(beads)] if floor else []), float))
+    for j, (key, w) in enumerate(beads):
+        d = srcs[:, :3] - np.asarray(w.slabflux[0], float)
+        if lattice[0] > 0:
+            d[:, :2] -= np.asarray(lattice)*np.round(d[:, :2]/np.asarray(lattice))
+        inside = (np.linalg.norm(d, axis=1) < radii[j]) & ~((srcs[:, 3] == j) & (srcs[:, 4] != 0))
+        if inside.any():
+            raise ValueError(f"constraint {key}: a sphere with gauge='flux' must not cross the "
+                             "floor, a box's wall or another such sphere (another source, or "
+                             "its own image, inside it)")
     ok = _core.slabflux_setup(lattice, zf, rows, fa, ft,
                               [h, s["kappa"], s["p"], s["kappa_w"], s["p_w"], s["M"], s["p_T"]],
                               list(u.ravel()), int(H.shape[1]), list(H.ravel()),

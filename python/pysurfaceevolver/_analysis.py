@@ -194,7 +194,7 @@ class _Analysis(_Engine):
                     wall_gap, wall = g, int(nums[c])
         crossed = _crossed(nums[active], attrs[active], dist[:, active], moving,
                            _CROSS_TOL*h)             # (fixed vertices never moved)
-        self_gap = _self_gap(m.vertices, e, moving, h)
+        self_gap = _self_gap(m.vertices, e, moving, h, periods=m.periods)
         issues = []
         if not residual < tol and not _core.crystalline():
             issues.append(f"not in equilibrium (residual {residual:.2g})")

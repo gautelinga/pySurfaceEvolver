@@ -213,6 +213,7 @@ int pyse_modeltype(void);       /* 1 linear, 2 quadratic, 3 lagrange */
 int pyse_lagrange_order(void);
 int pyse_torus(void);
 int pyse_slab_periods(double *L);   /* 1 and (Lx, Ly) for a slab periodic in x, y */
+int pyse_slab_set_home(int con, int kind, const double *c);  /* 0 the same at every copy, 1 a sphere */
 int pyse_crystalline(void);   /* a Wulff (crystalline) integrand is in use */
 int pyse_symmetry(void);      /* a torus or quotient space: coordinates are wrapped */
 /* goes up with every topology change (Evolver's top_timestamp) */

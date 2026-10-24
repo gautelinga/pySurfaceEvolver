@@ -17,6 +17,10 @@ int pyse_slab(REAL *L);
 void pyse_delta(const REAL *a, const REAL *b, REAL *d);
 WRAPTYPE pyse_wrap_between(vertex_id tail, vertex_id head);
 void pyse_edge_rewrap(edge_id e);
+/* where a slab's walls want their vertices: 0 the same at every copy, 1 a
+   sphere (centre into c), -1 unknown; whether a vertex must stay at its copy */
+int pyse_slab_home(int con, REAL *c);
+int pyse_slab_pinned(vertex_id v_id);
 
 /* changes to the native integrands (pyse_native.c): registrations, toggles */
 long pyse_native_serial(void);

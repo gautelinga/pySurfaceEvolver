@@ -148,9 +148,13 @@ WRAPTYPE torus_inverse(WRAPTYPE wrap  /* the element invert */)
 /* pySE: a slab periodic in x and y (bindings/pyse_api.c; 0 without the glue) */
 #if defined(__GNUC__)
 extern int pyse_slab(REAL *L) __attribute__((weak));
+extern int pyse_slab_pinned(vertex_id v_id) __attribute__((weak));
 #define TORUS_SLAB() (pyse_slab ? pyse_slab(NULL) : 0)
+#define TORUS_PINNED(v) (pyse_slab_pinned ? pyse_slab_pinned(v) \
+                         : (get_vattr(v) & CONSTRAINT) != 0)
 #else
 #define TORUS_SLAB() 0
+#define TORUS_PINNED(v) ((get_vattr(v) & CONSTRAINT) != 0)
 #endif
 
 void torus_unwrap_edge(edge_id e_id)
@@ -169,8 +173,8 @@ void torus_unwrap_edge(edge_id e_id)
   { /* pySE: a slab periodic in x and y (bindings/pyse_api.c): one end moved
        to the other's image, not both into the cell, and never by the z
        period (a vertex below z = 0 went up by it); the head, unless only it
-       is on a constraint (a sphere's vertices are kept near its centre) */
-    if ( (get_vattr(headv) & CONSTRAINT) && !(get_vattr(tailv) & CONSTRAINT) )
+       must stay at its copy (on a sphere: kept near its centre) */
+    if ( TORUS_PINNED(headv) && !TORUS_PINNED(tailv) )
       tailwrap = torus_inverse(wrap);
     else tailwrap = 0;
     headwrap = torus_compose(tailwrap,wrap);
