@@ -72,10 +72,14 @@ struct gitem { float lo[3], hi[3]; int ord; };
    cleared at every build, and at 50k facets its cells grew past h, each
    query's candidates with them). Per cell, the items put in when the grid
    was built and a list (through xnext, from xhead, -1 none) of those of
-   elements made or changed since. */
+   elements made or changed since. In a slab, x and y are periodic: cells
+   of sides pcell dividing the periods, their numbers taken round them;
+   each element's box at the image of its first vertex, a query's matched
+   to an item's image (see apart). */
 struct grid
-{ REAL lo[3], cell;
+{ REAL lo[3], cell, pcell[2];
   long n[3];
+  int per;
   long cap, used, *key, *bstart, *xhead;    /* cells by hash: key -1, an empty slot */
   int *bcount;
   struct gitem *items, *xitems;
@@ -107,6 +111,9 @@ struct ctx
   int *sig_at[NUMELEMENTS];        /* per edge, facet: its sig's place in sigs, */
   int *sig_ep[NUMELEMENTS];        /* when this is sig_now */
   long sig_size[NUMELEMENTS];
+  REAL *wref;                      /* in a slab, per wall: a vertex on it, where it was */
+  int *wref_ok;                    /* (none: 0) */
+  long nper[2];                    /* in a slab: near_key's cells a period */
   REAL *gaps;                      /* per vertex and wall: x, y, z, the gap there */
   long gaps_size;                  /* vertex ordinals it has room for */
   REAL *reach;                     /* per vertex: x, y, z, vertex_reach there */
@@ -201,14 +208,14 @@ static int constraint_count(vertex_id v)
 /* whether v, put onto wall too, would be on two constraints whose normals
    there are within 10 degrees of each other (a bead touching a side wall:
    a vertex on both at the touching point left Evolver's constraint
-   projection singular, ERROR 3005) */
-static int tangent_walls(vertex_id v, int wall)
+   projection singular, ERROR 3005); at, where v goes onto it (wall_image) */
+static int tangent_walls(vertex_id v, int wall, REAL *at)
 { conmap_t *map;
   unsigned int m;
   REAL *x = get_coord(v), f, a[MAXCOORD], b[MAXCOORD], aa = 0, bb = 0, ab = 0;
   int i;
   if ( !(get_vattr(v) & CONSTRAINT) ) return 0;
-  eval_all(get_constraint(wall)->formula,x,SDIM,&f,a,v);
+  eval_all(get_constraint(wall)->formula,at,SDIM,&f,a,v);
   map = get_v_constraint_map(v);
   for ( m = 1 ; m <= map[0] ; m++ )
   { int o = (int)(map[m] & CONMASK);
@@ -247,6 +254,59 @@ static REAL dist3(const REAL *a, const REAL *b)
 static void project(vertex_id v)
 { if ( get_vattr(v) & CONSTRAINT ) project_v_constr(v,ACTUAL_MOVE,KEEP_ONESIDEDNESS);
 }
+
+/* ---- slabs periodic in x and y ------------------------------------------ */
+
+/* (pyse_check.c) */
+void pyse_image(const REAL *ref, const REAL *x, REAL *out);
+double pyse_slab_gap(int c, double side, const REAL *ref, const REAL *x, REAL *at);
+
+/* A slab (pyse_slab): coordinates aren't wrapped into the cell and every
+   edge is short, so the geometry of a few nearby vertices is taken with
+   them at one image, each nearest a reference point (one of them); a new
+   position for a vertex is written at its own image. Set as each call
+   begins. */
+static int slab_on;
+static REAL slab_L[2];
+
+static void slab_set(void) { slab_on = web.torus_flag && pyse_slab(slab_L); }
+
+/* x's image nearest ref (x itself outside a slab) */
+static inline void img(const REAL *ref, const REAL *x, REAL *out)
+{ out[0] = x[0]; out[1] = x[1]; out[2] = x[2];
+  if ( slab_on )
+  { out[0] -= slab_L[0]*floor((x[0] - ref[0])/slab_L[0] + 0.5);
+    out[1] -= slab_L[1]*floor((x[1] - ref[1])/slab_L[1] + 0.5);
+  }
+}
+
+/* v's coordinates at the image nearest ref: in buf in a slab, else its own */
+static inline REAL *vimg(const REAL *ref, vertex_id v, REAL *buf)
+{ REAL *x = get_coord(v);
+  if ( !slab_on ) return x;
+  img(ref,x,buf);
+  return buf;
+}
+
+/* v moved by whole periods to its image nearest p (Evolver's wrap_vertex,
+   its edges' wraps kept right) */
+static void wrap_near(vertex_id v, const REAL *p)
+{ REAL *x = get_coord(v);
+  int kx, ky;
+  if ( !slab_on ) return;
+  kx = (int)floor((p[0] - x[0])/slab_L[0] + 0.5);
+  ky = (int)floor((p[1] - x[1])/slab_L[1] + 0.5);
+  if ( kx || ky ) wrap_vertex(v,(kx & WRAPMASK) | ((ky & WRAPMASK) << TWRAPBITS));
+}
+
+/* the distance between vertices a and b (nearest images) */
+static REAL vdist(vertex_id a, vertex_id b)
+{ REAL buf[3], *x = get_coord(a);
+  return dist3(x,vimg(x,b,buf));
+}
+
+static REAL edge_length(edge_id e)
+{ return vdist(get_edge_tailv(e),get_edge_headv(e)); }
 
 /* ---- a target edge length per vertex ------------------------------------ */
 
@@ -351,11 +411,12 @@ static const vertex_id *fverts(struct ctx *c, facet_id f, vertex_id *buf)
 static void elem_box(struct ctx *c, element_id id, REAL *lo, REAL *hi, REAL pad)
 { vertex_id buf[3];
   const vertex_id *v = buf;
+  REAL *x0 = NULL, xb[3];
   int n, k, d;
   if ( id_type(id) == EDGE ) { buf[0] = get_edge_tailv(id); buf[1] = get_edge_headv(id); n = 2; }
   else { v = fverts(c,id,buf); n = 3; }
   for ( k = 0 ; k < n ; k++ )
-  { REAL *x = get_coord(v[k]);
+  { const REAL *x = k ? vimg(x0,v[k],xb) : (x0 = get_coord(v[0]));
     for ( d = 0 ; d < 3 ; d++ )
     { if ( k == 0 || x[d] < lo[d] ) lo[d] = x[d];
       if ( k == 0 || x[d] > hi[d] ) hi[d] = x[d];
@@ -364,17 +425,34 @@ static void elem_box(struct ctx *c, element_id id, REAL *lo, REAL *hi, REAL pad)
   for ( d = 0 ; d < 3 ; d++ ) { lo[d] -= pad; hi[d] += pad; }
 }
 
-/* the cells a box is in (those past the grid's box: its last) */
+/* the cells a box is in (those past the grid's box: its last; in a
+   slab, x and y: as many as there are at most, numbered on past the period) */
 static void cells(struct grid *g, const REAL *lo, const REAL *hi, long *a, long *b)
 { int d;
   for ( d = 0 ; d < 3 ; d++ )
-  { REAL s = floor((lo[d] - g->lo[d])/g->cell), t = floor((hi[d] - g->lo[d])/g->cell);
+  { REAL s, t;
+    if ( g->per && d < 2 )
+    { s = floor(lo[d]/g->pcell[d]); t = floor(hi[d]/g->pcell[d]);
+      if ( !(fabs(s) < 1e15 && fabs(t) < 1e15) ) s = t = 0;     /* (not a number) */
+      a[d] = (long)s;
+      b[d] = t - s > g->n[d] - 1 ? a[d] + g->n[d] - 1 : (long)t;
+      continue;
+    }
+    s = floor((lo[d] - g->lo[d])/g->cell); t = floor((hi[d] - g->lo[d])/g->cell);
     a[d] = !(s > 0) ? 0 : s > g->n[d] - 1 ? g->n[d] - 1 : (long)s;
     b[d] = !(t > 0) ? 0 : t > g->n[d] - 1 ? g->n[d] - 1 : (long)t;
   }
 }
 
-#define CELL(g,i,j,k) (((k)*(g)->n[1] + (j))*(g)->n[0] + (i))
+static inline long cell_key(const struct grid *g, long i, long j, long k)
+{ if ( g->per )
+  { i %= g->n[0]; if ( i < 0 ) i += g->n[0];
+    j %= g->n[1]; if ( j < 0 ) j += g->n[1];
+  }
+  return (k*g->n[1] + j)*g->n[0] + i;
+}
+
+#define CELL(g,i,j,k) cell_key(g,i,j,k)
 
 /* cell key's slot, or the empty one where it would go */
 static long slot_probe(const struct grid *g, long key)
@@ -435,9 +513,24 @@ static void item_of(struct gitem *it, element_id id, const REAL *lo, const REAL 
   for ( d = 0 ; d < 3 ; d++ ) { it->lo[d] = below(lo[d]); it->hi[d] = above(hi[d]); }
 }
 
+/* (a slab's: the box moved to the image whose centre is nearest the item's) */
+static int apart_slab(const struct gitem *it, const REAL *lo, const REAL *hi, REAL tol)
+{ REAL l[3], h[3];
+  int d;
+  for ( d = 0 ; d < 2 ; d++ )
+  { REAL s = slab_L[d]*floor(((it->lo[d] + it->hi[d]) - (lo[d] + hi[d]))/(2*slab_L[d]) + 0.5);
+    l[d] = lo[d] + s; h[d] = hi[d] + s;
+  }
+  l[2] = lo[2]; h[2] = hi[2];
+  return h[0] < it->lo[0] - tol || l[0] > it->hi[0] + tol
+      || h[1] < it->lo[1] - tol || l[1] > it->hi[1] + tol
+      || h[2] < it->lo[2] - tol || l[2] > it->hi[2] + tol;
+}
+
 /* whether a box is further than tol from an item's (so from its element's) */
-static int apart(const struct gitem *it, const REAL *lo, const REAL *hi, REAL tol)
-{ return hi[0] < it->lo[0] - tol || lo[0] > it->hi[0] + tol
+static inline int apart(const struct gitem *it, const REAL *lo, const REAL *hi, REAL tol)
+{ if ( slab_on ) return apart_slab(it,lo,hi,tol);
+  return hi[0] < it->lo[0] - tol || lo[0] > it->hi[0] + tol
       || hi[1] < it->lo[1] - tol || lo[1] > it->hi[1] + tol
       || hi[2] < it->lo[2] - tol || lo[2] > it->hi[2] + tol;
 }
@@ -467,9 +560,18 @@ static void grid_build(struct ctx *c, struct grid *g, int type)
   { double n = floor((c->box_hi[d] - c->box_lo[d])/g->cell) + 1;
     g->n[d] = n > 1024 ? 1024 : (long)n;
   }
-  for ( d = 0 ; d < 3 ; d++ )
+  for ( d = slab_on ? 2 : 0 ; d < 3 ; d++ )
     if ( (c->box_hi[d] - c->box_lo[d])/g->n[d] > g->cell )
       g->cell = (c->box_hi[d] - c->box_lo[d])/g->n[d]*1.0000001;
+  if ( slab_on )
+  { REAL want = c->cell_h > 0 ? c->cell_h*c->h : c->h;
+    g->per = 1;
+    for ( d = 0 ; d < 2 ; d++ )
+    { double n = floor(slab_L[d]/want);
+      g->n[d] = n > 1024 ? 1024 : n < 1 ? 1 : (long)n;
+      g->pcell[d] = slab_L[d]/g->n[d];
+    }
+  }
   for ( cap = 64 ; cap < 2*web.skel[type].count ; cap *= 2 ) ;
   slots_alloc(g,cap);
   /* (each element's box once: the cells' keys and its item, in turn) */
@@ -637,6 +739,22 @@ static int unchanged(struct ctx *c, element_id id)
 
 /* ---- the patch's problems ----------------------------------------------- */
 
+/* wall w's gap at x (pyse_wall_gap; in a slab at x's image deepest in its
+   solid, pyse_slab_gap) */
+static double wall_gap(struct ctx *c, int w, REAL *x)
+{ if ( !slab_on ) return pyse_wall_gap(c->walls[w],x);
+  return pyse_slab_gap(c->walls[w],c->sides[w] < 0 ? -1.0 : 1.0,
+                       c->wref_ok[w] ? c->wref + 3*w : NULL,x,NULL);
+}
+
+/* v's coordinates at its image nearest wall w (deepest in its solid) */
+static void wall_image(struct ctx *c, int w, vertex_id v, REAL *at)
+{ int k;
+  if ( !slab_on ) { for ( k = 0 ; k < SDIM ; k++ ) at[k] = get_coord(v)[k]; return; }
+  pyse_slab_gap(c->walls[w],c->sides[w] < 0 ? -1.0 : 1.0,c->wref_ok[w] ? c->wref + 3*w : NULL,
+                get_coord(v),at);
+}
+
 /* wall w's gap at vertex v (pyse_wall_gap), kept while v stays where it was
    (a checked edit looks at each vertex round it before and after, most of
    them unmoved: the walls' formulas took 19% of a checked smoothing) */
@@ -653,7 +771,7 @@ static double vertex_gap_fill(struct ctx *c, int w, vertex_id v)
   g = c->gaps + (ord*c->nwalls + w)*4;
   if ( !(g[0] == x[0] && g[1] == x[1] && g[2] == x[2]) )
   { g[0] = x[0]; g[1] = x[1]; g[2] = x[2];
-    g[3] = pyse_wall_gap(c->walls[w],x);
+    g[3] = wall_gap(c,w,x);
   }
   return (double)g[3];
 }
@@ -678,7 +796,8 @@ static int near_pair(edge_id e, facet_id f);
 static int pair_crosses(struct ctx *c, edge_id e, facet_id f)
 { vertex_id buf[3], t, hd;
   const vertex_id *v;
-  REAL *p, *q, *a, *b, *w, pad;
+  const REAL *p, *q, *a, *b, *w;
+  REAL pad, qb[3], ab[3], bb[3], wb[3];
   int d;
   if ( !valid_element(e) || !valid_element(f) || !valid_id(get_facet_fe(f)) ) return 0;
   t = get_edge_tailv(e); hd = get_edge_headv(e);
@@ -689,6 +808,10 @@ static int pair_crosses(struct ctx *c, edge_id e, facet_id f)
      determinants below took 30% of a checked smoothing's time on) */
   p = get_coord(t); q = get_coord(hd);
   a = get_coord(v[0]); b = get_coord(v[1]); w = get_coord(v[2]);
+  if ( slab_on )
+  { q = vimg(p,hd,qb);
+    a = vimg(p,v[0],ab); b = vimg(a,v[1],bb); w = vimg(a,v[2],wb);
+  }
   pad = 1e-9*c->h;
   for ( d = 0 ; d < 3 ; d++ )
   { REAL elo = p[d] < q[d] ? p[d] : q[d], ehi = p[d] < q[d] ? q[d] : p[d];
@@ -746,8 +869,9 @@ static int crossings_of(struct ctx *c, element_id id, struct ids *near)
    pair_crosses(), the same tests in the same order; one crossing a query is
    in the cells of the query's box, which are among the set's, so each query
    finds the same partners. */
-struct qedge { vertex_id t, h; const REAL *p, *q; REAL lo[3], hi[3]; int ok; };
-struct qfacet { vertex_id v[3]; const REAL *a, *b, *w; REAL lo[3], hi[3]; int ok; };
+/* (in a slab, the points at one image, in x: see star_crossings) */
+struct qedge { vertex_id t, h; const REAL *p, *q; REAL lo[3], hi[3], x[2][3]; int ok; };
+struct qfacet { vertex_id v[3]; const REAL *a, *b, *w; REAL lo[3], hi[3], x[3][3]; int ok; };
 
 static void box3(const REAL *const *x, int n, REAL *lo, REAL *hi)
 { int k, d;
@@ -765,6 +889,10 @@ static void qedge_of(struct qedge *e, edge_id id)
   if ( !e->ok ) return;
   e->t = get_edge_tailv(id); e->h = get_edge_headv(id);
   x[0] = e->p = get_coord(e->t); x[1] = e->q = get_coord(e->h);
+  if ( slab_on )
+  { img(e->p,e->p,e->x[0]); img(e->p,e->q,e->x[1]);
+    x[0] = e->p = e->x[0]; x[1] = e->q = e->x[1];
+  }
   box3(x,2,e->lo,e->hi);
 }
 
@@ -777,7 +905,46 @@ static void qfacet_of(struct ctx *c, struct qfacet *f, facet_id id)
   v = fverts(c,id,buf);
   f->v[0] = v[0]; f->v[1] = v[1]; f->v[2] = v[2];
   x[0] = f->a = get_coord(v[0]); x[1] = f->b = get_coord(v[1]); x[2] = f->w = get_coord(v[2]);
+  if ( slab_on )
+  { img(f->a,f->a,f->x[0]); img(f->a,f->b,f->x[1]); img(f->a,f->w,f->x[2]);
+    x[0] = f->a = f->x[0]; x[1] = f->b = f->x[1]; x[2] = f->w = f->x[2];
+  }
   box3(x,3,f->lo,f->hi);
+}
+
+/* a query moved by whole periods to the image nearest ref (a slab's) */
+static void qedge_near(struct qedge *e, const REAL *ref)
+{ int d, k;
+  for ( d = 0 ; d < 2 ; d++ )
+  { REAL s = slab_L[d]*floor((e->x[0][d] - ref[d])/slab_L[d] + 0.5);
+    if ( s == 0 ) continue;
+    for ( k = 0 ; k < 2 ; k++ ) e->x[k][d] -= s;
+    e->lo[d] -= s; e->hi[d] -= s;
+  }
+}
+
+static void qfacet_near(struct qfacet *f, const REAL *ref)
+{ int d, k;
+  for ( d = 0 ; d < 2 ; d++ )
+  { REAL s = slab_L[d]*floor((f->x[0][d] - ref[d])/slab_L[d] + 0.5);
+    if ( s == 0 ) continue;
+    for ( k = 0 ; k < 3 ; k++ ) f->x[k][d] -= s;
+    f->lo[d] -= s; f->hi[d] -= s;
+  }
+}
+
+static int qpair(struct ctx *c, const struct qedge *e, const struct qfacet *f, edge_id eid,
+                 facet_id fid);
+
+/* (a slab's: the facet moved to the edge's image first; out of line, the
+   copy kept off qpair's way) */
+static int __attribute__((noinline)) qpair_slab(struct ctx *c, const struct qedge *e,
+                                                const struct qfacet *f, edge_id eid, facet_id fid)
+{ struct qfacet moved;
+  memcpy(&moved,f,sizeof(moved));
+  qfacet_near(&moved,e->p);
+  moved.a = moved.x[0]; moved.b = moved.x[1]; moved.w = moved.x[2];
+  return qpair(c,e,&moved,eid,fid);
 }
 
 /* (pair_crosses on the looked-up pair) */
@@ -788,6 +955,9 @@ static int qpair(struct ctx *c, const struct qedge *e, const struct qfacet *f, e
   if ( !e->ok || !f->ok ) return 0;
   if ( equal_id(f->v[0],e->t) || equal_id(f->v[1],e->t) || equal_id(f->v[2],e->t)
        || equal_id(f->v[0],e->h) || equal_id(f->v[1],e->h) || equal_id(f->v[2],e->h) ) return 0;
+  if ( slab_on
+       && (fabs(f->a[0] - e->p[0]) > 0.5*slab_L[0] || fabs(f->a[1] - e->p[1]) > 0.5*slab_L[1]) )
+    return qpair_slab(c,e,f,eid,fid);
   for ( d = 0 ; d < 3 ; d++ )
     if ( e->hi[d] < f->lo[d] - pad || e->lo[d] > f->hi[d] + pad ) return 0;
   if ( far_only && near_pair(eid,fid) ) return 0;
@@ -826,6 +996,18 @@ static int star_crossings(struct ctx *c, struct ids *QE, struct ids *nearF, stru
   }
   for ( i = 0 ; i < QE->n ; i++ ) qedge_of(qe + i,QE->a[i]);
   for ( i = 0 ; i < QF->n ; i++ ) qfacet_of(c,qf + i,QF->a[i]);
+  if ( slab_on )
+  { /* (the queries at one image, round a vertex: their box a patch's) */
+    const REAL *ref = NULL;
+    REAL r[3];
+    for ( i = 0 ; i < QE->n && !ref ; i++ ) if ( qe[i].ok ) ref = qe[i].p;
+    for ( i = 0 ; i < QF->n && !ref ; i++ ) if ( qf[i].ok ) ref = qf[i].a;
+    if ( ref )
+    { r[0] = ref[0]; r[1] = ref[1]; r[2] = ref[2];
+      for ( i = 0 ; i < QE->n ; i++ ) if ( qe[i].ok ) qedge_near(qe + i,r);
+      for ( i = 0 ; i < QF->n ; i++ ) if ( qf[i].ok ) qfacet_near(qf + i,r);
+    }
+  }
   for ( pass = 0 ; pass < 2 ; pass++ )
   { struct ids *Q = pass ? QF : QE, *near = pass ? nearE : nearF;
     struct grid *g = pass ? &c->egrid : &c->fgrid;
@@ -899,7 +1081,8 @@ static int line_near(vertex_id v, vertex_id w, int depth)
 static int lines_cross(edge_id e, edge_id o, REAL h, int far, REAL *mid)
 { vertex_id a0 = get_edge_tailv(e), a1 = get_edge_headv(e);
   vertex_id b0 = get_edge_tailv(o), b1 = get_edge_headv(o);
-  REAL *p = get_coord(a0), *q = get_coord(a1), *r = get_coord(b0), *t = get_coord(b1);
+  REAL qb[3], rb[3], tb[3], *p = get_coord(a0), *q = vimg(p,a1,qb), *r = vimg(p,b0,rb),
+       *t = vimg(p,b1,tb);
   REAL g[MAXCOORD], f, gl, e1[3], e2[3], P[4][2], d1, d2, d3, d4, *pts[4];
   conmap_t *map = get_e_constraint_map(e);
   unsigned int m;
@@ -1030,8 +1213,8 @@ static int vertex_solid(struct ctx *c, int w, vertex_id v)
   return -side*vertex_gap(c,w,v) > c->tol*c->h;
 }
 
-/* whether the middle of the edge from t (at p) to hh (at q), len long, is
-   in wall w's solid */
+/* whether the middle of the edge from t (at p) to hh (at q, p's image),
+   len long, is in wall w's solid */
 static int edge_solid(struct ctx *c, int w, vertex_id t, vertex_id hh, REAL *p, REAL *q,
                       double len)
 { int wc = c->walls[w], d;
@@ -1047,7 +1230,7 @@ static int edge_solid(struct ctx *c, int w, vertex_id t, vertex_id hh, REAL *p, 
   if ( deep + len < c->tol*c->h ) return 0;
   if ( v_on_constraint(t,wc) && v_on_constraint(hh,wc) ) return 0;
   for ( d = 0 ; d < 3 ; d++ ) mid[d] = (p[d] + q[d])/2;
-  return -side*pyse_wall_gap(wc,mid) > c->tol*c->h;
+  return -side*wall_gap(c,w,mid) > c->tol*c->h;
 }
 
 /* how far vertex v is in the solid of the wall it is deepest in (-side
@@ -1092,7 +1275,7 @@ static int vertex_solids(struct ctx *c, vertex_id v)
 
 static int edge_solids(struct ctx *c, edge_id e)
 { vertex_id t = get_edge_tailv(e), hh = get_edge_headv(e);
-  REAL *p = get_coord(t), *q = get_coord(hh);
+  REAL qb[3], *p = get_coord(t), *q = slab_on ? vimg(p,hh,qb) : get_coord(hh);
   double deep = vertex_reach(c,t), len = dist3(p,q);
   int w, n = 0;
   if ( vertex_reach(c,hh) > deep ) deep = vertex_reach(c,hh);
@@ -1368,7 +1551,8 @@ static void star(vertex_id v, struct ids *out)
 /* ---- the edits ---------------------------------------------------------- */
 
 /* the facets round u or w (not on both) moved to p: worst cosine of the
-   turn, smallest doubled area, longest new edge, and the volume swept */
+   turn, smallest doubled area, longest new edge, and the volume swept (in
+   a slab, the facets at p's image) */
 static void moved_shape(struct ctx *c, vertex_id u, vertex_id w, REAL *p, REAL *worst_cos,
                         REAL *least, REAL *longest, REAL *volume)
 { vertex_id ends[2];
@@ -1384,18 +1568,18 @@ static void moved_shape(struct ctx *c, vertex_id u, vertex_id w, REAL *p, REAL *
       int n = 0;
       vertex_id o = get_edge_headv(e);
       if ( !equal_id(o,u) && !equal_id(o,w) )
-      { REAL l = dist3(p,get_coord(o));
+      { REAL ob[3], l = dist3(p,vimg(p,o,ob));
         if ( l > *longest ) *longest = l;
       }
       if ( valid_id(fe0) ) do
       { facet_id f = positive_id(get_fe_facet(fe));
         if ( valid_id(f) && mark(c,f) )
         { vertex_id v[3];
-          REAL *x[3], *y[3], n0[3], n1[3], a0, a1;
+          REAL *x[3], *y[3], n0[3], n1[3], a0, a1, xb[3][3];
           int hits = 0;
           facet_verts(f,v);
           for ( k = 0 ; k < 3 ; k++ )
-          { x[k] = y[k] = get_coord(v[k]);
+          { x[k] = y[k] = vimg(p,v[k],xb[k]);
             if ( equal_id(v[k],u) || equal_id(v[k],w) ) { y[k] = p; hits++; }
           }
           *volume += pyse_det3(p,x[0],x[1],x[2])/6;
@@ -1483,7 +1667,9 @@ static int collapse(struct ctx *c, edge_id e, int relaxed)
   }
   if ( !link_kept(e) ) return PYSE_EDIT_LINK;
   if ( compare_vertex_attr(u,w) == A_EQ_B && !(get_vattr(u) & FIXED) )
-    for ( k = 0 ; k < 3 ; k++ ) p[k] = (get_coord(u)[k] + get_coord(w)[k])/2;
+  { REAL wb[3], *xw = vimg(get_coord(u),w,wb);
+    for ( k = 0 ; k < 3 ; k++ ) p[k] = (get_coord(u)[k] + xw[k])/2;
+  }
   else
     for ( k = 0 ; k < 3 ; k++ ) p[k] = get_coord(u)[k];
   moved_shape(c,u,w,p,&cosw,&least,&longest,&volume);
@@ -1507,6 +1693,9 @@ static int collapse(struct ctx *c, edge_id e, int relaxed)
   { if ( verts.a ) temp_free((char *)verts.a);
     return -PYSE_EDIT_EVOLVER;
   }
+  /* (in a slab, delete_edge may have moved u into the cell: back, a
+     sphere's vertices kept at the image near its centre) */
+  wrap_near(u,p);
   for ( k = 0 ; k < 3 ; k++ ) get_coord(u)[k] = p[k];
   project(u);
   verts.n = 0;
@@ -1537,7 +1726,7 @@ static int flip(struct ctx *c, edge_id e, int mode)
 { facetedge_id fe0;
   facet_id f1, f2;
   vertex_id a, b, p, q, cc, d, v1[3], v2[3];
-  REAL n1[3], n2[3], m1[3], m2[3], avg[3], an, l1, l2;
+  REAL n1[3], n2[3], m1[3], m2[3], avg[3], an, l1, l2, qb[3], cb[3], db[3], *xp, *xq, *xc, *xd;
   struct ids verts = {0,0,0};
   struct counts was;
   int k, why, s1, s2;
@@ -1565,9 +1754,10 @@ static int flip(struct ctx *c, edge_id e, int mode)
   if ( !valid_id(d) || equal_id(cc,d) || joined(cc,d) ) return PYSE_EDIT_NOT_APPLICABLE;
   /* no chord between two contact lines' vertices */
   if ( on_border(cc) && on_border(d) && common_wall(cc,d) ) return PYSE_EDIT_LINE;
+  /* (the four at p's image) */
+  xp = get_coord(p); xq = vimg(xp,q,qb); xc = vimg(xp,cc,cb); xd = vimg(xp,d,db);
   if ( mode == 1 )
-  { if ( angle_at(get_coord(cc),get_coord(p),get_coord(q))
-         + angle_at(get_coord(d),get_coord(p),get_coord(q)) <= M_PI + 1e-9 )
+  { if ( angle_at(xc,xp,xq) + angle_at(xd,xp,xq) <= M_PI + 1e-9 )
       return PYSE_EDIT_NOT_BETTER;
   }
   else if ( mode == 2 )
@@ -1577,10 +1767,10 @@ static int flip(struct ctx *c, edge_id e, int mode)
               + abs(vertex_valence(cc) + 1 - target_valence(cc)) + abs(vertex_valence(d) + 1 - target_valence(d));
     if ( later >= before ) return PYSE_EDIT_NOT_BETTER;
   }
-  tri_normal(get_coord(p),get_coord(q),get_coord(cc),n1);
-  tri_normal(get_coord(q),get_coord(p),get_coord(d),n2);
-  tri_normal(get_coord(p),get_coord(d),get_coord(cc),m1);
-  tri_normal(get_coord(q),get_coord(cc),get_coord(d),m2);
+  tri_normal(xp,xq,xc,n1);
+  tri_normal(xq,xp,xd,n2);
+  tri_normal(xp,xd,xc,m1);
+  tri_normal(xq,xc,xd,m2);
   l1 = norm3(n1); l2 = norm3(n2);
   if ( l1 <= 0 && l2 <= 0 ) return PYSE_EDIT_DEGENERATE;
   /* (weighted by area: a facet of next to no area has a normal that is
@@ -1591,7 +1781,7 @@ static int flip(struct ctx *c, edge_id e, int mode)
   if ( norm3(m1) < 2e-10*c->h*c->h || norm3(m2) < 2e-10*c->h*c->h ) return PYSE_EDIT_DEGENERATE;
   if ( an <= 0 || dot3(m1,avg) < c->cos_turn*norm3(m1)*an || dot3(m2,avg) < c->cos_turn*norm3(m2)*an )
     return PYSE_EDIT_TURN;
-  if ( fabs(pyse_det3(get_coord(p),get_coord(q),get_coord(cc),get_coord(d)))/6
+  if ( fabs(pyse_det3(xp,xq,xc,xd))/6
        > c->max_volume*c->h*c->h*c->h )
     return PYSE_EDIT_VOLUME;
 
@@ -1642,7 +1832,7 @@ static int smooth(struct ctx *c, vertex_id v)
   for ( k = 0 ; k < 3 ; k++ ) { target[k] = 0; n[k] = 0; old[k] = x[k]; }
   EACH_EDGE_AT(v,e,e0,guard)
   { int val = valence(e);
-    REAL *y = get_coord(get_edge_headv(e));
+    REAL yb[3], *y = vimg(x,get_edge_headv(e),yb);
     if ( val > 2 || val == 0 ) return PYSE_EDIT_NOT_APPLICABLE;
     if ( val == 1 )
     { if ( border < 2 ) line[border] = get_edge_headv(e);
@@ -1655,7 +1845,7 @@ static int smooth(struct ctx *c, vertex_id v)
   if ( border && border != 2 ) return PYSE_EDIT_NOT_APPLICABLE;
   if ( border == 2 )
   { /* along the contact line, between its two neighbours there */
-    REAL *y0 = get_coord(line[0]), *y1 = get_coord(line[1]), t[3], s;
+    REAL b0[3], b1[3], *y0 = vimg(x,line[0],b0), *y1 = vimg(x,line[1],b1), t[3], s;
     if ( !(get_vattr(v) & CONSTRAINT) ) return PYSE_EDIT_CONSTRAINTS;
     for ( k = 0 ; k < 3 ; k++ ) t[k] = y1[k] - y0[k];
     len = norm3(t);
@@ -1714,9 +1904,9 @@ static int smooth(struct ctx *c, vertex_id v)
       if ( valid_id(fe0) ) do
       { facet_id f = positive_id(get_fe_facet(fe));
         if ( mark(c,f) )
-        { REAL *y[3];
+        { REAL *y[3], yb[3][3];
           facet_verts(f,fv);
-          for ( k = 0 ; k < 3 ; k++ ) y[k] = equal_id(fv[k],v) ? p : get_coord(fv[k]);
+          for ( k = 0 ; k < 3 ; k++ ) y[k] = equal_id(fv[k],v) ? p : vimg(p,fv[k],yb[k]);
           tri_normal(y[0],y[1],y[2],fn);
           if ( norm3(fn) < 2e-10*c->h*c->h ) return PYSE_EDIT_DEGENERATE;
           if ( vlen > 0 && dot3(fn,vn) <= 0 ) return PYSE_EDIT_TURN;
@@ -1782,12 +1972,15 @@ static int snap(struct ctx *c, vertex_id a, vertex_id b)
   keep = (r == A_SUB_B || (get_vattr(b) & FIXED)) ? b : a;
   gone = equal_id(keep,a) ? b : a;
   if ( get_vattr(gone) & FIXED ) return PYSE_EDIT_FIXED;
-  for ( k = 0 ; k < 3 ; k++ )
-    p[k] = (r == A_EQ_B && !(get_vattr(keep) & FIXED))
-           ? (get_coord(a)[k] + get_coord(b)[k])/2 : get_coord(keep)[k];
+  { REAL bb[3], *xb = vimg(get_coord(a),b,bb);
+    for ( k = 0 ; k < 3 ; k++ )
+      p[k] = (r == A_EQ_B && !(get_vattr(keep) & FIXED))
+             ? (get_coord(a)[k] + xb[k])/2 : get_coord(keep)[k];
+  }
   star(a,&verts); star(b,&verts);
   before(c,&verts,&was);
   merge_vertex(keep,gone);
+  img(get_coord(keep),p,p);             /* (at keep's image, as its edges' wraps go) */
   for ( k = 0 ; k < 3 ; k++ ) get_coord(keep)[k] = p[k];
   project(keep);
   verts.n = 0;
@@ -1859,7 +2052,7 @@ static int separate(struct ctx *c, vertex_id v)
     if ( b > 0 ) u = new_vertex(x,v);
     for ( k = 0 ; k < ne ; k++ )
       if ( efan[k] == b )
-      { REAL *y = get_coord(get_edge_headv(es[k]));
+      { REAL yb[3], *y = vimg(x,get_edge_headv(es[k]),yb);
         int i;
         for ( i = 0 ; i < 3 ; i++ ) centre[i] += y[i];
         cnt++;
@@ -1944,7 +2137,7 @@ static int degenerate(struct ctx *c, facet_id f)
     } while ( valid_id(g) && !equal_id(g,f0) && ++m < 1000 );
   }
   for ( k = 0 ; k < 3 ; k++ )
-  { len[k] = dist3(get_coord(get_edge_tailv(es[k])),get_coord(get_edge_headv(es[k])));
+  { len[k] = edge_length(es[k]);
     if ( len[k] < len[shortest] ) shortest = k;
     if ( len[k] > len[longest] ) longest = k;
   }
@@ -2000,24 +2193,28 @@ static facet_id make_facet(edge_id *e, body_id front, body_id back, facet_id lik
   return f;
 }
 
-/* an oriented edge from a to b: an existing one, or a new one */
+/* an oriented edge from a to b: an existing one, or a new one (in a slab,
+   its wrap from its ends: to b's image nearest a) */
 static edge_id edge_between(vertex_id a, vertex_id b)
 { edge_id e, e0;
   int guard;
   EACH_EDGE_AT(a,e,e0,guard)
     if ( equal_id(get_edge_headv(e),b) ) return e;
-  return new_edge(a,b,NULLID);
+  e = new_edge(a,b,NULLID);
+  if ( slab_on ) pyse_edge_rewrap(e);
+  return e;
 }
 
 /* the side of facet f (as its loop goes) toward point p: 1 front, 0 back */
 static int faces(facet_id f, const REAL *p)
 { vertex_id v[3];
-  REAL n[3], d[3];
+  REAL n[3], d[3], b0[3], b1[3], b2[3], *x0, *x1, *x2;
   int k;
   facet_verts(f,v);
-  tri_normal(get_coord(v[0]),get_coord(v[1]),get_coord(v[2]),n);
+  x0 = vimg(p,v[0],b0); x1 = vimg(x0,v[1],b1); x2 = vimg(x0,v[2],b2);
+  tri_normal(x0,x1,x2,n);
   for ( k = 0 ; k < 3 ; k++ )
-    d[k] = p[k] - (get_coord(v[0])[k] + get_coord(v[1])[k] + get_coord(v[2])[k])/3;
+    d[k] = p[k] - (x0[k] + x1[k] + x2[k])/3;
   return dot3(n,d) > 0;
 }
 
@@ -2051,8 +2248,11 @@ static int merge_facets(struct ctx *c, facet_id f1, facet_id f2)
     if ( (get_eattr(ea[i]) | get_eattr(eb[i])) & (FIXED|CONSTRAINT|BOUNDARY) )
       return PYSE_EDIT_CONSTRAINTS;
   }
-  for ( i = 0 ; i < 3 ; i++ ) for ( k = 0 ; k < 3 ; k++ )
-  { ca[k] += get_coord(a[i])[k]/3; cb[k] += get_coord(b[i])[k]/3; }
+  /* (in a slab, both at a[0]'s image) */
+  for ( i = 0 ; i < 3 ; i++ )
+  { REAL ab[3], bb[3], *xa = vimg(get_coord(a[0]),a[i],ab), *xb = vimg(get_coord(a[0]),b[i],bb);
+    for ( k = 0 ; k < 3 ; k++ ) { ca[k] += xa[k]/3; cb[k] += xb[k]/3; }
+  }
   side1 = faces(f1,cb); side2 = faces(f2,ca);
   front = get_facet_body(f1); back = get_facet_body(inverse_id(f1));
   front2 = get_facet_body(f2); back2 = get_facet_body(inverse_id(f2));
@@ -2061,11 +2261,12 @@ static int merge_facets(struct ctx *c, facet_id f1, facet_id f2)
        hole refused run after run): which side each faces is round-off, so
        by their normals, facing each other, the gap on the side whose bodies
        agree */
-    REAL n1[3], n2[3], gap[3], l1, l2;
+    REAL n1[3], n2[3], gap[3], l1, l2, y[4][3], *xa, *xb;
     vertex_id va[3], vb[3];
     facet_verts(f1,va); facet_verts(f2,vb);
-    tri_normal(get_coord(va[0]),get_coord(va[1]),get_coord(va[2]),n1);
-    tri_normal(get_coord(vb[0]),get_coord(vb[1]),get_coord(vb[2]),n2);
+    xa = get_coord(va[0]); xb = get_coord(vb[0]);
+    tri_normal(xa,vimg(xa,va[1],y[0]),vimg(xa,va[2],y[1]),n1);
+    tri_normal(xb,vimg(xb,vb[1],y[2]),vimg(xb,vb[2],y[3]),n2);
     for ( k = 0 ; k < 3 ; k++ ) gap[k] = cb[k] - ca[k];
     l1 = norm3(n1); l2 = norm3(n2);
     if ( !(l1 > 0 && l2 > 0) || dot3(n1,n2) > -0.5*l1*l2
@@ -2082,7 +2283,7 @@ static int merge_facets(struct ctx *c, facet_id f1, facet_id f2)
      facets did */
   for ( k = 0 ; k < 3 ; k++ )
   { REAL d = 0;
-    for ( i = 0 ; i < 3 ; i++ ) d += dist3(get_coord(a[i]),get_coord(b[((k - i) % 3 + 3) % 3]));
+    for ( i = 0 ; i < 3 ; i++ ) d += vdist(a[i],b[((k - i) % 3 + 3) % 3]);
     if ( d < bestd ) { bestd = d; best = k; }
   }
   for ( i = 0 ; i < 3 ; i++ ) { star(a[i],&verts); star(b[i],&verts); }
@@ -2174,8 +2375,7 @@ static int bridge(struct ctx *c, edge_id e1, edge_id e2)
   else if ( equal_id(a1,b1) || equal_id(a2,b2) ) return PYSE_EDIT_ORIENTATION;
   else
   { /* running opposite ways: a1 across from b2 */
-    if ( dist3(get_coord(a1),get_coord(b2)) + dist3(get_coord(a2),get_coord(b1))
-         >= dist3(get_coord(a1),get_coord(b1)) + dist3(get_coord(a2),get_coord(b2)) )
+    if ( vdist(a1,b2) + vdist(a2,b1) >= vdist(a1,b1) + vdist(a2,b2) )
       return PYSE_EDIT_ORIENTATION;
     if ( joined(a1,b2) || joined(a2,b1) ) return PYSE_EDIT_LINK;
   }
@@ -2198,7 +2398,7 @@ static int bridge(struct ctx *c, edge_id e1, edge_id e2)
   { edge_id t1[3], t2[3], diag;
     outer[0] = edge_between(a1,b2);
     outer[1] = edge_between(b1,a2);
-    if ( dist3(get_coord(a2),get_coord(b2)) <= dist3(get_coord(a1),get_coord(b1)) )
+    if ( vdist(a2,b2) <= vdist(a1,b1) )
     { diag = edge_between(b2,a2);                                     /* a2 a1 b2 | a2 b2 b1 */
       t1[0] = inverse_id(g1); t1[1] = outer[0]; t1[2] = diag;
       t2[0] = inverse_id(diag); t2[1] = inverse_id(g2); t2[2] = outer[1];
@@ -2235,7 +2435,7 @@ static int patch_on(struct ctx *c, int wall, element_id *fs, int nf)
   int i, k, w, why, known = 0;
   facetedge_id fe;
 
-  for ( w = 0 ; w < c->nwalls ; w++ ) if ( c->walls[w] == wall ) known = 1;
+  for ( w = 0 ; w < c->nwalls ; w++ ) if ( c->walls[w] == wall ) known = w + 1;
   if ( !known ) return PYSE_EDIT_CONSTRAINTS;
   if ( nf < 1 ) return PYSE_EDIT_NOT_APPLICABLE;
   c->stamp_now++;
@@ -2249,7 +2449,11 @@ static int patch_on(struct ctx *c, int wall, element_id *fs, int nf)
       if ( mark(c,v) )
       { if ( get_vattr(v) & (FIXED|BOUNDARY) ) return PYSE_EDIT_FIXED;
         if ( !v_on_constraint(v,wall) && constraint_count(v) > 1 ) return PYSE_EDIT_CONSTRAINTS;
-        if ( !v_on_constraint(v,wall) && tangent_walls(v,wall) ) return PYSE_EDIT_CONSTRAINTS;
+        if ( !v_on_constraint(v,wall) )
+        { REAL at[MAXCOORD];
+          wall_image(c,known - 1,v,at);
+          if ( tangent_walls(v,wall,at) ) return PYSE_EDIT_CONSTRAINTS;
+        }
         push(&verts,v);
       }
       if ( mark(c,e) ) push(&edges,e);
@@ -2257,10 +2461,16 @@ static int patch_on(struct ctx *c, int wall, element_id *fs, int nf)
   }
   for ( i = 0 ; i < verts.n ; i++ ) star(verts.a[i],&ring);
   before(c,&ring,&was);
-  /* onto the wall (with the others it is on: a corner) */
+  /* onto the wall (with the others it is on: a corner); in a slab, from
+     its image nearest the wall's (a sphere's vertices kept there) */
   for ( i = 0 ; i < verts.n ; i++ )
     if ( !v_on_constraint(verts.a[i],wall) )
-    { set_v_constraint_map(verts.a[i],wall);
+    { if ( slab_on )
+      { REAL at[MAXCOORD];
+        wall_image(c,known - 1,verts.a[i],at);
+        wrap_near(verts.a[i],at);
+      }
+      set_v_constraint_map(verts.a[i],wall);
       project_v_constr(verts.a[i],ACTUAL_MOVE,RESET_ONESIDEDNESS);
     }
   for ( i = 0 ; i < nf ; i++ )
@@ -2355,6 +2565,7 @@ static int unzip(struct ctx *c, edge_id e)
   { t[k] = get_fe_edge(fe);
     if ( equal_id(positive_id(t[k]),e) )
     { e2 = new_edge(get_edge_tailv(t[k]),get_edge_headv(t[k]),NULLID);
+      if ( slab_on ) set_edge_wrap(e2,get_edge_wrap(t[k]));    /* (to the same image) */
       t[k] = e2;
     }
   }
@@ -2600,12 +2811,28 @@ static void run_batch(struct ctx *c, struct edit_args *a)
 }
 
 static void setup(struct ctx *c, struct edit_args *a)
-{ if ( web.representation != SOAPFILM || web.modeltype != LINEAR || SDIM != 3
-       || web.torus_flag || web.symmetry_flag )
+{ int w;
+  slab_set();
+  if ( web.representation != SOAPFILM || web.modeltype != LINEAR || SDIM != 3
+       || ((web.torus_flag || web.symmetry_flag) && !slab_on) )
     kb_error(PYSE_ERR_BAD_ARGUMENT,"The mesh edits are for linear soap films in 3D, not in "
-             "torus or symmetry spaces.\n",RECOVERABLE);
+             "torus or symmetry spaces (but slabs periodic in x and y).\n",RECOVERABLE);
   memset(c,0,sizeof(*c));
   c->walls = a->walls; c->sides = a->sides; c->nwalls = a->nwalls; c->manifold = a->manifold;
+  if ( slab_on )
+  { /* each wall's vertices at the image near it (a sphere's): one of them */
+    vertex_id v;
+    c->wref = (REAL *)temp_calloc(3*(c->nwalls + 1),sizeof(REAL));
+    c->wref_ok = (int *)temp_calloc(c->nwalls + 1,sizeof(int));
+    for ( w = 0 ; w < c->nwalls ; w++ )
+      FOR_ALL_VERTICES(v)
+        if ( v_on_constraint(v,c->walls[w]) )
+        { REAL *x = get_coord(v);
+          c->wref[3*w] = x[0]; c->wref[3*w+1] = x[1]; c->wref[3*w+2] = x[2];
+          c->wref_ok[w] = 1;
+          break;
+        }
+  }
   c->h = a->params[8] > 0 ? a->params[8] : pyse_mean_edge();
   c->cos_turn = cos(a->params[0]*M_PI/180);
   c->max_volume = a->params[1];
@@ -2652,9 +2879,6 @@ static void edit_body(void *arg)
 }
 
 /* ---- the remesher ------------------------------------------------------- */
-
-static REAL edge_length(edge_id e)
-{ return dist3(get_coord(get_edge_tailv(e)),get_coord(get_edge_headv(e))); }
 
 static int by_length_up(const void *x, const void *y)
 { const REAL *p = (const REAL *)x, *q = (const REAL *)y;
@@ -2933,13 +3157,20 @@ static int surface_clean(struct ctx *c)
    lines crossing on two walls (lines_cross isn't symmetric there). */
 #define NEAR_CELLS 3
 
+/* (in a slab, x and y in nper cells a period, numbered round it) */
+static long near_wrap(struct ctx *c, int i, long k)
+{ if ( !slab_on || i > 1 ) return k & 0x1FFFFF;
+  k %= c->nper[i];
+  return k < 0 ? k + c->nper[i] : k;
+}
+
 static long near_key(struct ctx *c, const REAL *x, long dx, long dy, long dz)
 { long k[3], d[3] = {dx,dy,dz}, key = 0;
   int i;
   for ( i = 0 ; i < 3 ; i++ )
-  { REAL s = floor(x[i]/c->h);
+  { REAL s = slab_on && i < 2 ? floor(x[i]*c->nper[i]/slab_L[i]) : floor(x[i]/c->h);
     if ( !(fabs(s) < 1e6) ) return -1;      /* (not a number, or far out: outside) */
-    k[i] = ((long)s + d[i]) & 0x1FFFFF;
+    k[i] = near_wrap(c,i,(long)s + d[i]);
     key = (key << 21) | k[i];
   }
   return key;
@@ -2985,6 +3216,10 @@ static int near_clean(struct ctx *c)
   far_only = 0;
   grids_build(c);                  /* (the first batch keeps them) */
   c->near_on = 1;
+  for ( i = 0 ; i < 2 && slab_on ; i++ )
+  { double n = floor(slab_L[i]/c->h);
+    c->nper[i] = n > 0x100000 ? 0x100000 : n < 1 ? 1 : (long)n;
+  }
   c->vok_now = 1;
   line_crossings(c,&a);
   if ( a.count ) return 0;
@@ -3007,8 +3242,8 @@ static int near_clean(struct ctx *c)
     for ( dz = -NEAR_CELLS ; dz <= NEAR_CELLS ; dz++ )
       for ( dy = -NEAR_CELLS ; dy <= NEAR_CELLS ; dy++ )
         for ( dx = -NEAR_CELLS ; dx <= NEAR_CELLS ; dx++ )
-        { key = (((k[0] + dx) & 0x1FFFFF) << 42) | (((k[1] + dy) & 0x1FFFFF) << 21)
-                | ((k[2] + dz) & 0x1FFFFF);
+        { key = (near_wrap(c,0,k[0] + dx) << 42) | (near_wrap(c,1,k[1] + dy) << 21)
+                | near_wrap(c,2,k[2] + dz);
           near_add(c,key,&used);
         }
   }
@@ -3085,9 +3320,11 @@ static void crossing_body(void *arg)
   edge_id e;
   struct ids none = {0,0,0};
   memset(&c,0,sizeof(c));
-  if ( web.representation != SOAPFILM || SDIM != 3 || web.torus_flag || web.symmetry_flag )
-    kb_error(PYSE_ERR_BAD_ARGUMENT,"Crossings are counted for soap films in 3D only.\n",
-             RECOVERABLE);
+  slab_set();
+  if ( web.representation != SOAPFILM || SDIM != 3
+       || ((web.torus_flag || web.symmetry_flag) && !slab_on) )
+    kb_error(PYSE_ERR_BAD_ARGUMENT,"Crossings are counted for soap films in 3D only (not "
+             "in torus or symmetry spaces but slabs periodic in x and y).\n",RECOVERABLE);
   c.h = pyse_mean_edge();
   grids_build(&c);
   a->count = 0;
@@ -3095,7 +3332,7 @@ static void crossing_body(void *arg)
   FOR_ALL_EDGES(e)
   { long n = crossings_of(&c,e,&none);
     if ( n && a->where )
-    { REAL *p = get_coord(get_edge_tailv(e)), *q = get_coord(get_edge_headv(e)), mid[3];
+    { REAL qb[3], *p = get_coord(get_edge_tailv(e)), *q = vimg(p,get_edge_headv(e),qb), mid[3];
       int k;
       for ( k = 0 ; k < 3 ; k++ ) mid[k] = (p[k] + q[k])/2;
       record(a,n,mid);
@@ -3146,12 +3383,13 @@ int pyse_chop_lines(void)
   edge_id e;
   int round, k, total = 0;
   if ( line_chop <= 0 || web.representation != SOAPFILM ) return 0;
+  slab_set();
   for ( round = 0 ; round < 6 ; round++ )
   { long_.n = 0;
     FOR_ALL_EDGES(e)
-    { REAL *a, *b, d[3];
+    { REAL *a, *b, d[3], bb[3];
       if ( (get_eattr(e) & (CONSTRAINT|FIXED)) != CONSTRAINT || valence(e) != 1 ) continue;
-      a = get_coord(get_edge_tailv(e)); b = get_coord(get_edge_headv(e));
+      a = get_coord(get_edge_tailv(e)); b = vimg(a,get_edge_headv(e),bb);
       for ( k = 0 ; k < 3 ; k++ ) d[k] = b[k] - a[k];
       if ( norm3(d) > line_chop ) push(&long_,e);
     }

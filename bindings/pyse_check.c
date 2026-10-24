@@ -73,6 +73,50 @@ int pyse_corner(facet_id f_id, vertex_id v_id)
   return -1;
 }
 
+/* ---- slabs periodic in x and y (pyse_slab) -------------------------------
+   Coordinates aren't wrapped into the cell, every edge is short: a nearby
+   point is taken at its image nearest a reference point. */
+
+/* x's image nearest ref (x itself outside a slab: whole periods off x) */
+void pyse_image(const REAL *ref, const REAL *x, REAL *out)
+{ REAL L[2];
+  int i;
+  for ( i = 0 ; i < 3 ; i++ ) out[i] = x[i];
+  if ( web.torus_flag && pyse_slab(L) )
+    for ( i = 0 ; i < 2 ; i++ ) out[i] -= L[i]*floor((x[i] - ref[i])/L[i] + 0.5);
+}
+
+/* Wall c's gap (pyse_wall_gap) at x's image deepest into its solid (side
+   +1: the solid where its formula is negative), of the 3 x 3 round x's
+   image nearest ref (a vertex on the wall, or NULL: x), into at (may be
+   NULL). A wall's vertices sit at the image near its centre (a sphere's),
+   the others anywhere: so a solid ball less than half a period across is
+   found whichever image a point is at, its radius under half a period; a
+   floor is the same at all. Outside
+   a slab, the gap at x. */
+double pyse_slab_gap(int c, double side, const REAL *ref, const REAL *x, REAL *at)
+{ REAL L[2], y[MAXCOORD], z[MAXCOORD], best[MAXCOORD];
+  double g, most;
+  int i, j, k;
+  for ( k = 0 ; k < SDIM ; k++ ) best[k] = z[k] = y[k] = x[k];
+  most = pyse_wall_gap(c,z);
+  if ( web.torus_flag && pyse_slab(L) )
+  { if ( ref ) pyse_image(ref,x,y);
+    for ( i = -1 ; i <= 1 ; i++ ) for ( j = -1 ; j <= 1 ; j++ )
+    { for ( k = 0 ; k < SDIM ; k++ ) z[k] = y[k];
+      z[0] += i*L[0]; z[1] += j*L[1];
+      if ( z[0] == x[0] && z[1] == x[1] ) continue;      /* (x's own: done) */
+      g = pyse_wall_gap(c,z);
+      if ( -side*g > -side*most || most != most )
+      { most = g;
+        for ( k = 0 ; k < SDIM ; k++ ) best[k] = z[k];
+      }
+    }
+  }
+  if ( at ) for ( k = 0 ; k < SDIM ; k++ ) at[k] = best[k];
+  return most;
+}
+
 void pyse_facet_normal(facet_id f_id, REAL *n, REAL *area)
 { facetedge_id fe = get_facet_fe(f_id);
   REAL *x0 = get_coord(get_fe_tailv(fe));
@@ -81,6 +125,7 @@ void pyse_facet_normal(facet_id f_id, REAL *n, REAL *area)
   REAL a[3], b[3];
   int i;
   for ( i = 0 ; i < 3 ; i++ ) { a[i] = x1[i] - x0[i]; b[i] = x2[i] - x0[i]; }
+  if ( web.torus_flag && pyse_slab(NULL) ) { pyse_delta(x0,x1,a); pyse_delta(x0,x2,b); }
   n[0] = a[1]*b[2] - a[2]*b[1];
   n[1] = a[2]*b[0] - a[0]*b[2];
   n[2] = a[0]*b[1] - a[1]*b[0];
@@ -121,39 +166,65 @@ double pyse_mean_edge(void)
 { edge_id e_id;
   double h = 0.0;
   long n = 0;
+  int slab = web.torus_flag && pyse_slab(NULL);
   FOR_ALL_EDGES(e_id)
-  { REAL *p = get_coord(get_edge_tailv(e_id)), *q = get_coord(get_edge_headv(e_id));
-    h += sqrt((p[0]-q[0])*(p[0]-q[0]) + (p[1]-q[1])*(p[1]-q[1]) + (p[2]-q[2])*(p[2]-q[2]));
+  { REAL *p = get_coord(get_edge_tailv(e_id)), *q = get_coord(get_edge_headv(e_id)), d[3];
+    if ( slab ) { pyse_delta(p,q,d); h += sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]); }
+    else h += sqrt((p[0]-q[0])*(p[0]-q[0]) + (p[1]-q[1])*(p[1]-q[1]) + (p[2]-q[2])*(p[2]-q[2]));
     n++;
   }
   return n ? h/n : 1.0;
 }
 
-struct grid { REAL lo[3], cell; int n[3]; long *start, *items; };
+/* (in a slab, x and y periodic: cells of a side dividing the period,
+   their numbers taken round it) */
+struct grid { REAL lo[3], cell, pcell[2]; int n[3], per; long *start, *items; };
 
 static long cell_of(struct grid *g, int i, int j, int k)
-{ return ((long)k*g->n[1] + j)*g->n[0] + i; }
+{ if ( g->per )
+  { i %= g->n[0]; if ( i < 0 ) i += g->n[0];
+    j %= g->n[1]; if ( j < 0 ) j += g->n[1];
+  }
+  return ((long)k*g->n[1] + j)*g->n[0] + i;
+}
 
 static void cell_range(struct grid *g, const REAL *lo, const REAL *hi, int *a, int *b)
 { int d;
   for ( d = 0 ; d < 3 ; d++ )
-  { a[d] = (int)floor((lo[d] - g->lo[d])/g->cell);
+  { if ( g->per && d < 2 )
+    { a[d] = (int)floor(lo[d]/g->pcell[d]);
+      b[d] = (int)floor(hi[d]/g->pcell[d]);
+      if ( b[d] - a[d] > g->n[d] - 1 ) b[d] = a[d] + g->n[d] - 1;
+      continue;
+    }
+    a[d] = (int)floor((lo[d] - g->lo[d])/g->cell);
     b[d] = (int)floor((hi[d] - g->lo[d])/g->cell);
     if ( a[d] < 0 ) a[d] = 0;
     if ( b[d] > g->n[d] - 1 ) b[d] = g->n[d] - 1;
   }
 }
 
-static void facet_box(facet_id f_id, REAL *lo, REAL *hi)
+/* facet f's corners, at one image (in a slab: the first's, or near ref) */
+static void facet_corners(facet_id f_id, const REAL *ref, REAL x[3][3])
 { facetedge_id fe = get_facet_fe(f_id);
   int k, d;
   for ( k = 0 ; k < FACET_VERTS ; k++, fe = get_next_edge(fe) )
-  { REAL *x = get_coord(get_fe_tailv(fe));
-    for ( d = 0 ; d < 3 ; d++ )
-    { if ( k == 0 || x[d] < lo[d] ) lo[d] = x[d];
-      if ( k == 0 || x[d] > hi[d] ) hi[d] = x[d];
-    }
+  { REAL *y = get_coord(get_fe_tailv(fe));
+    if ( k == 0 && ref ) pyse_image(ref,y,x[0]);
+    else if ( k == 0 ) for ( d = 0 ; d < 3 ; d++ ) x[0][d] = y[d];
+    else pyse_image(x[0],y,x[k]);
   }
+}
+
+static void facet_box(facet_id f_id, REAL *lo, REAL *hi)
+{ REAL x[3][3];
+  int k, d;
+  facet_corners(f_id,NULL,x);
+  for ( k = 0 ; k < FACET_VERTS ; k++ )
+    for ( d = 0 ; d < 3 ; d++ )
+    { if ( k == 0 || x[k][d] < lo[d] ) lo[d] = x[k][d];
+      if ( k == 0 || x[k][d] > hi[d] ) hi[d] = x[k][d];
+    }
 }
 
 static void intersections(struct check_args *a, REAL h)
@@ -162,7 +233,7 @@ static void intersections(struct check_args *a, REAL h)
   edge_id e_id;
   long nf = web.skel[FACET].max_ord + 1, total = 0, ncells, c;
   long *stamp;
-  REAL lo[3], hi[3], top[3];
+  REAL lo[3], hi[3], top[3], L[2];
   vertex_id v_id;
   int first = 1, d, i, j, k, ia[3], ib[3];
 
@@ -182,6 +253,13 @@ static void intersections(struct check_args *a, REAL h)
   }
   for ( d = 0 ; d < 3 ; d++ )
     if ( (top[d] - g.lo[d])/g.n[d] > g.cell ) g.cell = (top[d] - g.lo[d])/g.n[d]*1.0000001;
+  g.per = pyse_slab(L);
+  if ( g.per )
+    for ( d = 0 ; d < 2 ; d++ )
+    { double cells = floor(L[d]/(2*h));
+      g.n[d] = cells > 256 ? 256 : cells < 1 ? 1 : (int)cells;
+      g.pcell[d] = L[d]/g.n[d];
+    }
   ncells = (long)g.n[0]*g.n[1]*g.n[2];
   g.start = (long *)temp_calloc(ncells + 1,sizeof(long));
   /* counting pass, then filling */
@@ -212,8 +290,9 @@ static void intersections(struct check_args *a, REAL h)
   for ( c = 0 ; c < nf ; c++ ) stamp[c] = -1;
   FOR_ALL_EDGES(e_id)
   { vertex_id t = get_edge_tailv(e_id), hv = get_edge_headv(e_id);
-    REAL *p = get_coord(t), *q = get_coord(hv);
+    REAL *p = get_coord(t), *q = get_coord(hv), qq[3];
     long eo = ordinal(e_id);
+    if ( g.per ) { pyse_image(p,q,qq); q = qq; }
     for ( d = 0 ; d < 3 ; d++ )
     { lo[d] = p[d] < q[d] ? p[d] : q[d];
       hi[d] = p[d] < q[d] ? q[d] : p[d];
@@ -227,7 +306,7 @@ static void intersections(struct check_args *a, REAL h)
           { long fo = g.items[total];
             facet_id ff = get_ordinal_id(FACET,fo);
             facetedge_id fe;
-            REAL *x[3];
+            REAL *x[3], y[3][3];
             int m, shared = 0;
             if ( stamp[fo] == eo ) continue;
             stamp[fo] = eo;
@@ -238,6 +317,10 @@ static void intersections(struct check_args *a, REAL h)
               x[m] = get_coord(w);
             }
             if ( shared ) continue;
+            if ( g.per )
+            { facet_corners(ff,p,y);
+              for ( m = 0 ; m < 3 ; m++ ) x[m] = y[m];
+            }
             if ( pyse_crosses(p,q,x[0],x[1],x[2],1e-12*h*h*h) )
               add(a,PYSE_PROBLEM_INTERSECTION,PYSE_EDGE,e_id,fo + 1,0.0);
           }
@@ -257,14 +340,14 @@ static void check_body(void *arg)
   facet_id f_id;
   vertex_id v_id;
   REAL h;
-  int w;
+  int w, slab = pyse_slab(NULL);
 
   if ( web.representation != SOAPFILM || web.modeltype != LINEAR || SDIM != 3 )
     kb_error(PYSE_ERR_BAD_ARGUMENT,"The topology check is for linear soap films in 3D.\n",
              RECOVERABLE);
-  if ( web.torus_flag || web.symmetry_flag )
+  if ( (web.torus_flag || web.symmetry_flag) && !pyse_slab(NULL) )
     kb_error(PYSE_ERR_BAD_ARGUMENT,"The topology check doesn't do torus or symmetry "
-             "spaces.\n",RECOVERABLE);
+             "spaces (but slabs periodic in x and y).\n",RECOVERABLE);
   for ( w = 0 ; w < a->nwalls ; w++ )
     if ( a->walls[w] < 0 || a->walls[w] >= web.maxcon
          || !(get_constraint(a->walls[w])->attr & IN_USE) )
@@ -377,23 +460,31 @@ static void check_body(void *arg)
   temp_free((char *)fans);
   temp_free((char *)root_of);
 
-  /* solids */
+  /* solids (in a slab, each point at its image deepest in: see
+     pyse_slab_gap) */
   for ( w = 0 ; w < a->nwalls ; w++ )
   { int c = a->walls[w];
     double side = a->sides[w] < 0 ? -1.0 : 1.0, depth;
+    REAL *ref = NULL;
+    if ( slab )
+    { FOR_ALL_VERTICES(v_id)
+        if ( v_on_constraint(v_id,c) ) { ref = get_coord(v_id); break; }
+    }
     FOR_ALL_VERTICES(v_id)
     { if ( v_on_constraint(v_id,c) ) continue;
-      depth = -side*pyse_wall_gap(c,get_coord(v_id));
+      depth = -side*(slab ? pyse_slab_gap(c,side,ref,get_coord(v_id),NULL)
+                          : pyse_wall_gap(c,get_coord(v_id)));
       if ( depth > a->tol*h )
         add(a,PYSE_PROBLEM_VERTEX_IN_SOLID,PYSE_VERTEX,v_id,c,depth);
     }
     FOR_ALL_EDGES(e_id)
     { vertex_id t = get_edge_tailv(e_id), hv = get_edge_headv(e_id);
-      REAL *p = get_coord(t), *q = get_coord(hv), mid[MAXCOORD];
+      REAL *p = get_coord(t), *q = get_coord(hv), mid[MAXCOORD], qq[3];
       int d;
       if ( v_on_constraint(t,c) && v_on_constraint(hv,c) ) continue;
+      if ( slab ) { pyse_image(p,q,qq); q = qq; }
       for ( d = 0 ; d < SDIM ; d++ ) mid[d] = (p[d] + q[d])/2;
-      depth = -side*pyse_wall_gap(c,mid);
+      depth = -side*(slab ? pyse_slab_gap(c,side,ref,mid,NULL) : pyse_wall_gap(c,mid));
       if ( depth > a->tol*h )
         add(a,PYSE_PROBLEM_EDGE_IN_SOLID,PYSE_EDGE,e_id,c,depth);
     }
