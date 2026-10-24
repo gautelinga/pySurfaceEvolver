@@ -444,6 +444,10 @@
 
 ### Fixes
 
+- Topology runs: a descent no longer ends on a relaxed state holding crumbs (pieces of
+  next to no area or volume) that a remesh after its tidying left: two drops merged on
+  a plane kept two facets of area 3e-9 apart from the cap, now and then.
+
 - A stability check (`stability()` of an unstable surface, `modes()`) no longer
   switches the session to Evolver's own sparse factoring for good (Evolver's
   linear_metric does): every later Newton step, on any surface, ran on it.

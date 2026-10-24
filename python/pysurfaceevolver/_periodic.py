@@ -90,7 +90,7 @@ def home(x: np.ndarray, centre, periods) -> np.ndarray:
 
 def header(periods) -> str:
     L = periods_of(periods)
-    return (f"torus\nperiods\n{L[0]!r} 0 0\n0 {L[1]!r} 0\n0 0 {Z_PERIOD!r}\n")
+    return (f"torus\nperiods\n{float(L[0])!r} 0 0\n0 {float(L[1])!r} 0\n0 0 {Z_PERIOD!r}\n")
 
 
 def wrap_text(w) -> str:

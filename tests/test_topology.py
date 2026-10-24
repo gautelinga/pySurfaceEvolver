@@ -735,11 +735,13 @@ def test_contact_lines_of_two_drops_meet_and_join():
         steps = list(recipes.arclength(ev, ev.body(1), 0.1, 10, topology=True))
     fell = [s for s in steps if s.fell]
     # (the joined surface may come to rest on the plane between them: wetted,
-    # in that fall or a later one: which, the last bits of the arithmetic
-    # decide, as they differ with what ran before in the process)
+    # in that fall or a later one; or the lines join again, closing the dry
+    # ground between the drops from its other side: which, the last bits of
+    # the arithmetic decide, as they differ with what ran before in the
+    # process and with the threads)
     kinds = [(e.kind, e.constraint) for s in fell for e in s.changes]
     assert kinds[0][0] == "contact lines" and fell[0].changes[0].kind == "contact lines"
-    assert all(k == ("solid", 1) for k in kinds[1:])
+    assert all(k in (("solid", 1), ("contact lines", 1)) for k in kinds[1:])
     k = steps.index(fell[0])
     assert fell[0].volumes == pytest.approx([steps[k - 1].value + other], rel=1e-8)
     assert _loops(_border(ev)) == 1

@@ -494,7 +494,6 @@ def test_sphere_axis_gives_the_same_bridge_turned(angles):
     # isn't turned with it, the forms are. The same as unturned (and as the
     # default z-axis spheres, to the mesh's error: 0.26% here, 0.017% two
     # levels finer)
-    from scipy.spatial.transform import Rotation
     from pysurfaceevolver import shapes
     c, a = 1.3, 0.35
     zb = c - np.sqrt(1 - a*a)
@@ -514,7 +513,13 @@ def test_sphere_axis_gives_the_same_bridge_turned(angles):
     p0, e0 = bridge(np.eye(3))
     p1, e1 = bridge(np.eye(3), axis=(0, 0, 1))
     assert p1 == pytest.approx(p0, rel=4e-3) and e1 == pytest.approx(e0, rel=5e-3)
-    rot = Rotation.from_euler("xyz", angles, degrees=True).as_matrix()
+    def turn(k, t):                     # by t degrees about axis k
+        c, s = np.cos(np.radians(t)), np.sin(np.radians(t))
+        i, j = (k + 1) % 3, (k + 2) % 3
+        r = np.eye(3)
+        r[i, i], r[i, j], r[j, i], r[j, j] = c, -s, s, c
+        return r
+    rot = turn(2, angles[2]) @ turn(1, angles[1]) @ turn(0, angles[0])   # about x, then y, then z
     p, e = bridge(rot, axis=rot @ [0, 0, 1.0])
     assert p == pytest.approx(p1, rel=1e-4) and e == pytest.approx(e1, rel=1e-4)
 

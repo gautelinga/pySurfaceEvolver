@@ -254,7 +254,7 @@ def guard(ev) -> None:
     with np.errstate(invalid="ignore"):
         sel = np.flatnonzero((np.abs(dist[:, cols]) <= _GUARD_REACH*h).any(axis=1)
                              & ~np.asarray(m.fixed, dtype=bool))
-    on = np.isnan(dist[np.ix_(sel, real)]) if real else np.zeros((len(sel), 0), dtype=bool)
+    on = np.isnan(dist[np.ix_(sel, np.asarray(real, dtype=np.intp))]) if real else np.zeros((len(sel), 0), dtype=bool)
     # (the guards a vertex can take: _GUARDS less the walls it is on, so it
     # hits no more constraints than that at once: unguarded, a contact
     # line's vertex on a side wall went 0.17 out through the side wall it
@@ -264,7 +264,7 @@ def guard(ev) -> None:
     # surface gone through it is a contact to make, and put on the guard,
     # Evolver projected it out: a pack's vertex 0.47 inside a bead, on
     # another bead's guard too, went 3.9 onto both, out of the box)
-    signed = dist[np.ix_(sel, cols)]
+    signed = dist[np.ix_(sel, np.asarray(cols, dtype=np.intp))]
     gap = np.abs(np.nan_to_num(signed, nan=np.inf))
     gap[room <= 0] = np.inf
     gap[np.nan_to_num(signed, nan=0.0) < -0.1*h] = np.inf
@@ -2358,7 +2358,7 @@ def close_patches(ev, h: float, out: Optional[list] = None) -> int:
             if v != start or not 3 <= len(loop) <= 6:
                 continue
             corners = edges[loop, 0]
-            spokes = np.isin(edges, corners).any(axis=1)
+            spokes = np.asarray(np.isin(edges, corners).any(axis=1))
             spokes[loop] = False
             local = min(h, float(np.median(lengths[spokes]))) if spokes.any() else h
             if np.linalg.norm(_delta(x[corners[0]], x[corners], _slab(ev)),
@@ -3135,6 +3135,13 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                         chunk = _checked_relax(ev, tol)
                     _checked(ev, "tidying a relaxed state")
                 if chunk.converged and chunk.stable is not False and _sound(chunk.health):
+                    # (not with crumbs a remesh after the tidying left: two
+                    # drops on a plane, merged and wetting it between them,
+                    # a run through itself remeshed, and two facets of area
+                    # 3e-9 lay on the plane apart from the cap: taken away,
+                    # and on down)
+                    if _drop_empty(ev):
+                        continue
                     return chunk, changes, ""
                 if chunk.stable is not False:
                     # (on down, within the descent's budget: a pack's relax()
@@ -3154,6 +3161,8 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     # again, the end)
                     if chunk.converged and _mesh_only(chunk.health) \
                             and ev.mesh_quality().angle_min >= 1.0:
+                        if _drop_empty(ev):
+                            continue
                         _log.debug("relaxed, but %s, as the last round left it: settled there",
                                    chunk.health)
                         return chunk, changes, ""
@@ -3178,7 +3187,9 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                         continue
                     r = ev.relax(tol=tol)
                     if r.converged and r.stable is not False and _sound(r.health):
-                        return r, changes, ""
+                        if not _drop_empty(ev):
+                            return r, changes, ""
+                        break               # (crumbs taken away: on down from here)
                     ev.restore(start)
                 continue                    # a saddle, or not there yet: on down
             if not falling:

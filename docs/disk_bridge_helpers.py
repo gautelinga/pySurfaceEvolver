@@ -26,6 +26,7 @@ from pysurfaceevolver import constraints as C, recipes, shapes
 def _rim(z):
     """The disk's rim at height ``z``, a circular wire with the volume Evolver
     leaves out over the disk (its z dx dy) as a content integral."""
+    z = float(z)
     return C.circle((0, 0, z), 1.0, content=(f"-{z!r}*y/2", f"{z!r}*x/2", "0"))
 
 

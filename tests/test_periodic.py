@@ -93,6 +93,13 @@ def test_a_bridge_to_a_bead_across_the_cells_corner(gauge, zf):
     assert m.edge_lengths().max() < 0.2
 
 
+def test_the_datafiles_periods_are_plain_numbers():
+    # NumPy 2 writes a scalar's repr as np.float64(...), which Evolver can't read
+    from pysurfaceevolver import _periodic
+    text = _periodic.header((np.float64(1.9), np.float32(2.5)))
+    assert "np" not in text and "1.9 0 0" in text and "0 2.5 0" in text
+
+
 def test_edges_take_the_nearest_image():
     from pysurfaceevolver import _periodic
     x = np.array([[0.05, 0.1, 0.0], [1.85, 2.25, 0.0], [0.1, 0.4, 0.0], [1.0, 0.1, 0.0]])

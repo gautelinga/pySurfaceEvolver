@@ -276,7 +276,7 @@ print(f"together {total:.6f}; then drop 1 drained to {steps[-1].volumes[0]:.2f},
 ```
 
 ```text
-from 0.0792: unstable at 0.0777, where it fell; the neck cut 0.11 from the mid-plane
+from 0.0792: unstable at 0.0777, where it fell; the neck cut 0.06 from the mid-plane
 drop 1: 0.8 of the liquid, pressure 4.2, within 0.5% of the exact cap's
 drop 2: 0.2 of the liquid, pressure 6.2, within 0.5% of the exact cap's
 together 0.077708; then drop 1 drained to 0.06, drop 2 kept at its volume

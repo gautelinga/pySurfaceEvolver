@@ -89,9 +89,13 @@ print(f"the draining liquid goes on down to {steps[-1].value:.2f}, where it reac
 
 ```text
 periods (3.0, 3.0); the liquid starts at volume 28.07 (the cell to 4.05, 36.45, less the beads)
-at 9.88 the ring between the beads is cut off, holding 0.3183
+at 9.89 the ring between the beads is cut off, holding 0.3136
 the draining liquid goes on down to 2.43, where it reaches the floor; the ring holds its volume to 1e-15
 ```
+
+Where the ring is cut, and so what it holds, depends on the way down: the last
+digits of the steps before the cut move it (with NumPy 1.26 the same run cuts it at
+9.88, holding 0.3183). Once cut, it holds what it has.
 
 The run, the cell tiled two by two (`tools/drainage_topology_figure.py periodic`): the
 draining liquid blue, the ring cut off orange. The layer comes down onto the upper
