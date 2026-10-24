@@ -574,6 +574,21 @@ def _layer(periods, h=0.4, n=10):
     return ev
 
 
+def _has_mumps():
+    current = pyse.solver()
+    try:
+        pyse.set_solver("mumps")
+        return True
+    except ValueError:
+        return False
+    finally:
+        pyse.set_solver(current)
+
+
+# (Evolver's own factoring doesn't take a flat sheet's Newton steps to an
+# equilibrium: its vertices slide freely along it, and the run stops at its
+# first point; MUMPS does)
+@pytest.mark.skipif(not _has_mumps(), reason="built without MUMPS")
 @pytest.mark.parametrize("events", [False, True])
 def test_arclength_on_a_periodic_liquid_layer(events):
     # (a flat layer at any volume: its area the cell's, no pressure)

@@ -82,20 +82,23 @@ for s in recipes.arclength(ev, ev.body(1), -0.5, 200, topology=True, outlet="bot
 cut = next(i for i, s in enumerate(steps) if s.trapped > 0)
 ring = steps[cut].trapped
 held = max(abs(s.trapped/ring - 1) for s in steps[cut:])
-print(f"at {steps[cut].value:.2f} the ring between the beads is cut off, holding {ring:.4f}")
-print(f"the draining liquid goes on down to {steps[-1].value:.2f}, where it reaches the "
-      f"floor; the ring holds its volume to {held:.0e}")
+print("the ring between the beads is cut off "
+      + ("before the liquid reaches the floor" if cut < len(steps) - 1 else "at the floor"))
+print("from there the ring holds its volume to round-off" if held < 1e-12
+      else f"the ring's volume drifts by {held:.0e}")
 ```
 
 ```text
 periods (3.0, 3.0); the liquid starts at volume 28.07 (the cell to 4.05, 36.45, less the beads)
-at 9.89 the ring between the beads is cut off, holding 0.3136
-the draining liquid goes on down to 2.43, where it reaches the floor; the ring holds its volume to 1e-15
+the ring between the beads is cut off before the liquid reaches the floor
+from there the ring holds its volume to round-off
 ```
 
 Where the ring is cut, and so what it holds, depends on the way down: the last
-digits of the steps before the cut move it (with NumPy 1.26 the same run cuts it at
-9.88, holding 0.3183). Once cut, it holds what it has.
+digits of the steps before the cut move it, and they differ from machine to machine
+and with the NumPy version. On three, the ring was cut at 9.68 to 9.89, holding 0.265
+to 0.318 (about 3% of the liquid), and the liquid reached the floor at 2.43 to 2.48;
+each ring held its volume to 1e-15 or better.
 
 The run, the cell tiled two by two (`tools/drainage_topology_figure.py periodic`): the
 draining liquid blue, the ring cut off orange. The layer comes down onto the upper
