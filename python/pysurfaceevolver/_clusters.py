@@ -460,8 +460,8 @@ def _lying(piece: np.ndarray, npieces: int, on: np.ndarray) -> np.ndarray:
     for j in (0, 1):
         r = piece[:, j] >= 0
         np.logical_and.at(lies, piece[r, j], on[r])
-    lies = lies.any(axis=1)
-    return ((piece >= 0) & lies[np.maximum(piece, 0)]).any(axis=1)
+    lying = np.asarray(lies.any(axis=1))
+    return ((piece >= 0) & lying[np.maximum(piece, 0)]).any(axis=1)
 
 
 def _gather(piece, body_of, label, reached, size, near_walls, s, mixed) -> Clusters:
