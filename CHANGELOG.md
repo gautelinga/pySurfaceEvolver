@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 (2026-10-25)
+
+Fixes for topology runs: a crash where two drops' contact lines joined over a plane (the
+run's body lost to a sliver of its own surface), and a hang after a neck was cut or a
+spike taken off (an edge left from a vertex to itself, which Evolver's walk round it
+never got past). Newton steps at 2 threads as fast as 0.7.5's again, and the flux
+gauge's lattice sums in slabs 3-3.5x faster. No API changes.
 
 ### Speed
 

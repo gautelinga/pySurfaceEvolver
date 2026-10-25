@@ -152,4 +152,4 @@ __all__ = [
     "threads",
     "threads_limit",
 ]
-__version__ = "0.8.0"
+__version__ = "0.8.1"
