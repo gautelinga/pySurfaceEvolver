@@ -35,7 +35,9 @@ _STRUCTURAL = {1: "an edge on no facet", 2: "an edge on more than two facets",
                3: "facets turned against each other across an edge", 4: "a pinched vertex",
                5: "a border edge on no constraint",
                6: "a border edge on a constraint its vertex isn't on",
-               7: "a contact-line edge stored against its facet"}
+               7: "a contact-line edge stored against its facet",
+               13: "an edge whose facets don't come round to it",
+               14: "an edge from a vertex to itself"}
 _GEOMETRIC = {8: "a degenerate facet", 9: "a fold", 10: "a vertex inside a solid",
               11: "an edge through a solid", 12: "an edge through a facet"}
 _TYPES = {0: "vertex", 1: "edge", 2: "facet"}
@@ -159,7 +161,7 @@ class TopologyCheckError(RuntimeError):
 
 def check_topology(ev, tol: float = 0.01) -> list:
     """What's wrong with the surface beyond Evolver's own check: a list of
-    (code, text, element type, number, other, value); codes 1-7 structural
+    (code, text, element type, number, other, value); codes 1-7, 13 and 14 structural
     (_STRUCTURAL), 8-12 geometric (_GEOMETRIC). The solids are the walls
     (their solid side as events() takes it), a depth over tol mean edges
     counting; edges on three or more facets count with one body or none."""
@@ -1347,7 +1349,7 @@ def _cut(ev, x, ring, centre, scale) -> None:
     """Collapse the ring to its centre, delete the edges that collapsed and
     pop the vertex where the two sides now meet."""
     moved = _put_at(x, ring, centre, _slab(ev))
-    doubled = _doubled_edges(ev)
+    doubled, looped = _doubled_edges(ev), _looped_edges(ev)
     ev.vertices = moved
     if _slab(ev) is not None:
         # (all at one image: the collapsed edges then don't wrap, which
@@ -1367,6 +1369,8 @@ def _cut(ev, x, ring, centre, scale) -> None:
     # two edges, a pack's crumpled neck's: the descent stalled round them)
     if _doubled_edges(ev) > doubled:
         raise ValueError("pinch_off(): collapsing the ring joined two vertices by two edges")
+    if _looped_edges(ev) > looped:
+        raise ValueError("pinch_off(): collapsing the ring left an edge from a vertex to itself")
     m = ev.mesh()
     at = np.flatnonzero(np.linalg.norm(_delta(centre, np.asarray(m.vertices), _slab(ev)),
                                        axis=1) < 1e3*tiny)
@@ -1432,13 +1436,24 @@ def _doubled_edges(ev) -> int:
     return len(e) - len(np.unique(e, axis=0)) if len(e) else 0
 
 
+def _looped_edges(ev) -> int:
+    """How many edges go from a vertex to itself. (Evolver's deletion of an
+    edge whose ends another edge joins too makes that one such a loop; a
+    pack's spike taken off left one, its facet-edges later another edge's,
+    and Evolver's walk round that edge after a rebody never ended.)"""
+    e = np.asarray(ev.mesh().edges)
+    return int((e[:, 0] == e[:, 1]).sum()) if len(e) else 0
+
+
 def _tidy_seam(ev, centre, h: float) -> None:
     """Coarsen round the two tips the cut left: the ring's edges were short
     (a neck squeezed to an edge or two across keeps its edges round it),
     and the cones' facets all meet at the tips. Deletes the edges there
-    shorter than h/2 (not on the border; Evolver refuses unsafe merges),
+    shorter than h/2 (not on the border; Evolver refuses unsafe merges, but
+    not every one: an edge left from a vertex to itself refuses the cut),
     equiangulating after each pass, then averages and equiangulates there."""
     L = _slab(ev)
+    looped = _looped_edges(ev)
 
     def near_edges() -> str:
         m = ev.mesh()
@@ -1453,6 +1468,8 @@ def _tidy_seam(ev, centre, h: float) -> None:
         ev.command(f"equiangulate edge{near_edges()}")
         if ev.counts["edges"] == count:
             break
+    if _looped_edges(ev) > looped:
+        raise ValueError("pinch_off(): coarsening the seam left an edge from a vertex to itself")
     x = ev.vertices
     ev.command("vertex_average vertex"
                + ev._mark(_core.VERTEX, np.linalg.norm(_delta(centre, x, L), axis=1) < _SEAM*h))
@@ -4025,6 +4042,7 @@ def _take_spike(ev, x, ring, apex, centre, scale: float) -> None:
     left", run after run, a 16-bead pack's descent going round them.) The
     spike enclosed nothing to speak of."""
     moved = _put_at(_put_at(x, ring, centre, _slab(ev)), apex, centre, _slab(ev))
+    looped = _looped_edges(ev)
     ev.vertices = moved
     tiny = 1e-9*scale
     count = ev.counts["edges"]
@@ -4034,6 +4052,8 @@ def _take_spike(ev, x, ring, apex, centre, scale: float) -> None:
         if now == count:
             break
         count = now
+    if _looped_edges(ev) > looped:
+        raise ValueError("the spike's collapse left an edge from a vertex to itself")
     m = ev.mesh()
     at = np.flatnonzero(np.linalg.norm(_delta(centre, np.asarray(m.vertices), _slab(ev)),
                                        axis=1) < 1e3*tiny)

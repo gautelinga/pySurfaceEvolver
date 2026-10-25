@@ -273,7 +273,8 @@ int pyse_snapshot_take(long *handle);
 enum { PYSE_PROBLEM_BARE_EDGE = 1, PYSE_PROBLEM_MANY_FACETS, PYSE_PROBLEM_ORIENTATION,
        PYSE_PROBLEM_PINCHED, PYSE_PROBLEM_OPEN_BORDER, PYSE_PROBLEM_BORDER_VERTEX,
        PYSE_PROBLEM_BORDER_REVERSED, PYSE_PROBLEM_DEGENERATE, PYSE_PROBLEM_FOLD,
-       PYSE_PROBLEM_VERTEX_IN_SOLID, PYSE_PROBLEM_EDGE_IN_SOLID, PYSE_PROBLEM_INTERSECTION };
+       PYSE_PROBLEM_VERTEX_IN_SOLID, PYSE_PROBLEM_EDGE_IN_SOLID, PYSE_PROBLEM_INTERSECTION,
+       PYSE_PROBLEM_OPEN_RING, PYSE_PROBLEM_LOOP_EDGE };
 struct pyse_problem { int code; int type; long id; long other; double value; };
 int pyse_check_topology(const int *walls, const int *sides, int nwalls, double tol,
                         int manifold, struct pyse_problem *out, int max, int *count);

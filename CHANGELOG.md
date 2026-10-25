@@ -28,6 +28,17 @@
   the two-drop merge at 4 threads; none in 1500 now). A piece within an eighth of the
   grid's spacing of one wall now bounds no liquid the grid sees. The 16-bead wide set:
   17 of 18 runs the same to the step, one on another path from its 190th.
+- A topology run no longer hangs after a neck is cut or a spike taken off. Evolver's
+  deletion of the short edges there (the seam's coarsening, the collapsed spike's
+  edges) could leave an edge from a vertex to itself where another edge joined the
+  same two vertices; its facet-edges later became another edge's, and Evolver's walk
+  round it after the next `rebody` never ended (a 16-bead pack, seed 5 at 15 degrees,
+  spun for three hours at its 190th step). Such a deletion now refuses the change,
+  and the topology check (`PYSE_CHECK_TOPOLOGY=1`) and the edits' own checks count
+  an edge from a vertex to itself, and one whose facets don't come round to it, as
+  broken, with any number of bodies (before, only with one). The wide set: 16 of
+  18 runs the same to the step; in the other two such a cut was made and is now
+  refused, and both go on another way to breakthrough.
 - `test_the_flux_gauges_lattice_sums_scalar_and_simd_agree` on one thread: at four,
   the Newton step's threaded factoring differs in its last bits from run to run.
 

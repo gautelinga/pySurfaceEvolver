@@ -1168,10 +1168,15 @@ static void edge_problems(struct ctx *c, edge_id e, struct counts *k)
   vertex_id t, hh;
   t = get_edge_tailv(e); hh = get_edge_headv(e);
   fe0 = get_edge_fe(e);
-  if ( !valid_id(fe0) ) { k->structure++; return; }
+  if ( !valid_id(fe0) || equal_id(t,hh) ) { k->structure++; return; }
   { facetedge_id fe = fe0;
     do { if ( n < 3 ) f[n] = get_fe_facet(fe); n++; fe = get_next_facet(fe); }
     while ( valid_id(fe) && !equal_id(fe,fe0) && n < 1000 );
+    /* (its facets not coming round to where they began, whatever the
+       bodies: Evolver's walk round such an edge never ends, as after a
+       rebody where a pack's edge from a vertex to itself had another's
+       facet-edges) */
+    if ( !valid_id(fe) || !equal_id(fe,fe0) ) { k->structure++; return; }
   }
   if ( n > 2 ) { if ( c->manifold ) k->structure++; return; }
   if ( n == 2 )

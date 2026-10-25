@@ -2,6 +2,8 @@
  * pyse_check.c -- invariants of a soap-film surface beyond Evolver's own
  * "check" (its lists and links): what pySE's changes of topology must keep.
  *
+ *   - each edge's facets coming round to where they began (its ring closed),
+ *     and its ends two vertices;
  *   - each edge on one facet (a border) or two (manifold= also refuses more);
  *   - two facets across an edge oriented alike (the same bodies on the same
  *     sides), which Evolver's cone analysis (pop) needs;
@@ -370,12 +372,23 @@ static void check_body(void *arg)
     { add(a,PYSE_PROBLEM_BARE_EDGE,PYSE_EDGE,e_id,0,0.0);
       continue;
     }
+    if ( equal_id(t,hv) )
+    { add(a,PYSE_PROBLEM_LOOP_EDGE,PYSE_EDGE,e_id,(long)ordinal(t) + 1,0.0);
+      continue;
+    }
     fe = start;
     do
     { if ( n < 3 ) f[n] = get_fe_facet(fe);
       n++;
       fe = get_next_facet(fe);
     } while ( valid_id(fe) && !equal_id(fe,start) && n < 1000 );
+    if ( !valid_id(fe) || !equal_id(fe,start) )
+    { /* the edge's facets not coming round to where they began: Evolver's
+         walks round the edge (convert_bodies_to_quantities() after a
+         rebody) never end */
+      add(a,PYSE_PROBLEM_OPEN_RING,PYSE_EDGE,e_id,n,0.0);
+      continue;
+    }
     if ( n > 2 )
     { nonmanifold[ordinal(t)] = nonmanifold[ordinal(hv)] = 1;
       if ( a->manifold ) add(a,PYSE_PROBLEM_MANY_FACETS,PYSE_EDGE,e_id,n,0.0);
