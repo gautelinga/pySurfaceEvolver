@@ -207,9 +207,18 @@ without lines too. It now looks only at the facets beside a line (kept until the
 mesh changes) and copies nothing on a surface without them, with the same results
 to the bit: the Newton step's instructions are back to 0.7.5's (98k facets), and
 switching the following on and off within one run no longer changes its time.
-Timed in separate runs, the step is still 7-14% slower than 0.7.5's (the same
-results; the periodic slabs' changes to Evolver's core add nothing to it, measured
-against the fix's own commit); not yet explained.
+Timed in separate runs, the step was still 7-14% slower than 0.7.5's in 0.8.0, at 2
+threads only. The cause was false sharing: the Hessian's fill keeps each thread's
+buffer of entries side by side in an array, every thread writes its own buffer's
+count at every entry, and two buffers on one cache line make the threads fight
+for it. In 0.7.5 the array happened to start half a line in, so threads 0 and 1
+had a line each (threads 1 and 2 shared one); new variables after 0.7.5 moved it
+onto a line's start, and threads 0 and 1 shared. After 0.8.0 each buffer has a
+line of its own: the 98k step, pinned to two (four) fast cores, the median of ten
+rounds with the builds alternated, an idle machine: 0.149 s (0.126) at 0.7.5, 0.168
+(0.121) at 0.8.0, 0.149 (0.113) with the fix; the same results (to the last bit with
+Evolver's own factoring; MUMPS's threads can differ in the 16th digit from run to
+run, at 0.8.0 too).
 
 ## Threads and the Newton solver
 

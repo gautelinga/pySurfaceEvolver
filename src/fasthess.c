@@ -38,7 +38,10 @@ struct hop
                         OP_QVALUE: x[0]; OP_FORCE, OP_VGRAD: vector */
 };
 
-struct hbuf { struct hop *ops; long n, size; int failed; };
+/* a cache line each: the threads' buffers sit side by side in an array, and
+   two on one line slowed 2-thread Newton steps by 13% when the array's place
+   in memory happened to put them there */
+struct hbuf { struct hop *ops; long n, size; int failed; } __attribute__((aligned(64)));
 
 /* the buffer the current thread records into, while run_elements() runs */
 static __thread struct hbuf *recording = NULL;
@@ -737,7 +740,7 @@ static int fh_ensure(void **p, long *size, long want, size_t item)
 }
 static struct qsum *acc_q = NULL, *acc_v = NULL;   /* [thread][method instance] */
 static long acc_q_size = 0, acc_v_size = 0;
-static struct qsum acc_area[FH_MAXTHREADS];
+static struct { struct qsum q; } __attribute__((aligned(64))) acc_area[FH_MAXTHREADS];   /* a line each */
 static double *acc_force = NULL;                   /* [thread][vertex ordinal][SDIM] */
 static long acc_force_size = 0;
 static int acc_force_used[FH_MAXTHREADS];
@@ -787,7 +790,7 @@ static int acc_element(struct hbuf *b, long e0, int me)
         break;
       }
       case OP_AREA:
-        qsum_add(acc_area + me,op->x[0]);
+        qsum_add(&acc_area[me].q,op->x[0]);
         op->kind = OP_DONE;
         break;
       case OP_FORCE:
@@ -829,8 +832,8 @@ static void acc_end(int threads)
     }
   }
   for ( t = 0 ; t < threads ; t++ )
-    if ( acc_area[t].a != 0.0 )
-      binary_tree_add(web.total_area_addends,acc_area[t].s + acc_area[t].c);
+    if ( acc_area[t].q.a != 0.0 )
+      binary_tree_add(web.total_area_addends,acc_area[t].q.s + acc_area[t].q.c);
   for ( t = 0 ; t < threads && !acc_force_used[t] ; t++ ) ;
   if ( t == threads ) return;
   list = fl_element_list(VERTEX,&n);

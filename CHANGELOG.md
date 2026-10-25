@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Speed
+
+- Newton steps at 2 threads as fast as 0.7.5's again (0.8.0's were 7-14% slower):
+  the threads' buffers of Hessian entries, side by side in an array, now have a
+  cache line each; two on one line made the threads fight for it at every entry
+  (false sharing), as the array's place in memory fell. The 98k cube's step, two
+  (four) cores: 0.149 s (0.126) at 0.7.5, 0.168 (0.121) at 0.8.0, 0.149 (0.113) now.
+
 ## 0.8.0 (2026-10-24)
 
 Changes of topology: `Evolver.events()` finds the cuts, merges and contacts coming,

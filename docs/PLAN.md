@@ -12,8 +12,10 @@ Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELO
 dependencies; Sphinx, snippets, sanitizers, a cp312 wheel by cibuildwheel under
 podman): it found NumPy 2's repr in slab datafiles, 3.11-only mypy errors, a scipy
 import in a test and crumbs left at a descent's end (21323ea). Open after it: the
-Newton step 7-14% slower than 0.7.5's in separate runs (the same at eefbb2a: not the
-slabs' hooks; unexplained); test_drops_on_a_plane_merge... failed once in 120 file
+Newton step 7-14% slower than 0.7.5's in separate runs (2026-10-25: false sharing of
+the threads' hbuf array in fasthess.c run_elements(), placed on a line's start by
+8e5799c's new statics; fixed by a cache line per buffer, bisected and measured in
+`~/pyse_scratch/perf`: ab2_*.txt, bisect.log); test_drops_on_a_plane_merge... failed once in 120 file
 runs at 4 threads after the crumb fix (cause not caught); the flux gauge's lattice
 sums ~10x its direct ones; P5 lid and P6 cylinders (below) for the user to scope.
 
