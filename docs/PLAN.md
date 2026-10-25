@@ -21,6 +21,87 @@ sums ~10x its direct ones (2026-10-25: 4.7x a Newton step, 11x a gradient step a
 bead, after folding the boxes' polynomials); P5 lid and P6 cylinders dropped (user,
 2026-10-25).
 
+## Proposed (2026-10-25): wetted walls as facets, for solids of any shape
+
+**Goal.** Solids of any shape (a level set f(x) = 0, the solid where f < 0), not only
+planes, spheres and cylinders. The wetted part of a wall gets facets of its own; a body
+is closed by its free surface and its wet patches, so its volume needs no wall
+integrals and its wetting energy no gauge. A third way to wet a wall, beside the pole
+and flux gauges (kept for spheres).
+
+**Formulation (from P0).** The wall facets' energy is cos(theta) times the flux of the
+wall's unit normal through them, -cos(theta) times their area projected onto the wall:
+a folded facet counts negative, so nothing gains by folding (with tension -cos(theta)
+instead, the facets folded as the contact line moved: on a sphere within two steps).
+On a plane it is the content integral exactly; it needs only grad f / |grad f|. The
+patch's inner vertices have next to no stiffness: they are frozen in relaxing and
+Newton steps and moved only by remeshing and smoothing along the wall.
+
+**P0 spike, done** (`~/pyse_scratch/wallfacets`: wf.py, t_*.py, *.out). Against exact
+solutions, at h, h/2, h/4: second order; with tension -cos(theta), as accurate as the
+gauges (a plane: equal; a drop on a sphere: 2-4x better; a pendular ring: 1.2-1.4x
+worse); the normal flux about 2x the error on curved walls (an exact-area correction
+would recover it). Moving lines (normal flux, inner vertices frozen, averaged between
+steps): a drop on a sphere grown 6x and shrunk back, a ring grown 3.3x and shrunk to
+half, every step converged and the patch mesh kept; but the patch lags the line,
+about 5x the static error, and a patch shrunk far folds. A drop on an ellipsoid
+(formula and normal only) relaxes and converges under refinement, at ratio 2.3 rather
+than 4 on a poor stretched mesh. pySE's C remesher breaks wall facets as it is. Cost
+for one drop 1.4-1.7x the flux gauge at 1.5-2.8x the facets; a 16-bead pack would have
+6.2x the facets (wet area 152 of the beads' 201): steps about equal to 3x slower,
+runs an estimated 2-5x.
+
+**Phases** (each ends in a go/no-go with the user):
+
+* **P0b, the risk:** the C remesher (pyse_edit.c) on wall patches: splits, collapses,
+  flips and smoothing of wall facets on their wall, contact-line edges (one free facet,
+  one wall facet) kept, the patch's inner vertices moved only by it. Then the moving
+  tests and the ellipsoid again, remeshed each step. Go if the dynamic error comes down
+  to the static one and the ellipsoid converges at second order.
+* **P1, behaviour-neutral refactor:** one test for "a contact-line edge" in Python and
+  C (today a border edge on a wall: ~22 sites in _surgery/_events/_clusters, 13 in
+  pyse_edit.c, the checks), the wide corpus the same to the step.
+* **P2, basics:** `wetting="facets"` walls and level-set walls in `constraints`; bodies
+  built with their wet patches (`shapes.cap` with a base, `load_arrays` putting facets
+  on walls, the normal-flux quantity per wall); `relax`, Newton (inner wall vertices
+  frozen) and the remesher keeping them; the checks' exemptions (chords of a curved
+  wall inside its solid); events ignoring a free facet near its own wall facet across a
+  contact line, but not a film thinning over its own patch.
+* **P3, surgery:** wetting (free facets onto the wall become wall facets), drying (a
+  film gone over a patch: both layers taken away), contact lines meeting across dry
+  ground (the strip filled with wall facets), merges and pinches near walls, clusters
+  and trapped bodies (no wall terms). Validated on the 4- and 16-bead packs against the
+  flux gauge: energies at the same volumes, drained fractions, failures, time.
+* **P4, shapes:** level-set walls in events, checks and the clusters' grid (a signed
+  distance f / |grad f| near the wall, the sign for the grid's nodes, sampled segment
+  tests); ellipsoids, rounded cylinders, unions of spheres.
+* **P5:** docs page, performance table, CHANGELOG.
+
+**Size:** about the topology batch. P0b is small and decides the rest.
+
+**Decisions (user, 2026-10-25):**
+* Shapes: analytic level sets **and triangle-mesh solids**. Mesh solids need a
+  nearest-point projection onto the triangles in C (a constraint Evolver can't take
+  from a formula), a spatial index, and the faces' normals for the energy.
+* **Sharp edges and corners needed** (posts, grooves, faceted grains): a contact line
+  pinned on an edge while its angle lies between the two faces' limits (Gibbs), and
+  sliding onto a face past them. That is its own mechanism: a line on the edge's
+  constraint, the inequality as an event.
+* A **third option** beside the pole and flux gauges (kept for planes and spheres);
+  walls of all three kinds in one surface.
+* The flat facets' **O(h^2) wall error is fine**: no curvature correction.
+* **Patterned walls: shape and theta(x)** both; a contact angle varying over a wall is
+  cos(theta(x)) in the wall facets' integrand.
+* **Periodic slabs: yes, after P3** (in P4).
+* First systems: **non-spherical grains** (ellipsoid or superquadric packs drained as
+  the 16-bead pack is), **rough or patterned walls**, and the **sphere packs as a
+  check** against the flux gauge.
+* Order: **0.8.1 first** (the crash and hang fixes), then P0b.
+
+So P2 gains theta(x); P4 is level sets, then triangle meshes, then periodic slabs; a
+**P4b** sharp edges (pinning) on mesh solids and level sets with edges (a box's, a
+post's).
+
 ## Resume here (2026-10-24): periodic slab and flux gauge batch
 
 The user's choices (2026-10-24): an **x,y periodic slab** (floor below, free liquid on
