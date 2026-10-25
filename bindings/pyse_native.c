@@ -763,9 +763,10 @@ int pyse_native_simd(int on)
   if ( flux_simd < 0 ) flux_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
   was = flux_simd;
   flux_simd = on && __builtin_cpu_supports("avx2") ? 1 : 0;
+  pyse_slabflux_simd(on);
   return was;
 #else
-  (void)on;
+  pyse_slabflux_simd(on);
   return 0;
 #endif
 }

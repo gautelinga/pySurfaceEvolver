@@ -87,6 +87,7 @@ struct sf_region
   int nnear;
   struct sf_src *near;
   REAL *phi;                    /* [cls][NMONO(p)]: Phi, F = -grad Phi */
+  REAL *dc;                     /* boxes: [cls][sf_drow[p][20]], Phi's derivatives (sf_fold) */
   REAL *A;                      /* walls: [cls][3][NMONO(p)], A's components */
 };
 
@@ -151,7 +152,8 @@ static void sf_free(void)
 { int i;
   if ( sf.box )
   { for ( i = 0 ; i < sf.nx*sf.ny*sf.nz ; i++ )
-      if ( sf.box[i] ) { free(sf.box[i]->near); free(sf.box[i]->phi); free(sf.box[i]); }
+      if ( sf.box[i] ) { free(sf.box[i]->near); free(sf.box[i]->phi); free(sf.box[i]->dc);
+                         free(sf.box[i]); }
     free(sf.box);
   }
   if ( sf.layer )
@@ -247,6 +249,10 @@ struct sf_term { int k, r; REAL f; };
 static struct sf_term *sf_dlist[20];
 static int sf_dcount[20][SF_PMAX + 2];      /* terms with degree(m) <= p: [b][p + 1] */
 static int sf_parent[(SF_PMAX + 1)*(SF_PMAX + 2)*(SF_PMAX + 3)/6][2];  /* m = parent + e_axis */
+/* a folded polynomial's rows (sf_fold): derivative b's coefficients start at
+   sf_drow[p][b], NMONO(p - |b|) of them padded to a multiple of 4; the total
+   in [p][20] */
+static int sf_drow[SF_PMAX + 1][21];
 
 static int sf_dlists(void)
 { int b, k, n = NMONO(SF_PMAX);
@@ -276,6 +282,15 @@ static int sf_dlists(void)
     }
     sf_dlist[b] = t;
   }
+  for ( k = 0 ; k <= SF_PMAX ; k++ )
+  { int off = 0;
+    for ( b = 0 ; b < 20 ; b++ )
+    { int deg = b == 0 ? 0 : b < 4 ? 1 : b < 10 ? 2 : 3;
+      sf_drow[k][b] = off;
+      if ( deg <= k ) off += (NMONO(k - deg) + 3) & ~3;
+    }
+    sf_drow[k][20] = off;
+  }
   return 1;
 }
 
@@ -297,6 +312,80 @@ static void sf_poly_derivs(const REAL *a, int p, const REAL *mv, int order, REAL
     REAL sum = 0.0;
     for ( i = 0 ; i < n ; i++ ) sum += t[i].f*a[t[i].k]*mv[t[i].r];
     D[b] = sum;
+  }
+}
+
+/* the polynomials phi ([ncls][NMONO(p)]) folded: each derivative's
+   coefficients by the monomial of u they multiply, so that the derivative at
+   u is a dot product with the monomials' values (a box's field at every point
+   it serves: the gathers through sf_dlist were 87% of a slab's step) */
+static REAL *sf_fold(const REAL *phi, int p, int ncls)
+{ int nm = NMONO(p), tot = sf_drow[p][20], cl, b, i;
+  REAL *dc = (REAL*)calloc((size_t)ncls*tot,sizeof(REAL));
+  if ( !dc ) return NULL;
+  for ( cl = 0 ; cl < ncls ; cl++ )
+    for ( b = 1 ; b < 20 ; b++ )
+    { const struct sf_term *t = sf_dlist[b];
+      REAL *row = dc + (size_t)cl*tot + sf_drow[p][b];
+      for ( i = 0 ; i < sf_dcount[b][p + 1] ; i++ ) row[t[i].r] = t[i].f*phi[cl*nm + t[i].k];
+    }
+  return dc;
+}
+
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__)) && !defined(LONGDOUBLE) \
+    && !defined(FLOAT128)
+#include <immintrin.h>
+#define SF_SIMD 1
+/* sf_fold_derivs's sums in AVX2's four lanes: the same products and sums */
+__attribute__((target("avx2")))
+static void sf_fold_derivs_avx2(const REAL *c, int p, const REAL *mv, int nd, REAL *D)
+{ int b, i;
+  for ( b = 1 ; b < nd ; b++ )
+  { const REAL *row = c + sf_drow[p][b];
+    int n = sf_drow[p][b + 1] - sf_drow[p][b];
+    __m256d acc = _mm256_setzero_pd();
+    REAL l[4];
+    for ( i = 0 ; i < n ; i += 4 )
+      acc = _mm256_add_pd(acc,_mm256_mul_pd(_mm256_loadu_pd(row + i),_mm256_loadu_pd(mv + i)));
+    _mm256_storeu_pd(l,acc);
+    D[b] = (l[0] + l[1]) + (l[2] + l[3]);
+  }
+}
+static int sf_simd = -1;          /* (a benign race: every thread finds the same) */
+#endif
+
+/* the scalar sums (on 0) or the SIMD ones where the CPU has them: with
+   pyse_native_simd(), for tests comparing the two */
+void pyse_slabflux_simd(int on)
+{
+#ifdef SF_SIMD
+  sf_simd = on && __builtin_cpu_supports("avx2") ? 1 : 0;
+#else
+  (void)on;
+#endif
+}
+
+/* sf_poly_derivs from the folded coefficients c (one class), from order 1:
+   four running sums (a dot product's lanes), added pairwise */
+static void sf_fold_derivs(const REAL *c, int p, const REAL *mv, int order, REAL *D)
+{ int b, i, nd = NMONO(order);
+  D[0] = 0.0;                   /* (Phi itself: not wanted) */
+#ifdef SF_SIMD
+  if ( sf_simd < 0 ) sf_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
+  if ( sf_simd )
+  { sf_fold_derivs_avx2(c,p,mv,nd,D);
+    return;
+  }
+#endif
+  for ( b = 1 ; b < nd ; b++ )
+  { const REAL *row = c + sf_drow[p][b];
+    int n = sf_drow[p][b + 1] - sf_drow[p][b];
+    REAL s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    for ( i = 0 ; i < n ; i += 4 )
+    { s0 += row[i]*mv[i]; s1 += row[i+1]*mv[i+1];
+      s2 += row[i+2]*mv[i+2]; s3 += row[i+3]*mv[i+3];
+    }
+    D[b] = (s0 + s1) + (s2 + s3);
   }
 }
 
@@ -471,6 +560,7 @@ static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
                     sf.z0 + (iz + sf.izmin + 0.5)*sf.bz };
       REAL r = 0.5*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
       g = sf_region_make(c,r,sf.kappa,sf.p,-1);
+      if ( g ) g->dc = sf_fold(g->phi,g->p,sf.ncls);   /* (NULL: by sf_poly_derivs) */
       __atomic_store_n(&sf.box[i],g,__ATOMIC_RELEASE);
     }
   }
@@ -774,7 +864,8 @@ static int sf_fields(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL
   sf_mono_values(u,g->p,mv);
   for ( cl = 0 ; cl < sf.ncls ; cl++ )
   { REAL r1 = -1.0/g->rho, r2 = r1/g->rho, r3 = r2/g->rho;
-    sf_poly_derivs(g->phi + cl*nm,g->p,mv,order + 1,D);
+    if ( g->dc ) sf_fold_derivs(g->dc + (size_t)cl*sf_drow[g->p][20],g->p,mv,order + 1,D);
+    else sf_poly_derivs(g->phi + cl*nm,g->p,mv,order + 1,D);
     for ( m = 0 ; m < 3 ; m++ )
     { int e[3] = { 0, 0, 0 };
       e[m]++;

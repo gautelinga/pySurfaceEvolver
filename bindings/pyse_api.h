@@ -157,6 +157,7 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
 int pyse_slabflux_key(const char *method, int con, int which, int kind, int wall);
 int pyse_slabflux_probe(const double *x, double *out);
 int pyse_slabflux_field(int kind, int wall, const double *x, double *out);
+void pyse_slabflux_simd(int on);   /* (set by pyse_native_simd) */
 /* the flux gauge's sums over the spheres with AVX2 where the processor has
    it (1, the default) or the scalar kernels (0), which agree to the bit;
    returns the previous setting */

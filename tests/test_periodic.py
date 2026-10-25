@@ -163,6 +163,24 @@ def test_the_flux_gauges_fields_are_ewalds_sum():
         assert np.abs(o[12:].reshape(3, 3, 3) - d2).max() < 1e-7
 
 
+def test_the_flux_gauges_lattice_sums_scalar_and_simd_agree():
+    # (the regions' folded polynomials: the same products and sums, lane by lane)
+    from pysurfaceevolver import _core
+    ev = _bead_flux(PERIODS)
+    saved = ev._save()
+    found = []
+    for simd in (True, False):
+        was = _core.native_simd(simd)
+        try:
+            ev.restore(saved)
+            ev.command("g 3; hessian")
+            found.append((ev.energy, np.asarray(ev.vertices).copy()))
+        finally:
+            _core.native_simd(was)
+    assert found[0][0] == found[1][0]
+    assert np.array_equal(found[0][1], found[1][1])
+
+
 def test_the_periodic_flux_gauge_is_the_flux_gauge_to_its_quadrature():
     # (the images' and the mirror's fields through the facets by Gauss
     # points: the same surface's values apart by h^4, 16 times less a

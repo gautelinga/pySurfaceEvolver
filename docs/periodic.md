@@ -119,5 +119,6 @@ the two beads of a pair is a ring of its own.
 * The cell can't be smaller than about two edges: every edge shorter than half a
   period.
 * Evolver's threaded loops don't run in torus models: a slab's steps are serial.
-* The flux gauge's lattice sums cost about ten times its direct sums at one bead
-  a step; they don't grow with the number of beads.
+* The flux gauge's lattice sums cost about five times its direct sums at one bead
+  a Newton step (ten times a gradient step); they don't grow with the number of
+  beads, and the direct sums do.

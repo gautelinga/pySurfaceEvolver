@@ -10,6 +10,13 @@
   (false sharing), as the array's place in memory fell. The 98k cube's step, two
   (four) cores: 0.149 s (0.126) at 0.7.5, 0.168 (0.121) at 0.8.0, 0.149 (0.113) now.
 
+- The flux gauge's lattice sums in slabs (and `flux_sum="fast"`) 3-3.5x faster: each
+  box's polynomial folded once into its derivatives' coefficients, so a field at a
+  point is a few dot products with the monomials' values (AVX2 where the CPU has it,
+  to the bit the scalar sums) instead of gathers through the derivatives' term lists.
+  One bead's bridge to the floor, 3840 facets, 1 thread: `g 1` 0.270 to 0.078 s, a
+  Newton step 0.221 to 0.071 s (without periods 0.007 and 0.015).
+
 ## 0.8.0 (2026-10-24)
 
 Changes of topology: `Evolver.events()` finds the cuts, merges and contacts coming,

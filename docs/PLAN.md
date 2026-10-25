@@ -17,7 +17,9 @@ the threads' hbuf array in fasthess.c run_elements(), placed on a line's start b
 8e5799c's new statics; fixed by a cache line per buffer, bisected and measured in
 `~/pyse_scratch/perf`: ab2_*.txt, bisect.log); test_drops_on_a_plane_merge... failed once in 120 file
 runs at 4 threads after the crumb fix (cause not caught); the flux gauge's lattice
-sums ~10x its direct ones; P5 lid and P6 cylinders (below) for the user to scope.
+sums ~10x its direct ones (2026-10-25: 4.7x a Newton step, 11x a gradient step at one
+bead, after folding the boxes' polynomials); P5 lid and P6 cylinders dropped (user,
+2026-10-25).
 
 ## Resume here (2026-10-24): periodic slab and flux gauge batch
 
