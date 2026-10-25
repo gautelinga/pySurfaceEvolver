@@ -185,20 +185,26 @@ gradient step at 64 beads 23.5 -> 5.8 us a facet). On the wide set of 16-bead pa
 the whole set from about 8000 s to 5500 s (the machine's load not matched
 between the two).
 
-For the established workload, relaxing a large surface, it is a little slower: against
-0.7.5 (built from its tag, with the same numpy 1.26), the cube near equilibrium, 2
-threads, the median of five rounds with the versions alternated, an idle machine,
-the same energies to round-off; seconds (measured 2026-10-24, at 0.8.0):
+For the established workload, relaxing a large surface, it is as fast as 0.7.5 again
+(0.8.0 was a little slower): against 0.7.5 (built from its tag, with the same numpy
+1.26), the cube near equilibrium, 2 threads, the median of five rounds with the
+versions alternated, an idle machine, the same energies to round-off; seconds
+(0.8.0 measured 2026-10-24; after it, with the fix below, 2026-10-25):
 
-| surface | operation | 0.7.5 | 0.8.0 | |
-|---|---|---|---|---|
-| cube, linear, 98k facets | `g 1` | 0.019 | 0.020 | +2% |
-| | Newton step | 0.205 | 0.234 | +14% |
-| | `relax()` | 1.31 | 1.37 | +5% |
-| cube, linear, 393k facets | Newton step | 1.11 | 1.21 | +10% |
-| | `relax()` | 8.93 | 8.94 | 0% |
-| cube, Lagrange 2, 24k facets | `relax()` | 0.68 | 0.71 | +5% |
-| cube, Lagrange 2, 98k facets | `relax()` | 3.87 | 3.92 | +1% |
+| surface | operation | 0.7.5 | 0.8.0 | after 0.8.0 | |
+|---|---|---|---|---|---|
+| cube, linear, 98k facets | `g 1` | 0.020 | 0.020 | 0.018 | -7% |
+| | Newton step | 0.207 | 0.234 | 0.216 | +5% |
+| | `relax()` | 1.32 | 1.37 | 1.34 | +1% |
+| cube, linear, 393k facets | Newton step | 1.13 | 1.21 | 1.14 | +1% |
+| | `relax()` | 8.81 | 8.94 | 8.74 | -1% |
+| cube, Lagrange 2, 24k facets | `relax()` | 0.67 | 0.71 | 0.68 | +1% |
+| cube, Lagrange 2, 98k facets | `relax()` | 3.88 | 3.92 | 3.84 | -1% |
+
+(The last column against 0.7.5 in the same rounds; the 0.8.0 column from the day
+before, its 0.7.5 times within 2% of these. The 98k Newton step's +5% is the
+threads' placement on this machine's two kinds of cores: pinned to the fast ones,
+the two take the same time, below.)
 
 Part of the Newton step's slowdown was the step's following of moving contact and
 triple lines (after 0.7.5): after every step it copied every vertex and looked at
