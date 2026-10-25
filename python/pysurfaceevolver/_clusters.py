@@ -10,7 +10,9 @@ either end). Those joins are found on a grid of the space the solids leave:
 nodes inside a solid dropped, neighbouring nodes linked unless the segment
 between them crosses a facet or a solid, and each linked group of nodes
 joined to the pieces whose liquid side faces it. A layer of liquid thinner
-than the grid is not seen, so pieces joined only through one stay apart.
+than the grid is not seen, so pieces joined only through one stay apart;
+nor is a piece lying along a wall (every vertex within an eighth of a
+spacing of it), whose liquid is such a layer: its facets aren't seen.
 """
 
 from __future__ import annotations
@@ -348,6 +350,20 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
         tri[:, :, :2] -= (L*np.floor((tri[:, 0, :2] - lo[:2])/L))[:, None, :]
         tri = (tri - lo)/sp
     axis, low, frac, row, sign = _crossings(tri, shape, periodic)
+    # (a piece within an eighth of a spacing of a wall, every vertex, bounds
+    # a layer of liquid the grid can't see: its facets aren't seen. Two
+    # drops' contact lines joined over the plane left a tent of 21 facets
+    # there, 5e-4 high and turned over, its liquid side up in the gas; it
+    # voted that gas liquid, its cluster the largest of the run's body,
+    # which then had the run's number and the drop a new one)
+    if solids:
+        near = np.stack([np.abs(_gap(kind, data, x, periods)) < s/8
+                         for _, kind, data in solids], axis=1)
+        lying = _lying(piece, npieces, near[f].all(axis=1))
+        if lying.any():
+            seen = ~lying[row]
+            axis, low, frac, row, sign = (axis[seen], low[seen], frac[seen], row[seen],
+                                          sign[seen])
     strides = np.array([shape[1]*shape[2], shape[2], 1])
 
     def up(node: np.ndarray, k) -> np.ndarray:
@@ -435,6 +451,17 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
                 reached |= near_walls[wall] > 0
     return _gather(piece, body_of, label, reached, size, near_walls,
                    s if periods is None else float(np.prod(sp))**(1/3), mixed)
+
+
+def _lying(piece: np.ndarray, npieces: int, on: np.ndarray) -> np.ndarray:
+    """Per facet row, whether a piece on either side lies along a wall: all
+    its facets with their corners near one solid (``on``: rows, solids)."""
+    lies = np.ones((npieces, on.shape[1]), bool)
+    for j in (0, 1):
+        r = piece[:, j] >= 0
+        np.logical_and.at(lies, piece[r, j], on[r])
+    lies = lies.any(axis=1)
+    return ((piece >= 0) & lies[np.maximum(piece, 0)]).any(axis=1)
 
 
 def _gather(piece, body_of, label, reached, size, near_walls, s, mixed) -> Clusters:

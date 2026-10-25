@@ -17,6 +17,20 @@
   One bead's bridge to the floor, 3840 facets, 1 thread: `g 1` 0.270 to 0.078 s, a
   Newton step 0.221 to 0.071 s (without periods 0.007 and 0.015).
 
+### Fixes
+
+- A topology run no longer loses the body it steps to a sliver of its surface lying
+  along a wall. Two drops' contact lines joined over the plane could leave a tent of
+  facets there, 5e-4 high and turned over, its liquid side up in the gas; the liquid
+  clusters' grid counted that gas as its liquid, the largest of the run's body, so
+  the sliver kept the body's number and the drop was given a new one. The sliver was
+  then taken away as a crumb, and the run stopped with a `TypeError` (3 runs in 1000 of
+  the two-drop merge at 4 threads; none in 1500 now). A piece within an eighth of the
+  grid's spacing of one wall now bounds no liquid the grid sees. The 16-bead wide set:
+  17 of 18 runs the same to the step, one on another path from its 190th.
+- `test_the_flux_gauges_lattice_sums_scalar_and_simd_agree` on one thread: at four,
+  the Newton step's threaded factoring differs in its last bits from run to run.
+
 ## 0.8.0 (2026-10-24)
 
 Changes of topology: `Evolver.events()` finds the cuts, merges and contacts coming,

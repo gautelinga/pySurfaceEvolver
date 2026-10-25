@@ -147,6 +147,25 @@ def test_reconcile_keeps_the_liquid_reaching_the_outlet_draining():
     ev._liquid = None
 
 
+def test_a_tent_turned_over_on_the_floor_is_no_liquid_and_the_drop_keeps_its_number():
+    # a piece of the body lying along the floor, its rim on it and the rest
+    # 3e-4 above, turned over (its liquid side up, in the gas), beside a
+    # drop: as two drops' contact lines joined over the plane left one. It
+    # isn't seen on the grid: no cluster of the gas round it (which made it
+    # the body's largest, the run's number its and the drop a new body's)
+    v, f, sides = _square(0.0, up=False, n=4)
+    v = v*[0.3, 0.3, 1] + [0.1, 0.1, 0]
+    rim = np.unique(np.concatenate(list(sides.values())))
+    v[np.setdiff1d(np.arange(len(v)), rim), 2] = 3e-4
+    ev = _load([_ball((0.6, 0.6, 0.6), 0.3), (v, f)], floor=True, sides=[None, {"bottom": rim}])
+    c = K.clusters(ev)
+    assert sorted(c.nodes.tolist())[0] == 0 and c.mixed == 0
+    _run(ev)
+    K.reconcile(ev)
+    assert list(ev.bodies().ids) == [1]
+    ev._liquid = None
+
+
 def _flat(L, z, h):
     """The square [0, L]^2 at height z facing up, in nearly equilateral
     triangles of edge about h (rows offset by half an edge), and the rows

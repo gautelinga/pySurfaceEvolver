@@ -164,19 +164,25 @@ def test_the_flux_gauges_fields_are_ewalds_sum():
 
 
 def test_the_flux_gauges_lattice_sums_scalar_and_simd_agree():
-    # (the regions' folded polynomials: the same products and sums, lane by lane)
+    # (the regions' folded polynomials: the same products and sums, lane by
+    # lane; on one thread, the Newton step's threaded factoring differing in
+    # its last bits from run to run)
     from pysurfaceevolver import _core
     ev = _bead_flux(PERIODS)
     saved = ev._save()
     found = []
-    for simd in (True, False):
-        was = _core.native_simd(simd)
-        try:
-            ev.restore(saved)
-            ev.command("g 3; hessian")
-            found.append((ev.energy, np.asarray(ev.vertices).copy()))
-        finally:
-            _core.native_simd(was)
+    pyse.set_threads(1)
+    try:
+        for simd in (True, False):
+            was = _core.native_simd(simd)
+            try:
+                ev.restore(saved)
+                ev.command("g 3; hessian")
+                found.append((ev.energy, np.asarray(ev.vertices).copy()))
+            finally:
+                _core.native_simd(was)
+    finally:
+        pyse.set_threads(0)
     assert found[0][0] == found[1][0]
     assert np.array_equal(found[0][1], found[1][1])
 
