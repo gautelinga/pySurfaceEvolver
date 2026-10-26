@@ -131,3 +131,74 @@ def load(x, Lx, Ly, theta=20.0, h=0.2, above=0.005, floor=False, gauge="pole"):
                    bodies=[pyse.Body(volume=None)])
     ev.body(1).target = ev.body(1).volume
     return ev, H
+
+
+def settle_periodic(n, L, gap=0.03, seed=0, g=1e-3):
+    """n unit spheres settled under a weak gravity onto the floor of a cell
+    [0, L)^2 periodic in x and y, at least 2 + gap apart (at the nearest
+    copy) and 1 + gap/2 above the floor; centres wrapped into the cell."""
+    rng = np.random.default_rng(seed)
+    D, W = 2 + gap, 1 + gap/2
+
+    def energy(flat, g):
+        x = flat.reshape(n, 3)
+        dx = x[:, None, :] - x[None, :, :]
+        dx[..., :2] -= L*np.round(dx[..., :2]/L)
+        r = np.linalg.norm(dx, axis=2)
+        np.fill_diagonal(r, np.inf)
+        o = np.maximum(0.0, D - r)
+        e = 0.5*(o*o).sum()/2
+        grad = -((o/np.where(np.isfinite(r), r, 1))[:, :, None]*dx).sum(axis=1)
+        below = np.maximum(0.0, W - x[:, 2])
+        e += 0.5*(below**2).sum() + g*x[:, 2].sum()
+        grad[:, 2] += -below + g
+        return e, grad.ravel()
+
+    x = np.c_[rng.uniform(0, L, n), rng.uniform(0, L, n),
+              W + np.arange(n)*1.2*16/L**2 + rng.uniform(0, 0.5, n)]
+    for gk in (g, g/10, g/100, 0.0):
+        res = minimize(energy, x.ravel(), args=(gk,), jac=True, method="L-BFGS-B",
+                       options=dict(maxiter=50000, gtol=1e-14, ftol=1e-18))
+        x = res.x.reshape(n, 3)
+    x[:, :2] %= L
+    dx = x[:, None] - x[None]
+    dx[..., :2] -= L*np.round(dx[..., :2]/L)
+    r = np.linalg.norm(dx, axis=2)[np.triu_indices(n, 1)]
+    return x, float(r.min() - 2), float((x[:, 2] - 1).min())
+
+
+def sheet_periodic(L, z, h):
+    """A flat sheet over the cell [0, L)^2 at height z, facing up, joined
+    across the cell's sides: rows about h*sqrt(3)/2 apart (an even number),
+    every other row offset by half a step (nearly equilateral triangles)."""
+    nx = max(4, int(round(L/h)))
+    ny = max(4, 2*int(round(L/(h*np.sqrt(3)))))
+    xs, ys = np.arange(nx)*L/nx, np.arange(ny)*L/ny
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    X = X + 0.5*(np.arange(ny)[None, :] % 2)*L/nx
+    v = np.c_[X.ravel() % L, Y.ravel(), np.full(nx*ny, z)]
+    at = lambda i, j: (i % nx)*ny + (j % ny)
+    f = []
+    for i in range(nx):
+        for j in range(ny):
+            a, b, c, d = at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)
+            f += [(a, b, c), (b, d, c)] if j % 2 == 0 else [(a, b, d), (a, d, c)]
+    return v, np.array(f)
+
+
+def load_periodic(x, L, theta=20.0, h=0.2, above=0.005):
+    """The liquid filling a cell periodic in x and y up to a flat meniscus
+    `above` over the top bead: the beads constraints "bead<i>" (flux gauge),
+    the floor z = 0 a wall "bottom" at 90 degrees (the outlet)."""
+    import pysurfaceevolver as pyse
+    from pysurfaceevolver import constraints as C
+    H = float(x[:, 2].max() + 1 + above)
+    v, f = sheet_periodic(L, H, h)
+    cons = {"bottom": C.plane((0, 0, 1), 0.0, contact_angle=90.0)}
+    for i, c in enumerate(x):
+        cons[f"bead{i + 1}"] = C.sphere(tuple(float(t) for t in c), 1.0, contact_angle=theta,
+                                        gauge="flux")
+    ev = pyse.Evolver()
+    ev.load_arrays(v, f, constraints=cons, bodies=[pyse.Body(volume=None)], periods=(L, L))
+    ev.body(1).target = ev.body(1).volume
+    return ev, H

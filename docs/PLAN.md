@@ -5,6 +5,25 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
+## Resume here (2026-10-26): periodic packs of 32 and 64 beads, pressure curves
+
+0.8.1 released (2026-10-26, tag v0.8.1 at 3c1f15e). Wall facets parked (branch
+`wall-facets`, local; its PLAN has the lessons and the alternatives for other grains).
+
+The user's choices (2026-10-26): packs of **32 and 64 beads, periodic only** (x, y
+periodic slabs, the floor the outlet; the walled 16-bead wide set stays the reference),
+**3 seeds x 3 angles** (15, 20, 25 degrees) a size, to breakthrough, **under an hour a
+64-bead run**; robust (every run to breakthrough) and fast; **capillary pressure against
+saturation** curves: Pc = -p of the draining body (tension / bead radius), saturation
+= (draining + trapped liquid) / the liquid at the start (the pore space to the flat
+meniscus), Haines jumps as drops at a fixed volume; per run and a size's runs overlaid,
+PNG + CSV, local. Approved as a batch: all phases, report at the end.
+
+Phases: P0 periodic packs (settled under the periods, the slab loaded) in the corpus,
+each step's pressure recorded, the curves' script; P1 the 16/32/64 periodic sets run,
+their failures fixed; P2 speed (profile the 64s: the flux lattice sums, serial torus
+loops, steps); P3 the curves, docs.
+
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
 Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG

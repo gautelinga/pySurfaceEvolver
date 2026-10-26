@@ -32,6 +32,7 @@ summary.json. Run with another package (an overlay on PYTHONPATH, another
 venv's python via --python) to compare code.
 """
 import argparse, json, os, re, subprocess, sys, time
+import numpy as np
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
@@ -67,6 +68,14 @@ def configs(which, h=None, ds=None):
         # (the wide set as it was before breakthrough was the goal)
         out = [(16, 5.0, seed, theta, 0.2, -0.5, 3600) for seed in range(6)
                for theta in (15.0, 20.0, 25.0)]
+    if which in ("periodic", "periodic-16", "periodic-32", "periodic-64"):
+        # (cells periodic in x and y, the floor the outlet, to breakthrough;
+        # the walled 16-bead packs' density, 0.64 beads a unit area)
+        sizes = (16, 32, 64) if which == "periodic" else (int(which.split("-")[1]),)
+        out = [(n, round(float(np.sqrt(n/0.64)), 4), seed, theta, 0.2, -0.5,
+                {16: 3600, 32: 2*3600, 64: 4*3600}[n])
+               for n in sizes for seed in range(3) for theta in (15.0, 20.0, 25.0)]
+        goal = "breakthrough"
     if which == "full":
         for seed in (0, 1, 2):
             for h in (0.17, 0.23):
@@ -82,7 +91,8 @@ def configs(which, h=None, ds=None):
         out = [(n, L, seed, theta, h_, d, int(t*(0.2/h_)**2*abs(0.5/d)))
                for n, L, seed, theta, h_, d, t in out]
     tag = "_bt" if goal == "breakthrough" else ""
-    return [(f"n{n}_s{seed}_t{theta:g}_h{h_:g}_ds{d:g}{tag}", n, L, seed, theta, h_, d, timeout,
+    pre = "p" if which.startswith("periodic") else "n"
+    return [(f"{pre}{n}_s{seed}_t{theta:g}_h{h_:g}_ds{d:g}{tag}", n, L, seed, theta, h_, d, timeout,
              goal) for n, L, seed, theta, h_, d, timeout in out]
 
 
@@ -126,7 +136,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     import logging, warnings
     import numpy as np
     sys.path.insert(0, HERE)
-    from pack import settle, load
+    from pack import settle, load, settle_periodic, load_periodic
     import pysurfaceevolver as pyse
     from pysurfaceevolver import recipes
 
@@ -155,13 +165,18 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     if resume:
         ev, v0, first = restore_state(resume)
     else:
-        x, _, _ = settle(n, L, L, seed=seed)
         # (the beads in the flux gauge where the run goes to breakthrough:
         # the pole gauge's volume bookkeeping lost whole beads' volumes where
         # lines crossed poles; the older "half" sets as they were)
         if gauge is None:
             gauge = "flux" if goal == "breakthrough" else "pole"
-        ev, _ = load(x, L, L, theta=theta, h=h, floor=goal == "breakthrough", gauge=gauge)
+        if name.startswith("p"):
+            # (a cell periodic in x and y: no side walls)
+            x, _, _ = settle_periodic(n, L, seed=seed)
+            ev, _ = load_periodic(x, L, theta=theta, h=h)
+        else:
+            x, _, _ = settle(n, L, L, seed=seed)
+            ev, _ = load(x, L, L, theta=theta, h=h, floor=goal == "breakthrough", gauge=gauge)
         ev.relax()
         v0 = float(ev.body(1).volume)
     target = FRACTION*v0
@@ -172,6 +187,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     # (per step: the kinds of the changes made, whether it fell; a step
     # the run backed up past is no longer the run's)
     made = {}
+    # (per step the curve: the draining body's volume and pressure, the
+    # liquid trapped, the energy; a step the run backed up past dropped)
+    curve = {}
     # (the run's work, in passes over the surface, as arclength's budget
     # counts it: _core.work() between steps over the facets after each)
     from pysurfaceevolver import _core
@@ -218,6 +236,12 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                                 os.remove(stale + ext)
                     for k in [k for k in made if k >= step.index]:
                         del made[k]
+                    for k in [k for k in curve if k >= step.index]:
+                        del curve[k]
+                    curve[step.index] = (float(step.value), float(ev.body(1).pressure),
+                                         float(step.trapped), float(step.energy), bool(step.fell),
+                                         len(step.changes))
+                    result["curve"] = [[k, *curve[k]] for k in sorted(curve)]
                     made[step.index] = ([e.kind for e in step.changes], step.fell)
                     kinds = Counter(kind for m, _ in made.values() for kind in m)
                     result.update(end=float(step.value), steps=step.index,
@@ -451,7 +475,9 @@ def main(argv):
             argv[9] if len(argv) > 9 else "half", **options)
         return
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--set", default="quick", choices=("quick", "small", "wide", "wide-half", "full"))
+    ap.add_argument("--set", default="quick", choices=("quick", "small", "wide", "wide-half", "full",
+                                                       "periodic", "periodic-16", "periodic-32",
+                                                       "periodic-64"))
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--threads", type=int, default=1, choices=(1, 2, 3, 4),
                     help="OpenMP threads per run (runs times threads up to the cores: a "
