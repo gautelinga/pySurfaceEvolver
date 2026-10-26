@@ -144,6 +144,10 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     from pack import settle, load, settle_periodic, load_periodic
     import pysurfaceevolver as pyse
     from pysurfaceevolver import recipes
+    if os.environ.get("PYSE_SLAB_P"):
+        # (experiments: the slab flux gauge's polynomial degree)
+        from pysurfaceevolver import _periodic
+        _periodic.SLAB_FLUX["p"] = int(os.environ["PYSE_SLAB_P"])
 
     log = open(os.path.join(out, f"{name}.log"), "w")
     t0 = time.time()
@@ -247,6 +251,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                                          float(step.trapped), float(step.energy), bool(step.fell),
                                          len(step.changes))
                     result["curve"] = [[k, *curve[k]] for k in sorted(curve)]
+                    # (the run so far, for a run stopped from outside: a timeout)
+                    result["seconds"] = time.time() - t0
+                    json.dump(result, open(os.path.join(out, f"{name}.part"), "w"))
                     made[step.index] = ([e.kind for e in step.changes], step.fell)
                     kinds = Counter(kind for m, _ in made.values() for kind in m)
                     result.update(end=float(step.value), steps=step.index,
@@ -336,6 +343,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     log.write(f"end: {'reached' if result['reached'] else result['stop']}\n")
     log.close()
     json.dump(result, open(os.path.join(out, f"{name}.json"), "w"), indent=1)
+    if os.path.exists(os.path.join(out, f"{name}.part")):
+        os.remove(os.path.join(out, f"{name}.part"))
 
 
 KEEP = 20       # checkpoints: the last this many steps' states kept
@@ -378,8 +387,9 @@ def launch(cfg, out, python, threads=1, gauge=None):
     name, n, L, seed, theta, h, ds, timeout, goal = cfg
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
     path = os.path.join(out, f"{name}.json")
-    if os.path.exists(path):
-        os.remove(path)
+    for stale in (path, os.path.join(out, f"{name}.part")):
+        if os.path.exists(stale):
+            os.remove(stale)
     t = time.time()
     try:
         p = subprocess.run([python, os.path.abspath(__file__), "--one", name, str(n), str(L),
@@ -389,8 +399,17 @@ def launch(cfg, out, python, threads=1, gauge=None):
         code, err = p.returncode, p.stderr
     except subprocess.TimeoutExpired as e:
         code, err = "timeout", (e.stderr or b"").decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+    part = os.path.join(out, f"{name}.part")
     if os.path.exists(path):
         r = json.load(open(path))
+    elif os.path.exists(part):
+        # (stopped from outside: the run as far as it got, its curve kept)
+        r = json.load(open(part))
+        r.update(reached=False, seconds=time.time() - t, stop=f"process: {code}",
+                 stop_class="timeout" if code == "timeout" else f"crash (exit {code})")
+        left = r["end"] + r.get("trapped", 0.0)
+        r["drained"] = (r["start"] - left)/r["start"]
+        json.dump(r, open(path, "w"), indent=1)
     else:
         r = dict(name=name, beads=n, box=L, seed=seed, theta=theta, h=h, ds=ds, reached=False,
                  changes=None, drained=None, seconds=time.time() - t,

@@ -82,7 +82,9 @@ def panels(groups, title, path, label):
                     markeredgecolor="white" if end == "o" else colour[k], markeredgewidth=1.2)
         ax.set_title(f"contact angle {theta:g} degrees", fontsize=10, color=INK)
         ax.set_xlabel("saturation (liquid / pore space)", fontsize=9, color=INK)
-        ax.set_xlim(1.02, -0.02)
+        low = min([np.array(table(r), float)[:, 3].min() for _, r in groups[theta]
+                   if r.get("curve")] or [0.0])
+        ax.set_xlim(1.02, max(0.0, low - 0.05))
     axes[0][0].set_ylabel("capillary pressure Pc (tension / bead radius)", fontsize=9, color=INK)
     handles = [plt.Line2D([], [], color=colour[k], linewidth=1.5) for k in keys]
     fig.legend(handles, [f"{label} {k}" for k in keys], loc="upper right", frameon=False,
