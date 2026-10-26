@@ -41,11 +41,13 @@ FRACTION = 0.5      # a run succeeds when the liquid is down to this share of it
 STEPS = 2000        # arclength steps at most (a run needs about 150 at ds -0.5)
 
 
-def configs(which, h=None, ds=None):
+def configs(which, h=None, ds=None, ds_area=False):
     """(name, beads, box side, seed, contact angle, h, ds, timeout in s,
     goal): goal "half" (the liquid down to FRACTION of its start) or
     "breakthrough" (the floor a wall, the gas reaching it). h, ds: the
-    set's runs at that edge length, or arclength step, instead."""
+    set's runs at that edge length, or arclength step, instead; ds_area:
+    the step scaled with the cell's area (as a 5 x 5 cell's), the same mean
+    move of the meniscus a step whatever the pack's size."""
     out = []
     for n, L, timeout in ((4, 4.2, 1800), (16, 5.0, 3600)):
         for seed in (0, 1, 2):
@@ -86,6 +88,9 @@ def configs(which, h=None, ds=None):
         out = [(n, L, seed, theta, h, d, timeout) for n, L, seed, theta, _, d, timeout in out]
     if ds is not None:
         out = [(n, L, seed, theta, h_, ds, timeout) for n, L, seed, theta, h_, _, timeout in out]
+    if ds_area:
+        out = [(n, L, seed, theta, h_, round(d*(L/5.0)**2, 3), timeout)
+               for n, L, seed, theta, h_, d, timeout in out]
     if h is not None or ds is not None:
         # (the time limit grows with the work: facets as 1/h^2, steps as 1/ds)
         out = [(n, L, seed, theta, h_, d, int(t*(0.2/h_)**2*abs(0.5/d)))
@@ -489,6 +494,8 @@ def main(argv):
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--h", type=float, help="the set's runs at this edge length")
     ap.add_argument("--ds", type=float, help="the set's runs at this arclength step")
+    ap.add_argument("--ds-area", action="store_true",
+                    help="the arclength step scaled with the cell's area (as a 5 x 5 cell's)")
     ap.add_argument("--python", default=sys.executable)
     ap.add_argument("--summary")
     ap.add_argument("--compare", nargs=2)
@@ -501,7 +508,7 @@ def main(argv):
         return
     out = os.path.abspath(args.out or os.path.join(HERE, "out", args.set))
     os.makedirs(out, exist_ok=True)
-    todo = [c for c in configs(args.set, args.h, args.ds) if not args.only or c[0] in args.only]
+    todo = [c for c in configs(args.set, args.h, args.ds, args.ds_area) if not args.only or c[0] in args.only]
     # the longest first, so the pool ends together
     todo.sort(key=lambda c: -c[1])
     print(f"{len(todo)} runs, {args.jobs} at a time ({args.threads} thread"
