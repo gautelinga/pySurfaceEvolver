@@ -816,7 +816,7 @@ int pyse_slabflux_active(void)
 
 /* the class fields F_cl at x (box region), with derivatives: V[cl][m],
    G[cl][m][i], S[cl][m][i][j] */
-static int sf_fields(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL S[][3][3][3])
+static int sf_fields_in(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL S[][3][3][3])
 { REAL xc[3], u[3], D[20], mv[(SF_PMAX + 1)*(SF_PMAX + 2)*(SF_PMAX + 3)/6];
   struct sf_region *g = sf_box_at(x,xc);
   int cl, s, m, i, j, nm;
@@ -884,6 +884,40 @@ static int sf_fields(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL
         }
     }
   }
+  return 1;
+}
+
+/* sf_fields_in anywhere: a point below the boxes by the mirror symmetry (each
+   source has its image there, of the same strength: F(Rx) = R F(x), R the
+   reflection in the floor), one above the boxes (in a lattice: 64 periods
+   above the beads, where the field is uniform to exp(-2 pi 64)) by the top
+   layer's value, no derivatives. (A Newton step on an indefinite Hessian
+   tries such points; the step is then refused, its energy needs a value.) */
+static int sf_fields(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL S[][3][3][3])
+{ REAL y[3] = { x[0], x[1], x[2] }, top, sg[3] = { 1.0, 1.0, -1.0 };
+  int flip = 0, far = 0, cl, m, i, j;
+  if ( !isfinite(x[0]) || !isfinite(x[1]) || !isfinite(x[2]) ) return 0;
+  if ( sf.mirror && y[2] < sf.z0 + sf.izmin*sf.bz ) { y[2] = 2*sf.zf - y[2]; flip = 1; }
+  if ( sf.lattice )
+  { top = sf.z0 + (sf.nz + sf.izmin)*sf.bz;
+    if ( y[2] >= top - 0.5*sf.bz ) { y[2] = top - 0.5*sf.bz; far = 1; }
+  }
+  if ( !sf_fields_in(y,far ? 0 : order,V,G,S) ) return 0;
+  if ( far )
+  { if ( order >= 1 ) memset(G,0,sf.ncls*sizeof(*G));
+    if ( order >= 2 ) memset(S,0,sf.ncls*sizeof(*S));
+  }
+  if ( flip )
+    for ( cl = 0 ; cl < sf.ncls ; cl++ )
+      for ( m = 0 ; m < 3 ; m++ )
+      { V[cl][m] *= sg[m];
+        if ( order >= 1 && !far )
+          for ( i = 0 ; i < 3 ; i++ )
+          { G[cl][m][i] *= sg[m]*sg[i];
+            if ( order >= 2 )
+              for ( j = 0 ; j < 3 ; j++ ) S[cl][m][i][j] *= sg[m]*sg[i]*sg[j];
+          }
+      }
   return 1;
 }
 
@@ -1043,7 +1077,7 @@ static int sf_eval(const struct sf_key *k, const REAL *x, int order, REAL *v, RE
         }
 #endif
         kb_error(PYSE_ERR_BAD_ARGUMENT,"The flux gauge's fast sum was asked for its field "
-                 "outside the region it covers (far above the beads).\n",RECOVERABLE);
+                 "at a point it can't take (not finite).\n",RECOVERABLE);
         return 0;
       }
     }

@@ -431,6 +431,24 @@ def test_the_flux_gauge_far_above_and_beside_a_box():
         assert len(_core.slabflux_probe(x)) > 0
 
 
+def test_the_flux_gauge_below_the_floor_and_far_above():
+    # (a Newton step on an indefinite Hessian tries vertices far from the
+    # liquid: 30 below the floor in a periodic pack, which stopped the run
+    # with an error; below, the field by the mirror's symmetry, far above
+    # the boxes the uniform field the lattice tends to)
+    from pysurfaceevolver import _core
+    _bead(PERIODS, gauge="flux")
+    for x in ([0.3, 0.4, -30.0], [-7.1, 2.3, -3.0], [0.3, 0.4, -1e4], [0.3, 0.4, 1e4]):
+        o = np.array(_core.slabflux_probe(x))
+        n = len(o)//2
+        assert np.abs(o[:n] - o[n:]).max() < 1e-9*np.abs(o[n:]).max()
+    f = lambda y: np.array(_core.slabflux_field(0, 0, list(y)))
+    x, e = np.array([0.6, 0.7, -30.0]), 1e-4
+    o = f(x)
+    d1 = np.array([(f(x + e*d)[:3] - f(x - e*d)[:3])/(2*e) for d in np.eye(3)]).T
+    assert np.abs(o[3:12].reshape(3, 3) - d1).max() < 1e-8
+
+
 def test_a_plane_given_by_expressions_is_refused_plainly():
     # (plane() takes numbers; a hand-made wall whose normal has an expression
     # got numpy's conversion error)
