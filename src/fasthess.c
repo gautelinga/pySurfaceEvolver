@@ -242,7 +242,18 @@ static int method_safe_cached(int mk, struct method_instance *mi, int pass)
   return safe_seen[3*mk + pass] == 1;
 }
 
-/* whether this pass over elements of `type` may run in parallel */
+/* a slab periodic in x and y (pySE's periods=, bindings/pyse_api.c): its
+   periods into L; 0 elsewhere (and in Evolver without the glue) */
+#if defined(__GNUC__)
+extern int pyse_slab(REAL *L) __attribute__((weak));
+#define follow_slab(L) (pyse_slab ? pyse_slab(L) : 0)
+#else
+#define follow_slab(L) 0
+#endif
+
+/* whether this pass over elements of `type` may run in parallel (in a slab
+   periodic in x and y too: q_facet_setup() unwraps each element's vertices,
+   and a translation leaves the gradient and Hessian as they are) */
 static int quant_ok(int type, int pass)
 { int mk;
   if ( fl_disabled() || threadflag || nprocs > 1
@@ -250,7 +261,8 @@ static int quant_ok(int type, int pass)
            && web.modeltype != QUADRATIC)
        || SDIM != 3 || web.dimension != 2 || web.representation != SOAPFILM
        || compound_quant_list_head >= 0 || (sym_flags & NEED_FORM_UNWRAPPING)
-       || web.symmetry_flag || dirichlet_flag || sobolev_flag || web.torus_flag )
+       || ((web.symmetry_flag || web.torus_flag) && !follow_slab(NULL))
+       || dirichlet_flag || sobolev_flag )
     return 0;
   if ( type != VERTEX && type != EDGE && type != FACET ) return 0;
   for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
@@ -1643,15 +1655,6 @@ void fl_hessian_deflate(struct linsys *S, REAL *X)
 #define FOLLOW_SHAPE 0.3   /* facets of worse shape than this don't count */
 #define FOLLOW_TOL 0.005    /* sweeps stop below this correction per edge */
 #define FOLLOW_SWEEPS 200
-
-/* a slab periodic in x and y (pySE's periods=, bindings/pyse_api.c): its
-   periods into L; 0 elsewhere (and in Evolver without the glue) */
-#if defined(__GNUC__)
-extern int pyse_slab(REAL *L) __attribute__((weak));
-#define follow_slab(L) (pyse_slab ? pyse_slab(L) : 0)
-#else
-#define follow_slab(L) 0
-#endif
 
 static REAL *fw_old = NULL;   /* coordinates before the step, by vertex ordinal */
 static long fw_size = 0;
