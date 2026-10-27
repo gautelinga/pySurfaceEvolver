@@ -3,9 +3,14 @@
 Each run's JSON (corpus.py) carries its curve: per step the draining body's
 volume V and pressure p, the liquid trapped, the energy, whether the step
 was reached by a fall. Here Pc = -p (the gas at 0: tension over the beads'
-radius, both 1) and the saturation S = (V + trapped) / V0, V0 the liquid at
-the start (the pore space up to the flat meniscus). A Haines jump is a fall:
-the pressure drops at a fixed volume.
+radius, both 1) and the saturation S that of the pack's pore space: below
+z_ref, the 90th percentile of the beads' tops (the pack rebuilt from its
+seed), S = min(V + trapped, P)/P with P the pore volume below z_ref. The
+liquid above z_ref (the start's flat meniscus is just over the highest bead;
+one bead standing out raised it 0.9 in a 64-bead pack, a layer draining at
+Pc ~ 0 that was 30% of the liquid) is taken to drain first, at S = 1.
+Walled packs: S = (V + trapped)/V0, V0 the liquid at the start. A Haines
+jump is a fall: the pressure drops at a fixed volume.
 
 usage: python bench/topology/curves.py DIR [DIR ...] [--out OUT]
 
@@ -33,19 +38,45 @@ def runs(dirs):
     return out
 
 
+_PORES: dict = {}
+
+
+def pores(r):
+    """A periodic run's (z_ref, pore volume below it): its pack settled again
+    (settle_periodic, deterministic) at its size, cell and seed. None for a
+    walled one."""
+    if not r["name"].startswith("p"):
+        return None
+    key = (r["beads"], r["box"], r["seed"])
+    if key not in _PORES:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from pack import settle_periodic
+        L = float(r["box"])
+        x, _, _ = settle_periodic(int(r["beads"]), L, seed=int(r["seed"]))
+        z = float(np.percentile(x[:, 2] + 1.0, 90))
+        h = np.clip(z - (x[:, 2] - 1.0), 0.0, 2.0)          # (each sphere's part below z)
+        _PORES[key] = (z, L*L*z - float(np.sum(np.pi*h*h*(3.0 - h)/3.0)))
+    return _PORES[key]
+
+
 def table(r):
-    """(step, V, trapped, S, Pc, energy, fell, changes) rows of a run."""
+    """(step, V, trapped, S, Pc, energy, fell, changes, S0) rows of a run: S
+    the pack's saturation (pores()), S0 = (V + trapped)/V0."""
     v0 = float(r["start"])
+    ref = pores(r)
     rows = []
     for k, V, p, trapped, energy, fell, changes in r["curve"]:
-        rows.append((k, V, trapped, (V + trapped)/v0, -p, energy, int(fell), changes))
+        s0 = (V + trapped)/v0
+        s = min(V + trapped, ref[1])/ref[1] if ref else s0
+        rows.append((k, V, trapped, s, -p, energy, int(fell), changes, s0))
     return rows
 
 
 def write_csv(r, out):
     with open(os.path.join(out, f"{r['name']}.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["step", "volume", "trapped", "saturation", "pc", "energy", "fell", "changes"])
+        w.writerow(["step", "volume", "trapped", "saturation", "pc", "energy", "fell", "changes",
+                    "saturation_start"])
         w.writerows(table(r))
 
 
@@ -82,7 +113,8 @@ def panels(groups, title, path, label):
             ax.plot(t[-1, 3], t[-1, 4], end, color=colour[k], markersize=6,
                     markeredgecolor="white" if end == "o" else colour[k], markeredgewidth=1.2)
         ax.set_title(f"contact angle {theta:g} degrees", fontsize=10, color=INK)
-        ax.set_xlabel("saturation (liquid / pore space)", fontsize=9, color=INK)
+        ax.set_xlabel("saturation (liquid / pore space below the pack's top)", fontsize=9,
+                      color=INK)
         low = min([np.array(table(r), float)[:, 3].min() for _, r in groups[theta]
                    if r.get("curve")] or [0.0])
         ax.set_xlim(1.02, max(0.0, low - 0.05))
@@ -93,7 +125,8 @@ def panels(groups, title, path, label):
     fig.legend(handles, [f"{label} {k}" for k in keys], loc="upper left",
                bbox_to_anchor=(0.01, 0.93), frameon=False, fontsize=9, ncol=len(keys))
     note = ("o: breakthrough reached; x: the run stopped short. A drop at a fixed saturation "
-            "is a Haines jump.")
+            "is a Haines jump. The pack's top: the 90th percentile of the beads' tops; the "
+            "liquid above it drains first (at S = 1).")
     fig.text(0.01, 0.01, textwrap.fill(note, int(width*17)), fontsize=8, color=MUTED,
              va="bottom")
     fig.tight_layout(rect=(0, 0.07, 1, 0.88))
