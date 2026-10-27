@@ -407,19 +407,14 @@ def _newton_target(ev, put: Callable[[Any], None],
     was = _core.set_follow(False)
     try:
         _hessian(ev)
+    except BaseException:
+        ev._put_back(start)     # (a step refused: the multipliers its solve set)
+        raise
     finally:
         _core.set_follow(was)
     x, multipliers = ev.vertices, _core.multipliers()
     ev._put_back(start)
     return x, multipliers
-
-
-# arclength()'s corrector: a Newton step moving a vertex farther than this
-# many mean edge lengths is thrown, not made (an indefinite Hessian's: in a
-# 64-bead pack, steps of 1e2 to 1e4 edges took up to 200 s to evaluate, the
-# slab flux gauge's fields made wherever the vertices landed, and failed;
-# the converging ones moved vertices below 2 edges)
-WILD_STEP = 10.0
 
 
 def _newton_pair(ev, put, value: float, delta: float) -> "Union[None, str, tuple]":
@@ -429,8 +424,10 @@ def _newton_pair(ev, put, value: float, delta: float) -> "Union[None, str, tuple
     multipliers each ends at. None where it can't be (another kind of
     value, or Evolver refusing: then the two steps as before, which handle
     a body with no valid pressures yet or held all round by solids); "wild"
-    where a step would move a vertex farther than WILD_STEP mean edge
-    lengths (neither made)."""
+    where a step would move a vertex past the Newton steps' bound (10 mean
+    edge lengths: _core.set_step_limits; neither made: an indefinite
+    Hessian's steps of 1e2 to 1e4 edges took up to 200 s to evaluate in a
+    64-bead slab, and failed; converging ones moved vertices below 2)."""
     from ._errors import EvolverError, EvolverWarning
     body = getattr(put, "body", None)
     if body is None or not hasattr(_core, "newton_pair"):
@@ -439,7 +436,7 @@ def _newton_pair(ev, put, value: float, delta: float) -> "Union[None, str, tuple
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
         try:
-            _, result = ev._call(_core.newton_pair, int(body), float(delta), WILD_STEP)
+            _, result = ev._call(_core.newton_pair, int(body), float(delta))
         except EvolverError:
             return None
     if result.data is None:
@@ -483,6 +480,7 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
     fails as soon as the point is farther than that from the prediction: on
     the plane, but somewhere else (a pore's liquid at a volume 0.7 below a
     step of 0.01, where Newton's basin was a fifth of the step)."""
+    from ._errors import EvolverError, WILD_STEP_ERROR
     ev.vertices = x_pred
     value = v_pred
     n = len(x_pred)
@@ -496,8 +494,13 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
         if pair is not None:
             n0, m0, n1, m1 = pair
         else:
-            n0, m0 = _newton_target(ev, put, value)
-            n1, m1 = _newton_target(ev, put, value + delta)
+            try:
+                n0, m0 = _newton_target(ev, put, value)
+                n1, m1 = _newton_target(ev, put, value + delta)
+            except EvolverError as e:
+                if e.errnum != WILD_STEP_ERROR:
+                    raise
+                return False, it
         dn = (n1 - n0)/delta
         # the new point n0 + dv*dn on the plane: tx.(x - x_pred)/n + tv*(v - v_pred) = 0
         gap = float((tx*(n0 - x_pred)).sum())/n + tv*(value - v_pred)
@@ -572,9 +575,15 @@ def _arc_back(ev, put, value: float, tol: float,
         ok, _ = _arc_correct(ev, put, ev.vertices, value, tangent[0], tangent[1], tol, 12,
                              reach)
         return ok, ev.residual()
+    from ._errors import EvolverError, WILD_STEP_ERROR
     residual = ev.residual()
     for k in range(12):
-        _hessian(ev)
+        try:
+            _hessian(ev)
+        except EvolverError as e:
+            if e.errnum != WILD_STEP_ERROR:
+                raise
+            return False, residual      # (a step thrown far: not back)
         residual = ev.residual()
         if residual < tol:
             return True, residual
@@ -1586,8 +1595,14 @@ def _arc_tangent(ev, put, value: float, tx: np.ndarray,
     secant (tx, tv) does."""
     start = ev._coords()
     delta = 1e-6*max(1.0, abs(value))
-    n0, _ = _newton_target(ev, put, value)
-    n1, _ = _newton_target(ev, put, value + delta)
+    # (no step bound: near a fold both targets are far, their difference
+    # the tangent, which has no value part there)
+    was = _core.set_step_limits(0.0, 0.0)
+    try:
+        n0, _ = _newton_target(ev, put, value)
+        n1, _ = _newton_target(ev, put, value + delta)
+    finally:
+        _core.set_step_limits(*was)
     ev._put_back(start)
     put(value)
     dn = _normal_part(ev, (n1 - n0)/delta)

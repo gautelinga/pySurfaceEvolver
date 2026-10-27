@@ -1660,6 +1660,57 @@ static REAL *fw_old = NULL;   /* coordinates before the step, by vertex ordinal 
 static long fw_size = 0;
 static int fw_off = 0;        /* fl_set_follow(0): plain Newton steps */
 
+REAL fl_step_limit = 10.0, fl_step_size = 1.0;
+
+REAL fl_step_largest(REAL *X)
+{ vertex_id v_id;
+  REAL worst = 0.0;
+  int i, j;
+  FOR_ALL_VERTICES(v_id)
+  { struct hess_verlist *vc = get_vertex_vhead(v_id);
+    REAL d2 = 0.0, d;
+    if ( vc->freedom <= 0 ) continue;
+    if ( get_vattr(v_id) & BOUNDARY )   /* (by its parameters) */
+      for ( i = 0 ; i < get_boundary(v_id)->pcount ; i++ )
+        d2 += X[vc->rownum + i]*X[vc->rownum + i];
+    else
+      for ( j = 0 ; j < SDIM ; j++ )
+      { d = vc->proj ? dot(vc->proj[j],X + vc->rownum,vc->freedom) : X[vc->rownum + j];
+        d2 += d*d;
+      }
+    if ( d2 > worst ) worst = d2;
+  }
+  return sqrt(worst);
+}
+
+REAL fl_step_bound(int plain)
+{ if ( plain )
+  { vertex_id v_id;
+    REAL lo[MAXCOORD], hi[MAXCOORD], d2 = 0.0;
+    int j, any = 0;
+    if ( !(fl_step_size > 0.0) ) return 0.0;
+    FOR_ALL_VERTICES(v_id)
+    { REAL *x = get_coord(v_id);
+      for ( j = 0 ; j < SDIM ; j++ )
+      { if ( !any || x[j] < lo[j] ) lo[j] = x[j];
+        if ( !any || x[j] > hi[j] ) hi[j] = x[j];
+      }
+      any = 1;
+    }
+    if ( !any ) return 0.0;
+    for ( j = 0 ; j < SDIM ; j++ ) d2 += (hi[j] - lo[j])*(hi[j] - lo[j]);
+    return fl_step_size*sqrt(d2);
+  }
+  else
+  { edge_id e_id;
+    REAL sum = 0.0;
+    long n = 0;
+    if ( !(fl_step_limit > 0.0) ) return 0.0;
+    FOR_ALL_EDGES(e_id) { sum += get_edge_length(e_id); n++; }
+    return n ? fl_step_limit*sum/n : 0.0;
+  }
+}
+
 int fl_set_follow(int on)
 { int was = !fw_off;
   fw_off = !on;

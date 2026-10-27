@@ -33,6 +33,7 @@ enum {
 #define PYSE_ERR_INVALID_SURFACE 9002 /* see PYSE_INVALID */
 #define PYSE_ERR_BAD_VALUE 9003       /* expression did not give numbers */
 #define PYSE_ERR_BAD_ARGUMENT 9004    /* wrong array size, element type... */
+#define PYSE_ERR_WILD_STEP 9005      /* a Newton step past the step bound (fastloops.h) */
 
 /* Element types (same numbering as Evolver's storage.h). */
 enum { PYSE_VERTEX = 0, PYSE_EDGE = 1, PYSE_FACET = 2, PYSE_BODY = 3 };
@@ -156,6 +157,7 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
                         const double *pinv, int nsrc, const double *src, const double *grid);
 int pyse_slabflux_key(const char *method, int con, int which, int kind, int wall);
 int pyse_slabflux_probe(const double *x, double *out);
+void pyse_slabflux_stats(long *out);   /* boxes, parents made */
 int pyse_slabflux_field(int kind, int wall, const double *x, double *out);
 void pyse_slabflux_simd(int on);   /* (set by pyse_native_simd) */
 /* the flux gauge's sums over the spheres with AVX2 where the processor has
@@ -179,11 +181,19 @@ int pyse_edges_on_constraints(const int *nums, int ncon, unsigned char *out, lon
 /* Two Newton steps from the same point (see recipes._arc_correct): at body
    number body's target and at that plus delta, from one factorization; the
    vertices (nv x 3) and multipliers (nm) each ends at; the surface put back.
-   limit > 0: where either step would move a vertex farther than limit times
-   the edges' mean length, neither is made (*wild 1, the outputs not set).
+   Where either step would move a vertex farther than the corrector's step
+   bound (pyse_set_step_limits), neither is made (*wild 1, the outputs not
+   set).
    PYSE_OK or an error status. */
-int pyse_newton_pair(int body, double delta, double limit, double *x0, double *m0, double *x1,
-                     double *m1, long nv, long nm, int *wild);
+int pyse_newton_pair(int body, double delta, double *x0, double *m0, double *x1, double *m1,
+                     long nv, long nm, int *wild);
+/* Newton steps' bounds: arclength's corrector's (pyse_newton_pair) moves
+   no vertex farther than edges mean edge lengths (default 10), a plain step
+   none farther than size times the surface's size, its bounding box's
+   diagonal (default 1); 0: no bound. A plain step past it is refused (error
+   PYSE_ERR_WILD_STEP), hessian_seek's line search kept within it. The
+   previous two in was. */
+void pyse_set_step_limits(double edges, double size, double *was);
 const char *pyse_solver(void);
 /* Whether Newton steps carry the mesh along a line they move past the edges
    beside it (on by default); returns the previous setting. */

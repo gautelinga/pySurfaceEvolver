@@ -333,6 +333,17 @@ void hessian_auto() /* automatic hessian */
 
   sp_Hessian_solver(&S,rhs,&X);
 
+  { REAL bound = fl_step_bound(1);   /* pySE: a step thrown far isn't made */
+    if ( bound > 0.0 && fl_step_largest(X) > bound )
+    { hessian_exit(NULL);
+      free_system(&S);
+      temp_free((char*)rhs);
+      temp_free((char*)X);
+      kb_error(FL_ERR_WILD_STEP,"Newton step would move a vertex farther than the step "
+               "bound; not made.\n",RECOVERABLE);
+    }
+  }
+
   hessian_iterate_flag = 1;
   hessian_move((REAL)1.0,ACTUAL_MOVE,X);
   hessian_iterate_flag = 0;
@@ -374,6 +385,10 @@ REAL hessian_seek(REAL maxscale)
   else if ( web.area_norm_flag )
     star_metric_setup(&S,&Met);
   sp_Hessian_solver(&S,rhs,&X);
+  { REAL bound = fl_step_bound(1), big;   /* pySE: the search within the step bound */
+    if ( bound > 0.0 && (big = fl_step_largest(X)) > 0.0 && maxscale*big > bound )
+      maxscale = bound/big;
+  }
   best_scale = hessian_line_seek(&S,maxscale,X);
   hessian_exit(X);
   free_system(&S);

@@ -15,7 +15,8 @@ from . import _core
 from ._analysis import _TARGET_LOST, _Analysis
 from .constraints import ANGLE_FLOOR, ANGLE_FLOOR_TOP
 from ._engine import _threads_for_call, surface
-from ._errors import EvolverError, EvolverWarning, UnstableEquilibriumWarning, _num
+from ._errors import (EvolverError, EvolverWarning, UnstableEquilibriumWarning, WILD_STEP_ERROR,
+                      _num)
 from ._geometry import _edge_turn, _long_spokes
 from ._periodic import delta
 from ._results import Health, IterationResult, _Coords, _Trace
@@ -677,9 +678,11 @@ class _Relaxing(_Analysis):
                 e0 = _core.total_energy()
                 try:
                     output.append(self.command(kind))
-                except EvolverError:
+                except EvolverError as e:
                     self._put_back(snapshot)
-                    failed += 1
+                    # (a step thrown far, past the step bound: rejected, the
+                    # surface has a Hessian)
+                    failed += e.errnum != WILD_STEP_ERROR
                     continue
                 e1 = _core.total_energy()
                 res1 = self.residual()

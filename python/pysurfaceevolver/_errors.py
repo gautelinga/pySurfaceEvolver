@@ -10,6 +10,11 @@ import numpy as np
 from . import _core
 
 
+# a Newton step that would move a vertex past the steps' bound (a plain one:
+# the surface's size; _core.set_step_limits): refused, not made (pyse_api.h)
+WILD_STEP_ERROR = 9005
+
+
 def _rebuilt(cls: Any, args: tuple, state: dict) -> BaseException:
     error = cls.__new__(cls)
     error.args = args

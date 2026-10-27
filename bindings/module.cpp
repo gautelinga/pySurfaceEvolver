@@ -321,15 +321,15 @@ NB_MODULE(_core, m) {
     return r;
   }, "nums"_a, CALLBACK_NAMES, "data: (edges, constraints) 1 where the edge is on it");
 
-  m.def("newton_pair", [](int body, double delta, double limit, CALLBACK_ARGS) {
+  m.def("newton_pair", [](int body, double delta, CALLBACK_ARGS) {
     CALL_SCOPE;
     long nv = pyse_count(PYSE_VERTEX), nm = pyse_multiplier_count();
     int sdim = pyse_sdim(), wild = 0;
     std::vector<double> x0(size_t(nv)*size_t(sdim)), x1(size_t(nv)*size_t(sdim));
     std::vector<double> m0(static_cast<size_t>(nm)), m1(static_cast<size_t>(nm));
     CallResult r = run_guarded([&] {
-      return pyse_newton_pair(body, delta, limit, x0.data(), m0.data(), x1.data(), m1.data(),
-                              nv, nm, &wild);
+      return pyse_newton_pair(body, delta, x0.data(), m0.data(), x1.data(), m1.data(), nv, nm,
+                              &wild);
     });
     if (r.status == PYSE_OK && wild)
       r.data = nb::none();
@@ -339,10 +339,19 @@ NB_MODULE(_core, m) {
                               to_numpy(std::move(x1), {size_t(nv), size_t(sdim)}),
                               to_numpy(std::move(m1), {size_t(nm)}));
     return r;
-  }, "body"_a, "delta"_a, "limit"_a = 0.0, CALLBACK_NAMES,
+  }, "body"_a, "delta"_a, CALLBACK_NAMES,
   "data: (vertices, multipliers) after a Newton step at the body's target and at that plus "
-  "delta, from one factorization; None where limit > 0 and a step would move a vertex "
-  "farther than limit times the edges' mean length (neither made)");
+  "delta, from one factorization; None where a step would move a vertex past the step "
+  "bound (set_step_limit; neither made)");
+
+  m.def("set_step_limits", [](double edges, double size) {
+    Lock lock;
+    double was[2];
+    pyse_set_step_limits(edges, size, was);
+    return nb::make_tuple(was[0], was[1]);
+  }, "edges"_a, "size"_a,
+  "Newton steps' bounds: the corrector's in mean edge lengths, a plain step's in the "
+  "surface's sizes (0: none); returns the previous two");
 
   m.def("residual", [](bool full, CALLBACK_ARGS) {
     CALL_SCOPE;
@@ -740,6 +749,12 @@ NB_MODULE(_core, m) {
     int n = pyse_slabflux_probe(x.data(), out);
     return std::vector<double>(out, out + 6*(n > 0 ? n : 0));
   }, "x"_a, "The periodic flux gauge's class fields at x by its regions and by Ewald's sum.");
+  m.def("slabflux_stats", []() {
+    Lock lock;
+    long out[2];
+    pyse_slabflux_stats(out);
+    return nb::make_tuple(out[0], out[1]);
+  }, "The periodic flux gauge's boxes and parents made since its setup.");
   m.def("slabflux_field", [](int kind, int wall, std::vector<double> x) {
     Lock lock;
     double out[39];

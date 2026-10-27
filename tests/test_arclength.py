@@ -325,10 +325,13 @@ def test_the_correctors_two_newton_steps_come_from_one_factorization():
     assert np.array_equal(ev.vertices, start.coords)
 
 
-def test_a_correctors_step_thrown_far_isnt_made(monkeypatch):
-    # (a vertex moved farther than WILD_STEP mean edges: neither step made,
-    # the surface and multipliers as they were, and the corrector fails)
+def test_a_newton_step_thrown_far_isnt_made():
+    # (a vertex moved past the step bounds, the corrector's in mean edges:
+    # its pair not made, the surface and multipliers as they were, and the
+    # corrector fails; a plain step's in the surface's size: refused, which
+    # relax() counts as rejected; hessian_seek's search kept within it)
     from pysurfaceevolver import _core
+    from pysurfaceevolver._errors import EvolverError, WILD_STEP_ERROR
     drop = shapes.cap(0.7, 0.7, nr=6, nt=24)
     ev = pyse.Evolver()
     ev.load_arrays(drop.vertices, drop.faces,
@@ -345,12 +348,27 @@ def test_a_correctors_step_thrown_far_isnt_made(monkeypatch):
     value = 1.1*body.target
     put(value)
     start, pressure = ev._coords(), body.pressure
-    _, result = ev._call(_core.newton_pair, 1, 1e-6, 1e-6)
-    assert result.data is None
-    assert np.array_equal(ev.vertices, start.coords) and body.pressure == pressure
-    _, result = ev._call(_core.newton_pair, 1, 1e-6, 10.0)
+    _, result = ev._call(_core.newton_pair, 1, 1e-6)
     assert result.data is not None
-    monkeypatch.setattr(recipes, "WILD_STEP", 1e-6)
-    ok, its = recipes._arc_correct(ev, put, start.coords, value, np.zeros_like(start.coords),
-                                   1.0, 1e-9, 5)
-    assert not ok and its == 1
+    was = _core.set_step_limits(1e-6, 1e-6)
+    try:
+        assert was == (10.0, 1.0)
+        _, result = ev._call(_core.newton_pair, 1, 1e-6)
+        assert result.data is None
+        assert np.array_equal(ev.vertices, start.coords) and body.pressure == pressure
+        ok, its = recipes._arc_correct(ev, put, start.coords, value,
+                                       np.zeros_like(start.coords), 1.0, 1e-9, 5)
+        assert not ok and its == 1
+        with pytest.raises(EvolverError) as e:
+            ev.command("hessian")
+        assert e.value.errnum == WILD_STEP_ERROR
+        ev._put_back(start)
+        r = ev.newton(1, seek=False)
+        assert r.newton_steps == 0 and not ev._no_hessian
+        put(body.volume)        # (no volume to restore: the move is the step's)
+        x = ev.vertices
+        ev.command("hessian_seek")
+        size = np.linalg.norm(x.max(axis=0) - x.min(axis=0))
+        assert np.linalg.norm(ev.vertices - x, axis=1).max() <= 2e-6*size
+    finally:
+        _core.set_step_limits(*was)

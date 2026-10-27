@@ -93,6 +93,23 @@ void fl_hessian_deflate(struct linsys *S, REAL *X);   /* rigid motions out of a 
 int fl_follow_begin(void);
 void fl_follow_end(void);
 int fl_set_follow(int on);   /* on (default) or off; returns the previous setting */
+/* Newton steps' bounds (fasthess.c): arclength's corrector's
+   (pyse_newton_pair) moves no vertex farther than fl_step_limit mean edge
+   lengths, a plain step (hessian, hessian_seek) none farther than
+   fl_step_size times the surface's size (its vertices' bounding box's
+   diagonal); 0: no bound. fl_step_bound(plain): that length now (0: none);
+   fl_step_largest(X): the largest move the solution X makes (hessian_move's,
+   not made). A plain step past its bound is refused (error
+   FL_ERR_WILD_STEP), hessian_seek's line search kept within it, the
+   corrector's pair not made. (An indefinite Hessian's steps moved vertices
+   by 1e2 to 1e4 edges, and evaluating the surface out there made the slab
+   flux gauge's fields for thousands of boxes: minutes a step. The
+   corrector's converging steps moved them less than 2 edges; a plain step
+   from far off equilibrium can move them many edges of a fine mesh.) */
+#define FL_ERR_WILD_STEP 9005
+extern REAL fl_step_limit, fl_step_size;
+REAL fl_step_bound(int plain);
+REAL fl_step_largest(REAL *X);
 /* Nonzero when PYSE_CHECK_FACET_CACHE is set: verify every cached answer. */
 int fl_check(void);
 
