@@ -19,7 +19,10 @@
  *     region's near sources (within kappa times its radius) are summed
  *     directly; the other explicit ones by their Taylor coefficients at its
  *     centre (a recurrence for 1/r), with the tail's polynomial moved there,
- *     to degree p.
+ *     to degree p. A box's far sources come from its parent (a block of
+ *     4^3 boxes, the same kappa and p): the parent's polynomial moved to
+ *     the box, then only the parent's near sources split into the box's
+ *     near and far ones.
  *
  * Fields come in classes: the volume's (strength -R^3/3) and one per
  * distinct (angle, tension) of the wetting energy (strength R^2, the
@@ -53,6 +56,7 @@
 #define SF_PMAX 24
 #define SF_FLOOR_TOP 20.0         /* constraints.ANGLE_FLOOR_TOP */
 #define SF_CORE 0.5               /* _flux.CORE */
+#define SF_PF 4                   /* a parent's side, in boxes */
 
 /* monomials u^a v^b w^c of degree <= SF_PMAX, by degree */
 static int sf_mono_n[SF_PMAX + 2];        /* count of degree <= p is sf_mono_n[p + 1] */
@@ -116,6 +120,9 @@ static struct
   /* boxes */
   int nx, ny, nz, izmin; REAL bx, by, bz;
   struct sf_region **box;
+  /* parents: blocks of SF_PF^3 boxes (their far sources, sf_parent_at) */
+  int pnx, pny, pnz;
+  struct sf_region **parent;
   /* layers */
   int nl, ilmin; REAL hl;
   struct sf_layer **layer;
@@ -156,6 +163,12 @@ static void sf_free(void)
                          free(sf.box[i]); }
     free(sf.box);
   }
+  if ( sf.parent )
+  { for ( i = 0 ; i < sf.pnx*sf.pny*sf.pnz ; i++ )
+      if ( sf.parent[i] ) { free(sf.parent[i]->near); free(sf.parent[i]->phi);
+                            free(sf.parent[i]); }
+    free(sf.parent);
+  }
   if ( sf.layer )
   { for ( i = 0 ; i < sf.nl ; i++ )
       if ( sf.layer[i] ) { free(sf.layer[i]->phi); free(sf.layer[i]); }
@@ -169,7 +182,7 @@ static void sf_free(void)
   }
   free(sf.exp); free(sf.base); free(sf.bead); free(sf.R);
   free(sf.stencil); free(sf.H); free(sf.pinv);
-  sf.box = NULL; sf.layer = NULL; sf.wall = NULL; sf.exp = sf.base = NULL;
+  sf.box = NULL; sf.parent = NULL; sf.layer = NULL; sf.wall = NULL; sf.exp = sf.base = NULL;
   sf.bead = NULL; sf.R = NULL; sf.stencil = sf.H = sf.pinv = NULL;
   sf.on = 0;
 }
@@ -493,10 +506,16 @@ static struct sf_layer *sf_layer_at(REAL z)
 
 /* a region about c (radius r: the points it serves): near sources within
    kappa r directly, the others by its polynomial; skip: the bead whose own
-   source (n = 0, not the mirror) it leaves out (-1: none) */
-static struct sf_region *sf_region_make(const REAL *c, REAL r, REAL kappa, int p, int skip)
+   source (n = 0, not the mirror) it leaves out (-1: none). par: a parent
+   region about the region (its points within par's radius, of the same
+   kappa and p, no skip, no tail): the sources par holds by its polynomial,
+   far from the region too, come from it re-expanded (exact: a polynomial),
+   only par's near ones are looked at. tail: with the tail's polynomial. */
+static struct sf_region *sf_region_make(const REAL *c, REAL r, REAL kappa, int p, int skip,
+                                        const struct sf_region *par, int tail)
 { struct sf_region *g = (struct sf_region*)calloc(1,sizeof(*g));
-  int nm = NMONO(p), s, cl, cap = 64;
+  int nm = NMONO(p), s, cl, cap = 64, nsrc = par ? par->nnear : sf.nexp;
+  const struct sf_src *src = par ? par->near : sf.exp;
   REAL *work = (REAL*)malloc((size_t)NMONO(SF_PMAX)*sizeof(REAL)), D = kappa*r;
   struct sf_layer *t;
   if ( !g || !work ) { free(g); free(work); return NULL; }
@@ -505,8 +524,11 @@ static struct sf_region *sf_region_make(const REAL *c, REAL r, REAL kappa, int p
   g->phi = (REAL*)calloc((size_t)sf.ncls*nm,sizeof(REAL));
   g->near = (struct sf_src*)malloc(cap*sizeof(struct sf_src));
   if ( !g->phi || !g->near ) goto fail;
-  for ( s = 0 ; s < sf.nexp ; s++ )
-  { const struct sf_src *e = sf.exp + s;
+  if ( par )
+    for ( cl = 0 ; cl < sf.ncls ; cl++ )
+      sf_shift_add(par->phi + cl*NMONO(par->p),par->p,par->c,par->rho,c,r,p,g->phi + cl*nm);
+  for ( s = 0 ; s < nsrc ; s++ )
+  { const struct sf_src *e = src + s;
     REAL w[3] = { e->c[0] - c[0], e->c[1] - c[1], e->c[2] - c[2] };
     if ( skip >= 0 && e->bead == skip && e->own ) continue;
     if ( w[0]*w[0] + w[1]*w[1] + w[2]*w[2] < D*D )
@@ -520,7 +542,7 @@ static struct sf_region *sf_region_make(const REAL *c, REAL r, REAL kappa, int p
     else sf_taylor_add(c,e->c,p,r,e->q,sf.ncls,g->phi,nm,work);
   }
   /* the tail, from the layer at the region's height */
-  if ( sf.lattice )
+  if ( sf.lattice && tail )
   { t = sf_layer_at(c[2]);
     if ( !t ) goto fail;
     for ( cl = 0 ; cl < sf.ncls ; cl++ )
@@ -531,6 +553,25 @@ static struct sf_region *sf_region_make(const REAL *c, REAL r, REAL kappa, int p
 fail:
   free(work); free(g->phi); free(g->near); free(g);
   return NULL;
+}
+
+/* the parent of boxes (SF_PF jx .. + SF_PF - 1, ...): about its block's
+   centre, SF_PF times a box's radius (a box's points within it), every
+   explicit source farther than kappa times that by its polynomial (to a box
+   in the block they are at least (SF_PF kappa - (SF_PF - 1)) box radii away:
+   far for it too), the others listed. A box then expands only those, not
+   every explicit source (at 64 beads 6272 of them, 12-26 ms a box: a
+   Newton step thrown far made thousands of boxes). Made under the boxes'
+   lock (sf_box_at's). */
+static struct sf_region *sf_parent_at(int jx, int jy, int jz)
+{ int i = (jz*sf.pny + jy)*sf.pnx + jx;
+  if ( !sf.parent[i] )
+  { REAL c[3] = { sf.ox + (SF_PF*jx + 0.5*SF_PF)*sf.bx, sf.oy + (SF_PF*jy + 0.5*SF_PF)*sf.by,
+                  sf.z0 + (SF_PF*jz + sf.izmin + 0.5*SF_PF)*sf.bz };
+    REAL r = 0.5*SF_PF*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
+    sf.parent[i] = sf_region_make(c,r,sf.kappa,sf.p,-1,NULL,0);
+  }
+  return sf.parent[i];
 }
 
 static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
@@ -559,7 +600,8 @@ static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
     { REAL c[3] = { sf.ox + (ix + 0.5)*sf.bx, sf.oy + (iy + 0.5)*sf.by,
                     sf.z0 + (iz + sf.izmin + 0.5)*sf.bz };
       REAL r = 0.5*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
-      g = sf_region_make(c,r,sf.kappa,sf.p,-1);
+      struct sf_region *par = sf_parent_at(ix/SF_PF,iy/SF_PF,iz/SF_PF);
+      g = par ? sf_region_make(c,r,sf.kappa,sf.p,-1,par,1) : NULL;
       if ( g ) g->dc = sf_fold(g->phi,g->p,sf.ncls);   /* (NULL: by sf_poly_derivs) */
       __atomic_store_n(&sf.box[i],g,__ATOMIC_RELEASE);
     }
@@ -570,7 +612,7 @@ static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
 /* sphere j's region: its polynomial turned into A's components */
 static struct sf_region *sf_wall_make(int j)
 { REAL r = 1.02*sf.R[j];
-  struct sf_region *g = sf_region_make(sf.bead[j],r,sf.kappa_w,sf.pw,j);
+  struct sf_region *g = sf_region_make(sf.bead[j],r,sf.kappa_w,sf.pw,j,NULL,1);
   int nm, cl, k;
   if ( !g ) return NULL;
   nm = NMONO(sf.pw);
@@ -750,13 +792,16 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   if ( sf.izmin > -2 ) sf.izmin = -2;
   sf.nz = (int)ceil((zmax - sf.z0)/sf.bz) - sf.izmin + (int)ceil(64*Lmin/sf.bz) + 8;
   sf.box = (struct sf_region**)calloc((size_t)sf.nx*sf.ny*sf.nz,sizeof(*sf.box));
+  sf.pnx = (sf.nx + SF_PF - 1)/SF_PF; sf.pny = (sf.ny + SF_PF - 1)/SF_PF;
+  sf.pnz = (sf.nz + SF_PF - 1)/SF_PF;
+  sf.parent = (struct sf_region**)calloc((size_t)sf.pnx*sf.pny*sf.pnz,sizeof(*sf.parent));
   sf.hl = Lmin;
   sf.ilmin = (int)floor((zmin - sf.z0)/sf.hl) - 3;
   if ( sf.ilmin > -1 ) sf.ilmin = -1;
   sf.nl = (int)ceil((zmax - sf.z0)/sf.hl) - sf.ilmin + 66;
   sf.layer = (struct sf_layer**)calloc(sf.nl,sizeof(*sf.layer));
   sf.wall = (struct sf_region**)calloc(nbead,sizeof(*sf.wall));
-  if ( !sf.box || !sf.layer || !sf.wall ) { sf_free(); return 0; }
+  if ( !sf.box || !sf.parent || !sf.layer || !sf.wall ) { sf_free(); return 0; }
   for ( i = 0 ; i < nbead ; i++ )
     if ( !(sf.wall[i] = sf_wall_make(i)) ) { sf_free(); return 0; }
   memset(&sf.all,0,sizeof(sf.all));
