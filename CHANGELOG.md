@@ -15,6 +15,13 @@
   is made (`hessian` raises error 9005, which `relax()` counts a rejected step), and
   `hessian_seek` searches within it. The 64-bead pack from its 38th step, 20 minutes
   on one thread: step 68 before, 120 now.
+- The flux gauge's sphere integrands in a slab (the contact lines' fields, half of a
+  gradient step's time in a 64-bead pack) folded as the boxes' were in 0.8.1: each
+  sphere's degree-14 polynomials evaluated as dot products (AVX2) instead of gathers
+  through their derivatives' terms, the same sums to 1e-14. And where every sphere has
+  the same radius and wetting (one angle and tension), the volume's and the wetting's
+  fields are multiples of one another: one is kept. A gradient step of the 64-bead pack
+  near breakthrough (5755 facets, one thread) 0.26 to 0.13 s.
 - The flux gauge in a slab takes points far from the beads (a period above the
   highest, or below the lowest without a floor) by the lattice's Fourier series,
   exact to ~1e-13 with a few dozen modes, no box made there whatever lands out there.

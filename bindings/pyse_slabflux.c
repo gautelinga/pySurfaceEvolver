@@ -96,7 +96,8 @@ struct sf_region
   int nnear;
   struct sf_src *near;
   REAL *phi;                    /* [cls][NMONO(p)]: Phi, F = -grad Phi */
-  REAL *dc;                     /* boxes: [cls][sf_drow[p][20]], Phi's derivatives (sf_fold) */
+  REAL *dc;                     /* boxes: [cls][sf_drow[p][20]], Phi's derivatives (sf_fold);
+                                   walls: [cls][3][sf_drow[p][20]], A's components' */
   REAL *A;                      /* walls: [cls][3][NMONO(p)], A's components */
 };
 
@@ -111,6 +112,10 @@ static struct
   int nbead;
   REAL (*bead)[3]; REAL *R;
   int ncls, nen;                /* classes: nen energy ones, then the volume's */
+  /* every source's classes in the same proportion (equal radii, one angle
+     and tension): one field kept (ncls 1, the volume's strengths), class cl
+     lam[cl] times it (sf_eval); nout the classes given */
+  int merged, nout; REAL lam[SF_MAXCLS];
   REAL cls_angle[SF_MAXCLS], cls_tension[SF_MAXCLS];
   int floor_energy; REAL floor_angle, floor_tension;
   REAL h, kappa, kappa_w; int p, pw, M, pT;
@@ -192,7 +197,7 @@ static void sf_free(void)
   if ( sf.wall )
   { for ( i = 0 ; i < sf.nbead ; i++ )
       if ( sf.wall[i] ) { free(sf.wall[i]->near); free(sf.wall[i]->phi); free(sf.wall[i]->A);
-                          free(sf.wall[i]); }
+                          free(sf.wall[i]->dc); free(sf.wall[i]); }
     free(sf.wall);
   }
   free(sf.kv); free(sf.cup); free(sf.cdn);
@@ -345,16 +350,18 @@ static void sf_poly_derivs(const REAL *a, int p, const REAL *mv, int order, REAL
   }
 }
 
-/* the polynomials phi ([ncls][NMONO(p)]) folded: each derivative's
+/* the polynomials phi ([n][NMONO(p)]) folded: each derivative's
    coefficients by the monomial of u they multiply, so that the derivative at
    u is a dot product with the monomials' values (a box's field at every point
-   it serves: the gathers through sf_dlist were 87% of a slab's step) */
-static REAL *sf_fold(const REAL *phi, int p, int ncls)
+   it serves: the gathers through sf_dlist were 87% of a slab's step; a
+   sphere's A, half a gradient step's). From derivative b0: 1 for Phi (its
+   value not wanted), 0 for A. */
+static REAL *sf_fold(const REAL *phi, int p, int ncls, int b0)
 { int nm = NMONO(p), tot = sf_drow[p][20], cl, b, i;
   REAL *dc = (REAL*)calloc((size_t)ncls*tot,sizeof(REAL));
   if ( !dc ) return NULL;
   for ( cl = 0 ; cl < ncls ; cl++ )
-    for ( b = 1 ; b < 20 ; b++ )
+    for ( b = b0 ; b < 20 ; b++ )
     { const struct sf_term *t = sf_dlist[b];
       REAL *row = dc + (size_t)cl*tot + sf_drow[p][b];
       for ( i = 0 ; i < sf_dcount[b][p + 1] ; i++ ) row[t[i].r] = t[i].f*phi[cl*nm + t[i].k];
@@ -368,9 +375,9 @@ static REAL *sf_fold(const REAL *phi, int p, int ncls)
 #define SF_SIMD 1
 /* sf_fold_derivs's sums in AVX2's four lanes: the same products and sums */
 __attribute__((target("avx2")))
-static void sf_fold_derivs_avx2(const REAL *c, int p, const REAL *mv, int nd, REAL *D)
+static void sf_fold_derivs_avx2(const REAL *c, int p, const REAL *mv, int nd, REAL *D, int b0)
 { int b, i;
-  for ( b = 1 ; b < nd ; b++ )
+  for ( b = b0 ; b < nd ; b++ )
   { const REAL *row = c + sf_drow[p][b];
     int n = sf_drow[p][b + 1] - sf_drow[p][b];
     __m256d acc = _mm256_setzero_pd();
@@ -395,19 +402,21 @@ void pyse_slabflux_simd(int on)
 #endif
 }
 
-/* sf_poly_derivs from the folded coefficients c (one class), from order 1:
-   four running sums (a dot product's lanes), added pairwise */
-static void sf_fold_derivs(const REAL *c, int p, const REAL *mv, int order, REAL *D)
+/* sf_poly_derivs from the folded coefficients c (one polynomial), from
+   derivative b0 (1: D[0] 0, the value not wanted): four running sums (a dot
+   product's lanes), added pairwise. (mv zero past its NMONO(p) values, to
+   the next multiple of 4: the value's row reads that far.) */
+static void sf_fold_derivs(const REAL *c, int p, const REAL *mv, int order, REAL *D, int b0)
 { int b, i, nd = NMONO(order);
-  D[0] = 0.0;                   /* (Phi itself: not wanted) */
+  D[0] = 0.0;
 #ifdef SF_SIMD
   if ( sf_simd < 0 ) sf_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
   if ( sf_simd )
-  { sf_fold_derivs_avx2(c,p,mv,nd,D);
+  { sf_fold_derivs_avx2(c,p,mv,nd,D,b0);
     return;
   }
 #endif
-  for ( b = 1 ; b < nd ; b++ )
+  for ( b = b0 ; b < nd ; b++ )
   { const REAL *row = c + sf_drow[p][b];
     int n = sf_drow[p][b + 1] - sf_drow[p][b];
     REAL s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
@@ -620,7 +629,7 @@ static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
       REAL r = 0.5*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
       struct sf_region *par = sf_parent_at(ix/SF_PF,iy/SF_PF,iz/SF_PF);
       g = par ? sf_region_make(c,r,sf.kappa,sf.p,-1,par,1) : NULL;
-      if ( g ) { g->dc = sf_fold(g->phi,g->p,sf.ncls); sf.nboxes++; }  /* (dc NULL: by sf_poly_derivs) */
+      if ( g ) { g->dc = sf_fold(g->phi,g->p,sf.ncls,1); sf.nboxes++; }  /* (dc NULL: by sf_poly_derivs) */
       __atomic_store_n(&sf.box[i],g,__ATOMIC_RELEASE);
     }
   }
@@ -660,6 +669,7 @@ static struct sf_region *sf_wall_make(int j)
         }
       }
     }
+  g->dc = sf_fold(g->A,g->p,3*sf.ncls,0);    /* (NULL: by sf_poly_derivs) */
   return g;
 }
 
@@ -770,6 +780,26 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
         s->q[cl] = b[3]*b[3];
       }
     }
+  }
+  /* the classes in proportion: one field (half the work where there are two) */
+  sf.nout = sf.ncls; sf.merged = 0;
+  for ( cl = 0 ; cl < sf.ncls ; cl++ ) sf.lam[cl] = 1.0;
+  if ( sf.ncls > 1 )
+  { int same = 1;
+    for ( cl = 0 ; cl < sf.ncls ; cl++ ) sf.lam[cl] = sf.base[0].q[cl]/sf.base[0].q[sf.nen];
+    for ( i = 1 ; i < sf.nbase && same ; i++ )
+      for ( cl = 0 ; cl < sf.ncls ; cl++ )
+        if ( fabs(sf.base[i].q[cl] - sf.lam[cl]*sf.base[i].q[sf.nen])
+             > 1e-14*fabs(sf.base[i].q[cl]) ) { same = 0; break; }
+    if ( same )
+    { for ( i = 0 ; i < sf.nbase ; i++ )
+      { REAL q = sf.base[i].q[sf.nen];
+        memset(sf.base[i].q,0,sizeof(sf.base[i].q));
+        sf.base[i].q[0] = q;
+      }
+      sf.ncls = 1; sf.merged = 1;
+    }
+    else for ( cl = 0 ; cl < sf.ncls ; cl++ ) sf.lam[cl] = 1.0;
   }
   for ( k = 0, i = 0 ; i < sf.nbase ; i++ )
   { int a, b;
@@ -937,7 +967,7 @@ static int sf_fields_in(const REAL *x, int all, int order, REAL V[][3], REAL G[]
   sf_mono_values(u,g->p,mv);
   for ( cl = 0 ; cl < sf.ncls ; cl++ )
   { REAL r1 = -1.0/g->rho, r2 = r1/g->rho, r3 = r2/g->rho;
-    if ( g->dc ) sf_fold_derivs(g->dc + (size_t)cl*sf_drow[g->p][20],g->p,mv,order + 1,D);
+    if ( g->dc ) sf_fold_derivs(g->dc + (size_t)cl*sf_drow[g->p][20],g->p,mv,order + 1,D,1);
     else sf_poly_derivs(g->phi + cl*nm,g->p,mv,order + 1,D);
     for ( m = 0 ; m < 3 ; m++ )
     { int e[3] = { 0, 0, 0 };
@@ -1086,7 +1116,7 @@ static void sf_wall_fields(int j, const REAL *x0, int order, REAL V[][3], REAL G
                            REAL S[][3][3][3])
 { struct sf_region *g = sf.wall[j];
   const REAL *c = sf.bead[j];
-  REAL x[3], u[3], D[10], mv[(SF_PMAX + 1)*(SF_PMAX + 2)*(SF_PMAX + 3)/6];
+  REAL x[3], u[3], D[10], mv[(SF_PMAX + 1)*(SF_PMAX + 2)*(SF_PMAX + 3)/6 + 4];
   int s, cl, m, i, k, nm = NMONO(g->p);
   /* (the image of x nearest the sphere: its vertices are kept there) */
   for ( m = 0 ; m < 3 ; m++ ) x[m] = x0[m];
@@ -1135,11 +1165,13 @@ static void sf_wall_fields(int j, const REAL *x0, int order, REAL V[][3], REAL G
   }
   for ( m = 0 ; m < 3 ; m++ ) u[m] = (x[m] - g->c[m])/g->rho;
   sf_mono_values(u,g->p,mv);
+  for ( k = nm ; k < ((nm + 3) & ~3) ; k++ ) mv[k] = 0.0;
   for ( cl = 0 ; cl < sf.ncls ; cl++ )
   { REAL r1 = 1.0/g->rho, r2 = r1/g->rho;
     for ( m = 0 ; m < 3 ; m++ )
     { int e[3] = { 0, 0, 0 };
-      sf_poly_derivs(g->A + (cl*3 + m)*nm,g->p,mv,order,D);
+      if ( g->dc ) sf_fold_derivs(g->dc + (size_t)(cl*3 + m)*sf_drow[g->p][20],g->p,mv,order,D,0);
+      else sf_poly_derivs(g->A + (cl*3 + m)*nm,g->p,mv,order,D);
       V[cl][m] += D[0];
       if ( order >= 1 )
         for ( i = 0 ; i < 3 ; i++ )
@@ -1246,12 +1278,15 @@ static int sf_eval(const struct sf_key *k, const REAL *x, int order, REAL *v, RE
     C->x[0] = x[0]; C->x[1] = x[1]; C->x[2] = x[2];
   }
   for ( cl = lo ; cl < hi ; cl++ )
+  { int c = sf.merged ? 0 : cl;
+    REAL f = coef[cl]*sf.lam[cl];
     for ( m = 0 ; m < 3 ; m++ )
-    { v[m] += coef[cl]*V[cl][m];
-      if ( order >= 1 ) for ( i = 0 ; i < 3 ; i++ ) g[m][i] += coef[cl]*G[cl][m][i];
+    { v[m] += f*V[c][m];
+      if ( order >= 1 ) for ( i = 0 ; i < 3 ; i++ ) g[m][i] += f*G[c][m][i];
       if ( order >= 2 )
-        for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) h[m][i][j] += coef[cl]*S[cl][m][i][j];
+        for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) h[m][i][j] += f*S[c][m][i][j];
     }
+  }
   /* the bases */
   { REAL kf = sf.floor_energy ? -sf_coef(sf.floor_angle,sf.floor_tension,afloor) : 0.0;
     REAL zf = sf.mirror ? sf.zf : 0.0;
