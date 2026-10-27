@@ -72,11 +72,13 @@ def configs(which, h=None, ds=None, ds_area=False):
         out = [(16, 5.0, seed, theta, 0.2, -0.5, 3600) for seed in range(6)
                for theta in (15.0, 20.0, 25.0)]
     if which in ("periodic", "periodic-16", "periodic-32", "periodic-64"):
-        # (cells periodic in x and y, the floor the outlet, to breakthrough;
-        # the walled 16-bead packs' density, 0.64 beads a unit area)
+        # (columns: a cell 3 bead diameters square, periodic in x and y, the
+        # pack deeper with more beads, 16 to 64: 1.9 to 5.8 diameters; the
+        # floor the outlet, to breakthrough. Until 2026-10-27 the cell grew
+        # instead, 0.64 beads a unit area, and the packs stayed 2-3 diameters
+        # deep: a 64-bead pack's front had nowhere to go)
         sizes = (16, 32, 64) if which == "periodic" else (int(which.split("-")[1]),)
-        out = [(n, round(float(np.sqrt(n/0.64)), 4), seed, theta, 0.2, -0.5,
-                {16: 3600, 32: 2*3600, 64: 4*3600}[n])
+        out = [(n, COLUMN, seed, theta, 0.2, -0.5, {16: 3600, 32: 2*3600, 64: 4*3600}[n])
                for n in sizes for seed in range(3) for theta in (15.0, 20.0, 25.0)]
         goal = "breakthrough"
     if which == "full":
@@ -97,7 +99,7 @@ def configs(which, h=None, ds=None, ds_area=False):
         out = [(n, L, seed, theta, h_, d, int(t*(0.2/h_)**2*abs(0.5/d)))
                for n, L, seed, theta, h_, d, t in out]
     tag = "_bt" if goal == "breakthrough" else ""
-    pre = "p" if which.startswith("periodic") else "n"
+    pre = "c" if which.startswith("periodic") else "n"
     return [(f"{pre}{n}_s{seed}_t{theta:g}_h{h_:g}_ds{d:g}{tag}", n, L, seed, theta, h_, d, timeout,
              goal) for n, L, seed, theta, h_, d, timeout in out]
 
@@ -134,13 +136,15 @@ def stop_class(message):
 
 
 def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resume=None,
-        gauge=None, flux_degree=None):
+        gauge=None, flux_degree=None, frames=None):
     """One run, in this process: NAME.json and NAME.log in out. checkpoints:
     a directory each step's state goes to (stepNNNN.fe and .pkl, the last
     KEEP kept); resume: such a state (its path without the extension), the
     run going on from it (the steps numbered on) instead of from the start;
     where an earlier attempt left NAME.part, its curve, counts and time are
-    carried on and the log appended to (launch(): a crashed run resumed)."""
+    carried on and the log appended to (launch(): a crashed run resumed).
+    frames: every this many steps the state kept in OUT/frames/NAME (for a
+    film of the run: bench/topology/film.py)."""
     import logging, warnings
     import numpy as np
     sys.path.insert(0, HERE)
@@ -184,7 +188,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         # lines crossed poles; the older "half" sets as they were)
         if gauge is None:
             gauge = "flux" if goal == "breakthrough" else "pole"
-        if name.startswith("p"):
+        if name[0] in "pc":
             # (a cell periodic in x and y: no side walls)
             x, _, _ = settle_periodic(n, L, seed=seed)
             ev, _ = load_periodic(x, L, theta=theta, h=h)
@@ -257,6 +261,10 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                         for ext in (".fe", ".pkl"):
                             if os.path.exists(stale + ext):
                                 os.remove(stale + ext)
+                    if frames and step.index % int(frames) == 0:
+                        film = os.path.join(out, "frames", name)
+                        os.makedirs(film, exist_ok=True)
+                        save_state(ev, os.path.join(film, f"step{step.index:04d}"), v0, step.index)
                     for k in [k for k in made if k >= step.index]:
                         del made[k]
                     for k in [k for k in curve if k >= step.index]:
@@ -364,6 +372,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         os.remove(os.path.join(out, f"{name}.part"))
 
 
+COLUMN = 6.0    # the periodic sets' cell side: 3 bead diameters
 KEEP = 20       # checkpoints: the last this many steps' states kept
 
 
@@ -451,7 +460,7 @@ def latest_state(ck, part=None):
     return os.path.join(ck, steps[-1]) if steps else None
 
 
-def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None):
+def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None, frames=None):
     """One run in its own process; cpus: the CPUs to pin it to (None: not
     pinned). Its checkpoints in OUT/ck/NAME (removed when it gets there); a
     run whose process died (no NAME.json, not a timeout: a crash) resumed
@@ -474,6 +483,7 @@ def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None)
                                 str(seed), str(theta), str(h), str(ds), out, goal]
                                + (["--gauge", gauge] if gauge else [])
                                + (["--flux-degree", str(flux_degree)] if flux_degree else [])
+                               + (["--frames", str(frames)] if frames else [])
                                + ["--checkpoints", ck] + (["--resume", resume] if resume else []),
                                env=env, capture_output=True, text=True,
                                timeout=max(1.0, timeout - (time.time() - t)),
@@ -585,7 +595,7 @@ def main(argv):
         # --one NAME N L SEED THETA H DS OUT [GOAL] [--checkpoints DIR] [--resume STATE]
         options = {}
         while len(argv) > 2 and argv[-2] in ("--checkpoints", "--resume", "--gauge",
-                                             "--flux-degree"):
+                                             "--flux-degree", "--frames"):
             options[argv[-2][2:].replace("-", "_")] = argv[-1]
             argv = argv[:-2]
         name, n, L, seed, theta, h, ds, out = argv[1:9]
@@ -605,6 +615,8 @@ def main(argv):
                     help="pin each run to its own CPUs: 'fast' (the highest clocked, one a "
                          "physical core), 'all' (this process's), or a list '0,2,4-6'; "
                          "default: not pinned (a cluster's scheduler places them)")
+    ap.add_argument("--frames", type=int,
+                    help="keep every this many steps' state in OUT/frames/NAME (a film: film.py)")
     ap.add_argument("--flux-degree", type=int,
                     help="pyse.flux_degree for the runs (the flux gauge's fast sum)")
     ap.add_argument("--gauge", choices=("flux", "pole"),
@@ -643,7 +655,8 @@ def main(argv):
     def run(c):
         cpus = free.get() if groups else None
         try:
-            return launch(c, out, args.python, args.threads, args.gauge, args.flux_degree, cpus)
+            return launch(c, out, args.python, args.threads, args.gauge, args.flux_degree, cpus,
+                          args.frames)
         finally:
             if cpus:
                 free.put(cpus)

@@ -45,7 +45,7 @@ def pores(r):
     """A periodic run's (z_ref, pore volume below it): its pack settled again
     (settle_periodic, deterministic) at its size, cell and seed. None for a
     walled one."""
-    if not r["name"].startswith("p"):
+    if r["name"][0] not in "pc":
         return None
     key = (r["beads"], r["box"], r["seed"])
     if key not in _PORES:
@@ -150,7 +150,7 @@ def main(argv):
         for r in rs:
             if r["beads"] == n:
                 groups.setdefault(r["theta"], []).append((r["seed"], r))
-        kind = "periodic" if any(r["name"].startswith("p") for r in rs if r["beads"] == n) \
+        kind = "periodic" if any(r["name"][0] in "pc" for r in rs if r["beads"] == n) \
             else "walled"
         panels(groups, f"Drainage of {n}-bead packs ({kind}): capillary pressure against "
                "saturation", os.path.join(out, f"pc_{n}.png"), "seed")
