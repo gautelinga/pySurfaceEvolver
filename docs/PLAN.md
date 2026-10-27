@@ -24,6 +24,28 @@ each step's pressure recorded, the curves' script; P1 the 16/32/64 periodic sets
 their failures fixed; P2 speed (profile the 64s: the flux lattice sums, serial torus
 loops, steps); P3 the curves, docs.
 
+**Status (2026-10-27).** P0 done (133e54f, 58a8604, 320f547).
+- **Speed.** The user asked to make it faster and chose each item.
+  - Stalls were the cost, not the sums: corrector steps on an indefinite Hessian threw
+    vertices up to 1e4 edges, and evaluating there made thousands of slab boxes (44 to
+    200 s a step, about half of a 64-bead run).
+  - Fixed by Newton step bounds (aa9837e, 5f788eb), parent boxes (eb67f92) and the
+    Fourier far field (4be70a2).
+  - Also added: `pyse.flux_degree` (c657050), and the corpus' `--cpus` and
+    `--flux-degree` (e23f9bd).
+- **Robustness.** Crashed runs resume once from their checkpoint (1157534).
+- **Result.** The 64-bead seed-0 20-degree run took 7589 s before (1 thread). After:
+  3370 s at 4 threads on the fast cores, degree 10, the machine shared. Breakthrough at
+  V 138.4 (138.3 before).
+- **Deferred by the user: a trust region in the corrector.** Wild steps are ~10% of
+  corrector calls, now refused cheaply; the late stage is all descents.
+  - If built: damped steps kept when the residual drops, else the radius shrinks by
+    4 and the step is retried.
+  - Its bar: the suite, the walled 16 wide set and the periodic 16 set, with no more
+    failures, breakthrough volumes within 1%, and time within +10%.
+- **Next.** Profile the descents (the late stage, and 10 steps over 60 s in that run);
+  measure degree 8; split the cores for the 9-run sets; then run the 32/64 sets.
+
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
 Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG
