@@ -12,7 +12,8 @@ that stopped short, crashed or timed out) and how far the runs drained.
 usage: python bench/topology/corpus.py [--set quick|small|wide|wide-half|full]
                                        [--jobs 4] [--threads 1] [--out DIR]
                                        [--only NAME ...] [--h H] [--ds DS]
-                                       [--gauge flux|pole]
+                                       [--gauge flux|pole] [--cpus fast|all|LIST]
+                                       [--flux-degree P] [--ds-area]
        python bench/topology/corpus.py --summary DIR
        python bench/topology/corpus.py --compare DIR_A DIR_B
 
@@ -31,7 +32,7 @@ bench/topology/out/<set>): NAME.json per run, NAME.log (the records),
 summary.json. Run with another package (an overlay on PYTHONPATH, another
 venv's python via --python) to compare code.
 """
-import argparse, json, os, re, subprocess, sys, time
+import argparse, json, os, queue, re, subprocess, sys, time
 import numpy as np
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -133,7 +134,7 @@ def stop_class(message):
 
 
 def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resume=None,
-        gauge=None):
+        gauge=None, flux_degree=None):
     """One run, in this process: NAME.json and NAME.log in out. checkpoints:
     a directory each step's state goes to (stepNNNN.fe and .pkl, the last
     KEEP kept); resume: such a state (its path without the extension), the
@@ -144,10 +145,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     from pack import settle, load, settle_periodic, load_periodic
     import pysurfaceevolver as pyse
     from pysurfaceevolver import recipes
-    if os.environ.get("PYSE_SLAB_P"):
-        # (experiments: the slab flux gauge's polynomial degree)
-        from pysurfaceevolver import _periodic
-        _periodic.SLAB_FLUX["p"] = int(os.environ["PYSE_SLAB_P"])
+    if flux_degree is not None:
+        pyse.flux_degree = int(flux_degree)
 
     log = open(os.path.join(out, f"{name}.log"), "w")
     t0 = time.time()
@@ -192,7 +191,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     result = dict(name=name, beads=n, box=L, seed=seed, theta=theta, h=h, ds=ds, goal=goal,
                   start=v0, target=target, end=v0, steps=0, reached=False, stop="",
                   stop_class="", changes=0, kinds={}, falls=0, facets=ev.counts["facets"],
-                  python=sys.executable, pyse=os.path.dirname(pyse.__file__))
+                  python=sys.executable, pyse=os.path.dirname(pyse.__file__),
+                  flux_degree=pyse.flux_degree, threads=pyse.threads(),
+                  cpus=sorted(os.sched_getaffinity(0)))
     # (per step: the kinds of the changes made, whether it fell; a step
     # the run backed up past is no longer the run's)
     made = {}
@@ -383,7 +384,46 @@ def restore_state(path):
     return ev, float(saved["start"]), int(saved["step"]) + 1
 
 
-def launch(cfg, out, python, threads=1, gauge=None):
+def cpu_groups(spec, jobs, threads):
+    """--cpus: None (no pinning: the runs where the system puts them, or a
+    cluster's scheduler); "all" (the CPUs this process may use); "fast" (the
+    highest clocked, one per physical core: a hybrid CPU's big cores); or a
+    list "0,2,4-6". Split into groups of `threads` CPUs, one per run at a
+    time (at most `jobs`)."""
+    if spec is None:
+        return None
+    usable = sorted(os.sched_getaffinity(0))
+    if spec in ("all", "fast"):
+        cpus = usable
+        if spec == "fast":
+            def read(path, default):
+                try:
+                    return open(path).read().strip()
+                except OSError:
+                    return default
+            top = "/sys/devices/system/cpu/cpu{}/"
+            freq = {c: int(read(top.format(c) + "cpufreq/cpuinfo_max_freq", "0")) for c in usable}
+            seen, cpus = set(), []
+            for c in sorted(usable, key=lambda c: (-freq[c], c)):
+                core = read(top.format(c) + "topology/core_cpus_list", str(c))
+                if core not in seen:
+                    seen.add(core)
+                    cpus.append(c)
+    else:
+        cpus = []
+        for part in spec.split(","):
+            a, _, b = part.partition("-")
+            cpus += list(range(int(a), int(b or a) + 1))
+    groups = [cpus[k:k + threads] for k in range(0, len(cpus) - threads + 1, threads)]
+    if len(groups) < jobs:
+        raise SystemExit(f"--cpus {spec}: {len(cpus)} CPUs ({cpus}), not enough for {jobs} "
+                         f"runs of {threads} threads")
+    return groups[:jobs]
+
+
+def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None):
+    """One run in its own process; cpus: the CPUs to pin it to (None: not
+    pinned)."""
     name, n, L, seed, theta, h, ds, timeout, goal = cfg
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
     path = os.path.join(out, f"{name}.json")
@@ -394,8 +434,10 @@ def launch(cfg, out, python, threads=1, gauge=None):
     try:
         p = subprocess.run([python, os.path.abspath(__file__), "--one", name, str(n), str(L),
                             str(seed), str(theta), str(h), str(ds), out, goal]
-                           + (["--gauge", gauge] if gauge else []),
-                           env=env, capture_output=True, text=True, timeout=timeout)
+                           + (["--gauge", gauge] if gauge else [])
+                           + (["--flux-degree", str(flux_degree)] if flux_degree else []),
+                           env=env, capture_output=True, text=True, timeout=timeout,
+                           preexec_fn=(lambda: os.sched_setaffinity(0, cpus)) if cpus else None)
         code, err = p.returncode, p.stderr
     except subprocess.TimeoutExpired as e:
         code, err = "timeout", (e.stderr or b"").decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
@@ -491,8 +533,9 @@ def main(argv):
     if argv[:1] == ["--one"]:
         # --one NAME N L SEED THETA H DS OUT [GOAL] [--checkpoints DIR] [--resume STATE]
         options = {}
-        while len(argv) > 2 and argv[-2] in ("--checkpoints", "--resume", "--gauge"):
-            options[argv[-2][2:]] = argv[-1]
+        while len(argv) > 2 and argv[-2] in ("--checkpoints", "--resume", "--gauge",
+                                             "--flux-degree"):
+            options[argv[-2][2:].replace("-", "_")] = argv[-1]
             argv = argv[:-2]
         name, n, L, seed, theta, h, ds, out = argv[1:9]
         one(name, int(n), float(L), int(seed), float(theta), float(h), float(ds), out,
@@ -503,10 +546,16 @@ def main(argv):
                                                        "periodic", "periodic-16", "periodic-32",
                                                        "periodic-64"))
     ap.add_argument("--jobs", type=int, default=4)
-    ap.add_argument("--threads", type=int, default=1, choices=(1, 2, 3, 4),
+    ap.add_argument("--threads", type=int, default=1,
                     help="OpenMP threads per run (runs times threads up to the cores: a "
                          "run's threads idle a third of the time, so several runs side by "
                          "side do more an hour)")
+    ap.add_argument("--cpus",
+                    help="pin each run to its own CPUs: 'fast' (the highest clocked, one a "
+                         "physical core), 'all' (this process's), or a list '0,2,4-6'; "
+                         "default: not pinned (a cluster's scheduler places them)")
+    ap.add_argument("--flux-degree", type=int,
+                    help="pyse.flux_degree for the runs (the flux gauge's fast sum)")
     ap.add_argument("--gauge", choices=("flux", "pole"),
                     help="the beads' gauge (default: flux to breakthrough, else pole)")
     ap.add_argument("--out")
@@ -519,6 +568,8 @@ def main(argv):
     ap.add_argument("--summary")
     ap.add_argument("--compare", nargs=2)
     args = ap.parse_args(argv)
+    if args.threads < 1 or args.jobs < 1:
+        ap.error("--threads and --jobs must be at least 1")
     if args.summary:
         summary(load_dir(args.summary))
         return
@@ -530,11 +581,23 @@ def main(argv):
     todo = [c for c in configs(args.set, args.h, args.ds, args.ds_area) if not args.only or c[0] in args.only]
     # the longest first, so the pool ends together
     todo.sort(key=lambda c: -c[1])
+    groups = cpu_groups(args.cpus, min(args.jobs, len(todo)), args.threads)
     print(f"{len(todo)} runs, {args.jobs} at a time ({args.threads} thread"
-          f"{'s' if args.threads > 1 else ''} each), into {out}", flush=True)
+          f"{'s' if args.threads > 1 else ''} each"
+          + (f", on CPUs {groups}" if groups else "") + f"), into {out}", flush=True)
+    free = queue.Queue()
+    for g in groups or []:
+        free.put(g)
+
+    def run(c):
+        cpus = free.get() if groups else None
+        try:
+            return launch(c, out, args.python, args.threads, args.gauge, args.flux_degree, cpus)
+        finally:
+            if cpus:
+                free.put(cpus)
     with ThreadPoolExecutor(args.jobs) as pool:
-        results = list(pool.map(lambda c: launch(c, out, args.python, args.threads, args.gauge),
-                                todo))
+        results = list(pool.map(run, todo))
     total = summary(results)
     json.dump(total, open(os.path.join(out, "summary.json"), "w"), indent=1)
 
