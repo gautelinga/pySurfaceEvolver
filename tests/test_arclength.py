@@ -323,3 +323,34 @@ def test_the_correctors_two_newton_steps_come_from_one_factorization():
     assert np.allclose(x0, n0, rtol=0, atol=1e-12) and np.allclose(x1, n1, rtol=0, atol=1e-12)
     assert np.allclose(q0, m0, rtol=1e-12) and np.allclose(q1, m1, rtol=1e-12)
     assert np.array_equal(ev.vertices, start.coords)
+
+
+def test_a_correctors_step_thrown_far_isnt_made(monkeypatch):
+    # (a vertex moved farther than WILD_STEP mean edges: neither step made,
+    # the surface and multipliers as they were, and the corrector fails)
+    from pysurfaceevolver import _core
+    drop = shapes.cap(0.7, 0.7, nr=6, nt=24)
+    ev = pyse.Evolver()
+    ev.load_arrays(drop.vertices, drop.faces,
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=60.0)},
+                   vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.relax()
+    body = ev.body(1)
+
+    def put(v):
+        body.target = v
+        ev.command("recalc")
+    put.body = 1
+    value = 1.1*body.target
+    put(value)
+    start, pressure = ev._coords(), body.pressure
+    _, result = ev._call(_core.newton_pair, 1, 1e-6, 1e-6)
+    assert result.data is None
+    assert np.array_equal(ev.vertices, start.coords) and body.pressure == pressure
+    _, result = ev._call(_core.newton_pair, 1, 1e-6, 10.0)
+    assert result.data is not None
+    monkeypatch.setattr(recipes, "WILD_STEP", 1e-6)
+    ok, its = recipes._arc_correct(ev, put, start.coords, value, np.zeros_like(start.coords),
+                                   1.0, 1e-9, 5)
+    assert not ok and its == 1

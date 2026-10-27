@@ -321,24 +321,28 @@ NB_MODULE(_core, m) {
     return r;
   }, "nums"_a, CALLBACK_NAMES, "data: (edges, constraints) 1 where the edge is on it");
 
-  m.def("newton_pair", [](int body, double delta, CALLBACK_ARGS) {
+  m.def("newton_pair", [](int body, double delta, double limit, CALLBACK_ARGS) {
     CALL_SCOPE;
     long nv = pyse_count(PYSE_VERTEX), nm = pyse_multiplier_count();
-    int sdim = pyse_sdim();
+    int sdim = pyse_sdim(), wild = 0;
     std::vector<double> x0(size_t(nv)*size_t(sdim)), x1(size_t(nv)*size_t(sdim));
     std::vector<double> m0(static_cast<size_t>(nm)), m1(static_cast<size_t>(nm));
     CallResult r = run_guarded([&] {
-      return pyse_newton_pair(body, delta, x0.data(), m0.data(), x1.data(), m1.data(), nv, nm);
+      return pyse_newton_pair(body, delta, limit, x0.data(), m0.data(), x1.data(), m1.data(),
+                              nv, nm, &wild);
     });
-    if (r.status == PYSE_OK)
+    if (r.status == PYSE_OK && wild)
+      r.data = nb::none();
+    else if (r.status == PYSE_OK)
       r.data = nb::make_tuple(to_numpy(std::move(x0), {size_t(nv), size_t(sdim)}),
                               to_numpy(std::move(m0), {size_t(nm)}),
                               to_numpy(std::move(x1), {size_t(nv), size_t(sdim)}),
                               to_numpy(std::move(m1), {size_t(nm)}));
     return r;
-  }, "body"_a, "delta"_a, CALLBACK_NAMES,
+  }, "body"_a, "delta"_a, "limit"_a = 0.0, CALLBACK_NAMES,
   "data: (vertices, multipliers) after a Newton step at the body's target and at that plus "
-  "delta, from one factorization");
+  "delta, from one factorization; None where limit > 0 and a step would move a vertex "
+  "farther than limit times the edges' mean length (neither made)");
 
   m.def("residual", [](bool full, CALLBACK_ARGS) {
     CALL_SCOPE;

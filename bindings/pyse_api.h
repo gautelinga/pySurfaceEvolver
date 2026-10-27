@@ -179,9 +179,11 @@ int pyse_edges_on_constraints(const int *nums, int ncon, unsigned char *out, lon
 /* Two Newton steps from the same point (see recipes._arc_correct): at body
    number body's target and at that plus delta, from one factorization; the
    vertices (nv x 3) and multipliers (nm) each ends at; the surface put back.
+   limit > 0: where either step would move a vertex farther than limit times
+   the edges' mean length, neither is made (*wild 1, the outputs not set).
    PYSE_OK or an error status. */
-int pyse_newton_pair(int body, double delta, double *x0, double *m0, double *x1, double *m1,
-                     long nv, long nm);
+int pyse_newton_pair(int body, double delta, double limit, double *x0, double *m0, double *x1,
+                     double *m1, long nv, long nm, int *wild);
 const char *pyse_solver(void);
 /* Whether Newton steps carry the mesh along a line they move past the edges
    beside it (on by default); returns the previous setting. */

@@ -2137,7 +2137,8 @@ int pyse_modes(int n, double *values, double *vectors, long nv, int *found)
    multipliers put back as they were. The corrector made the second step by
    a second hessian, factorizing the same matrix again: half its cost, a
    fifth of a 16-bead pack's run. */
-struct pair_args { int body; double delta; double *x0, *m0, *x1, *m1; long nv, nm; };
+struct pair_args { int body; double delta, limit; double *x0, *m0, *x1, *m1; long nv, nm;
+                  int wild; };
 
 static void constraint_rows(struct linsys *S, REAL *rhs)
 { body_id b_id;
@@ -2155,6 +2156,37 @@ static void constraint_rows(struct linsys *S, REAL *rhs)
     if ( q->flags & Q_FIXED )
       rhs[S->quanrowstart + k] = -(q->target - q->value);
   }
+}
+
+/* the largest move of a vertex the solution X makes (hessian_move's, not
+   made; a boundary vertex's by its parameters) */
+static REAL pair_largest(REAL *X)
+{ vertex_id v_id;
+  REAL worst = 0.0;
+  int i, j;
+  FOR_ALL_VERTICES(v_id)
+  { struct hess_verlist *vc = get_vertex_vhead(v_id);
+    REAL d2 = 0.0, d;
+    if ( vc->freedom <= 0 ) continue;
+    if ( get_vattr(v_id) & BOUNDARY )
+      for ( i = 0 ; i < get_boundary(v_id)->pcount ; i++ ) d2 += X[vc->rownum + i]*X[vc->rownum + i];
+    else
+      for ( j = 0 ; j < SDIM ; j++ )
+      { d = vc->proj ? dot(vc->proj[j],X + vc->rownum,vc->freedom) : X[vc->rownum + j];
+        d2 += d*d;
+      }
+    if ( d2 > worst ) worst = d2;
+  }
+  return sqrt(worst);
+}
+
+/* the edges' mean length */
+static REAL pair_edge_mean(void)
+{ edge_id e_id;
+  REAL sum = 0.0;
+  long n = 0;
+  FOR_ALL_EDGES(e_id) { sum += get_edge_length(e_id); n++; }
+  return n ? sum/n : 0.0;
 }
 
 static void pair_coords(double *out, long nv)
@@ -2202,6 +2234,24 @@ static void pair_body(void *arg)
   sp_hessian_solve(&S,rhs2,X2,SET_PRESSURE);    /* the same factors */
   fl_hessian_deflate(&S,X2);
   pyse_get_multipliers(a->m1,a->nm);
+  /* a step thrown far (an indefinite Hessian's: vertices moved by hundreds of
+     edges): not made. Moving there evaluates every integrand out there (the
+     slab flux gauge's fields made for thousands of boxes: minutes a step),
+     and the corrector refuses it anyway */
+  if ( a->limit > 0.0 )
+  { REAL bound = a->limit*pair_edge_mean();
+    if ( bound > 0.0 && (pair_largest(X) > bound || pair_largest(X2) > bound) ) a->wild = 1;
+  }
+  if ( a->wild )
+  { pyse_set_multipliers(p0,a->nm);
+    hessian_exit(NULL);
+    free_system(&S);
+    fl_set_follow(was);
+    temp_free((char *)rhs); temp_free((char *)rhs2);
+    temp_free((char *)X); temp_free((char *)X2); temp_free((char *)p0);
+    recalc();
+    return;
+  }
   hessian_iterate_flag = 1;
   pyse_set_multipliers(a->m0,a->nm);
   hessian_move((REAL)1.0,ACTUAL_MOVE,X);
@@ -2226,15 +2276,18 @@ static void pair_body(void *arg)
   recalc();
 }
 
-int pyse_newton_pair(int body, double delta, double *x0, double *m0, double *x1, double *m1,
-                     long nv, long nm)
+int pyse_newton_pair(int body, double delta, double limit, double *x0, double *m0, double *x1,
+                     double *m1, long nv, long nm, int *wild)
 { struct pair_args a;
+  int status;
   if ( nv != web.skel[VERTEX].count || nm != pyse_multiplier_count() )
     return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
                       "newton_pair: output arrays don't match the vertices or multipliers.");
-  a.body = body; a.delta = delta; a.x0 = x0; a.m0 = m0; a.x1 = x1; a.m1 = m1;
-  a.nv = nv; a.nm = nm;
-  return surface_call(pair_body,&a);
+  a.body = body; a.delta = delta; a.limit = limit; a.x0 = x0; a.m0 = m0; a.x1 = x1; a.m1 = m1;
+  a.nv = nv; a.nm = nm; a.wild = 0;
+  status = surface_call(pair_body,&a);
+  *wild = a.wild;
+  return status;
 }
 
 /* The Lagrange multipliers: each body's pressure (in body order), then each

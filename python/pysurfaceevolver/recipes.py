@@ -414,13 +414,23 @@ def _newton_target(ev, put: Callable[[Any], None],
     return x, multipliers
 
 
-def _newton_pair(ev, put, value: float, delta: float) -> "Optional[tuple]":
+# arclength()'s corrector: a Newton step moving a vertex farther than this
+# many mean edge lengths is thrown, not made (an indefinite Hessian's: in a
+# 64-bead pack, steps of 1e2 to 1e4 edges took up to 200 s to evaluate, the
+# slab flux gauge's fields made wherever the vertices landed, and failed;
+# the converging ones moved vertices below 2 edges)
+WILD_STEP = 10.0
+
+
+def _newton_pair(ev, put, value: float, delta: float) -> "Union[None, str, tuple]":
     """_newton_target at value and at value + delta, from one factorization
     where the value is a body's target (only the constraint rows of the
     right side change with it: _core.newton_pair): the vertices and
     multipliers each ends at. None where it can't be (another kind of
     value, or Evolver refusing: then the two steps as before, which handle
-    a body with no valid pressures yet or held all round by solids)."""
+    a body with no valid pressures yet or held all round by solids); "wild"
+    where a step would move a vertex farther than WILD_STEP mean edge
+    lengths (neither made)."""
     from ._errors import EvolverError, EvolverWarning
     body = getattr(put, "body", None)
     if body is None or not hasattr(_core, "newton_pair"):
@@ -429,9 +439,11 @@ def _newton_pair(ev, put, value: float, delta: float) -> "Optional[tuple]":
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", "WARNING 1825", EvolverWarning)
         try:
-            _, result = ev._call(_core.newton_pair, int(body), float(delta))
+            _, result = ev._call(_core.newton_pair, int(body), float(delta), WILD_STEP)
         except EvolverError:
             return None
+    if result.data is None:
+        return "wild"
     x0, m0, x1, m1 = result.data
     return np.asarray(x0), np.asarray(m0), np.asarray(x1), np.asarray(m1)
 
@@ -479,6 +491,8 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
         x = ev.vertices
         delta = 1e-6*max(1.0, abs(value))
         pair = _newton_pair(ev, put, value, delta)
+        if isinstance(pair, str):     # (wild)
+            return False, it
         if pair is not None:
             n0, m0, n1, m1 = pair
         else:
