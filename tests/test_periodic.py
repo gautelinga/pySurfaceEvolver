@@ -449,6 +449,30 @@ def test_the_flux_gauge_below_the_floor_and_far_above():
     assert np.abs(o[3:12].reshape(3, 3) - d1).max() < 1e-8
 
 
+def test_the_flux_gauge_far_from_the_beads_needs_no_boxes():
+    # (a period above the highest source, the lattice's field by its Fourier
+    # modes: as Ewald's sum, with its derivatives, and no box made out there,
+    # where a step thrown far made thousands)
+    from pysurfaceevolver import _core
+    _bead(PERIODS, gauge="flux")
+    _core.slabflux_field(0, 0, [0.1, 0.2, 0.5])
+    made = _core.slabflux_stats()
+    top = 0.6 + max(PERIODS)     # (a period above the bead's centre, 0.55, and more)
+    for z in (top, top + 0.37, top + 3.0, 50.0, 1e4):
+        for xy in ((0.3, 0.4), (-1.7, 2.9)):
+            o = np.array(_core.slabflux_probe([*xy, z]))
+            n = len(o)//2
+            assert np.abs(o[:n] - o[n:]).max() < 1e-11*np.abs(o[n:]).max()
+    assert _core.slabflux_stats() == made
+    f = lambda y: np.array(_core.slabflux_field(0, 0, list(y)))
+    x, e = np.array([0.6, 0.7, top + 0.2]), 1e-5
+    o = f(x)
+    d1 = np.array([(f(x + e*d)[:3] - f(x - e*d)[:3])/(2*e) for d in np.eye(3)]).T
+    d2 = np.array([(f(x + e*d)[3:12] - f(x - e*d)[3:12])/(2*e) for d in np.eye(3)])
+    assert np.abs(o[3:12].reshape(3, 3) - d1).max() < 1e-8
+    assert np.abs(o[12:].reshape(3, 3, 3) - d2.transpose(1, 0).reshape(3, 3, 3)).max() < 1e-8
+
+
 def test_the_flux_gauges_degree_is_a_setting(monkeypatch):
     # (pyse.flux_degree: lower, the fields to a looser tolerance, faster; read
     # at each load; refused outside its range)

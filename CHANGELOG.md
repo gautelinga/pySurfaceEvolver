@@ -4,14 +4,20 @@
 
 ### Speed
 
-- Topology runs no longer stall on a corrector step thrown far. Near a fold, a Newton
+- Topology runs no longer stall on a Newton step thrown far. Near a fold, a Newton
   step of `arclength()`'s corrector on an indefinite Hessian could move vertices by
   hundreds to ten thousand edge lengths; making it evaluated every integrand out there,
   and with the flux gauge in a slab that meant the fields of thousands of new boxes
-  (44 to 200 s for one step in a 64-bead pack), only for the corrector to refuse the
-  step. A step moving a vertex farther than `recipes.WILD_STEP` (10) mean edge lengths
-  is now refused before it is made; converging steps moved vertices less than 2. The
-  64-bead pack from its 38th step, 20 minutes on one thread: step 68 before, 120 now.
+  (44 to 200 s for one step in a 64-bead pack), only for the step to be refused. The
+  corrector's steps now move no vertex farther than 10 mean edge lengths (its
+  converging steps moved them less than 2), a plain Newton step none farther than the
+  surface's size (its bounding box's diagonal): past that, a step is refused before it
+  is made (`hessian` raises error 9005, which `relax()` counts a rejected step), and
+  `hessian_seek` searches within it. The 64-bead pack from its 38th step, 20 minutes
+  on one thread: step 68 before, 120 now.
+- The flux gauge in a slab takes points far from the beads (a period above the
+  highest, or below the lowest without a floor) by the lattice's Fourier series,
+  exact to ~1e-13 with a few dozen modes, no box made there whatever lands out there.
 - The flux gauge's fast sum makes its boxes about 10x faster in a 64-bead slab (3.5x
   at 16 beads): a box's far sources come from its parent, a block of 4x4x4 boxes,
   whose polynomial is moved to the box exactly, so a box expands only the sources near

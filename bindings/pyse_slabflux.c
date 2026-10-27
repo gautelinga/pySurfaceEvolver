@@ -22,7 +22,12 @@
  *     to degree p. A box's far sources come from its parent (a block of
  *     4^3 boxes, the same kappa and p): the parent's polynomial moved to
  *     the box, then only the parent's near sources split into the box's
- *     near and far ones.
+ *     near and far ones;
+ *   far from the sources (a period above the highest, or below the lowest
+ *     without a floor): the lattice's field as its Fourier series, exact to
+ *     ~1e-13 with a few dozen modes there (each decays as exp(-|k| dz)), no
+ *     box made (a step thrown far made thousands). Without a lattice, the
+ *     explicit sources summed directly there.
  *
  * Fields come in classes: the volume's (strength -R^3/3) and one per
  * distinct (angle, tension) of the wetting energy (strength R^2, the
@@ -123,6 +128,15 @@ static struct
   /* parents: blocks of SF_PF^3 boxes (their far sources, sf_parent_at) */
   int pnx, pny, pnz;
   struct sf_region **parent;
+  /* far from the sources (sf_far): above zhi, below zlo (no floor); the
+     lattice's Fourier modes k (half of them), their coefficients per class
+     [mode][cls] (re, im) referred to ztop / zbot; each class's total charge */
+  REAL zhi, zlo, ztop, zbot;
+  int nmode;
+  REAL (*kv)[3];                /* kx, ky, |k| */
+  REAL (*cup)[SF_MAXCLS][2], (*cdn)[SF_MAXCLS][2];
+  REAL qtot[SF_MAXCLS];
+  long nboxes, nparents;        /* made (pyse_slabflux_stats) */
   /* layers */
   int nl, ilmin; REAL hl;
   struct sf_layer **layer;
@@ -134,6 +148,7 @@ static struct
 } sf;
 
 static long sf_gen = 1;          /* bumped at each setup (the caches' key) */
+static int sf_modes(REAL Lmin);
 static double *sf_key = NULL;     /* the inputs the fields were made from */
 static size_t sf_key_n = 0;
 
@@ -180,6 +195,8 @@ static void sf_free(void)
                           free(sf.wall[i]); }
     free(sf.wall);
   }
+  free(sf.kv); free(sf.cup); free(sf.cdn);
+  sf.kv = NULL; sf.cup = sf.cdn = NULL; sf.nmode = 0;
   free(sf.exp); free(sf.base); free(sf.bead); free(sf.R);
   free(sf.stencil); free(sf.H); free(sf.pinv);
   sf.box = NULL; sf.parent = NULL; sf.layer = NULL; sf.wall = NULL; sf.exp = sf.base = NULL;
@@ -570,6 +587,7 @@ static struct sf_region *sf_parent_at(int jx, int jy, int jz)
                   sf.z0 + (SF_PF*jz + sf.izmin + 0.5*SF_PF)*sf.bz };
     REAL r = 0.5*SF_PF*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
     sf.parent[i] = sf_region_make(c,r,sf.kappa,sf.p,-1,NULL,0);
+    if ( sf.parent[i] ) sf.nparents++;
   }
   return sf.parent[i];
 }
@@ -602,7 +620,7 @@ static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
       REAL r = 0.5*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
       struct sf_region *par = sf_parent_at(ix/SF_PF,iy/SF_PF,iz/SF_PF);
       g = par ? sf_region_make(c,r,sf.kappa,sf.p,-1,par,1) : NULL;
-      if ( g ) g->dc = sf_fold(g->phi,g->p,sf.ncls);   /* (NULL: by sf_poly_derivs) */
+      if ( g ) { g->dc = sf_fold(g->phi,g->p,sf.ncls); sf.nboxes++; }  /* (dc NULL: by sf_poly_derivs) */
       __atomic_store_n(&sf.box[i],g,__ATOMIC_RELEASE);
     }
   }
@@ -808,6 +826,15 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   memset(sf.all_phi,0,sizeof(sf.all_phi));
   sf.all.rho = 1.0; sf.all.p = 0; sf.all.nnear = sf.nexp; sf.all.near = sf.exp;
   sf.all.phi = sf.all_phi;
+  /* far from the sources: a period beyond the highest and the lowest */
+  sf.ztop = -HUGE_VAL; sf.zbot = HUGE_VAL;
+  for ( i = 0 ; i < sf.nbase ; i++ )
+  { if ( sf.base[i].c[2] > sf.ztop ) sf.ztop = sf.base[i].c[2];
+    if ( sf.base[i].c[2] < sf.zbot ) sf.zbot = sf.base[i].c[2];
+  }
+  sf.zhi = sf.ztop + Lmin; sf.zlo = sf.zbot - Lmin;
+  sf.nboxes = sf.nparents = 0;
+  if ( sf.lattice && !sf_modes(Lmin) ) { sf_free(); return 0; }
   sf.on = 1;
   sf_gen++;
   return 1;
@@ -861,9 +888,10 @@ int pyse_slabflux_active(void)
 
 /* the class fields F_cl at x (box region), with derivatives: V[cl][m],
    G[cl][m][i], S[cl][m][i][j] */
-static int sf_fields_in(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL S[][3][3][3])
+static int sf_fields_in(const REAL *x, int all, int order, REAL V[][3], REAL G[][3][3],
+                        REAL S[][3][3][3])
 { REAL xc[3], u[3], D[20], mv[(SF_PMAX + 1)*(SF_PMAX + 2)*(SF_PMAX + 3)/6];
-  struct sf_region *g = sf_box_at(x,xc);
+  struct sf_region *g = all ? NULL : sf_box_at(x,xc);
   int cl, s, m, i, j, nm;
   if ( !g && !sf.lattice )
   { g = &sf.all;               /* (outside the grid, no lattice: every source) */
@@ -932,31 +960,118 @@ static int sf_fields_in(const REAL *x, int order, REAL V[][3], REAL G[][3][3], R
   return 1;
 }
 
+/* the lattice's Fourier modes for points at least dz = Lmin beyond the
+   sources: per source of charge q at s, with z above it (Poisson's sum over
+   the lattice, A the cell's area)
+     Phi = 2 pi/A (-(z - s_z) + sum_{k != 0} exp(i k.(x - s) - |k| (z - s_z))/|k|),
+   F = -grad Phi; the modes kept while exp(-|k| Lmin) > 1e-13 (a square
+   cell's |n| <= 5), half of them (the rest their conjugates) */
+static int sf_modes(REAL Lmin)
+{ REAL Lmax = sf.L[0] > sf.L[1] ? sf.L[0] : sf.L[1];
+  int N = (int)ceil(30.0*Lmax/(2*M_PI*Lmin)), n1, n2, k, s, cl;
+  if ( N > 64 ) N = 64;
+  sf.nmode = 0;
+  sf.kv = (REAL(*)[3])malloc((size_t)(2*N + 1)*(N + 1)*sizeof(*sf.kv));
+  if ( !sf.kv ) return 0;
+  for ( n2 = 0 ; n2 <= N ; n2++ )
+    for ( n1 = -N ; n1 <= N ; n1++ )
+    { REAL kx = 2*M_PI*n1/sf.L[0], ky = 2*M_PI*n2/sf.L[1], kn = sqrt(kx*kx + ky*ky);
+      if ( n2 == 0 && n1 <= 0 ) continue;
+      if ( kn*Lmin > 30.0 ) continue;
+      sf.kv[sf.nmode][0] = kx; sf.kv[sf.nmode][1] = ky; sf.kv[sf.nmode][2] = kn;
+      sf.nmode++;
+    }
+  sf.cup = (REAL(*)[SF_MAXCLS][2])calloc((size_t)sf.nmode + 1,sizeof(*sf.cup));
+  sf.cdn = (REAL(*)[SF_MAXCLS][2])calloc((size_t)sf.nmode + 1,sizeof(*sf.cdn));
+  if ( !sf.cup || !sf.cdn ) return 0;
+  memset(sf.qtot,0,sizeof(sf.qtot));
+  for ( s = 0 ; s < sf.nbase ; s++ )
+  { const struct sf_src *e = sf.base + s;
+    for ( cl = 0 ; cl < sf.ncls ; cl++ ) sf.qtot[cl] += e->q[cl];
+    for ( k = 0 ; k < sf.nmode ; k++ )
+    { REAL th = -(sf.kv[k][0]*e->c[0] + sf.kv[k][1]*e->c[1]);
+      REAL up = exp(-sf.kv[k][2]*(sf.ztop - e->c[2])), dn = exp(-sf.kv[k][2]*(e->c[2] - sf.zbot));
+      for ( cl = 0 ; cl < sf.ncls ; cl++ )
+      { REAL q = e->q[cl];
+        if ( q == 0.0 ) continue;
+        sf.cup[k][cl][0] += q*up*cos(th); sf.cup[k][cl][1] += q*up*sin(th);
+        sf.cdn[k][cl][0] += q*dn*cos(th); sf.cdn[k][cl][1] += q*dn*sin(th);
+      }
+    }
+  }
+  return 1;
+}
+
+/* the class fields at x far from the sources (sf_modes): above them (up 1)
+   or below. For each mode, c = C_k exp(i k.x - |k| dz)/|k| and w = (i kx, i ky,
+   -+|k|) the derivatives' factors: F_m = -(4 pi/A) Re(c w_m), G_mi = -(4 pi/A)
+   Re(c w_m w_i), S_mij likewise; and F_z = +-(2 pi/A) Q of the linear part */
+static void sf_far(const REAL *x, int up, int order, REAL V[][3], REAL G[][3][3],
+                   REAL S[][3][3][3])
+{ REAL A = sf.L[0]*sf.L[1], f = -4*M_PI/A, dz = up ? x[2] - sf.ztop : sf.zbot - x[2];
+  REAL sg = up ? -1.0 : 1.0;
+  int k, cl, m, i, j;
+  memset(V,0,sf.ncls*sizeof(*V));
+  if ( order >= 1 ) memset(G,0,sf.ncls*sizeof(*G));
+  if ( order >= 2 ) memset(S,0,sf.ncls*sizeof(*S));
+  for ( cl = 0 ; cl < sf.ncls ; cl++ ) V[cl][2] = -sg*2*M_PI/A*sf.qtot[cl];
+  for ( k = 0 ; k < sf.nmode ; k++ )
+  { const REAL *kv = sf.kv[k];
+    REAL (*C)[2] = up ? sf.cup[k] : sf.cdn[k];
+    REAL amp = exp(-kv[2]*dz)/kv[2], th = kv[0]*x[0] + kv[1]*x[1];
+    REAL gr = amp*cos(th), gi = amp*sin(th);
+    /* w_m: (re, im) */
+    REAL w[3][2] = { { 0.0, kv[0] }, { 0.0, kv[1] }, { sg*kv[2], 0.0 } };
+    REAL w2[3][3][2], w3[3][3][3][2];
+    if ( amp == 0.0 ) continue;
+    for ( m = 0 ; m < 3 ; m++ )
+      for ( i = 0 ; i < 3 ; i++ )
+      { w2[m][i][0] = w[m][0]*w[i][0] - w[m][1]*w[i][1];
+        w2[m][i][1] = w[m][0]*w[i][1] + w[m][1]*w[i][0];
+        if ( order >= 2 )
+          for ( j = 0 ; j < 3 ; j++ )
+          { w3[m][i][j][0] = w2[m][i][0]*w[j][0] - w2[m][i][1]*w[j][1];
+            w3[m][i][j][1] = w2[m][i][0]*w[j][1] + w2[m][i][1]*w[j][0];
+          }
+      }
+    for ( cl = 0 ; cl < sf.ncls ; cl++ )
+    { REAL cr = C[cl][0]*gr - C[cl][1]*gi, ci = C[cl][0]*gi + C[cl][1]*gr;
+      if ( cr == 0.0 && ci == 0.0 ) continue;
+      for ( m = 0 ; m < 3 ; m++ )
+      { V[cl][m] += f*(cr*w[m][0] - ci*w[m][1]);
+        if ( order >= 1 )
+          for ( i = 0 ; i < 3 ; i++ )
+          { G[cl][m][i] += f*(cr*w2[m][i][0] - ci*w2[m][i][1]);
+            if ( order >= 2 )
+              for ( j = 0 ; j < 3 ; j++ )
+                S[cl][m][i][j] += f*(cr*w3[m][i][j][0] - ci*w3[m][i][j][1]);
+          }
+      }
+    }
+  }
+}
+
 /* sf_fields_in anywhere: a point below the boxes by the mirror symmetry (each
    source has its image there, of the same strength: F(Rx) = R F(x), R the
-   reflection in the floor), one above the boxes (in a lattice: 64 periods
-   above the beads, where the field is uniform to exp(-2 pi 64)) by the top
-   layer's value, no derivatives. (A Newton step on an indefinite Hessian
-   tries such points; the step is then refused, its energy needs a value.) */
+   reflection in the floor); one far from the sources by sf_far (a Newton
+   step on an indefinite Hessian tries such points; the step is then
+   refused, its energy needs a value) */
 static int sf_fields(const REAL *x, int order, REAL V[][3], REAL G[][3][3], REAL S[][3][3][3])
-{ REAL y[3] = { x[0], x[1], x[2] }, top, sg[3] = { 1.0, 1.0, -1.0 };
-  int flip = 0, far = 0, cl, m, i, j;
+{ REAL y[3] = { x[0], x[1], x[2] }, sg[3] = { 1.0, 1.0, -1.0 };
+  int flip = 0, cl, m, i, j;
   if ( !isfinite(x[0]) || !isfinite(x[1]) || !isfinite(x[2]) ) return 0;
   if ( sf.mirror && y[2] < sf.z0 + sf.izmin*sf.bz ) { y[2] = 2*sf.zf - y[2]; flip = 1; }
-  if ( sf.lattice )
-  { top = sf.z0 + (sf.nz + sf.izmin)*sf.bz;
-    if ( y[2] >= top - 0.5*sf.bz ) { y[2] = top - 0.5*sf.bz; far = 1; }
+  if ( y[2] >= sf.zhi || (!sf.mirror && y[2] <= sf.zlo) )
+  { int up = y[2] >= sf.zhi;
+    if ( sf.lattice ) sf_far(y,up,order,V,G,S);
+    else if ( !sf_fields_in(y,1,order,V,G,S) ) return 0;   /* (every source, directly) */
   }
-  if ( !sf_fields_in(y,far ? 0 : order,V,G,S) ) return 0;
-  if ( far )
-  { if ( order >= 1 ) memset(G,0,sf.ncls*sizeof(*G));
-    if ( order >= 2 ) memset(S,0,sf.ncls*sizeof(*S));
-  }
+  else if ( !sf_fields_in(y,0,order,V,G,S) ) return 0;
   if ( flip )
     for ( cl = 0 ; cl < sf.ncls ; cl++ )
       for ( m = 0 ; m < 3 ; m++ )
       { V[cl][m] *= sg[m];
-        if ( order >= 1 && !far )
+        if ( order >= 1 )
           for ( i = 0 ; i < 3 ; i++ )
           { G[cl][m][i] *= sg[m]*sg[i];
             if ( order >= 2 )
@@ -1173,6 +1288,11 @@ static int sf_eval(const struct sf_key *k, const REAL *x, int order, REAL *v, RE
 
 /* checks: the class fields at x by the regions and by Ewald's sum over all
    sources (out[0..3ncls) and [3ncls..6ncls)); the number of classes */
+/* the boxes and parents made since the fields were set up */
+void pyse_slabflux_stats(long *out)
+{ out[0] = sf.on ? sf.nboxes : 0; out[1] = sf.on ? sf.nparents : 0;
+}
+
 int pyse_slabflux_probe(const double *x, double *out)
 { REAL V[SF_MAXCLS][3], G[SF_MAXCLS][3][3], S[SF_MAXCLS][3][3][3], E[3];
   int cl, m, s;
