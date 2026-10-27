@@ -13,7 +13,7 @@ Writes OUT/NAME.csv per run, OUT/pc_<size>.png (a panel per contact angle,
 the seeds overlaid) and OUT/pc_sizes.png (a panel per contact angle, the
 sizes' runs overlaid). OUT defaults to the first DIR's curves/.
 """
-import argparse, csv, json, os, re, sys
+import argparse, csv, json, os, re, sys, textwrap
 
 import numpy as np
 
@@ -68,7 +68,8 @@ def panels(groups, title, path, label):
     thetas = sorted(groups)
     keys = sorted({k for g in groups.values() for k, _ in g})
     colour = {k: SLOTS[i % len(SLOTS)] for i, k in enumerate(keys)}
-    fig, axes = plt.subplots(1, len(thetas), figsize=(4.2*len(thetas), 3.8), sharey=True,
+    width = max(6.4, 4.2*len(thetas))
+    fig, axes = plt.subplots(1, len(thetas), figsize=(width, 4.4), sharey=True,
                              squeeze=False)
     for ax, theta in zip(axes[0], thetas):
         _style(ax)
@@ -87,12 +88,15 @@ def panels(groups, title, path, label):
         ax.set_xlim(1.02, max(0.0, low - 0.05))
     axes[0][0].set_ylabel("capillary pressure Pc (tension / bead radius)", fontsize=9, color=INK)
     handles = [plt.Line2D([], [], color=colour[k], linewidth=1.5) for k in keys]
-    fig.legend(handles, [f"{label} {k}" for k in keys], loc="upper right", frameon=False,
-               fontsize=9, ncol=len(keys))
-    fig.suptitle(title, x=0.01, ha="left", fontsize=11, color=INK)
-    fig.text(0.01, 0.005, "o: breakthrough reached; x: the run stopped short. A drop at a "
-             "fixed saturation is a Haines jump.", fontsize=8, color=MUTED)
-    fig.tight_layout(rect=(0, 0.03, 1, 0.93))
+    # (the title, then the legend on a row of its own, the note wrapped to the width)
+    fig.suptitle(title, x=0.01, y=0.985, ha="left", fontsize=11, color=INK)
+    fig.legend(handles, [f"{label} {k}" for k in keys], loc="upper left",
+               bbox_to_anchor=(0.01, 0.93), frameon=False, fontsize=9, ncol=len(keys))
+    note = ("o: breakthrough reached; x: the run stopped short. A drop at a fixed saturation "
+            "is a Haines jump.")
+    fig.text(0.01, 0.01, textwrap.fill(note, int(width*17)), fontsize=8, color=MUTED,
+             va="bottom")
+    fig.tight_layout(rect=(0, 0.07, 1, 0.88))
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
