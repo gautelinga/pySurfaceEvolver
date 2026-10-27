@@ -32,7 +32,7 @@ bench/topology/out/<set>): NAME.json per run, NAME.log (the records),
 summary.json. Run with another package (an overlay on PYTHONPATH, another
 venv's python via --python) to compare code.
 """
-import argparse, json, os, queue, re, subprocess, sys, time
+import argparse, json, os, queue, re, shutil, subprocess, sys, time
 import numpy as np
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -138,7 +138,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     """One run, in this process: NAME.json and NAME.log in out. checkpoints:
     a directory each step's state goes to (stepNNNN.fe and .pkl, the last
     KEEP kept); resume: such a state (its path without the extension), the
-    run going on from it (the steps numbered on) instead of from the start."""
+    run going on from it (the steps numbered on) instead of from the start;
+    where an earlier attempt left NAME.part, its curve, counts and time are
+    carried on and the log appended to (launch(): a crashed run resumed)."""
     import logging, warnings
     import numpy as np
     sys.path.insert(0, HERE)
@@ -148,8 +150,12 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     if flux_degree is not None:
         pyse.flux_degree = int(flux_degree)
 
-    log = open(os.path.join(out, f"{name}.log"), "w")
-    t0 = time.time()
+    part = os.path.join(out, f"{name}.part")
+    prior = json.load(open(part)) if resume and os.path.exists(part) else None
+    log = open(os.path.join(out, f"{name}.log"), "a" if resume else "w")
+    t0 = time.time() - (prior.get("seconds", 0.0) if prior else 0.0)
+    if resume:
+        log.write(f"{time.time() - t0:8.1f}s resumed from {resume}\n")
     state = {"step": -1}
     records = []
 
@@ -204,6 +210,13 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     # counts it: _core.work() between steps over the facets after each)
     from pysurfaceevolver import _core
     work = {"last": _core.work(), "passes": 0.0}
+    # (resumed: the attempt before it, to its checkpoint, carried on)
+    before = {"kinds": Counter(), "falls": 0}
+    if prior:
+        curve.update({int(k): tuple(rest) for k, *rest in prior.get("curve", []) if k < first})
+        work["passes"] = float(prior.get("passes", 0.0))
+        before.update(kinds=Counter(prior.get("kinds", {})), falls=int(prior.get("falls", 0)))
+        result["resumed"] = prior.get("resumed", []) + [first]
     # (the liquid kept: at every step what the bodies hold is their targets,
     # the draining one's and the trapped ones'; the changes only move
     # targets between bodies, _clusters.reconcile logging any that doesn't)
@@ -252,15 +265,18 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                                          float(step.trapped), float(step.energy), bool(step.fell),
                                          len(step.changes))
                     result["curve"] = [[k, *curve[k]] for k in sorted(curve)]
-                    # (the run so far, for a run stopped from outside: a timeout)
-                    result["seconds"] = time.time() - t0
-                    json.dump(result, open(os.path.join(out, f"{name}.part"), "w"))
                     made[step.index] = ([e.kind for e in step.changes], step.fell)
-                    kinds = Counter(kind for m, _ in made.values() for kind in m)
+                    kinds = before["kinds"] + Counter(kind for m, _ in made.values() for kind in m)
                     result.update(end=float(step.value), steps=step.index,
                                   changes=sum(kinds.values()), kinds=dict(kinds),
-                                  falls=sum(fell for _, fell in made.values()),
+                                  falls=before["falls"] + sum(fell for _, fell in made.values()),
                                   facets=ev.counts["facets"])
+                    # (the run so far, for a run stopped from outside: a timeout,
+                    # or a crash, resumed from this step's checkpoint)
+                    result["seconds"] = time.time() - t0
+                    json.dump(result, open(part, "w"))
+                    if not resume and str(step.index) == os.environ.get("PYSE_CORPUS_CRASH_AT"):
+                        os.abort()      # (tests of launch()'s resuming)
                     log.write(f"{time.time() - t0:8.1f}s step {step.index:4d}  V {step.value:.4f} "
                               f"trapped {step.trapped:.4f} "
                               f"facets {ev.counts['facets']} angle {ev.mesh_quality().angle_min:.1f}"
@@ -366,7 +382,8 @@ def save_state(ev, path, v0, index):
 
 def restore_state(path):
     """A state save_state wrote: the surface loaded, pySE's memory of it put
-    back. (The surface, the volume it started at, the step it is.)"""
+    back. (The surface, the volume it started at, the step it was: a run
+    resumed from it numbers its first point, this one again, so.)"""
     import pickle
     import pysurfaceevolver as pyse
     from pysurfaceevolver._engine import surface
@@ -381,7 +398,7 @@ def restore_state(path):
     surface.edge_scale = saved["edge_scale"]
     surface.sizes = dict(saved["sizes"])
     ev._register_native()
-    return ev, float(saved["start"]), int(saved["step"]) + 1
+    return ev, float(saved["start"]), int(saved["step"])
 
 
 def cpu_groups(spec, jobs, threads):
@@ -421,27 +438,56 @@ def cpu_groups(spec, jobs, threads):
     return groups[:jobs]
 
 
+def latest_state(ck, part=None):
+    """The checkpoint in ck to resume from (its path without the extension):
+    the one of the last step NAME.part has (its curve and counts that far),
+    else the newest; None if there is none."""
+    steps = sorted(f[:-4] for f in os.listdir(ck) if f.endswith(".pkl")) \
+        if os.path.isdir(ck) else []
+    if part and os.path.exists(part):
+        at = f"step{int(json.load(open(part)).get('steps', -1)):04d}"
+        if at in steps:
+            return os.path.join(ck, at)
+    return os.path.join(ck, steps[-1]) if steps else None
+
+
 def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None):
     """One run in its own process; cpus: the CPUs to pin it to (None: not
-    pinned)."""
+    pinned). Its checkpoints in OUT/ck/NAME (removed when it gets there); a
+    run whose process died (no NAME.json, not a timeout: a crash) resumed
+    once from the last of them, with the time it has left."""
     name, n, L, seed, theta, h, ds, timeout, goal = cfg
     env = dict(os.environ, OMP_NUM_THREADS=str(threads))
     path = os.path.join(out, f"{name}.json")
-    for stale in (path, os.path.join(out, f"{name}.part")):
+    part = os.path.join(out, f"{name}.part")
+    ck = os.path.join(out, "ck", name)
+    for stale in (path, part):
         if os.path.exists(stale):
             os.remove(stale)
+    if os.path.isdir(ck):
+        shutil.rmtree(ck)
     t = time.time()
-    try:
-        p = subprocess.run([python, os.path.abspath(__file__), "--one", name, str(n), str(L),
-                            str(seed), str(theta), str(h), str(ds), out, goal]
-                           + (["--gauge", gauge] if gauge else [])
-                           + (["--flux-degree", str(flux_degree)] if flux_degree else []),
-                           env=env, capture_output=True, text=True, timeout=timeout,
-                           preexec_fn=(lambda: os.sched_setaffinity(0, cpus)) if cpus else None)
-        code, err = p.returncode, p.stderr
-    except subprocess.TimeoutExpired as e:
-        code, err = "timeout", (e.stderr or b"").decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-    part = os.path.join(out, f"{name}.part")
+    resume, crash = None, None
+    while True:
+        try:
+            p = subprocess.run([python, os.path.abspath(__file__), "--one", name, str(n), str(L),
+                                str(seed), str(theta), str(h), str(ds), out, goal]
+                               + (["--gauge", gauge] if gauge else [])
+                               + (["--flux-degree", str(flux_degree)] if flux_degree else [])
+                               + ["--checkpoints", ck] + (["--resume", resume] if resume else []),
+                               env=env, capture_output=True, text=True,
+                               timeout=max(1.0, timeout - (time.time() - t)),
+                               preexec_fn=(lambda: os.sched_setaffinity(0, cpus)) if cpus else None)
+            code, err = p.returncode, p.stderr
+        except subprocess.TimeoutExpired as e:
+            code, err = "timeout", (e.stderr or b"").decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+        if os.path.exists(path) or code == "timeout" or resume or not latest_state(ck):
+            break
+        # (crashed: once more from its last checkpoint)
+        resume = latest_state(ck, part)
+        crash = f"{'signal ' + str(-code) if isinstance(code, int) and code < 0 else 'exit ' + str(code)}: " \
+                f"{err.strip().splitlines()[-1] if err.strip() else ''}"
+        print(f"  {name}: crashed ({crash}); resuming from {os.path.basename(resume)}", flush=True)
     if os.path.exists(path):
         r = json.load(open(path))
     elif os.path.exists(part):
@@ -469,6 +515,11 @@ def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None)
                 v0 = float(first[0])
                 r["drained"] = (v0 - float(vs[-1]))/(v0*(1 - FRACTION))
         json.dump(r, open(path, "w"), indent=1)
+    if crash:
+        r["crashed"] = crash
+        json.dump(r, open(path, "w"), indent=1)
+    if r.get("reached") and os.path.isdir(ck):
+        shutil.rmtree(ck)
     print(f"  {name:32s} {'reached' if r['reached'] else r['stop_class']:30s} "
           f"drained {r['drained'] if r['drained'] is None else round(r['drained'], 3)} "
           f"changes {r['changes']} {r['seconds']:.0f}s", flush=True)
