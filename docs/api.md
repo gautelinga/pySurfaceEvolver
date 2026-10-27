@@ -102,6 +102,7 @@ handle to it.
 .. autofunction:: set_solver
 .. autofunction:: solver
 .. autodata:: tessellation_limit
+.. autodata:: flux_degree
 .. autodata:: busy_timeout
 ```
 

@@ -20,9 +20,10 @@ volume is Evolver's z dx dy as a facet integral, the floor's wetted area the flu
 z-hat through the free surface (less that through the spheres' wetted caps, a line
 integral on each sphere's contact line), and a sphere's own integrals are local to it.
 With spheres of `gauge="flux"`, each sphere's field is the sum over the lattice of its
-source and of its mirror image in the floor, taken to about 1e-10 of the field (near
+source and of its mirror image in the floor, taken to about 1e-9 of the field (near
 sources directly, the rest by local harmonic expansions, the lattice's far tail by
-Ewald's sum).
+Ewald's sum). `pyse.flux_degree = 8` (default 10) takes it to about 5e-8 instead, the
+fields about 1.3x faster to evaluate.
 
 ## A drop across the cell's corner
 
