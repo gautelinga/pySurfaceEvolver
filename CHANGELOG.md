@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Speed
+
+- Topology runs no longer stall on a corrector step thrown far. Near a fold, a Newton
+  step of `arclength()`'s corrector on an indefinite Hessian could move vertices by
+  hundreds to ten thousand edge lengths; making it evaluated every integrand out there,
+  and with the flux gauge in a slab that meant the fields of thousands of new boxes
+  (44 to 200 s for one step in a 64-bead pack), only for the corrector to refuse the
+  step. A step moving a vertex farther than `recipes.WILD_STEP` (10) mean edge lengths
+  is now refused before it is made; converging steps moved vertices less than 2. The
+  64-bead pack from its 38th step, 20 minutes on one thread: step 68 before, 120 now.
+- The flux gauge's fast sum makes its boxes about 10x faster in a 64-bead slab (3.5x
+  at 16 beads): a box's far sources come from its parent, a block of 4x4x4 boxes,
+  whose polynomial is moved to the box exactly, so a box expands only the sources near
+  its parent instead of every explicit one (6272 at 64 beads). The same accuracy (the
+  fields to 1e-9 of Ewald's sum).
+
+### API
+
+- `pyse.flux_degree` (default 10): the degree of the flux gauge's fast-sum
+  polynomials. 8 gives the fields to ~5e-8 instead of ~1e-9, their evaluation about
+  1.3x faster; read at each load.
+
 ## 0.8.1 (2026-10-25)
 
 Fixes for topology runs: a crash where two drops' contact lines joined over a plane (the

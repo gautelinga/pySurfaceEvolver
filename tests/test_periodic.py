@@ -449,6 +449,27 @@ def test_the_flux_gauge_below_the_floor_and_far_above():
     assert np.abs(o[3:12].reshape(3, 3) - d1).max() < 1e-8
 
 
+def test_the_flux_gauges_degree_is_a_setting(monkeypatch):
+    # (pyse.flux_degree: lower, the fields to a looser tolerance, faster; read
+    # at each load; refused outside its range)
+    from pysurfaceevolver import _core
+    probes = ([0.3, 0.4, 1.3], [1.7, -0.2, 2.9], [0.9, 1.1, 0.4])
+    err = {}
+    for p in (10, 8):
+        monkeypatch.setattr(pyse, "flux_degree", p)
+        _bead(PERIODS, gauge="flux")
+        worst = 0.0
+        for x in probes:
+            o = np.array(_core.slabflux_probe(x))
+            n = len(o)//2
+            worst = max(worst, np.abs(o[:n] - o[n:]).max()/np.abs(o[n:]).max())
+        err[p] = worst
+    assert err[10] < 1e-9 and err[8] < 1e-6
+    monkeypatch.setattr(pyse, "flux_degree", 30)
+    with pytest.raises(ValueError, match="flux_degree"):
+        _bead(PERIODS, gauge="flux")
+
+
 def test_a_plane_given_by_expressions_is_refused_plainly():
     # (plane() takes numbers; a hand-made wall whose normal has an expression
     # got numpy's conversion error)

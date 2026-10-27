@@ -255,10 +255,22 @@ def _assemble_flux(cons, flux, floor_key, z_f, k_f) -> Tuple[Dict[Any, Any], str
 
 # the fast sum's settings (pyse_slabflux.c): boxes of side ~2h (h a quarter of
 # the smallest radius), sources within kappa box radii summed directly, the
-# rest to degree p; a sphere's within kappa_w radii, to degree p_w; explicit
-# images |n| <= M, the tail per layer to degree p_T. Errors ~1e-11 of the
-# field (scratch tests against Ewald's sum, 2026-10-24).
-SLAB_FLUX = dict(kappa=6.0, p=10, kappa_w=5.0, p_w=14, M=3, p_T=16)
+# rest to degree p (pyse.flux_degree); a sphere's within kappa_w radii, to
+# degree p_w; explicit images |n| <= M, the tail per layer to degree p_T.
+# Errors ~1e-9 of the field at p 10, 5e-8 at 8 (scratch tests against
+# Ewald's sum, 2026-10-24 and 26).
+SLAB_FLUX = dict(kappa=6.0, kappa_w=5.0, p_w=14, M=3, p_T=16)
+FLUX_DEGREES = range(4, 17)
+
+
+def flux_degree() -> int:
+    """pyse.flux_degree, checked."""
+    import pysurfaceevolver as pyse
+    p = pyse.flux_degree
+    if isinstance(p, bool) or not isinstance(p, int) or p not in FLUX_DEGREES:
+        raise ValueError(f"pyse.flux_degree must be an integer from {FLUX_DEGREES.start} to "
+                         f"{FLUX_DEGREES.stop - 1}, not {p!r}")
+    return p
 
 _FIT: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
@@ -338,7 +350,7 @@ def slab_flux(walls: Dict[Any, Any], number: Dict[Any, int], periods, bodies) ->
                  float(tension)]
     radii = [float(w.slabflux[1]) for _, w in beads]
     h = min(radii)/4
-    s = SLAB_FLUX
+    s = dict(SLAB_FLUX, p=flux_degree())
     u, H, pinv = _fit(int(s["p_T"]))
     sources: List[float] = []
     if periods is not None:
