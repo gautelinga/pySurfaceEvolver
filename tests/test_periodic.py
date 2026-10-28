@@ -473,6 +473,38 @@ def test_the_flux_gauge_far_from_the_beads_needs_no_boxes():
     assert np.abs(o[12:].reshape(3, 3, 3) - d2.transpose(1, 0).reshape(3, 3, 3)).max() < 1e-8
 
 
+def test_frozen_elements_in_a_slab_with_the_flux_gauge():
+    # (the slab's flux gauge: facet integrands and the sphere's line integrals
+    # left out where frozen, the same energy, volume and Newton step)
+    import numpy as np
+    from pysurfaceevolver import _core
+    ev = _bead(PERIODS, gauge="flux")
+    ev.refine(1)
+    ev.relax()
+    x = ev.vertices
+    ev.fix("vertex", x[:, 2] < 0.2)
+    start = ev._save()
+    out = {}
+    for on in (False, True):
+        ev.restore(start)
+        was = _core.freeze(on)
+        try:
+            ev.command("recalc")
+            if on:
+                frozen, live, _, _ = _core.freeze_counts()
+                assert frozen > 0 and live > 0
+            before = (ev.energy, ev.body(1).volume)
+            ev.command("g 2")
+            after_g = ev.vertices
+            ev.command("hessian")
+            out[on] = (before, after_g, ev.vertices)
+        finally:
+            _core.freeze(was)
+    (b0, g0, h0), (b1, g1, h1) = out[False], out[True]
+    assert np.allclose(b1, b0, rtol=1e-12)
+    assert np.abs(g1 - g0).max() < 1e-12 and np.abs(h1 - h0).max() < 1e-11
+
+
 def test_the_flux_gauges_degree_is_a_setting(monkeypatch):
     # (pyse.flux_degree: lower, the fields to a looser tolerance, faster; read
     # at each load; refused outside its range)

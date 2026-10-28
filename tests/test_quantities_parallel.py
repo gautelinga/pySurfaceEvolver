@@ -77,3 +77,51 @@ def test_integrand_errors_reported_as_before(tmp_path):
     fast = run(path, {"PYSE_THREADS": "8"})
     assert isinstance(original, str) and "Square root of negative" in original
     assert fast == original
+
+
+def test_frozen_elements_give_the_same_values_gradients_and_hessians(tmp_path):
+    # (freeze(): facets and edges whose vertices are all fixed left out of the
+    # quantity loops, their values summed once: a local descent's speed; the
+    # same energy, quantities and steps as without, the sums kept until the
+    # frozen vertices move or are unfixed)
+    import numpy as np
+    from pysurfaceevolver import Evolver, _core
+    ev = Evolver(datafile(tmp_path, "x"))
+    ev.command("r; r; r; g 5")
+    x = ev.vertices
+    ev.fix("vertex", x[:, 0] > 0.1)
+    start = ev._save()
+    out = {}
+    for on in (False, True):
+        ev.restore(start)
+        was = _core.freeze(on)
+        try:
+            ev.command("recalc")
+            if on:
+                frozen, live, _, _ = _core.freeze_counts()
+                assert frozen > 0 and live > 0
+            values = [ev.total_energy] + [q.value for q in ev.quantities().values()]
+            ev.command("g 3")
+            after_g = ev.vertices
+            ev.command("hessian")
+            out[on] = (values, after_g, ev.vertices, ev.total_energy)
+        finally:
+            _core.freeze(was)
+    (v0, g0, h0, e0), (v1, g1, h1, e1) = out[False], out[True]
+    assert np.allclose(v1, v0, rtol=1e-12, atol=1e-14)
+    assert np.abs(g1 - g0).max() < 1e-12 and np.abs(h1 - h0).max() < 1e-11
+    assert e1 == pytest.approx(e0, rel=1e-12)
+    # unfixed: no longer frozen (the sums made again), still the same
+    ev.restore(start)
+    was = _core.freeze(True)
+    try:
+        ev.command("recalc")
+        ev.unfix("vertex")
+        ev.command("recalc")
+        frozen_unfixed = ev.total_energy
+    finally:
+        _core.freeze(was)
+    ev.restore(start)
+    ev.unfix("vertex")
+    ev.command("recalc")
+    assert frozen_unfixed == pytest.approx(ev.total_energy, rel=1e-12)
