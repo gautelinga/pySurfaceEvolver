@@ -11,6 +11,7 @@
 */
 
 #include "include.h"
+#include "fastloops.h"
 
 /* pySE: its sphere walls' contact-line integrands evaluated in C where
    registered (bindings/pyse_native.c; absent from the stock program) */
@@ -200,7 +201,7 @@ REAL q_edge_tension_value(struct qinfo *e_info)
       proc_total_area[GET_THREAD_ID] += energy;
      else
 #endif
-     binary_tree_add(web.total_area_addends,energy);
+     fl_total_area_add(energy);  /* thread-safe; fastloops.h */
      set_edge_length(e_info->id,energy);
   }
   

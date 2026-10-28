@@ -175,8 +175,10 @@ static int expr_ok(struct expnode *e)
 }
 
 /* Methods checked to be thread-safe for the linear and Lagrange models:
-   their setup, value, gradient and Hessian write only their qinfo (the area
-   methods' total area goes through fl_total_area_add()). Integral methods
+   their setup, value, gradient and Hessian write only their qinfo and their
+   element (the area and length methods' total area goes through
+   fl_total_area_add(): the default length, an info quantity, in every edge
+   pass a recalc makes, kept the contact lines' integrals serial). Integral methods
    also need read-only integrands. `quadratic`: their quadratic-model
    versions checked too. */
 static const struct
@@ -190,6 +192,7 @@ static const struct
   { facet_vector_integral, facet_vector_integral_grad, facet_vector_integral_hess, 1, 0 },
   { facet_2form_integral, facet_2form_integral_grad, facet_2form_integral_hess, 1, 0 },
   { facet_general_value, facet_general_grad, facet_general_hess, 1, 0 },
+  { q_edge_tension_value, q_edge_tension_gradient, q_edge_tension_hessian, 0, 0 },
   { edge_scalar_integral, edge_scalar_integral_grad, edge_scalar_integral_hess, 1, 0 },
   { edge_vector_integral, edge_vector_integral_grad, edge_vector_integral_hess, 1, 0 },
   { edge_general_value, edge_general_grad, edge_general_hess, 1, 0 },
@@ -1055,6 +1058,7 @@ struct fz_cache
 { int valid;
   long top, count, maxord;
   double xsum, floor;
+  unsigned long long sig;      /* the frozen elements: fz_sig() */
   element_id *live, *frozen;
   long nlive, nfrozen, cap;
   double *s, *a, *area;        /* per method instance: signed and absolute sums, area */
@@ -1101,6 +1105,61 @@ static double fz_xsum(struct fz_cache *z, int type, vertex_id *corners)
 static double fz_floor(void)
 { int k = lookup_global("pyse_angle_floor");
   return k >= 0 ? (double)globals(k)->value.real : 0.0;
+}
+
+/* the frozen elements, their vertices and methods hashed (in any order): a
+   topology change elsewhere (a flip, a split, an edit in the live region)
+   leaves it, and the sums with it, as they were */
+static unsigned long long fz_mix(unsigned long long h)
+{ h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL;
+  return h ^ (h >> 33);
+}
+
+static unsigned long long fz_sig(struct fz_cache *z, int type, vertex_id *corners)
+{ unsigned long long sig = (unsigned long long)z->nfrozen;
+  int meth_offset = get_meth_offset(type);
+  long k;
+  for ( k = 0 ; k < z->nfrozen ; k++ )
+  { element_id id = z->frozen[k];
+    struct element *e_ptr = elptr(id);
+    unsigned long long h = fz_mix((unsigned long long)id);
+    int i;
+    if ( type == FACET )
+      for ( i = 0 ; i < 3 ; i++ ) h = fz_mix(h + (unsigned long long)corners[3*ordinal(id) + i]);
+    else
+    { h = fz_mix(h + (unsigned long long)get_edge_tailv(id));
+      h = fz_mix(h + (unsigned long long)get_edge_headv(id));
+    }
+    for ( i = 0 ; i < e_ptr->method_count ; i++ )
+      h = fz_mix(h + (unsigned long long)(long)((int*)((char*)e_ptr + meth_offset))[i]);
+    sig += h;
+  }
+  return sig;
+}
+
+/* the elements of list into the live and frozen ones (0: out of memory) */
+static int fz_partition(struct fz_cache *z, int type, element_id *list, long n,
+                        vertex_id *corners)
+{ long k;
+  if ( z->cap < n )
+  { element_id *a = (element_id*)realloc(z->live,n*sizeof(element_id));
+    element_id *b = a ? (element_id*)realloc(z->frozen,n*sizeof(element_id)) : NULL;
+    if ( a ) z->live = a;
+    if ( !a || !b ) return 0;
+    z->frozen = b; z->cap = n;
+  }
+  z->nlive = z->nfrozen = 0;
+  for ( k = 0 ; k < n ; k++ )
+  { element_id id = list[k];
+    int all;
+    if ( type == FACET )
+    { vertex_id *c = corners + 3*ordinal(id);
+      all = fz_vertex_fixed(c[0]) && fz_vertex_fixed(c[1]) && fz_vertex_fixed(c[2]);
+    }
+    else all = fz_vertex_fixed(get_edge_tailv(id)) && fz_vertex_fixed(get_edge_headv(id));
+    if ( all ) z->frozen[z->nfrozen++] = id; else z->live[z->nlive++] = id;
+  }
+  return 1;
 }
 
 /* the frozen elements' values summed, serially: the method instances active
@@ -1158,15 +1217,24 @@ static void fz_sum(struct fz_cache *z, int type, vertex_id *corners, int fresh)
 static struct fz_cache *fz_ready(int type, element_id *list, long n)
 { struct fz_cache *z = fz + type;
   vertex_id *corners = NULL;
-  long k;
   int stale;
   if ( type != FACET && type != EDGE ) return NULL;
   if ( type == FACET && !(corners = fl_facet_corners()) ) return NULL;
   /* (not the attributes' stamp: Evolver sets some attribute nearly every pass;
      the frozen vertices still fixed and where they were, fz_xsum, is what counts) */
-  stale = !z->valid || z->top != top_timestamp
-          || z->count != web.skel[type].count || z->maxord != (long)web.skel[type].max_ord
-          || z->floor != fz_floor() || z->nm != meth_inst_count;
+  stale = !z->valid || z->floor != fz_floor() || z->nm != meth_inst_count;
+  if ( !stale && (z->top != top_timestamp || z->count != web.skel[type].count
+                  || z->maxord != (long)web.skel[type].max_ord) )
+  { /* (the topology changed: the elements parted again, the sums kept where
+       the frozen ones are the same; a descent's flips and edits in its
+       region made them again at every few steps, a whole pass each) */
+    if ( !fz_partition(z,type,list,n,corners) ) { z->valid = 0; return NULL; }
+    if ( fz_sig(z,type,corners) == z->sig )
+    { z->top = top_timestamp;
+      z->count = web.skel[type].count; z->maxord = (long)web.skel[type].max_ord;
+    }
+    else stale = 1;
+  }
   if ( !stale && !(fz_xsum(z,type,corners) == z->xsum) ) stale = 2;
   if ( !stale )
   { /* method instances active now that weren't summed (the energy's and the
@@ -1181,24 +1249,7 @@ static struct fz_cache *fz_ready(int type, element_id *list, long n)
     if ( missing ) fz_sum(z,type,corners,0);
   }
   if ( stale )
-  { if ( z->cap < n )
-    { element_id *a = (element_id*)realloc(z->live,n*sizeof(element_id));
-      element_id *b = a ? (element_id*)realloc(z->frozen,n*sizeof(element_id)) : NULL;
-      if ( a ) z->live = a;
-      if ( !a || !b ) { z->valid = 0; return NULL; }
-      z->frozen = b; z->cap = n;
-    }
-    z->nlive = z->nfrozen = 0;
-    for ( k = 0 ; k < n ; k++ )
-    { element_id id = list[k];
-      int all;
-      if ( type == FACET )
-      { vertex_id *c = corners + 3*ordinal(id);
-        all = fz_vertex_fixed(c[0]) && fz_vertex_fixed(c[1]) && fz_vertex_fixed(c[2]);
-      }
-      else all = fz_vertex_fixed(get_edge_tailv(id)) && fz_vertex_fixed(get_edge_headv(id));
-      if ( all ) z->frozen[z->nfrozen++] = id; else z->live[z->nlive++] = id;
-    }
+  { if ( !fz_partition(z,type,list,n,corners) ) { z->valid = 0; return NULL; }
     z->nm = meth_inst_count;
     free(z->s); free(z->a); free(z->area); free(z->summed);
     z->s = (double*)calloc(z->nm + 1,sizeof(double));
@@ -1211,6 +1262,7 @@ static struct fz_cache *fz_ready(int type, element_id *list, long n)
     z->count = web.skel[type].count; z->maxord = (long)web.skel[type].max_ord;
     z->floor = fz_floor();
     z->xsum = fz_xsum(z,type,corners);
+    z->sig = fz_sig(z,type,corners);
     z->valid = 1;
   }
   return z->nfrozen > 0 ? z : NULL;

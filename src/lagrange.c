@@ -65,7 +65,7 @@ REAL lagrange_edge_tension_value(struct qinfo *e_info)
       proc_total_area[GET_THREAD_ID] += value;
      else
 #endif
-     binary_tree_add(web.total_area_addends,value);
+     fl_total_area_add(value);  /* thread-safe; fastloops.h */
   }
   if ( METH_INSTANCE(e_info->method)->flags & USE_DENSITY )
       value *= get_edge_density(e_info->id);

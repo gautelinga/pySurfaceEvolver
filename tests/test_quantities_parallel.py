@@ -125,3 +125,31 @@ def test_frozen_elements_give_the_same_values_gradients_and_hessians(tmp_path):
     ev.unfix("vertex")
     ev.command("recalc")
     assert frozen_unfixed == pytest.approx(ev.total_energy, rel=1e-12)
+
+
+def test_frozen_sums_kept_across_changes_in_the_live_region(tmp_path):
+    # (a topology change among the live elements, as a descent's flips and
+    # edits in its region, leaves the frozen ones and their sums; the values
+    # as without freezing)
+    import numpy as np
+    from pysurfaceevolver import Evolver, _core
+    ev = Evolver(datafile(tmp_path, "x"))
+    ev.command("r; r; r; g 5")
+    ev.fix("vertex", ev.vertices[:, 0] > 0.1)
+    m = ev.mesh()
+    free = ~np.asarray(m.fixed, bool)
+    live = np.flatnonzero(free[np.asarray(m.edges)].all(axis=1))
+    was = _core.freeze(True)
+    try:
+        ev.command("recalc")
+        before = _core.freeze_counts()
+        ev.command(f"refine edge[{int(m.edge_ids[live[0]])}]")
+        ev.command("recalc")
+        after = _core.freeze_counts()
+        frozen = ev.total_energy
+    finally:
+        _core.freeze(was)
+    assert after[0] == before[0] and after[2] == before[2]
+    assert after[1] > before[1] and after[3] > before[3]
+    ev.command("recalc")
+    assert frozen == pytest.approx(ev.total_energy, rel=1e-12)
