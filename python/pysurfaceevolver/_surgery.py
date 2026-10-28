@@ -2629,6 +2629,7 @@ _FALL_NEAR = 0.05       # the residual below which Newton steps try to finish a 
 _NEWTON_NEAR = 1.0      # ... and below which its relax() runs take Newton steps (gradient runs
                         # alone level off at 0.1-0.5, the tidying between rounds disturbing it)
 _FALL_TRY = 10          # iterations between such tries
+_PLATEAU = 2.0          # ... and below which they try where the runs don't converge (a plateau)
 _FLAT = 0.05            # a facet crushed flat: its area under this many h^2 (h the mean edge)
 _AGAIN = 3              # a change made this often at one place in a descent: not again there
 _FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
@@ -3133,6 +3134,17 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     if stalled == _STALLED:
                         stalled += 1
                         since = max(since, _FALL_ITERATIONS)
+                    # (near an equilibrium the runs never converge: the tidying
+                    # between rounds stirs the surface, residual 0.4-2 and the
+                    # energy wandering by 0.03, a 32-bead column's descent 2000
+                    # gradient steps there, 400 s, to its budget's end; four
+                    # Newton steps from there converge in a second)
+                    if residual < _PLATEAU and tried >= _FALL_TRY:
+                        tried = 0
+                        done = _try_finish(ev, tol)
+                        if done is not None:
+                            if not _drop_empty(ev):
+                                return done, changes, ""
                     continue
                 if chunk.stable is not False and not _sound(chunk.health):
                     # (a facet squashed in the change, a patch shrunk to nothing,
@@ -3198,17 +3210,10 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 # (or relax(), where Newton steps alone don't get there: a drop
                 # free to move as a whole, which relax() deflates)
                 tried = 0
-                start = ev._save()
-                for finish in ("newton", "relax"):
-                    if finish == "newton" and not ev.newton(20, tol=tol).converged:
-                        continue
-                    r = ev.relax(tol=tol)
-                    if r.converged and r.stable is not False and _sound(r.health):
-                        if not _drop_empty(ev):
-                            return r, changes, ""
-                        break               # (crumbs taken away: on down from here)
-                    ev.restore(start)
-                continue                    # a saddle, or not there yet: on down
+                done = _try_finish(ev, tol)
+                if done is not None and not _drop_empty(ev):
+                    return done, changes, ""
+                continue                    # a saddle, not there yet, or crumbs: on down
             if not falling:
                 _unguard(ev)
             falling = True
@@ -3406,6 +3411,22 @@ def _radial(points, shape, axis, periods=None) -> np.ndarray:
     if axis is not None:
         r = r - np.outer(r @ axis, axis)
     return r
+
+
+def _try_finish(ev, tol: float) -> Any:
+    """A descent's try at finishing from where it is: Newton steps, then
+    relax() (or relax() alone where they don't converge: a drop free to move
+    as a whole, which relax() deflates). relax()'s result where that
+    converged to a stable, sound state; else the surface put back, None."""
+    start = ev._save()
+    for finish in ("newton", "relax"):
+        if finish == "newton" and not ev.newton(20, tol=tol).converged:
+            continue
+        r = ev.relax(tol=tol)
+        if r.converged and r.stable is not False and _sound(r.health):
+            return r
+        ev.restore(start)
+    return None
 
 
 def _run(ev, tol: float, n: int) -> Any:

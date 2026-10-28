@@ -31,6 +31,17 @@
   its parent instead of every explicit one (6272 at 64 beads). The same accuracy (the
   fields to 1e-9 of Ewald's sum).
 
+### Fixes
+
+- A topology descent no longer crawls to its work budget on a plateau. Near an
+  equilibrium its gradient runs never converge (the tidying between rounds stirs the
+  surface: residual 0.4-2, the energy wandering by 0.03), and its Newton finish was only
+  tried below a residual of 0.05: a 32-bead column's descent took 2000 gradient steps
+  there, 400 s, where four Newton steps converge in a second. Every ten runs that don't
+  converge below a residual of 2, Newton steps and relax() now try to finish (kept where
+  they reach a stable, sound state; put back otherwise): that descent from its plateau
+  ended in 45 s, and two of three runs that were stuck late in drainage got past.
+
 ### API
 
 - `pyse.flux_degree` (default 10): the degree of the flux gauge's fast-sum
