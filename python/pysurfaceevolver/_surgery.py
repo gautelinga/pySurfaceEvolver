@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import warnings
+from types import SimpleNamespace
 from typing import Any, List, NamedTuple, Optional
 
 import numpy as np
@@ -234,6 +235,8 @@ def guard(ev) -> None:
         return
     if _slab(ev) is not None:
         _home_by_spheres(ev, list(walls))
+    if _PUSH_AT:
+        _push_beside_lines(ev, list(walls), _edge_scale(ev), np.asarray(_PUSH_AT))
     nums, _, dist, names = ev._constraint_gaps(guards=True)
     names = [str(n) for n in names]
     defined = []
@@ -2755,6 +2758,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     nowhere), the events whose changes were made, and why it stopped if it
     did."""
     from ._errors import EvolverError
+    _PUSH_AT[:] = []                   # (a run of this descent crossed itself off the walls)
     way: Any = None
     before: list = []
     refused = ""
@@ -3535,6 +3539,7 @@ def _implausible(ev, before: tuple, trace=None) -> str:
         _log.debug("implausible run: %s", why)
     if why == "crossings":
         _note_crossed(ev)
+        _PUSH_AT.extend(_off_walls(ev, _CROSSED_AT[0]))
     return why
 
 
@@ -4599,6 +4604,79 @@ def _beside_line(ev, event, h: float) -> bool:
     reach = np.linalg.norm(_delta(x[on][None, :, :], x[rows][:, None, :], _slab(ev)),
                            axis=2).min(axis=1)
     return bool((reach < 1.5*float(event.scale)).all())
+
+
+_PUSH_AT: list = []                # (where runs of this descent crossed off the walls)
+
+
+def _off_walls(ev, places: np.ndarray) -> list:
+    """Of the places where the surface crossed itself, those off the walls:
+    the vertices within half an edge of it all more than a quarter edge from
+    every wall (not two parts of the surface met on a solid, a contact the
+    descent makes)."""
+    if not len(places):
+        return []
+    nums, _, dist, names = ev._constraint_gaps()
+    if not dist.shape[1]:
+        return [p for p in places]
+    x = ev.vertices
+    h = _edge_scale(ev)
+    near_wall = (np.abs(np.nan_to_num(dist, nan=0.0)) < 0.25*h).any(axis=1)
+    out = []
+    for p in np.asarray(places, float):
+        close = np.linalg.norm(_delta(p[None, :], x, _slab(ev)), axis=1) < 0.5*h
+        if close.any() and not near_wall[close].any():
+            out.append(p)
+    return out
+
+
+def _push_beside_lines(ev, keys, h: float, at: np.ndarray) -> None:
+    """Free vertices through a wall by less than half an edge within an edge
+    and a half of a contact line on it (its first ring of free vertices) put
+    back out (_push_out), for guard() to hold them on the wall. At a small
+    contact angle the liquid's wedge beside a contact line is thin (0.36 of
+    the distance from the line at 20 degrees), its first ring a fraction of
+    an edge from the solid, and the capillary pressure presses it in as the
+    line should recede; a vertex more than a tenth of an edge through takes
+    no guard (the surface gone through elsewhere is a contact to make), and
+    the next run took a 32-bead column's ring 0.47 into its bead, through
+    the surface beyond: 309 runs crossed so in one descent, 815 lines of log
+    in one step, the run stopped. Beside its line the surface going through
+    is the line's own (descend's _push_out after a run), here before it.
+    Only within three edges of where a run of this descent crossed itself off
+    the walls (at; _off_walls): a ring just inside where a dry patch has
+    opened lifts out in the next run, and held on the sphere instead it was
+    taken as resting there, the patch made in four contacts instead of one;
+    crossings on a wall are surfaces meeting on it, a contact to make."""
+    nums, _, dist, names = ev._constraint_gaps()
+    m = ev.mesh()
+    x = ev.vertices
+    L = _slab(ev)
+    free = ~np.asarray(m.fixed, bool) & ~np.isnan(dist).any(axis=1)
+    through = []
+    for key in keys:
+        c = _column(nums, names, key)
+        d = dist[:, c]
+        on = np.isnan(d)
+        if not on.any() or on.all():
+            continue
+        side = 1.0 if (d[~on] > 0).sum() >= (d[~on] < 0).sum() else -1.0
+        sd = side*np.nan_to_num(d)
+        rows = np.flatnonzero(free & (sd < 0) & (sd > -0.5*h))
+        if not len(rows):
+            continue
+        reach = np.linalg.norm(_delta(x[on][None, :, :], x[rows][:, None, :], L), axis=2).min(axis=1)
+        rows = rows[reach < 1.5*h]
+        if len(rows):
+            far = np.linalg.norm(_delta(np.asarray(at)[None, :, :], x[rows][:, None, :], L),
+                                 axis=2).min(axis=1)
+            rows = rows[far < 3.0*h]
+        if len(rows):
+            through.append(SimpleNamespace(vertices=rows, constraint=key))
+    if through:
+        _push_out(ev, through, h)
+        _log.debug("pushed out beside a contact line: %d vertices",
+                   sum(len(t.vertices) for t in through))
 
 
 def _push_out(ev, through: list, h: float) -> None:

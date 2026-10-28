@@ -41,6 +41,14 @@
   converge below a residual of 2, Newton steps and relax() now try to finish (kept where
   they reach a stable, sound state; put back otherwise): that descent from its plateau
   ended in 45 s, and two of three runs that were stuck late in drainage got past.
+- A topology descent late in drainage no longer drives a contact line's first ring of
+  vertices through its bead. At a small contact angle that ring lies a fraction of an
+  edge from the solid and the capillary pressure presses it in as the line should recede;
+  a vertex more than a tenth of an edge through took no guard, and runs carried it deep
+  (0.47 of a bead's radius) and through the surface beyond, run after run undone. Where a
+  run of a descent passes the surface through itself away from the walls, such vertices
+  within three edges are put back on the wall for their guards to hold. With the plateau
+  finish, all three runs that were stuck got past their stuck steps.
 
 ### API
 
