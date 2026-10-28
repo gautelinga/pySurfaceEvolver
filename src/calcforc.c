@@ -833,7 +833,7 @@ REAL calc_content_and_energy(void)
   content_energy_ready = 0;
 #ifndef MPI_EVOLVER
   if ( !content_fuse_energy || !quantities_only_flag || !gen_quant_count
-        || web.torus_flag || web.torus_period || min_square_grad_flag
+        || ((web.torus_flag || web.torus_period) && !PYSE_SLAB()) || min_square_grad_flag
         || (compound_quant_list_head >= 0) || calc_quant_flag )
 #endif
     return calc_content(Q_FIXED);

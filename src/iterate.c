@@ -20,6 +20,14 @@ extern int pyse_chop_lines(void) __attribute__((weak));
 static int (*pyse_chop_lines)(void) = 0;
 #endif
 #include "fastloops.h"
+/* pySE: a slab periodic in x and y (bindings/pyse_api.c): its volumes are
+   z dx dy, exact, never a cell's volume off (as calcforc.c's) */
+#if defined(__GNUC__)
+extern int pyse_slab(REAL *L) __attribute__((weak));
+#define PYSE_SLAB() (pyse_slab ? pyse_slab(NULL) : 0)
+#else
+#define PYSE_SLAB() 0
+#endif
 
 int volgrads_changed_flag; /* whether volgrads recalced during move */
 
@@ -96,7 +104,7 @@ void pyse_iterate_abort(void)
 static int content_slopes(void)
 { vertex_id v_id;
   int i, nfix = pyse_fixcount();
-  if ( nfix <= 0 || web.torus_flag || approx_curve_flag || web.pressure_flag )
+  if ( nfix <= 0 || (web.torus_flag && !PYSE_SLAB()) || approx_curve_flag || web.pressure_flag )
     return 0;
   if ( nfix > pyse_dcontent_size )
   { REAL *d = (REAL*)realloc(pyse_dcontent,2*nfix*sizeof(REAL));
@@ -480,7 +488,7 @@ have_scale:
        values; a 16-bead pack's gradient step made 7 passes of the flux
        gauge's integrands, this one of them) */
     if ( pyse_content_stamp == global_timestamp && !web.jiggle_flag
-           && !autopop_flag && !autochop_flag && !web.torus_flag )
+           && !autopop_flag && !autochop_flag && (!web.torus_flag || PYSE_SLAB()) )
       fixed_volume_timestamp = global_timestamp;
     else calc_content(Q_FIXED);
   }
