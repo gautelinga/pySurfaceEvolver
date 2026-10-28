@@ -46,6 +46,24 @@ loops, steps); P3 the curves, docs.
 - **Next.** Profile the descents (the late stage, and 10 steps over 60 s in that run);
   measure degree 8; split the cores for the 9-run sets; then run the 32/64 sets.
 
+**2026-10-28.**
+- **Scope.** The user set the scope to **128 beads**. 1000 beads with explicit interfaces
+  was judged unrealistic (global descents, late-jump churn); a pore-morphology, level-set
+  or network method calibrated by these runs is suggested for large packs, not decided.
+- **Periodic sets as columns** 3 bead diameters square (d4a8957).
+- **Saturation below an inlet plane** one diameter below the top layer (520d54b).
+- **Descents fixed** (2786122, d080ae6): a Newton finish from plateaus of unconverged
+  runs, and a contact line's first ring held on its bead where runs cross off the walls.
+- **Event library.** `~/pyse_scratch/pp/lib`: the stuck checkpoints, the plateau state,
+  and `rep.py` to replay a case for minutes.
+- **Tried and dropped:** event-watching runs (worse); `_FALL_NEAR` raised (slower).
+- **Known: an intermittent test.** `test_a_drop_drained_onto_a_sphere_in_it_dries_a_patch_there`
+  passes 2-3 times in 4 at 4 threads, both before and after these changes (thread
+  nondeterminism in its descent); it always passes at 1 thread.
+- **Next: local descents.** A Haines jump moves only 1.5-5% of the surface more than an
+  edge (one pore, ~2 radii across); 80% moves less than half an edge, the menisci
+  following the pressure.
+
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
 Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG
