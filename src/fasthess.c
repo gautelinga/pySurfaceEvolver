@@ -908,7 +908,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
     if ( fz_list && fz_type == type ) { list = fz_list; n = fz_n; }
   }
   if ( !list || n == 0 ) return 0;
-  chunk = 64*threads;
+  chunk = (direct ? 512 : 64)*threads;   /* (the records a chunk keeps: direct ones few) */
   fstart = (long*)malloc(2*chunk*sizeof(long));
   fthread = (int*)malloc(chunk*sizeof(int));
   ftrapped = (unsigned char*)malloc(chunk);
@@ -930,7 +930,11 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
 
     fl_enter();
 #ifdef _OPENMP
-    omp_set_schedule(direct ? omp_sched_static : omp_sched_dynamic, direct ? 0 : 4);
+    /* (values and gradients: their sums are the threads', so a static
+       schedule, in fours for balance: a facet's cost varies with its place,
+       and halves of a chunk left the threads 13% of the pass waiting in a
+       64-bead slab; 2-5% in fours over chunks eight times as long) */
+    omp_set_schedule(direct ? omp_sched_static : omp_sched_dynamic, 4);
     #pragma omp parallel for schedule(runtime) num_threads(threads)
 #endif
     for ( k = start ; k < end ; k++ )
