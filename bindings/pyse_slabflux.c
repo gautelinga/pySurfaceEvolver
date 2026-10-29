@@ -99,6 +99,7 @@ struct sf_region
   REAL *dc;                     /* boxes: [cls][sf_drow[p][20]], Phi's derivatives (sf_fold);
                                    walls: [cls][3][sf_drow[p][20]], A's components' */
   REAL *A;                      /* walls: [cls][3][NMONO(p)], A's components */
+  REAL *soa; int n4;            /* the near sources in rows of n4 (sf_soa_make) */
 };
 
 struct sf_layer { REAL c[3], rho; REAL *phi; };  /* [cls][NMONO(pT)] */
@@ -180,7 +181,7 @@ static void sf_free(void)
   if ( sf.box )
   { for ( i = 0 ; i < sf.nx*sf.ny*sf.nz ; i++ )
       if ( sf.box[i] ) { free(sf.box[i]->near); free(sf.box[i]->phi); free(sf.box[i]->dc);
-                         free(sf.box[i]); }
+                         free(sf.box[i]->soa); free(sf.box[i]); }
     free(sf.box);
   }
   if ( sf.parent )
@@ -197,9 +198,10 @@ static void sf_free(void)
   if ( sf.wall )
   { for ( i = 0 ; i < sf.nbead ; i++ )
       if ( sf.wall[i] ) { free(sf.wall[i]->near); free(sf.wall[i]->phi); free(sf.wall[i]->A);
-                          free(sf.wall[i]->dc); free(sf.wall[i]); }
+                          free(sf.wall[i]->dc); free(sf.wall[i]->soa); free(sf.wall[i]); }
     free(sf.wall);
   }
+  free(sf.all.soa); sf.all.soa = NULL;
   free(sf.kv); free(sf.cup); free(sf.cdn);
   sf.kv = NULL; sf.cup = sf.cdn = NULL; sf.nmode = 0;
   free(sf.exp); free(sf.base); free(sf.bead); free(sf.R);
@@ -283,7 +285,6 @@ static void sf_taylor_add(const REAL *c, const REAL *y, int p, REAL rho, const R
 struct sf_term { int k, r; REAL f; };
 static struct sf_term *sf_dlist[20];
 static int sf_dcount[20][SF_PMAX + 2];      /* terms with degree(m) <= p: [b][p + 1] */
-static int sf_parent[(SF_PMAX + 1)*(SF_PMAX + 2)*(SF_PMAX + 3)/6][2];  /* m = parent + e_axis */
 /* a folded polynomial's rows (sf_fold): derivative b's coefficients start at
    sf_drow[p][b], NMONO(p - |b|) of them padded to a multiple of 4; the total
    in [p][20] */
@@ -292,12 +293,6 @@ static int sf_drow[SF_PMAX + 1][21];
 static int sf_dlists(void)
 { int b, k, n = NMONO(SF_PMAX);
   if ( sf_dlist[0] ) return 1;
-  for ( k = 1 ; k < n ; k++ )
-  { int a = sf_mono[k][0] ? 0 : sf_mono[k][1] ? 1 : 2, m[3] = { sf_mono[k][0], sf_mono[k][1],
-                                                                 sf_mono[k][2] };
-    m[a]--;
-    sf_parent[k][0] = sf_mono_idx[m[0]][m[1]][m[2]]; sf_parent[k][1] = a;
-  }
   for ( b = 0 ; b < 20 ; b++ )
   { int b0 = sf_mono[b][0], b1 = sf_mono[b][1], b2 = sf_mono[b][2], cnt = 0, deg;
     struct sf_term *t = (struct sf_term*)malloc((size_t)n*sizeof(struct sf_term));
@@ -330,11 +325,6 @@ static int sf_dlists(void)
 }
 
 /* the monomials' values at u, to degree p */
-static void sf_mono_values(const REAL *u, int p, REAL *mv)
-{ int k, n = NMONO(p);
-  mv[0] = 1.0;
-  for ( k = 1 ; k < n ; k++ ) mv[k] = mv[sf_parent[k][0]]*u[sf_parent[k][1]];
-}
 
 /* the derivatives of sum_k a[k] u^mono[k] (degree p) up to order `order`
    from the monomials' values mv: D[] indexed by sf_mono_idx of the
@@ -373,23 +363,88 @@ static REAL *sf_fold(const REAL *phi, int p, int ncls, int b0)
     && !defined(FLOAT128)
 #include <immintrin.h>
 #define SF_SIMD 1
-/* sf_fold_derivs's sums in AVX2's four lanes: the same products and sums */
+/* sf_fold_derivs's sums in AVX2's four lanes: the same products and sums.
+   The rows of one order (derivatives b of the same degree: the same length,
+   consecutive) three at a time, sharing the monomials' loads: each row's
+   sum one chain of adds, three chains running together (one at a time, each
+   add waited for the last: a third of a 64-bead column's gradient step) */
 __attribute__((target("avx2")))
 static void sf_fold_derivs_avx2(const REAL *c, int p, const REAL *mv, int nd, REAL *D, int b0)
-{ int b, i;
-  for ( b = b0 ; b < nd ; b++ )
-  { const REAL *row = c + sf_drow[p][b];
+{ static const int end_of[20] = { 1, 4, 4, 4, 10, 10, 10, 10, 10, 10,
+                                  20, 20, 20, 20, 20, 20, 20, 20, 20, 20 };
+  int b = b0, i;
+  while ( b < nd )
+  { int end = end_of[b] < nd ? end_of[b] : nd;
     int n = sf_drow[p][b + 1] - sf_drow[p][b];
-    __m256d acc = _mm256_setzero_pd();
-    REAL l[4];
-    for ( i = 0 ; i < n ; i += 4 )
-      acc = _mm256_add_pd(acc,_mm256_mul_pd(_mm256_loadu_pd(row + i),_mm256_loadu_pd(mv + i)));
-    _mm256_storeu_pd(l,acc);
-    D[b] = (l[0] + l[1]) + (l[2] + l[3]);
+    while ( b < end )
+    { const REAL *r0 = c + sf_drow[p][b];
+      REAL l[4];
+      if ( end - b >= 3 )
+      { const REAL *r1 = r0 + n, *r2 = r1 + n;
+        __m256d a0 = _mm256_setzero_pd(), a1 = a0, a2 = a0;
+        for ( i = 0 ; i < n ; i += 4 )
+        { __m256d m = _mm256_loadu_pd(mv + i);
+          a0 = _mm256_add_pd(a0,_mm256_mul_pd(_mm256_loadu_pd(r0 + i),m));
+          a1 = _mm256_add_pd(a1,_mm256_mul_pd(_mm256_loadu_pd(r1 + i),m));
+          a2 = _mm256_add_pd(a2,_mm256_mul_pd(_mm256_loadu_pd(r2 + i),m));
+        }
+        _mm256_storeu_pd(l,a0); D[b] = (l[0] + l[1]) + (l[2] + l[3]);
+        _mm256_storeu_pd(l,a1); D[b + 1] = (l[0] + l[1]) + (l[2] + l[3]);
+        _mm256_storeu_pd(l,a2); D[b + 2] = (l[0] + l[1]) + (l[2] + l[3]);
+        b += 3;
+      }
+      else
+      { __m256d a0 = _mm256_setzero_pd();
+        for ( i = 0 ; i < n ; i += 4 )
+          a0 = _mm256_add_pd(a0,_mm256_mul_pd(_mm256_loadu_pd(r0 + i),_mm256_loadu_pd(mv + i)));
+        _mm256_storeu_pd(l,a0); D[b] = (l[0] + l[1]) + (l[2] + l[3]);
+        b++;
+      }
+    }
+  }
+}
+
+/* sf_mono_values's rows in AVX2 (the same products) */
+__attribute__((target("avx2")))
+static void sf_mono_values_avx2(const REAL *u, int p, REAL *mv)
+{ int n, i;
+  __m256d u0 = _mm256_set1_pd(u[0]);
+  mv[0] = 1.0;
+  for ( n = 1 ; n <= p ; n++ )
+  { const REAL *last = mv + sf_mono_n[n - 1];
+    REAL *row = mv + sf_mono_n[n];
+    int nl = sf_mono_n[n] - sf_mono_n[n - 1];
+    for ( i = 0 ; i + 4 <= nl ; i += 4 )
+      _mm256_storeu_pd(row + i,_mm256_mul_pd(_mm256_loadu_pd(last + i),u0));
+    for ( ; i < nl ; i++ ) row[i] = last[i]*u[0];
+    for ( i = 0 ; i < n ; i++ ) row[nl + i] = last[nl - n + i]*u[1];
+    row[nl + n] = last[nl - 1]*u[2];
   }
 }
 static int sf_simd = -1;          /* (a benign race: every thread finds the same) */
 #endif
+
+static void sf_mono_values(const REAL *u, int p, REAL *mv)
+{ int n, i;
+#ifdef SF_SIMD
+  if ( sf_simd < 0 ) sf_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
+  if ( sf_simd ) { sf_mono_values_avx2(u,p,mv); return; }
+#endif
+  /* (by degree, each from the last: those with u's power a > 0 are the last
+     degree's in its order times u, those with a = 0 and v's b > 0 its last n
+     times v, and w^n; whole rows: each monomial from a parent looked up in a
+     table was a fifth of a 64-bead column's gradient step) */
+  mv[0] = 1.0;
+  for ( n = 1 ; n <= p ; n++ )
+  { const REAL *last = mv + sf_mono_n[n - 1];
+    REAL *row = mv + sf_mono_n[n];
+    int nl = sf_mono_n[n] - sf_mono_n[n - 1];
+#pragma GCC ivdep
+    for ( i = 0 ; i < nl ; i++ ) row[i] = last[i]*u[0];
+    for ( i = 0 ; i < n ; i++ ) row[nl + i] = last[nl - n + i]*u[1];
+    row[nl + n] = last[nl - 1]*u[2];
+  }
+}
 
 /* the scalar sums (on 0) or the SIMD ones where the CPU has them: with
    pyse_native_simd(), for tests comparing the two */
@@ -425,6 +480,327 @@ static void sf_fold_derivs(const REAL *c, int p, const REAL *mv, int order, REAL
       s2 += row[i+2]*mv[i+2]; s3 += row[i+3]*mv[i+3];
     }
     D[b] = (s0 + s1) + (s2 + s3);
+  }
+}
+
+/* ---- near sources, four at a time ------------------------------------------
+   A region's near sources in rows of n4 (their count up to a multiple of 4,
+   the rest of strength 0 far away): a box's x, y, z, K2, iK3, q[cls]; a
+   wall's x, y, z, its unit vector d from the sphere's centre, q[cls]. Their
+   sums in four lanes (source s in lane s mod 4), added pairwise at the end:
+   the scalar version and AVX2's the same products and sums, to the bit.
+   The derivatives' sums by their symmetry: a box's F = a w (a = 1/r^3),
+   dF = a I - b w w, d2F = -b (I w)_sym + f w w w: per class sum q a w, q a,
+   q b w w, q b w, q f w w w (3 + 1 + 6 + 3 + 10), not 3 + 9 + 27 per
+   source; a wall's likewise (3 + 3 + 9 + 9 + 18, see sf_near_wall). */
+#define SF_ROWS_BOX 5
+#define SF_ROWS_WALL 6
+#define SF_NB 23                  /* a box's sums per class */
+#define SF_NW 42                  /* a wall's */
+static const int sf_s2[3][3] = { {0,1,2}, {1,3,4}, {2,4,5} };
+static int sf_s3[3][3][3];        /* (sf_soa_make sets it: the sorted triple's index) */
+
+static int sf_soa_make(struct sf_region *g, int wall)
+{ int n = 0, n4, rows = (wall ? SF_ROWS_WALL : SF_ROWS_BOX) + sf.ncls, s, k, cl, m;
+  REAL *a;
+  { int i, j, t, idx = 0;
+    for ( i = 0 ; i < 3 ; i++ ) for ( j = i ; j < 3 ; j++ ) for ( t = j ; t < 3 ; t++ )
+    { int pm[6][3] = { {i,j,t}, {i,t,j}, {j,i,t}, {j,t,i}, {t,i,j}, {t,j,i} }, q;
+      for ( q = 0 ; q < 6 ; q++ ) sf_s3[pm[q][0]][pm[q][1]][pm[q][2]] = idx;
+      idx++;
+    }
+  }
+  for ( s = 0 ; s < g->nnear ; s++ )
+  { const struct sf_src *e = g->near + s;
+    REAL d[3] = { e->c[0] - g->c[0], e->c[1] - g->c[1], e->c[2] - g->c[2] };
+    if ( wall && !(d[0]*d[0] + d[1]*d[1] + d[2]*d[2] > 0.0) ) continue;
+    n++;
+  }
+  n4 = (n + 3) & ~3;
+  a = (REAL*)calloc((size_t)rows*(n4 ? n4 : 4),sizeof(REAL));
+  if ( !a ) return 0;
+  for ( s = 0, k = 0 ; s < g->nnear ; s++ )
+  { const struct sf_src *e = g->near + s;
+    REAL d[3] = { e->c[0] - g->c[0], e->c[1] - g->c[1], e->c[2] - g->c[2] };
+    REAL nd = sqrt(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+    if ( wall && !(nd > 0.0) ) continue;
+    for ( m = 0 ; m < 3 ; m++ ) a[m*n4 + k] = e->c[m];
+    if ( wall ) for ( m = 0 ; m < 3 ; m++ ) a[(3 + m)*n4 + k] = d[m]/nd;
+    else { a[3*n4 + k] = e->K2; a[4*n4 + k] = e->iK3; }
+    for ( cl = 0 ; cl < sf.ncls ; cl++ )
+      a[((wall ? SF_ROWS_WALL : SF_ROWS_BOX) + cl)*n4 + k] = e->q[cl];
+    k++;
+  }
+  for ( ; k < n4 ; k++ )
+  { /* (strength 0, far, not along its d: every term finite) */
+    a[k] = 1e10; a[n4 + k] = 2e10; a[2*n4 + k] = 3e10;
+    if ( wall ) a[5*n4 + k] = 1.0;
+  }
+  g->soa = a; g->n4 = n4;
+  return 1;
+}
+
+/* a box's near sums at xc into acc[cls][SF_NB], scalar (lanes in arrays) */
+static void sf_near_box_scalar(const struct sf_region *g, const REAL *xc, int order,
+                               REAL acc[][SF_NB])
+{ int n4 = g->n4, s, l, cl, k, nk = order >= 2 ? SF_NB : order >= 1 ? 10 : 3;
+  const REAL *a = g->soa;
+  REAL L[SF_MAXCLS][SF_NB][4];
+  memset(L,0,sizeof(L));
+  for ( s = 0 ; s < n4 ; s += 4 )
+    for ( l = 0 ; l < 4 ; l++ )
+    { REAL w0 = xc[0] - a[s + l], w1 = xc[1] - a[n4 + s + l], w2 = xc[2] - a[2*n4 + s + l];
+      REAL r2 = (w0*w0 + w1*w1) + w2*w2, r = sqrt(r2), A, B, F;
+      int in = r2 < a[3*n4 + s + l];
+      A = 1.0/(r2*r); B = (3.0*A)/r2; F = (15.0*A)/(r2*r2);
+      if ( in ) { A = a[4*n4 + s + l]; B = 0.0; F = 0.0; }
+      for ( cl = 0 ; cl < sf.ncls ; cl++ )
+      { REAL q = a[(SF_ROWS_BOX + cl)*n4 + s + l], qa = q*A, qb, qf;
+        L[cl][0][l] += qa*w0; L[cl][1][l] += qa*w1; L[cl][2][l] += qa*w2;
+        if ( order < 1 ) continue;
+        qb = q*B;
+        L[cl][3][l] += qa;
+        L[cl][4][l] += (qb*w0)*w0; L[cl][5][l] += (qb*w0)*w1; L[cl][6][l] += (qb*w0)*w2;
+        L[cl][7][l] += (qb*w1)*w1; L[cl][8][l] += (qb*w1)*w2; L[cl][9][l] += (qb*w2)*w2;
+        if ( order < 2 ) continue;
+        qf = q*F;
+        L[cl][10][l] += qb*w0; L[cl][11][l] += qb*w1; L[cl][12][l] += qb*w2;
+        L[cl][13][l] += ((qf*w0)*w0)*w0; L[cl][14][l] += ((qf*w0)*w0)*w1;
+        L[cl][15][l] += ((qf*w0)*w0)*w2; L[cl][16][l] += ((qf*w0)*w1)*w1;
+        L[cl][17][l] += ((qf*w0)*w1)*w2; L[cl][18][l] += ((qf*w0)*w2)*w2;
+        L[cl][19][l] += ((qf*w1)*w1)*w1; L[cl][20][l] += ((qf*w1)*w1)*w2;
+        L[cl][21][l] += ((qf*w1)*w2)*w2; L[cl][22][l] += ((qf*w2)*w2)*w2;
+      }
+    }
+  for ( cl = 0 ; cl < sf.ncls ; cl++ )
+    for ( k = 0 ; k < nk ; k++ )
+      acc[cl][k] = (L[cl][k][0] + L[cl][k][1]) + (L[cl][k][2] + L[cl][k][3]);
+}
+
+/* a wall's near sums at x into acc[cls][SF_NW], scalar */
+static void sf_near_wall_scalar(const struct sf_region *g, const REAL *x, int order,
+                                REAL acc[][SF_NW])
+{ int n4 = g->n4, s, l, cl, k, i, j, nk = order >= 2 ? SF_NW : order >= 1 ? 15 : 3;
+  const REAL *a = g->soa;
+  REAL L[SF_MAXCLS][SF_NW][4];
+  memset(L,0,sizeof(L));
+  for ( s = 0 ; s < n4 ; s += 4 )
+    for ( l = 0 ; l < 4 ; l++ )
+    { REAL w[3] = { x[0] - a[s + l], x[1] - a[n4 + s + l], x[2] - a[2*n4 + s + l] };
+      REAL d[3] = { a[3*n4 + s + l], a[4*n4 + s + l], a[5*n4 + s + l] };
+      REAL r2 = (w[0]*w[0] + w[1]*w[1]) + w[2]*w[2], r = sqrt(r2);
+      REAL dw = (d[0]*w[0] + d[1]*w[1]) + d[2]*w[2], ph = 1.0/(r*(r - dw));
+      REAL C[3], ph2 = 0, t = 0, ir = 0, ir2 = 0, qq = 0, phi[3] = {0,0,0}, ph3 = 0, phii[6];
+      C[0] = d[1]*w[2] - d[2]*w[1]; C[1] = d[2]*w[0] - d[0]*w[2]; C[2] = d[0]*w[1] - d[1]*w[0];
+      if ( order >= 1 )
+      { ir = 1.0/r; qq = dw*ir; t = 2.0 - qq; ph2 = ph*ph;
+        for ( i = 0 ; i < 3 ; i++ ) phi[i] = -((t*w[i] - r*d[i])*ph2);
+        if ( order >= 2 )
+        { ir2 = ir*ir; ph3 = ph2*ph;
+          for ( i = 0 ; i < 3 ; i++ )
+            for ( j = i ; j < 3 ; j++ )
+            { REAL Di = t*w[i] - r*d[i], Dj = t*w[j] - r*d[j];
+              REAL Dij = (i == j ? t : 0.0) + (qq*w[i])*w[j]*ir2 - (w[i]*d[j] + w[j]*d[i])*ir;
+              phii[sf_s2[i][j]] = (2.0*Di)*Dj*ph3 - Dij*ph2;
+            }
+        }
+      }
+      for ( cl = 0 ; cl < sf.ncls ; cl++ )
+      { REAL q = a[(SF_ROWS_WALL + cl)*n4 + s + l], qph = q*ph, qC[3];
+        for ( i = 0 ; i < 3 ; i++ ) { qC[i] = q*C[i]; L[cl][i][l] += qph*C[i]; }
+        if ( order < 1 ) continue;
+        for ( i = 0 ; i < 3 ; i++ ) L[cl][3 + i][l] += qph*d[i];
+        for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) L[cl][6 + 3*i + j][l] += qC[i]*phi[j];
+        if ( order < 2 ) continue;
+        for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) L[cl][15 + 3*i + j][l] += (q*d[i])*phi[j];
+        for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 6 ; j++ ) L[cl][24 + 6*i + j][l] += qC[i]*phii[j];
+      }
+    }
+  for ( cl = 0 ; cl < sf.ncls ; cl++ )
+    for ( k = 0 ; k < nk ; k++ )
+      acc[cl][k] = (L[cl][k][0] + L[cl][k][1]) + (L[cl][k][2] + L[cl][k][3]);
+}
+
+#ifdef SF_SIMD
+__attribute__((target("avx2")))
+static void sf_near_box_avx2(const struct sf_region *g, const REAL *xc, int order,
+                             REAL acc[][SF_NB])
+{ int n4 = g->n4, s, cl, k, nk = order >= 2 ? SF_NB : order >= 1 ? 10 : 3;
+  const REAL *a = g->soa;
+  __m256d L[SF_MAXCLS][SF_NB];
+  __m256d x0 = _mm256_set1_pd(xc[0]), x1 = _mm256_set1_pd(xc[1]), x2 = _mm256_set1_pd(xc[2]);
+  __m256d one = _mm256_set1_pd(1.0), three = _mm256_set1_pd(3.0), fifteen = _mm256_set1_pd(15.0);
+  __m256d zero = _mm256_setzero_pd();
+  for ( cl = 0 ; cl < sf.ncls ; cl++ ) for ( k = 0 ; k < nk ; k++ ) L[cl][k] = zero;
+#define ADD _mm256_add_pd
+#define MUL _mm256_mul_pd
+  for ( s = 0 ; s < n4 ; s += 4 )
+  { __m256d w0 = _mm256_sub_pd(x0,_mm256_loadu_pd(a + s));
+    __m256d w1 = _mm256_sub_pd(x1,_mm256_loadu_pd(a + n4 + s));
+    __m256d w2 = _mm256_sub_pd(x2,_mm256_loadu_pd(a + 2*n4 + s));
+    __m256d r2 = ADD(ADD(MUL(w0,w0),MUL(w1,w1)),MUL(w2,w2)), r = _mm256_sqrt_pd(r2);
+    __m256d in = _mm256_cmp_pd(r2,_mm256_loadu_pd(a + 3*n4 + s),_CMP_LT_OQ);
+    __m256d A = _mm256_div_pd(one,MUL(r2,r));
+    __m256d B = _mm256_div_pd(MUL(three,A),r2), F = _mm256_div_pd(MUL(fifteen,A),MUL(r2,r2));
+    A = _mm256_blendv_pd(A,_mm256_loadu_pd(a + 4*n4 + s),in);
+    B = _mm256_blendv_pd(B,zero,in); F = _mm256_blendv_pd(F,zero,in);
+    for ( cl = 0 ; cl < sf.ncls ; cl++ )
+    { __m256d q = _mm256_loadu_pd(a + (SF_ROWS_BOX + cl)*n4 + s), qa = MUL(q,A), qb, qf;
+      __m256d *T = L[cl];
+      T[0] = ADD(T[0],MUL(qa,w0)); T[1] = ADD(T[1],MUL(qa,w1)); T[2] = ADD(T[2],MUL(qa,w2));
+      if ( order < 1 ) continue;
+      qb = MUL(q,B);
+      T[3] = ADD(T[3],qa);
+      { __m256d b0 = MUL(qb,w0), b1 = MUL(qb,w1), b2 = MUL(qb,w2);
+        T[4] = ADD(T[4],MUL(b0,w0)); T[5] = ADD(T[5],MUL(b0,w1)); T[6] = ADD(T[6],MUL(b0,w2));
+        T[7] = ADD(T[7],MUL(b1,w1)); T[8] = ADD(T[8],MUL(b1,w2)); T[9] = ADD(T[9],MUL(b2,w2));
+        if ( order < 2 ) continue;
+        qf = MUL(q,F);
+        T[10] = ADD(T[10],b0); T[11] = ADD(T[11],b1); T[12] = ADD(T[12],b2);
+        { __m256d f0 = MUL(qf,w0), f1 = MUL(qf,w1), f2 = MUL(qf,w2);
+          __m256d f00 = MUL(f0,w0), f01 = MUL(f0,w1), f02 = MUL(f0,w2);
+          __m256d f11 = MUL(f1,w1), f12 = MUL(f1,w2), f22 = MUL(f2,w2);
+          T[13] = ADD(T[13],MUL(f00,w0)); T[14] = ADD(T[14],MUL(f00,w1));
+          T[15] = ADD(T[15],MUL(f00,w2)); T[16] = ADD(T[16],MUL(f01,w1));
+          T[17] = ADD(T[17],MUL(f01,w2)); T[18] = ADD(T[18],MUL(f02,w2));
+          T[19] = ADD(T[19],MUL(f11,w1)); T[20] = ADD(T[20],MUL(f11,w2));
+          T[21] = ADD(T[21],MUL(f12,w2)); T[22] = ADD(T[22],MUL(f22,w2));
+        }
+      }
+    }
+  }
+  for ( cl = 0 ; cl < sf.ncls ; cl++ )
+    for ( k = 0 ; k < nk ; k++ )
+    { REAL l[4];
+      _mm256_storeu_pd(l,L[cl][k]);
+      acc[cl][k] = (l[0] + l[1]) + (l[2] + l[3]);
+    }
+}
+
+__attribute__((target("avx2")))
+static void sf_near_wall_avx2(const struct sf_region *g, const REAL *x, int order,
+                              REAL acc[][SF_NW])
+{ int n4 = g->n4, s, cl, k, i, j, nk = order >= 2 ? SF_NW : order >= 1 ? 15 : 3;
+  const REAL *a = g->soa;
+  __m256d L[SF_MAXCLS][SF_NW];
+  __m256d X[3] = { _mm256_set1_pd(x[0]), _mm256_set1_pd(x[1]), _mm256_set1_pd(x[2]) };
+  __m256d one = _mm256_set1_pd(1.0), two = _mm256_set1_pd(2.0), zero = _mm256_setzero_pd();
+  for ( cl = 0 ; cl < sf.ncls ; cl++ ) for ( k = 0 ; k < nk ; k++ ) L[cl][k] = zero;
+  for ( s = 0 ; s < n4 ; s += 4 )
+  { __m256d w[3], d[3], C[3], phi[3] = { zero, zero, zero }, phii[6], r2, r, dw, ph, ph2 = zero;
+    __m256d t = zero, ir, ir2, qq = zero, ph3;
+    for ( i = 0 ; i < 3 ; i++ )
+    { w[i] = _mm256_sub_pd(X[i],_mm256_loadu_pd(a + i*n4 + s));
+      d[i] = _mm256_loadu_pd(a + (3 + i)*n4 + s);
+    }
+    r2 = ADD(ADD(MUL(w[0],w[0]),MUL(w[1],w[1])),MUL(w[2],w[2])); r = _mm256_sqrt_pd(r2);
+    dw = ADD(ADD(MUL(d[0],w[0]),MUL(d[1],w[1])),MUL(d[2],w[2]));
+    ph = _mm256_div_pd(one,MUL(r,_mm256_sub_pd(r,dw)));
+    C[0] = _mm256_sub_pd(MUL(d[1],w[2]),MUL(d[2],w[1]));
+    C[1] = _mm256_sub_pd(MUL(d[2],w[0]),MUL(d[0],w[2]));
+    C[2] = _mm256_sub_pd(MUL(d[0],w[1]),MUL(d[1],w[0]));
+    if ( order >= 1 )
+    { ir = _mm256_div_pd(one,r); qq = MUL(dw,ir); t = _mm256_sub_pd(two,qq); ph2 = MUL(ph,ph);
+      for ( i = 0 ; i < 3 ; i++ )
+        phi[i] = _mm256_sub_pd(zero,MUL(_mm256_sub_pd(MUL(t,w[i]),MUL(r,d[i])),ph2));
+      if ( order >= 2 )
+      { ir2 = MUL(ir,ir); ph3 = MUL(ph2,ph);
+        for ( i = 0 ; i < 3 ; i++ )
+          for ( j = i ; j < 3 ; j++ )
+          { __m256d Di = _mm256_sub_pd(MUL(t,w[i]),MUL(r,d[i]));
+            __m256d Dj = _mm256_sub_pd(MUL(t,w[j]),MUL(r,d[j]));
+            __m256d Dij = ADD(i == j ? t : zero,MUL(MUL(MUL(qq,w[i]),w[j]),ir2));
+            Dij = _mm256_sub_pd(Dij,MUL(ADD(MUL(w[i],d[j]),MUL(w[j],d[i])),ir));
+            phii[sf_s2[i][j]] = _mm256_sub_pd(MUL(MUL(MUL(two,Di),Dj),ph3),MUL(Dij,ph2));
+          }
+      }
+    }
+    for ( cl = 0 ; cl < sf.ncls ; cl++ )
+    { __m256d q = _mm256_loadu_pd(a + (SF_ROWS_WALL + cl)*n4 + s), qph = MUL(q,ph), qC[3];
+      __m256d *T = L[cl];
+      for ( i = 0 ; i < 3 ; i++ ) { qC[i] = MUL(q,C[i]); T[i] = ADD(T[i],MUL(qph,C[i])); }
+      if ( order < 1 ) continue;
+      for ( i = 0 ; i < 3 ; i++ ) T[3 + i] = ADD(T[3 + i],MUL(qph,d[i]));
+      for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ )
+        T[6 + 3*i + j] = ADD(T[6 + 3*i + j],MUL(qC[i],phi[j]));
+      if ( order < 2 ) continue;
+      for ( i = 0 ; i < 3 ; i++ )
+      { __m256d qd = MUL(q,d[i]);
+        for ( j = 0 ; j < 3 ; j++ ) T[15 + 3*i + j] = ADD(T[15 + 3*i + j],MUL(qd,phi[j]));
+      }
+      for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 6 ; j++ )
+        T[24 + 6*i + j] = ADD(T[24 + 6*i + j],MUL(qC[i],phii[j]));
+    }
+  }
+#undef ADD
+#undef MUL
+  for ( cl = 0 ; cl < sf.ncls ; cl++ )
+    for ( k = 0 ; k < nk ; k++ )
+    { REAL l[4];
+      _mm256_storeu_pd(l,L[cl][k]);
+      acc[cl][k] = (l[0] + l[1]) + (l[2] + l[3]);
+    }
+}
+#endif
+
+/* a box's near sources' field at xc into V, G, S (zeroed) */
+static void sf_near_box(const struct sf_region *g, const REAL *xc, int order, REAL V[][3],
+                        REAL G[][3][3], REAL S[][3][3][3])
+{ REAL acc[SF_MAXCLS][SF_NB];
+  int cl, m, i, j;
+#ifdef SF_SIMD
+  if ( sf_simd < 0 ) sf_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
+  if ( sf_simd ) sf_near_box_avx2(g,xc,order,acc);
+  else
+#endif
+  sf_near_box_scalar(g,xc,order,acc);
+  for ( cl = 0 ; cl < sf.ncls ; cl++ )
+  { const REAL *t = acc[cl];
+    for ( m = 0 ; m < 3 ; m++ )
+    { V[cl][m] += t[m];
+      if ( order >= 1 )
+        for ( i = 0 ; i < 3 ; i++ )
+        { G[cl][m][i] += (m == i ? t[3] : 0.0) - t[4 + sf_s2[m][i]];
+          if ( order >= 2 )
+            for ( j = 0 ; j < 3 ; j++ )
+              S[cl][m][i][j] += -((m == i ? t[10 + j] : 0.0) + (m == j ? t[10 + i] : 0.0)
+                                  + (i == j ? t[10 + m] : 0.0)) + t[13 + sf_s3[m][i][j]];
+        }
+    }
+  }
+}
+
+/* a wall's near sources' primitives at x into V, G, S (zeroed): A = q C/D,
+   dA = q (dC/D + C dphi), d2A = q (dC_i dphi_k + dC_k dphi_i + C d2phi);
+   dC's (the cross product with d) sums from q d/D and q d dphi */
+static void sf_near_wall(const struct sf_region *g, const REAL *x, int order, REAL V[][3],
+                         REAL G[][3][3], REAL S[][3][3][3])
+{ REAL acc[SF_MAXCLS][SF_NW];
+  int cl, m, i, k;
+#ifdef SF_SIMD
+  if ( sf_simd < 0 ) sf_simd = __builtin_cpu_supports("avx2") ? 1 : 0;
+  if ( sf_simd ) sf_near_wall_avx2(g,x,order,acc);
+  else
+#endif
+  sf_near_wall_scalar(g,x,order,acc);
+  for ( cl = 0 ; cl < sf.ncls ; cl++ )
+  { const REAL *t = acc[cl];
+    /* the cross product's matrix of v: [m][i] (v x e_i)_m ... as dC */
+#define CROSS(v,m,i) ((m) == (i) ? 0.0 : ((m) == 0 ? ((i) == 1 ? -(v)[2] : (v)[1]) \
+                      : (m) == 1 ? ((i) == 0 ? (v)[2] : -(v)[0]) : ((i) == 0 ? -(v)[1] : (v)[0])))
+    for ( m = 0 ; m < 3 ; m++ )
+    { V[cl][m] += t[m];
+      if ( order >= 1 )
+        for ( i = 0 ; i < 3 ; i++ )
+        { G[cl][m][i] += CROSS(t + 3,m,i) + t[6 + 3*m + i];
+          if ( order >= 2 )
+            for ( k = 0 ; k < 3 ; k++ )
+            { REAL Qk[3] = { t[15 + k], t[18 + k], t[21 + k] }, Qi[3] = { t[15 + i], t[18 + i], t[21 + i] };
+              S[cl][m][i][k] += CROSS(Qk,m,i) + CROSS(Qi,m,k) + t[24 + 6*m + sf_s2[i][k]];
+            }
+        }
+    }
+#undef CROSS
   }
 }
 
@@ -629,7 +1005,8 @@ static struct sf_region *sf_box_at(const REAL *x, REAL *xc)
       REAL r = 0.5*sqrt(sf.bx*sf.bx + sf.by*sf.by + sf.bz*sf.bz);
       struct sf_region *par = sf_parent_at(ix/SF_PF,iy/SF_PF,iz/SF_PF);
       g = par ? sf_region_make(c,r,sf.kappa,sf.p,-1,par,1) : NULL;
-      if ( g ) { g->dc = sf_fold(g->phi,g->p,sf.ncls,1); sf.nboxes++; }  /* (dc NULL: by sf_poly_derivs) */
+      if ( g ) { g->dc = sf_fold(g->phi,g->p,sf.ncls,1); sf_soa_make(g,0); sf.nboxes++; }
+      /* (dc NULL: by sf_poly_derivs; soa NULL: the near sources one by one) */
       __atomic_store_n(&sf.box[i],g,__ATOMIC_RELEASE);
     }
   }
@@ -670,6 +1047,7 @@ static struct sf_region *sf_wall_make(int j)
       }
     }
   g->dc = sf_fold(g->A,g->p,3*sf.ncls,0);    /* (NULL: by sf_poly_derivs) */
+  sf_soa_make(g,1);                           /* (NULL: one by one) */
   return g;
 }
 
@@ -856,6 +1234,7 @@ int pyse_slabflux_setup(const double *L, double zf, int nbead, const double *bea
   memset(sf.all_phi,0,sizeof(sf.all_phi));
   sf.all.rho = 1.0; sf.all.p = 0; sf.all.nnear = sf.nexp; sf.all.near = sf.exp;
   sf.all.phi = sf.all_phi;
+  sf_soa_make(&sf.all,0);
   /* far from the sources: a period beyond the highest and the lowest */
   sf.ztop = -HUGE_VAL; sf.zbot = HUGE_VAL;
   for ( i = 0 ; i < sf.nbase ; i++ )
@@ -932,6 +1311,8 @@ static int sf_fields_in(const REAL *x, int all, int order, REAL V[][3], REAL G[]
   if ( order >= 1 ) memset(G,0,sf.ncls*sizeof(*G));
   if ( order >= 2 ) memset(S,0,sf.ncls*sizeof(*S));
   /* near sources (their own images: x in the cell, they around it) */
+  if ( g->soa ) sf_near_box(g,xc,order,V,G,S);
+  else
   for ( s = 0 ; s < g->nnear ; s++ )
   { const struct sf_src *e = g->near + s;
     REAL w[3] = { xc[0] - e->c[0], xc[1] - e->c[1], xc[2] - e->c[2] };
@@ -1125,6 +1506,8 @@ static void sf_wall_fields(int j, const REAL *x0, int order, REAL V[][3], REAL G
   memset(V,0,sf.ncls*sizeof(*V));
   if ( order >= 1 ) memset(G,0,sf.ncls*sizeof(*G));
   if ( order >= 2 ) memset(S,0,sf.ncls*sizeof(*S));
+  if ( g->soa ) sf_near_wall(g,x,order,V,G,S);
+  else
   for ( s = 0 ; s < g->nnear ; s++ )
   { const struct sf_src *e = g->near + s;
     REAL dd[3] = { e->c[0] - c[0], e->c[1] - c[1], e->c[2] - c[2] }, n, w[3], r2, r, dw, Dn, ph;
