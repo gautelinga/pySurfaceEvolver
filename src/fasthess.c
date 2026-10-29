@@ -26,7 +26,8 @@
 
 /* one recorded addition */
 enum { OP_ENTRY, OP_GRAD, OP_VALUE, OP_QVALUE, OP_FORCE, OP_VGRAD, OP_AREA,
-       OP_DONE /* an OP_ENTRY already added to the kept pattern */ };
+       OP_PENTRY, /* an OP_ENTRY found in the kept pattern: at pos */
+       OP_DONE /* records already added */ };
 struct hop
 { int kind;
   int r, c;          /* OP_ENTRY: matrix row, column; OP_VALUE, OP_QVALUE:
@@ -36,6 +37,7 @@ struct hop
   REAL s;            /* OP_FORCE, OP_VGRAD: coefficient */
   REAL x[MAXCOORD];  /* OP_ENTRY: x[0]; OP_GRAD: gradient; OP_VALUE: x[0], x[1];
                         OP_QVALUE: x[0]; OP_FORCE, OP_VGRAD: vector */
+  long pos;          /* OP_PENTRY: the entry's place in the kept pattern */
 };
 
 /* a cache line each: the threads' buffers sit side by side in an array, and
@@ -654,9 +656,12 @@ int fl_pattern_add(struct linsys *S, int row, int col, REAL value)
   return 1;
 }
 
-/* After an element's work: add its matrix entries to the kept pattern
-   (from any thread); those found are marked done for the serial replay. */
-static void pattern_add_entries(struct hbuf *b, long from)
+/* After an element's work (in any thread): its matrix entries' places in
+   the kept pattern, the additions left to the serial replay, in element
+   order (added here by atomics, the order of the threads' additions made a
+   Newton step's result differ from run to run in its last bits, and a
+   drop's fall onto a sphere made different changes). */
+static void pattern_find_entries(struct hbuf *b, long from)
 { long e;
   for ( e = from ; e < b->n ; e++ )
   { struct hop *op = b->ops + e;
@@ -664,11 +669,8 @@ static void pattern_add_entries(struct hbuf *b, long from)
     if ( op->kind != OP_ENTRY ) continue;
     pos = pattern_find(op->r,op->c);
     if ( pos < 0 ) continue;   /* new entry: hash table, in the replay */
-#ifdef _OPENMP
-    #pragma omp atomic
-#endif
-    pc_A[pos] += op->x[0];
-    op->kind = OP_DONE;
+    op->pos = pos;
+    op->kind = OP_PENTRY;
   }
 }
 
@@ -945,7 +947,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
       { fl_trap = &trap;   /* kb_error() comes back here */
         (*fn)(S,list[k],CORNERS(list[k]),me,&buf[me],ctx);
         fl_trap = NULL;
-        if ( live ) pattern_add_entries(&buf[me],fstart[2*(k-start)]);
+        if ( live ) pattern_find_entries(&buf[me],fstart[2*(k-start)]);
         if ( direct && !acc_element(&buf[me],fstart[2*(k-start)],me) )
           buf[me].failed = 1;
       }
@@ -981,6 +983,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
       { struct hop *op = b->ops + e;
         switch ( op->kind )
         { case OP_ENTRY: sp_hash_search(S,op->r,op->c,op->x[0]); break;
+          case OP_PENTRY: pc_A[op->pos] += op->x[0]; break;
           case OP_GRAD: fill_grad(S,get_vertex_vhead(op->v),op->x,rhs); break;
           case OP_VALUE:    /* as calc_quant_grads(), calc_quant_hess() */
           { struct method_instance *mi = METH_INSTANCE(op->r);

@@ -98,6 +98,15 @@ static void blas_threads(void)
    step of relax()) */
 #define PORD_MIN_N 10000
 
+/* MUMPS's tree parallelism (ICNTL(48), L0 threads) only for systems this
+   large: its threads' order of work changes a factor's last bits from run
+   to run (a run's Newton steps, then its path: the same thread count no
+   longer gives the same run), and below this it gained nothing (24k facets,
+   37k rows: 0.05 s a Newton step at 2 or 4 threads either way; a 64-bead
+   slab's 0.15-0.2 s); at 98k facets (150k rows) 4 threads took 0.22 s with
+   it, 0.30 s without */
+#define L0_MIN_N 100000
+
 static void mumps_controls(struct mumps_sys *m)
 { blas_threads(); m->id.ICNTL(1) = -1;    /* no error messages */
   m->id.ICNTL(2) = -1;    /* no diagnostics */
@@ -107,6 +116,7 @@ static void mumps_controls(struct mumps_sys *m)
   m->id.ICNTL(13) = 1;    /* no ScaLAPACK root: exact inertia */
   m->id.ICNTL(16) = fl_threads();   /* OpenMP threads */
   m->id.ICNTL(24) = 1;    /* null pivot detection */
+  m->id.ICNTL(48) = m->n >= L0_MIN_N;   /* tree parallelism (L0 threads) */
   m->id.CNTL(3) = hessian_epsilon > 0.0 ? hessian_epsilon : 1e-8;  /* relative */
 }
 

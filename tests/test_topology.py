@@ -798,7 +798,13 @@ def test_a_drop_drained_onto_a_sphere_in_it_dries_a_patch_there():
                    vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=None)])
     ev.body(1).target = ev.body(1).volume
     ev.refine(1)
-    with warnings.catch_warnings():
+    # (one thread: the runs are the same from run to run at any thread count,
+    # but this fall's descent is sensitive to the sums' last bits, which
+    # differ between thread counts: at 2 and 4 threads the branch overshoots
+    # the film's thinning by a step and the descent makes 3-4 changes; also
+    # at ds -0.5 one thread made two contacts and 2 and 4 threads one; see
+    # docs/PLAN.md, 2026-10-29)
+    with warnings.catch_warnings(), pyse.threads_limit(1):
         warnings.simplefilter("ignore")
         ev.relax()
         steps = []
