@@ -83,9 +83,53 @@ loops, steps); P3 the curves, docs.
   - Field tabulation: cells cost cycles (+8%).
   - Cross-pass caches: nothing left to cache.
 - **Threads scale** on a quiet machine: 1/2/4 fast cores 2.80/1.63/1.04 s per 30 steps.
-- **Open: run time is not mostly fields.** A capped run with all of the above was only
-  ~4% ahead at 28 min (on a loaded machine), against 1.6x on a descent: profile a
-  full run's stretch before more field work.
+
+**2026-10-29 (later): profile, determinism, the run's own overheads.**
+- **Profile of a run** (cProfile and perf, 15 min from steps 254 and 340):
+  - Python itself and MUMPS are ~1% each; 97% of the time is in C calls.
+  - Of busy CPU: slab fields ~60%, per-element setup and integrands ~30%.
+  - A gradient step is ~16 ms at 2 threads: the time is in how many passes the
+    descents and relaxes make, not what a pass costs.
+  - Branch-start relax() calls were 180 s of a 600-s window; their contact_pass
+    (spoke splits, then relaxing) 130 s.
+  - perf on a loaded machine shows ~50% of thread time spinning in OpenMP: mostly
+    preemption (samples stop while a thread is off its core), not imbalance.
+    Measure imbalance by per-thread CPU time per region instead.
+- **Kept.**
+  - Runs the same from run to run at a thread count (572bbd4):
+    - Hessian pattern additions in element order (the atomics' order varied);
+    - MUMPS L0 threads (ICNTL(48)) only from 100k rows: nothing gained below
+      (24k facets; 64-bead slabs), 0.22 vs 0.30 s a Newton step at 98k facets
+      and 4 threads.
+    - Two 7-min stretches of a 64-bead run now give identical logs: A/B tests on a
+      stretch can compare paths exactly.
+  - Value and gradient passes split in fours, chunks 8x larger, still static
+    (f03c6e2). Threads' waiting 13% -> 3% at 2 threads, 20% -> 5% at 4; critical
+    path 3-9% shorter.
+  - `_target_gap()` recalculates quantities only if one is fixed (7ad7643): the same
+    path, 6% faster.
+  - No contact-line spoke splits in relax() inside a topology run (2f9afd5); the
+    run's remeshing coarsened them at the next step. 15 min from step 254: 9.3 vs 7.4
+    drained; from 340: 10.2 vs 3.4; as many stops.
+  - Flux degree 8 by default (51d0413, the user's call): energy and volumes within
+    1e-11 of degree 14, gradient steps 9% faster. Accuracy tests run at 10.
+- **End to end** (64 beads, seed 0, 20 degrees, 2 threads on fast cores, before
+  degree 8):
+  - V 106.37 at 2957 s (step 366).
+  - The morning's code: V 123.07 at that time; 106.81 at its 7200-s cap.
+  - So at least 2.4x. The run was stopped there (the user), so no Pc-S overlay yet.
+- **Dropped:** interleaving in ones (the passes' locality cost as much as balance
+  gained).
+- **Open.**
+  - `test_a_drop_drained_onto_a_sphere_in_it_dries_a_patch_there` runs at one
+    thread. With determinism its outcome is a function of the thread count:
+    - 1 thread: the branch overshoots to 31.0, backs up, and falls cleanly at 32.5.
+    - 2 and 4 threads: it falls at 31.5 with 3-4 changes.
+    - At ds -0.5, all thread counts fall at 32.0, with 1-2 solid changes.
+    - The fall at the patch's opening is fragile: an isolated event to fix.
+  - The branch-start relax() is still ~10-20 s each, a full relax of a state a
+    descent has just converged.
+  - A Pc-S overlay of the new code against the morning's.
 
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
