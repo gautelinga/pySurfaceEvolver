@@ -800,13 +800,7 @@ def test_a_drop_drained_onto_a_sphere_in_it_dries_a_patch_there():
                    vertex_constraints={1: drop.rims["rim"]}, bodies=[pyse.Body(volume=None)])
     ev.body(1).target = ev.body(1).volume
     ev.refine(1)
-    # (one thread: the runs are the same from run to run at any thread count,
-    # but this fall's descent is sensitive to the sums' last bits, which
-    # differ between thread counts: at 2 and 4 threads the branch overshoots
-    # the film's thinning by a step and the descent makes 3-4 changes; also
-    # at ds -0.5 one thread made two contacts and 2 and 4 threads one; see
-    # docs/PLAN.md, 2026-10-29)
-    with warnings.catch_warnings(), pyse.threads_limit(1):
+    with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         ev.relax()
         steps = []
@@ -815,8 +809,14 @@ def test_a_drop_drained_onto_a_sphere_in_it_dries_a_patch_there():
             if step.fell:
                 break
     fell, before = steps[-1], steps[-2]
-    assert fell.fell and [e.kind for e in fell.changes] == ["solid"]
+    # (where the branch finds the fold depends on the sums' last bits, which
+    # differ between thread counts: at one thread it falls at 32.5 with the
+    # one contact; at 2 and 4 a step later, at 31.5, where the descent's way
+    # down makes the contact, joins its contact lines, wets and dries the
+    # patch again (4 changes) to the same one patch)
+    assert fell.fell and fell.changes[0].kind == "solid"
     assert fell.changes[0].between == "body" and fell.changes[0].constraint == 2
+    assert len(ev.bodies().ids) == 1
     assert fell.volumes[0] == pytest.approx(before.value, rel=1e-8)
     assert fell.result.stable and fell.result.health.ok
     edges = np.asarray(ev.mesh().edges)
