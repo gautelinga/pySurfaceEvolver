@@ -64,6 +64,29 @@ loops, steps); P3 the curves, docs.
   edge (one pore, ~2 radii across); 80% moves less than half an edge, the menisci
   following the pressure.
 
+**2026-10-29: the 64-bead run's speed.**
+- **Kept.**
+  - Frozen sums kept across changes elsewhere (273bfeb): a local region's first
+    descent 189 -> 107 s.
+  - Fast steps in the slab (ff59f99): 11 -> 4 passes per gradient step.
+  - SIMD near sums, monomials by rows, interleaved derivative rows (794cd1c):
+    1.71x fewer cycles per step.
+  - Together, one global descent (step 393): 902 -> 557 s on one core, 2.17x fewer
+    field instructions, the same 17 changes and stable state.
+- **Local descents** (0438fd4) are kept **off by default**: the curves match (median
+  dPc 0.03), but the time is erratic (412/233/827 s at regions of 8/12/16 edges, against
+  681 s global).
+- **Dropped.**
+  - Creep stop (end a branch after two steps halved to ds/64): 0.4% of the drained
+    volume in a 2-h capped run; it made the intermittent test fail more often (4 of 7
+    against 0 of 4); patch in `~/pyse_scratch/pp/creep.diff`.
+  - Field tabulation: cells cost cycles (+8%).
+  - Cross-pass caches: nothing left to cache.
+- **Threads scale** on a quiet machine: 1/2/4 fast cores 2.80/1.63/1.04 s per 30 steps.
+- **Open: run time is not mostly fields.** A capped run with all of the above was only
+  ~4% ahead at 28 min (on a loaded machine), against 1.6x on a descent: profile a
+  full run's stretch before more field work.
+
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
 Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG
