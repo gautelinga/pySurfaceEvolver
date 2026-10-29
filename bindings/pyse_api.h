@@ -113,6 +113,7 @@ long pyse_parameter_count(void);
 int pyse_get_parameters(char (*names)[PYSE_NAME_SIZE], double *values,
                         unsigned char *optimizing, long n);
 long pyse_quantity_count(void);
+long pyse_fixed_quantity_count(void);
 /* the Evolver method names of the energy quantities' method instances (at
    most max rows; count: all of them) */
 int pyse_energy_methods(char (*names)[PYSE_NAME_SIZE], int max, int *count);

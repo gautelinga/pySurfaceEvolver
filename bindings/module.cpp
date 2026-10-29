@@ -699,6 +699,7 @@ NB_MODULE(_core, m) {
   m.def("is_initialized", []() { Lock lock; return bool(pyse_is_initialized()); });
   m.def("surface_valid", []() { Lock lock; return bool(pyse_surface_valid()); });
   m.def("surface_version", []() { Lock lock; return pyse_surface_version(); });
+  m.def("fixed_quantity_count", []() { Lock lock; return pyse_fixed_quantity_count(); });
   m.def("set_threads", [](int n) { Lock lock; pyse_set_threads(n); }, "n"_a);
   m.def("threads", []() { Lock lock; return pyse_threads(); });
   m.def("thread_setting", []() { Lock lock; return pyse_thread_setting(); });

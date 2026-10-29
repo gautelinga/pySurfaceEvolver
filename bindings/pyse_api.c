@@ -1724,6 +1724,17 @@ long pyse_quantity_count(void)
   return count;
 }
 
+/* the named quantities with a target (fixed), their values not brought up
+   to date: whether a check of the targets needs them recalculated */
+long pyse_fixed_quantity_count(void)
+{ long count = 0;
+  int i;
+  if ( !initialized || !surface_valid ) return 0;
+  for ( i = 0 ; i < gen_quant_count ; i++ )
+    if ( is_named_quantity(i) && (GEN_QUANT(i)->flags & Q_FIXED) ) count++;
+  return count;
+}
+
 struct quantities_args
 { char (*names)[PYSE_NAME_SIZE]; double *value, *target, *modulus, *pressure;
   int *kind; long n; };

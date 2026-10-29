@@ -60,7 +60,9 @@ class _Analysis(_Engine):
             off = target - b.volume[b.fixed]
             gaps += list(np.abs(off)/np.where(target != 0, np.abs(target), 1.0))
             cost += float(np.abs(b.pressure[b.fixed]*off).sum())
-        for q in self.quantities().values():
+        # (the quantities recalculated only where one has a target: a full
+        # pass over the surface, 6% of a 64-bead run asked after every step)
+        for q in (self.quantities() if _core.fixed_quantity_count() else {}).values():
             if q.kind == "fixed":
                 gaps.append(abs(q.target - q.value)/(abs(q.target) if q.target else 1.0))
                 cost += abs(q.pressure*(q.target - q.value))
