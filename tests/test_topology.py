@@ -500,7 +500,9 @@ def test_arclength_stops_where_its_tries_run_out(monkeypatch, caplog):
     backed = [s for s in said if s.startswith("branch backed up")]
     assert 4 <= len(backed) <= 12 and said[-1].startswith("branch not backed up again")
     back = [0 if s.split()[3] == "to" else int(s.split()[3]) for s in backed[:4]]
-    assert back == sorted(back)                     # (each further back)
+    # (each further back: counted in steps, which the third try takes at half
+    # ds, so the fourth, back at ds, can count fewer than the third)
+    assert back[:3] == sorted(back[:3]) and back[3] >= back[1]
     assert not any(s.fell for s in steps)
 
 

@@ -353,7 +353,11 @@ class _Relaxing(_Analysis):
                     else:
                         retry = run.finer_start(start, levels) if levels else None
                     steps, residual = retry or (steps, residual)
-            if self.model == "linear" and residual < tol and not keep_mesh and not already:
+            # (not in a topology run: its remeshing keeps the edges' sizes, and
+            # coarsened the spokes split here at the next step; in a 64-bead
+            # run the splits and their relaxing were a fifth of the time)
+            if self.model == "linear" and residual < tol and not keep_mesh and not already \
+                    and self._liquid is None:
                 more, residual = run.contact_pass(levels + 1, residual)
                 steps += more
             if adapt and self.model == "linear" and not elastic:
