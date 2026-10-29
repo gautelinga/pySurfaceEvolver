@@ -50,6 +50,13 @@
 
 ### Fixes
 
+- In a periodic slab, a sphere's guard (the one-sided copy of its constraint that
+  keeps a topology descent's free vertices out of the solid) now holds at every copy
+  of the cell: its formula takes the nearest image of the centre (Evolver's
+  `floor()`, with a closed form in C). A vertex kept at one bead's copy and guarded
+  against a bead at the next copy went through that one, up to 4.5 edges deep, and
+  the run was undone: a quarter of the late runs of a 64-bead pack. 10 minutes late in
+  that run: runs into a bead 47 to 0, drained volume 6% more.
 - A topology descent no longer crawls to its work budget on a plateau. Near an
   equilibrium its gradient runs never converge (the tidying between rounds stirs the
   surface: residual 0.4-2, the energy wandering by 0.03), and its Newton finish was only

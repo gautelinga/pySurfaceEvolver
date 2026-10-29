@@ -131,6 +131,39 @@ loops, steps); P3 the curves, docs.
     descent has just converged.
   - A Pc-S overlay of the new code against the morning's.
 
+**2026-10-29 (evening): "faster and more robust" batch (user chose 1-5, all).**
+- **1, branch-start relax:** with contact splits gone (2f9afd5) these take 2.5-6 s,
+  not 13-45 s (~10% of a window). Newton-first there is the dropped "quick settle":
+  left as is.
+- **4, undone runs:**
+  - From step 340, 10 min: 20 runs into a bead, 17 crossings; about 8 s lost per
+    event, 25% of the window.
+  - The vertices that went in were guarded: against beads whose home is at another
+    copy, so their guards were a period away.
+  - Fixed: guards at the nearest image (08435c1, floor() in the formula, C kind 2).
+    Runs into a bead 41 -> 25 and 47 -> 0; drained +13% and +6%.
+  - Tried and dropped: making the nearest change at once after a run into a bead
+    (runs into beads x3, drained less).
+  - Open:
+    - The remaining runs into beads are vertices with their 3 guards (the most a
+      vertex takes) against other beads, going into a 4th in crowded spots
+      (~4% of a stretch).
+    - Crossings: ~8% late; their handling (remesh, shorter runs) is old, tuned
+      work.
+- **5, the sphere test:** the outcome is the same at every thread count (one
+  patch, stable); only the change list differs (1 at 32.5 vs 4 at 31.5). The test
+  checks the outcome, at default threads (9c867cb).
+- **2, descent overhead:**
+  - C time is 63% gradient steps, 21% the corrector, 7% residuals; Python about 3%.
+  - The corrector's double recalc (target set, then recalc): removing it saved
+    nothing measurable (-2%/+1%), dropped.
+- **3, field batching: deferred.**
+  - At degree 8 the kernels are ~70% of a gradient step. The bead walls'
+    degree-14 fold is 17%, the boxes' 6%; monomials 13%.
+  - Batching a facet's Gauss points would make the folds load-shared: estimated
+    ~14% of a step, ~8% of a run, for a sizeable C change.
+  - Lower wall degrees (12, 10) weren't faster in noisy timings.
+
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
 Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG
