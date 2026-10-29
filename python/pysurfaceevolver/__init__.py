@@ -47,9 +47,10 @@ tessellation_limit: Optional[int] = 10_000_000
 
 #: The flux gauge's fast sum (``constraints.sphere(gauge="flux")`` in a
 #: periodic slab, or with many spheres): the degree of the polynomials that
-#: carry the spheres' far fields. 10: the fields to ~1e-9 relative; 8: ~5e-8,
-#: their evaluation about 1.3x faster (a 16-bead slab). Read at each load.
-flux_degree: int = 10
+#: carry the spheres' far fields. 8: the fields to ~5e-8 relative (a 64-bead
+#: slab's energies and volumes within 1e-11 of degree 14's, its gradient
+#: steps 9% faster than at 10); 10: ~1e-9. Read at each load.
+flux_degree: int = 8
 
 #: Seconds a call waits while Evolver runs a call from another thread, then
 #: EvolverBusyError; None: fail at once; float("inf"): wait as long as needed.

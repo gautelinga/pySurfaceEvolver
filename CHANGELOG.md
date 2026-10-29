@@ -31,6 +31,23 @@
   its parent instead of every explicit one (6272 at 64 beads). The same accuracy (the
   fields to 1e-9 of Ewald's sum).
 
+- Topology runs in a periodic slab are faster:
+  - gradient steps predict the volumes and evaluate content and energy in one pass, as
+    without periods (4 passes over the surface a step instead of 11);
+  - the flux gauge's near sources are summed four at a time (AVX2), its monomials by
+    rows, its derivatives three at a time (a descent 1.6x faster);
+  - the threads' shares of a value or gradient pass are interleaved in fours (their
+    waiting 13% of a pass to 3% at 2 threads);
+  - relax() checks the targets of fixed quantities without recalculating the
+    quantities where none is fixed (6% of a 64-bead run);
+  - relax() in a topology run no longer splits contact-line spokes after converging
+    (the run's remeshing coarsened them again at the next step; a fifth of a 64-bead
+    run's time).
+- A run is the same from run to run at a given thread count: the Hessian's entries are
+  added in element order, and MUMPS's tree parallelism (whose order of work changes a
+  factorization's last bits) is used only from 100k rows, where it pays (a Newton step
+  at 98k facets, 4 threads: 0.22 s with it, 0.30 s without; nothing below).
+
 ### Fixes
 
 - A topology descent no longer crawls to its work budget on a plateau. Near an
@@ -52,9 +69,10 @@
 
 ### API
 
-- `pyse.flux_degree` (default 10): the degree of the flux gauge's fast-sum
-  polynomials. 8 gives the fields to ~5e-8 instead of ~1e-9, their evaluation about
-  1.3x faster; read at each load.
+- `pyse.flux_degree` (default 8): the degree of the flux gauge's fast-sum
+  polynomials, the fields to ~5e-8 of Ewald's sum (a 64-bead slab's energies and
+  volumes within 1e-11 of degree 14's; its gradient steps 9% faster than at 10). 10
+  gives ~1e-9; read at each load.
 
 ## 0.8.1 (2026-10-25)
 

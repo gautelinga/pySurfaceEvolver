@@ -139,11 +139,13 @@ def _bead_flux(periods):
     return _bead(periods, gauge="flux")
 
 
-def test_the_flux_gauges_fields_are_ewalds_sum():
+def test_the_flux_gauges_fields_are_ewalds_sum(monkeypatch):
     # (the regions' near sources and polynomials against Ewald's sum over the
     # lattice, at points around the bead and its mirror; derivatives against
-    # differences)
+    # differences; at degree 10, the fields to 1e-9: the default 8's 5e-8
+    # would hide less)
     from pysurfaceevolver import _core
+    monkeypatch.setattr(pyse, "flux_degree", 10)
     _bead(PERIODS, gauge="flux")
     rng = np.random.default_rng(0)
     for x in rng.uniform([0, 0, 0.05], [PERIODS[0], PERIODS[1], 1.5], (30, 3)):
@@ -265,10 +267,11 @@ def test_adapt_merges_and_splits_as_without_periods(make):
     assert np.allclose(found[0][2:], found[1][2:], rtol=1e-11)
 
 
-def test_the_flux_gauges_field_far_above_the_beads():
+def test_the_flux_gauges_field_far_above_the_beads(monkeypatch):
     # (a box in a layer not made yet: the layer's lock was the box's own,
-    # taken again inside it, and the step hung)
+    # taken again inside it, and the step hung; degree 10, as above)
     from pysurfaceevolver import _core
+    monkeypatch.setattr(pyse, "flux_degree", 10)
     _bead(PERIODS, gauge="flux")
     for z in (2.0, 3.5, 5.0):
         o = np.array(_core.slabflux_probe([0.3, 0.4, z]))
@@ -300,9 +303,11 @@ def _drop_among_spheres(mode, n, floor=False, box=False):
 
 
 @pytest.mark.parametrize("n", [10, 70])
-def test_the_fast_flux_sum_is_the_direct_one(n):
+def test_the_fast_flux_sum_is_the_direct_one(n, monkeypatch):
     # (spheres only: the near ones directly, the far ones by local
-    # expansions, against every sphere's sum, through steps and Newton)
+    # expansions, against every sphere's sum, through steps and Newton; at
+    # degree 10, to 1e-11)
+    monkeypatch.setattr(pyse, "flux_degree", 10)
     found = []
     for mode in ("direct", "fast"):
         ev = _drop_among_spheres(mode, n)
