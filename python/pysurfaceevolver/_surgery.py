@@ -243,7 +243,7 @@ def guard(ev) -> None:
     for key, wall in walls.items():
         name = f"{GUARD_PREFIX}{key}"
         if name not in names:
-            ev.command(f"define constraint {name} nonnegative formula: {getattr(wall, 'formula')}")
+            ev.command(f"define constraint {name} nonnegative formula: {_guard_formula(ev, key)}")
             defined.append(name)
     if defined:
         ev._register_native_formulas()      # (theirs in closed form too)
@@ -343,6 +343,24 @@ def guard(ev) -> None:
     _set_guards(ev, [int(nums[i]) for i in gone + gcols],
                 np.c_[np.isnan(dist[:, gone]), now & ~chosen], False)
     _set_guards(ev, [int(nums[i]) for i in gcols], chosen & ~now, True)
+
+
+def _guard_formula(ev, key) -> str:
+    """Wall key's formula for its guard: in a slab a sphere's at the image
+    of its centre nearest the vertex (the guard holds a vertex at any copy: a
+    vertex held at one bead's copy, guarded against beads at the next copy
+    too, went through those, 2.7-4.5 edges deep, in a run of a 64-bead pack,
+    a quarter of the late runs undone so; Evolver's formulas take floor);
+    else the wall's own."""
+    wall = surface.walls[key]
+    centre, L = _sphere_centre(key), _slab(ev)
+    if centre is None or L is None:
+        return getattr(wall, "formula")
+    R = float(getattr(wall, "shape")[2])
+    def image(v: str, c: float, p: float) -> str:
+        return f"({v} - {c!r} - {float(p)!r}*floor(({v} - {c!r})/{float(p)!r} + 0.5))"
+    return (f"{image('x', float(centre[0]), L[0])}^2 + {image('y', float(centre[1]), L[1])}^2 "
+            f"+ (z - {float(centre[2])!r})^2 = {R*R!r}")
 
 
 def _home_by_spheres(ev, keys) -> None:

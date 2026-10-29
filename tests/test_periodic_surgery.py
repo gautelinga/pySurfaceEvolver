@@ -324,6 +324,21 @@ def test_vertices_by_a_sphere_are_moved_home_before_they_are_guarded():
     assert found[0] > 0 and found[0] == found[1]
 
 
+def test_a_spheres_guard_in_a_slab_holds_at_every_copy():
+    # (its formula at the nearest image of the centre, floor() in Evolver's
+    # formula: a vertex at one bead's copy guarded against a bead at the next
+    # copy went through it; its closed form registered, which C checks bit
+    # for bit against the interpreter, wrapped test points among them)
+    from pysurfaceevolver import _core
+    ev = _bead(PERIODS)
+    S.guard(ev)
+    nums, _, _, names = ev._constraint_gaps(guards=True)
+    col = [str(n) for n in names].index("pyse_guard_bead")
+    assert "floor" in S._guard_formula(ev, "bead")
+    assert _core.native_formula(int(nums[col]), 2, [0.0, 0.0, 0.55, 0.5**2])
+    assert "floor" not in S._guard_formula(_bead(None), "bead")
+
+
 def test_a_vertex_put_on_a_sphere_is_moved_home_first():
     ev = _bead(PERIODS)
     m = ev.mesh()

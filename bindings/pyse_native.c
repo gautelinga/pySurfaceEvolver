@@ -1224,8 +1224,11 @@ int pyse_native_points(struct expnode *key, REAL **x, int n, int order, REAL (*V
 
 struct formula_native
 { struct expnode *key;
-  int kind;                      /* 0 plane: p = n, d; 1 sphere: p = c, R^2 */
+  int kind;                      /* 0 plane: p = n, d; 1 sphere: p = c, R^2; 2 a
+                                    slab's sphere at the nearest image in x, y
+                                    (a guard: _surgery._guard_formula), L its periods */
   REAL p[4];
+  REAL L[2];
   REAL sign;                     /* the interpreter's value is sign times ours */
 };
 
@@ -1249,6 +1252,14 @@ static void formula_value(const struct formula_native *n, const REAL *x, REAL *f
       }
     v = v - n->p[3];
     if ( g ) for ( i = 0 ; i < 3 ; i++ ) g[i] = n->p[i];
+  }
+  else if ( n->kind == 2 )
+  { /* (x - c - L floor((x - c)/L + 0.5)), as the formula has it */
+    REAL a = x[0] - n->p[0], b = x[1] - n->p[1];
+    REAL X = a - n->L[0]*floor(a/n->L[0] + 0.5), Y = b - n->L[1]*floor(b/n->L[1] + 0.5);
+    REAL Z = x[2] - n->p[2];
+    v = (X*X + Y*Y) + Z*Z - n->p[3];
+    if ( g ) { g[0] = 2.0*X; g[1] = 2.0*Y; g[2] = 2.0*Z; }
   }
   else
   { REAL X = x[0] - n->p[0], Y = x[1] - n->p[1], Z = x[2] - n->p[2];
@@ -1289,8 +1300,9 @@ void pyse_native_formula_at(int slot, const REAL *x, REAL *f, REAL *grad)
 { formula_value(formulas + slot,x,f,grad);
 }
 
-/* register constraint con's formula as a plane (kind 0: n, d) or a sphere
-   (kind 1: c, R^2); 1 if registered (the closed form matching the
+/* register constraint con's formula as a plane (kind 0: n, d), a sphere
+   (kind 1: c, R^2) or a slab's sphere at the nearest image (kind 2: c, R^2,
+   the slab's periods); 1 if registered (the closed form matching the
    interpreter, value and gradient, at test points), else 0 */
 int pyse_native_formula_register(int con, int kind, const double *p)
 { struct constraint *cn;
@@ -1306,7 +1318,8 @@ int pyse_native_formula_register(int con, int kind, const double *p)
     formula_count = 0;
     formula_load = pyse_load_serial();
   }
-  if ( SDIM != 3 || (kind != 0 && kind != 1) || con < 0 || con >= web.maxcon ) return 0;
+  if ( SDIM != 3 || kind < 0 || kind > 2 || con < 0 || con >= web.maxcon ) return 0;
+  if ( kind == 2 && !pyse_slab(n.L) ) return 0;
   cn = get_constraint(con);
   if ( !cn || !(cn->attr & IN_USE) || !cn->formula ) return 0;
   ex = cn->formula;
@@ -1320,8 +1333,17 @@ int pyse_native_formula_register(int con, int kind, const double *p)
        Python's round some decimals apart, and the closed form then missed
        the interpreter in the last bit at most points */
     REAL zero[3] = {0,0,0}, f0, g0[2*MAXCOORD];
+    if ( kind == 2 )   /* (read back from the centre's guess: periodic about it) */
+      for ( j = 0 ; j < 3 ; j++ ) zero[j] = p[j];
     eval_all(ex,zero,SDIM,&f0,g0,NULLID);
-    if ( kind == 1 )
+    if ( kind == 2 )
+    { REAL c[3], fc, gc[2*MAXCOORD];
+      for ( j = 0 ; j < 3 ; j++ ) c[j] = p[j] - g0[j]/2.0;
+      eval_all(ex,c,SDIM,&fc,gc,NULLID);
+      for ( j = 0 ; j < 3 ; j++ ) n.p[j] = c[j];
+      n.p[3] = -fc;
+    }
+    else if ( kind == 1 )
     { /* s (|x - c|^2 - R^2), s = +1 or -1: with s = 1, c = -g/2 and the
          value there -R^2 < 0; else s = -1, c = g/2, the value there R^2 */
       REAL c[3], fc, gc[2*MAXCOORD];

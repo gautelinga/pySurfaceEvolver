@@ -907,6 +907,8 @@ class _Engine:
                 key = next((k for k in shapes if str(k) == key), key)
             if key in shapes:
                 kind, p = shapes[key]
+                if kind == 1 and name.startswith(GUARD_PREFIX) and self.periods is not None:
+                    kind = 2        # (a slab sphere's guard: at the nearest image)
                 _core.native_formula(int(c), kind, p)
 
     def _register_native_flux(self) -> None:
