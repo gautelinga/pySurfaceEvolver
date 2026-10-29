@@ -153,6 +153,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     from pysurfaceevolver import recipes
     if flux_degree is not None:
         pyse.flux_degree = int(flux_degree)
+    if os.environ.get("PYSE_LOCAL_DESCENTS"):
+        recipes.LOCAL_DESCENTS = True       # (falls by local descents: being validated)
 
     part = os.path.join(out, f"{name}.part")
     prior = json.load(open(part)) if resume and os.path.exists(part) else None
@@ -615,6 +617,7 @@ def main(argv):
                     help="pin each run to its own CPUs: 'fast' (the highest clocked, one a "
                          "physical core), 'all' (this process's), or a list '0,2,4-6'; "
                          "default: not pinned (a cluster's scheduler places them)")
+    ap.add_argument("--timeout", type=float, help="each run's time limit in seconds (default: the set's)")
     ap.add_argument("--frames", type=int,
                     help="keep every this many steps' state in OUT/frames/NAME (a film: film.py)")
     ap.add_argument("--flux-degree", type=int,
@@ -642,6 +645,8 @@ def main(argv):
     out = os.path.abspath(args.out or os.path.join(HERE, "out", args.set))
     os.makedirs(out, exist_ok=True)
     todo = [c for c in configs(args.set, args.h, args.ds, args.ds_area) if not args.only or c[0] in args.only]
+    if args.timeout:
+        todo = [(*c[:7], args.timeout, c[8]) for c in todo]
     # the longest first, so the pool ends together
     todo.sort(key=lambda c: -c[1])
     groups = cpu_groups(args.cpus, min(args.jobs, len(todo)), args.threads)

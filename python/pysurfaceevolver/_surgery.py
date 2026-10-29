@@ -3433,6 +3433,9 @@ def _try_finish(ev, tol: float) -> Any:
     return None
 
 
+_COUPLING: list = []    # a local descent's (body, p0, V0, dp/dV): its pressure set before each run
+
+
 def _run(ev, tol: float, n: int) -> Any:
     """A descent's relax() run of up to n gradient steps; its Newton steps
     (and relax()'s conjugate-gradient pass) only once the residual is under
@@ -3441,6 +3444,17 @@ def _run(ev, tol: float, n: int) -> Any:
     putting contact lines onto the beads' poles, where the walls' integrals
     are singular: 0.025 radii from one where gradient steps alone left it
     0.14 away, run after run undone, the poles moved 20 times."""
+    if _COUPLING:
+        # (a local descent: the body's pressure as the rest of the surface,
+        # fixed, would have given back the volume the region took, at every
+        # gradient step; see _local)
+        body, p0, v0, stiff = _COUPLING[0]
+
+        def follow(ev_, i) -> None:
+            ev_.command(f"set body[{body}] pressure {p0 - stiff*(ev_.body(body).volume - v0)!r}")
+        follow(ev, 0)
+        return ev.relax(tol, max_iter=n, newton=None if ev.residual() < _NEWTON_NEAR else 0,
+                        callback=follow, every=1)
     return ev.relax(tol, max_iter=n, newton=None if ev.residual() < _NEWTON_NEAR else 0)
 
 

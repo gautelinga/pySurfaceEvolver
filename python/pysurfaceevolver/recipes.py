@@ -974,6 +974,8 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
     from ._surgery import (_ON_THE_WAY, TopologyCheckError, _edge_scale, _keep_edges, _log,
                            _resting, move_poles, orient_lines)
     keep = ev._liquid["keep"]
+    from ._views import BodyView
+    body = what.number if isinstance(what, BodyView) else None   # (local descents follow its target)
     index, quiet, stuck, start = 0, 0, 0, True
     run_remesh = remesh
     last: List[Step] = []
@@ -1152,7 +1154,6 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                 # the branch stopped short (a step that didn't settle after
                 # tidying: a pore's contact line receding over dry patches):
                 # from a relaxed state there, as after a change
-                from ._surgery import descend
                 if quiet and moves:
                     # (and it came back to the same state last time: past a
                     # fold where the value has its least, as a pack's liquid
@@ -1167,10 +1168,11 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                     push = min(typical*2**min(quiet - 1, 3), 0.1*abs(value) or typical)
                     set_value(ev, value + way*push)
                     ev.command("recalc")
-                result, cut, why = descend(ev, factor, tol, falling=False, keep=keep,
-                                           history=history)
+                near = _nearest(ev.events(factor)) if LOCAL_DESCENTS else None
+                result, cut, why = _descend(ev, factor, tol, keep, history, body, False,
+                                            None if near is None else near.where)
             elif event is not None:
-                result, cut, why = _change(ev, event, factor, tol, keep, history)
+                result, cut, why = _change(ev, event, factor, tol, keep, history, body)
             elif len(last) == 3 and last[-2].value != last[-3].value and _at_fold(ev, *seen):
                 # past a fold, the stable state is still there at the unstable
                 # point's value (a catenoid's at 1.3241, its fold at 1.3255):
@@ -1181,9 +1183,9 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                 far = max(stable*way, last[-1].value*way)*way
                 set_value(ev, far + (stable - previous))
                 ev.command("recalc")
-                result, cut, why = _fall(ev, factor, tol, keep, history)
+                result, cut, why = _fall(ev, factor, tol, keep, history, body)
             else:
-                result, cut, why = _fall(ev, factor, tol, keep, history)
+                result, cut, why = _fall(ev, factor, tol, keep, history, body)
             if result is not None:
                 _smooth(ev, factor, tol)
         except _RETRIED as error:
@@ -1270,7 +1272,7 @@ def _nearest(found: list) -> Any:
 
 
 def _change(ev, event, factor: float, tol: float, keep,
-            history: Optional[list] = None) -> "tuple[Any, list, str]":
+            history: Optional[list] = None, body: Optional[int] = None) -> "tuple[Any, list, str]":
     """Make the change a coming event announces, then down to a stable state
     (as _fall). The cut of a neck settles as pinch_off's does; a merge or a
     contact relaxes from there. A change refused (ValueError: the surface is
@@ -1278,16 +1280,20 @@ def _change(ev, event, factor: float, tol: float, keep,
     from here, the changes coming on the way made; so is one ``history``
     (the changes since the branch last stepped on) puts off repeating
     (_surgery._put_off), which the descent makes if it comes nearer or waits
-    long."""
+    long. With LOCAL_DESCENTS and a body's target the value (``body``), the
+    descents are local ones first, round the change's place (_local)."""
     from ._errors import EvolverError
-    from ._surgery import _crossings, _log, _put_off, _settle, _tried, apply, descend, guard
+    from ._surgery import _crossings, _log, _put_off, _settle, _tried, apply, guard
     if history is None:
         history = []
+
+    def down(falling: bool) -> "tuple[Any, list, str]":
+        return _descend(ev, factor, tol, keep, history, body, falling, event.where)
     here = _tried(ev, event, "")
     if history and _put_off(here, history):
         _log.debug("change put off: %s (made, undone or refused at its place since the "
                    "branch last stepped on)", event)
-        return descend(ev, factor, tol, falling=False, keep=keep, history=history)
+        return down(False)
     crossed, start = _crossings(ev), ev._save()
     try:
         apply(ev, event, keep)
@@ -1296,7 +1302,7 @@ def _change(ev, event, factor: float, tol: float, keep,
             raise ValueError("the change passed the surface through itself")
     except ValueError:
         history.append(here._replace(what="refused"))
-        return descend(ev, factor, tol, falling=False, keep=keep, history=history)
+        return down(False)
     except EvolverError as error:
         return None, [], str(error)
     history.append(here._replace(what="made"))
@@ -1306,14 +1312,13 @@ def _change(ev, event, factor: float, tol: float, keep,
         if r is None:
             # (down from the cut in the descent's runs instead, as the
             # descent does: a 16-bead pack's pieces, other changes coming)
-            result, more, why = descend(ev, factor, tol, falling=False, keep=keep,
-                                        history=history)
+            result, more, why = down(False)
             return result, [event] + more, why
         if r.stable is not False:
             return r, [event], ""
-        result, more, why = descend(ev, factor, tol, falling=True, keep=keep, history=history)
+        result, more, why = down(True)
     else:
-        result, more, why = descend(ev, factor, tol, falling=False, keep=keep, history=history)
+        result, more, why = down(False)
     return result, [event] + more, why
 
 
@@ -1337,13 +1342,33 @@ def _negative(step: Step) -> int:
     return int(getattr(step.result, "negative_modes", 0) or 0)
 
 
+# descents by local ones first (_local: the region round the unstable mode or
+# the change's place, the rest frozen, then the whole surface back to the
+# target) where the value is a body's target; off by default while they are
+# validated
+LOCAL_DESCENTS = False
+
+
+def _descend(ev, factor: float, tol: float, keep, history: Optional[list], body: Optional[int],
+             falling: bool, centre=None) -> "tuple[Any, list, str]":
+    """_surgery.descend, with LOCAL_DESCENTS and a body's target the value a
+    local descent first, round ``centre`` (else the lowest mode)."""
+    from ._surgery import descend
+    if LOCAL_DESCENTS and body is not None:
+        from ._local import descend_local
+        done = descend_local(ev, body, factor, tol, keep=keep, history=history, centre=centre,
+                             falling=falling)
+        if done is not None:
+            return done
+    return descend(ev, factor, tol, falling=falling, keep=keep, history=history)
+
+
 def _fall(ev, factor: float, tol: float = 1e-8, keep=None,
-          history: Optional[list] = None) -> "tuple[Any, list, str]":
+          history: Optional[list] = None, body: Optional[int] = None) -> "tuple[Any, list, str]":
     """From a point that has lost its stability, down to a stable state at
     the same value, making the changes of topology that come on the way
-    (_surgery.descend; ``history``, see _change)."""
-    from ._surgery import descend
-    return descend(ev, factor, tol, falling=True, keep=keep, history=history)
+    (_surgery.descend; ``history``, see _change; ``body``, _descend)."""
+    return _descend(ev, factor, tol, keep, history, body, True)
 
 
 def _branch(ev, what: Any, ds: float, steps: int, *,
