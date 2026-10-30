@@ -2151,7 +2151,12 @@ static int degenerate(struct ctx *c, facet_id f)
   { r = collapse(c,positive_id(es[shortest]),1);
     if ( r == PYSE_EDIT_DONE || r < 0 ) return r;
   }
-  return flip(c,positive_id(es[longest]),0);
+  /* (only where that makes the facets more equiangular, as a cap's long
+     edge always does: a facet is small by area also where the targets are
+     fine, a quarter of the mean edge in a pack's necks, and its long edge
+     flipped regardless made caps of sound facets, 18 after a remeshing
+     round one sliver) */
+  return flip(c,positive_id(es[longest]),1);
 }
 
 /* ---- events: merge and bridge -------------------------------------------- */
@@ -2955,9 +2960,14 @@ static int count_done(int *r, int n)
 
 /* isotropic remeshing toward edges of h (Botsch and Kobbelt's): per sweep,
    edges over 4/3 h split, under 4/5 h collapsed (none made over 4/3 h),
-   flips toward valence 6 (4 on a border), vertices smoothed along the
-   surface; every edit checked as in a batch, contact lines kept (they
-   are the edits' features). results: splits, collapses, flips, moves. */
+   flips toward valence 6 (4 on a border), then where that makes the
+   facets more equiangular, vertices smoothed along the surface; every
+   edit checked as in a batch, contact lines kept (they are the edits'
+   features). results: splits, collapses, flips, moves. (The valences'
+   flips alone left caps: a split's new vertex collapsed into the facet's
+   far corner put that corner on the edge's middle, an angle of 160 to
+   175 degrees, and in a pack's necks, where the targets are a quarter of
+   h, a remeshing round one sliver left 16 to 20 such) */
 static int surface_clean(struct ctx *c);
 static int near_clean(struct ctx *c);
 
@@ -2985,18 +2995,19 @@ static void remesh_body(void *arg)
   for ( sweep = 0 ; sweep < (sweeps > 0 ? sweeps : 3) ; sweep++ )
   { struct edit_args b = *a;
     int moved = 0;
-    for ( pass = 0 ; pass < 4 ; pass++ )
+    for ( pass = 0 ; pass < 5 ; pass++ )
     { long *ids;
       int *res;
       if ( pass == 0 ) { ids = edges_by(&c,4.0/3,0,&n); b.op = PYSE_OP_SPLIT; }
       else if ( pass == 1 ) { ids = edges_by(&c,0,0.8,&n); b.op = PYSE_OP_COLLAPSE; c.max_len = 4.0/3; }
       else if ( pass == 2 ) { ids = edges_by(&c,0,0,&n); b.op = PYSE_OP_FLIP; c.mode = 2; }
+      else if ( pass == 3 ) { ids = edges_by(&c,0,0,&n); b.op = PYSE_OP_FLIP; c.mode = 1; }
       else { ids = all_vertices(&n); b.op = PYSE_OP_SMOOTH; }
       res = (int *)temp_calloc(n ? n : 1,sizeof(int));
       b.ids = ids; b.n = n; b.results = res;
       if ( n ) run_batch(&c,&b);
-      a->results[pass] += count_done(res,n);
-      if ( pass < 3 ) moved += count_done(res,n);
+      a->results[pass < 3 ? pass : pass - 1] += count_done(res,n);
+      if ( pass < 4 ) moved += count_done(res,n);
       c.max_len = keep_len; c.mode = (int)keep_mode;
       temp_free((char *)res);
       temp_free((char *)ids);

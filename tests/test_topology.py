@@ -509,7 +509,8 @@ def test_arclength_stops_where_its_tries_run_out(monkeypatch, caplog):
 def test_a_descent_past_its_budget_stops_and_the_run_backs_up(monkeypatch, caplog):
     # descents bounded at a pass over the surface: each stops at its first
     # iteration, the run backs up as from any stop and ends where its tries
-    # run out, with the reason
+    # run out, with the reason (no change made: their descents all stopped;
+    # a relaxing where the branch stopped short may settle in its one pass)
     import logging
     from pysurfaceevolver import _surgery
     monkeypatch.setattr(_surgery, "_BUDGET", 1)
@@ -521,7 +522,7 @@ def test_a_descent_past_its_budget_stops_and_the_run_backs_up(monkeypatch, caplo
     stops = [str(w.message) for w in caught if "arclength()" in str(w.message)]
     assert len(stops) == 1 and "the descent's budget spent" in stops[0]
     assert any(r.getMessage().startswith("branch backed up") for r in caplog.records)
-    assert not any(s.fell for s in steps)
+    assert not any(s.changes for s in steps)
 
 
 def test_a_resumable_run_resumed_from_a_step_goes_on_exactly(monkeypatch):
@@ -574,6 +575,30 @@ def test_slivers_are_remeshed_round():
     assert len(_surgery._slivers(ev))
     assert _surgery._even_slivers(ev, _surgery._edge_scale(ev))
     assert ev.mesh_quality().angle_min > _surgery._SLIVER
+
+
+def test_a_neck_remeshed_finer_keeps_no_caps():
+    # (targets a fifth of the edge scale in the neck, as a pack's necks near
+    # the beads: the valences' flips alone left 32 caps, angles of 160 to 175
+    # degrees, where a split's new vertex collapsed into the far corner)
+    from pysurfaceevolver import _edits, _surgery
+    ev = _sphere_bridge(0.09)
+    h = _surgery._edge_scale(ev)
+    _edits.remesh(ev, h, sizes=np.where(np.abs(ev.vertices[:, 2]) < 0.2, 0.2*h, h))
+    assert not len(_surgery._slivers(ev))
+
+
+def test_crushed_facets_dont_make_caps_of_sound_ones():
+    # (a facet small by area where the targets are fine is sound: its long
+    # edge flipped only where that makes the facets more equiangular, as a
+    # cap's always does; flipped regardless, a pack's remeshing round one
+    # sliver left 18 caps)
+    from pysurfaceevolver import _edits, _surgery
+    ev = _sphere_bridge(0.09)
+    before = ev.mesh_quality().angle_min
+    r = _edits.edit(ev, "degenerate", ev.mesh().facet_ids, flat=1.0)
+    assert (np.abs(r) == 3).sum() > len(r)/2         # (no better)
+    assert ev.mesh_quality().angle_min >= before
 
 
 def test_a_resumable_run_gives_a_state_every_fifth_step():

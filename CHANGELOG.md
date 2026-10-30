@@ -76,6 +76,27 @@
 
 ### Fixes
 
+- Remeshing no longer makes caps (facets with an angle of 160-175 degrees, a corner on
+  the middle of the opposite edge). Two edits made them where the targets are fine (a
+  quarter of the edge scale in a pack's necks): a split's new vertex collapsed into the
+  facet's far corner, which the remesher's flips toward valence 6 never undid; and the
+  removal of crushed facets took any facet small by area as crushed and flipped its
+  long edge regardless, making caps of sound facets (a remeshing round one sliver left
+  18). Each sweep now also flips edges where that makes the facets more equiangular,
+  and a crushed facet's long edge is flipped only where it does (as a cap's always
+  does). The bridge's neck remeshed at a fifth of the edge scale: 32 caps before,
+  none now; in a pack, remeshings round slivers left 12-17 caps in clusters.
+- A gradient step with the descents' fast search no longer jumps to another surface
+  where restoring the volumes fails. The search predicts each move's volumes and took
+  the first restore's result as its start where it left them out of tolerance, even
+  where the restore had taken them further off: in a 32-bead pack (the contact-line
+  gauge), volumes 0.25 of the tolerance off went to 79 times it, the restore went on
+  from there to another surface (area 4% less, energy 16 higher), and the contact
+  that preceded it was refused as one Evolver can't step from. The restore now starts
+  from the predicted volumes' own difference and keeps the stock search's checks
+  (a restore that makes it worse undone, one 100 times worse abandoned). Three
+  32-bead runs at 20 degrees: two of them to breakthrough in 735 and 380 s (1232 and
+  961 s before), their refusals 9 and 5 (17 and 8).
 - Topology runs remesh round slivers (a facet's angle under 12 degrees) before each
   descent and as a branch keeps its edges in range, a sliver the remeshing leaves where
   it was not tried again in that descent. Four of eight refusal storms in a 32-bead set

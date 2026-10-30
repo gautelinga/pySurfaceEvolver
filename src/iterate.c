@@ -161,6 +161,29 @@ static int predict_content(void)
   return 1;
 }
 
+/* the fixed constraints' total difference from their targets as their
+   content stands (calc_content()'s, without its pass): where a move's
+   content was predicted, its difference before the restore */
+static REAL content_diff(void)
+{ body_id b_id;
+  int k;
+  REAL diff = 0.0;
+  if ( !everything_quantities_flag && !web.pressure_flag )
+    FOR_ALL_BODIES(b_id)
+    { REAL absvol = get_body_abstotal(b_id);
+      if ( !(get_battr(b_id) & FIXEDVOL) ) continue;
+      diff += fabs(get_body_fixvol(b_id) - get_body_volume(b_id))
+                /(web.target_tolerance*(absvol ? absvol : 1.0));
+    }
+  for ( k = 0 ; k < gen_quant_count ; k++ )
+  { struct gen_quant *gq = GEN_QUANT(k);
+    if ( (gq->flags & Q_DELETED) || !(gq->flags & Q_FIXED) ) continue;
+    diff += fabs(gq->target - gq->value)
+              /((gq->tolerance > 0.0 ? gq->tolerance : web.target_tolerance)*gq->abstotal);
+  }
+  return diff;
+}
+
 /* after a predicted trial's restore, what it left off the targets, over
    the scale squared: the content's curvature along the motion (to the
    prediction's first-order part, which restored the rest) */
@@ -1018,7 +1041,7 @@ void project_all(
   { int calc_count;
     /* pySE: the content after the move predicted (pyse_predict_content) */
     int predicted = pyse_predict_content && predict_content();
-    REAL orig_diff = predicted ? 1.0 : calc_content(Q_FIXED);
+    REAL orig_diff = predicted ? content_diff() : calc_content(Q_FIXED);
     REAL old_diff = orig_diff;
     REAL diff=old_diff;  /* total relative constraint diff */
     REAL stepsize = 1.0;
@@ -1079,10 +1102,18 @@ void project_all(
       if ( predicted )
       { /* pySE: the prediction restored; where that left the constraints
            out of tolerance, on as if the move had ended here (the
-           restore not counted as a poor one, the gradients kept) */
+           restore not counted as a poor one, the gradients kept). Not
+           where the restore took them further off than the prediction
+           (or the tolerance, were it within): that is left to the checks
+           above, as with the content evaluated (restored back, abandoned
+           past 100 times). A restore of a pack's volumes 0.25 of the
+           tolerance off, after a contact made a new body, went to 79
+           times; taken on from there it ended at another surface, its
+           area 4% less and its energy 16 higher, and the change was
+           refused */
         predicted = 0;
         if ( mode2 == TEST_MOVE && diff <= 1 ) content_curvature();
-        if ( diff > 1 )
+        if ( diff > 1 && diff <= 1.01*(old_diff > 1.0 ? old_diff : 1.0) )
         { if ( itdebug ) printf("Predicted restore short: on from here.\n");
           unsave_coords(&psaved,SAVE_SEPARATE);
           save_coords(&psaved,SAVE_SEPARATE);
