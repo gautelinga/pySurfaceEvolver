@@ -131,7 +131,10 @@ the two beads of a pair is a ring of its own.
   mixed with other spheres.
 * The cell can't be smaller than about two edges: every edge shorter than half a
   period.
-* Evolver's threaded loops don't run in torus models: a slab's steps are serial.
+* Threads ({func}`~pysurfaceevolver.set_threads`) split a slab's passes over the surface
+  as without periods (20 gradient steps of a 64-bead pack 2.8 to 3.4x faster on 4),
+  except the surface tension's Hessian (Evolver's own area energy), which is serial in
+  a slab.
 * The flux gauge's lattice sums cost about five times its direct sums at one bead
   a Newton step (ten times a gradient step); they don't grow with the number of
   beads, and the direct sums do.
