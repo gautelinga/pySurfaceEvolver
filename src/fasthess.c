@@ -197,6 +197,7 @@ static const struct
   { q_edge_tension_value, q_edge_tension_gradient, q_edge_tension_hessian, 0, 0 },
   { edge_scalar_integral, edge_scalar_integral_grad, edge_scalar_integral_hess, 1, 0 },
   { edge_vector_integral, edge_vector_integral_grad, edge_vector_integral_hess, 1, 0 },
+  { pyse_contact_value, pyse_contact_grad, pyse_contact_hess, 0, 0 },
   { edge_general_value, edge_general_grad, edge_general_hess, 1, 0 },
   { vertex_scalar_integral, vertex_scalar_integral_grad, vertex_scalar_integral_hess, 1, 1 },
 };

@@ -233,6 +233,16 @@ int pyse_lagrange_order(void);
 int pyse_torus(void);
 int pyse_slab_periods(double *L);   /* 1 and (Lx, Ly) for a slab periodic in x, y */
 int pyse_slab_set_home(int con, int kind, const double *c);  /* 0 the same at every copy, 1 a sphere */
+
+/* spheres' wetting and content from their contact lines (src/pyse_contact.c):
+   registered by constraint number (centre, radius, contact angle, tension, the
+   floor's height); adopt_all switches the spheres' line integrals to it
+   (returns how many, -1 outside the linear model); reset switches them back */
+void pyse_contact_reset(void);
+int pyse_contact_sphere(int con, const double *c, double R, double angle, double tension, double zf);
+int pyse_contact_adopt_all(void);
+int pyse_contact_active(void);
+int pyse_contact_status(int *out, int n);
 int pyse_crystalline(void);   /* a Wulff (crystalline) integrand is in use */
 int pyse_symmetry(void);      /* a torus or quotient space: coordinates are wrapped */
 /* goes up with every topology change (Evolver's top_timestamp) */

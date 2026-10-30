@@ -14,6 +14,7 @@ usage: python bench/topology/corpus.py [--set quick|small|wide|wide-half|full]
                                        [--only NAME ...] [--h H] [--ds DS]
                                        [--gauge flux|pole] [--cpus fast|all|LIST]
                                        [--flux-degree P] [--ds-area]
+                                       [--wet-area flux|lines]
        python bench/topology/corpus.py --summary DIR
        python bench/topology/corpus.py --compare DIR_A DIR_B
 
@@ -153,6 +154,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     from pysurfaceevolver import recipes
     if flux_degree is not None:
         pyse.flux_degree = int(flux_degree)
+    if os.environ.get("PYSE_WET_AREA"):
+        pyse.wet_area = os.environ["PYSE_WET_AREA"]     # (--wet-area)
     if os.environ.get("PYSE_LOCAL_DESCENTS"):
         recipes.LOCAL_DESCENTS = True       # (falls by local descents: being validated)
 
@@ -204,7 +207,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                   start=v0, target=target, end=v0, steps=0, reached=False, stop="",
                   stop_class="", changes=0, kinds={}, falls=0, facets=ev.counts["facets"],
                   python=sys.executable, pyse=os.path.dirname(pyse.__file__),
-                  flux_degree=pyse.flux_degree, threads=pyse.threads(),
+                  flux_degree=pyse.flux_degree, wet_area=pyse.wet_area, threads=pyse.threads(),
                   cpus=sorted(os.sched_getaffinity(0)))
     # (per step: the kinds of the changes made, whether it fell; a step
     # the run backed up past is no longer the run's)
@@ -622,6 +625,8 @@ def main(argv):
                     help="keep every this many steps' state in OUT/frames/NAME (a film: film.py)")
     ap.add_argument("--flux-degree", type=int,
                     help="pyse.flux_degree for the runs (the flux gauge's fast sum)")
+    ap.add_argument("--wet-area", choices=("flux", "lines"),
+                    help="pyse.wet_area for the runs (a slab's flux spheres: fields or contact lines)")
     ap.add_argument("--gauge", choices=("flux", "pole"),
                     help="the beads' gauge (default: flux to breakthrough, else pole)")
     ap.add_argument("--out")
@@ -634,6 +639,8 @@ def main(argv):
     ap.add_argument("--summary")
     ap.add_argument("--compare", nargs=2)
     args = ap.parse_args(argv)
+    if args.wet_area:
+        os.environ["PYSE_WET_AREA"] = args.wet_area     # (each run's process reads it)
     if args.threads < 1 or args.jobs < 1:
         ap.error("--threads and --jobs must be at least 1")
     if args.summary:

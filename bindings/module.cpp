@@ -804,6 +804,26 @@ NB_MODULE(_core, m) {
     if ( !pyse_slab_periods(L) ) return nb::none();
     return nb::make_tuple(L[0], L[1]);
   }, "(Lx, Ly) of a slab periodic in x and y (periods= in make_datafile), or None.");
+  m.def("contact_reset", []() { Lock lock; pyse_contact_reset(); },
+        "Spheres' line integrals back to Evolver's (pyse_contact.c off).");
+  m.def("contact_sphere", [](int con, std::vector<double> c, double R, double angle,
+                             double tension, double zf) {
+    Lock lock;
+    if ( c.size() != 3 ) throw std::invalid_argument("contact_sphere(): a centre");
+    return bool(pyse_contact_sphere(con, c.data(), R, angle, tension, zf));
+  }, "con"_a, "c"_a, "R"_a, "angle"_a, "tension"_a, "zf"_a,
+  "Register constraint con, a sphere, for wetting and content from its contact lines.");
+  m.def("contact_adopt", []() { Lock lock; return pyse_contact_adopt_all(); },
+        "Switch the registered spheres' line integrals to the contact-line method; "
+        "returns how many instances (-1 outside the linear model).");
+  m.def("contact_status", [](int nbodies) {
+    Lock lock;
+    std::vector<int> out(4 + std::max(nbodies, 0) + 1, 0);
+    pyse_contact_status(out.data(), int(out.size()));
+    return out;
+  }, "nbodies"_a,
+  "[entries, groups, groups with a branch or open line, bodies whose whole spheres no "
+  "line carries, then whole spheres inside each body by ordinal]");
   m.def("slab_set_home", [](int con, int kind, std::vector<double> c) {
     Lock lock;
     if ( c.size() != 3 ) throw std::invalid_argument("slab_set_home(): a centre");

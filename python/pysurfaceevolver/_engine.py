@@ -837,9 +837,13 @@ class _Engine:
         """The sphere(axis=) walls' contact-line integrands evaluated in C
         (bindings/pyse_native.c), registered by constraint number: after a
         load and as move_poles makes copies."""
+        if hasattr(_core, "contact_reset"):
+            _core.contact_reset()
         if hasattr(_core, "slabflux_setup") and any(
                 getattr(w, "slabflux", None) for w in surface.walls.values()):
             from ._periodic import slab_flux
+            if self._register_contact():
+                return
             nums, _, _, names = self._constraint_gaps()
             if slab_flux(dict(surface.walls),
                          {(name or int(c)): int(c) for c, name in zip(nums, names)},
@@ -858,6 +862,47 @@ class _Engine:
             if data is not None:
                 centre, R, e1, e2, e3, k = data
                 _core.native_sphere(int(c), list(centre), R, list(e1), list(e2), list(e3), k)
+
+    def _register_contact(self) -> bool:
+        """pyse.wet_area == "lines": a slab's flux spheres' wetting and
+        content from their contact lines (src/pyse_contact.c) instead of the
+        fields; the facets' wetting quantity (the fields' part) off. False
+        (and the quantity on) where it doesn't apply."""
+        import pysurfaceevolver as pyse
+        from ._periodic import WETTING_QUANTITY
+        on = self.eval(f'is_defined("{WETTING_QUANTITY}")') != 0
+        walls: Dict[Any, Any] = surface.walls
+        spheres = {k: w for k, w in walls.items() if getattr(w, "slabflux", None)}
+        others = [w for k, w in walls.items() if k not in spheres]
+        floor = [w for w in others if getattr(w, "shape", (None,))[0] == "plane"
+                 and not isinstance(w.shape[1], str) and float(w.shape[1][2]) > 0.5]
+        ok = (pyse.wet_area == "lines" and hasattr(_core, "contact_sphere")
+              and self.periods is not None and len(others) == len(floor) <= 1
+              and all(w.contact_angle is None or (not isinstance(w.contact_angle, str)
+                      and abs(np.cos(np.radians(float(w.contact_angle)))) < 1e-12)
+                      for w in floor)
+              and all(not isinstance(w.slabflux[2], str) for w in spheres.values()))
+        if pyse.wet_area not in ("flux", "lines"):
+            raise ValueError(f'pyse.wet_area must be "flux" or "lines", not {pyse.wet_area!r}')
+        if ok:
+            zf = float(floor[0].shape[2]) if floor else 0.0
+            nums, _, _, names = self._constraint_gaps()
+            number = {(name or int(c)): int(c) for c, name in zip(nums, names)}
+            for key, w in spheres.items():
+                c, R, angle, tension = w.slabflux
+                if key in number:
+                    _core.contact_sphere(number[key], [float(v) for v in c], float(R),
+                                         90.0 if angle is None else float(angle),
+                                         float(tension), zf)
+            ok = _core.contact_adopt() > 0
+            if not ok:
+                _core.contact_reset()
+        if on:
+            self.command(f"{WETTING_QUANTITY}.modulus := {0 if ok else 1}")
+        if ok:
+            self._register_native_formulas()
+            self.command("recalc")
+        return ok
 
     def _register_native_formulas(self) -> None:
         """The plane and sphere walls' formulas, and their guards', evaluated

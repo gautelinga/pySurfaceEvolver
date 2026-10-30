@@ -35,7 +35,7 @@ def _drop(periods, angle=60.0):
     return ev
 
 
-def _bead(periods, gauge="axis", zf=0.0):
+def _bead(periods, gauge="axis", zf=0.0, floor_angle=50.0):
     """A liquid bridge from a floor (at zf) to a bead above it, on the cell's
     corner."""
     R, c = 0.5, np.array([0.0, 0.0, 0.55 + zf])
@@ -47,7 +47,7 @@ def _bead(periods, gauge="axis", zf=0.0):
     v[top] = c + R*d/np.linalg.norm(d, axis=1)[:, None]
     kw = (dict(axis=(0, 0, 1)) if gauge == "axis" else dict(gauge="flux") if gauge == "flux"
           else dict(wet_poles=("south",)))
-    cons = {"bottom": C.plane((0, 0, 1), zf, contact_angle=50.0),
+    cons = {"bottom": C.plane((0, 0, 1), zf, contact_angle=floor_angle),
             "bead": C.sphere(tuple(c), R, contact_angle=40.0, **kw)}
     ev = pyse.Evolver()
     ev.load_arrays(_into_cell(v, periods), sh.faces, constraints=cons,
@@ -539,3 +539,85 @@ def test_a_plane_given_by_expressions_is_refused_plainly():
     with pytest.raises(ValueError, match="floor"):
         pyse.make_datafile(np.eye(3), [[0, 1, 2]], parameters={"tilt": 0.1},
                            constraints={"slope": slope}, periods=PERIODS)
+
+
+# ---- pyse.wet_area = "lines": the flux spheres' wetting and content from
+# their contact lines (src/pyse_contact.c) ----
+
+def _both(make, commands=()):
+    """make() under each wet_area, then commands: (energy, volume, residual,
+    the contact table's status) per mode."""
+    from pysurfaceevolver import _core
+    out = {}
+    for mode in ("flux", "lines"):
+        was = pyse.wet_area
+        pyse.wet_area = mode
+        try:
+            ev = make()
+            for c in commands:
+                ev.command(c)
+            out[mode] = (ev.energy, ev.body(1).volume, ev.residual(), _core.contact_status(2))
+        finally:
+            pyse.wet_area = was
+    return out
+
+
+def test_the_lines_gauge_is_the_flux_gauge_to_its_discretization():
+    # (the same surface: the flux gauge's facet quadrature against the
+    # lines' exact geodesic polygons, apart by less each refinement)
+    gaps = []
+    for refine in (0, 1, 2):
+        out = _both(lambda: _bead(PERIODS, gauge="flux", floor_angle=90.0), ["r"]*refine)
+        assert out["lines"][3][0] > 0 and out["flux"][3][0] == 0
+        gaps.append(np.abs(np.subtract(out["flux"][:2], out["lines"][:2])))
+    assert gaps[0].max() < 1e-4
+    assert np.all(gaps[2] < gaps[0]/10)
+
+
+def test_newton_steps_converge_with_the_lines_gauge():
+    # (the turning angles' second derivatives: Newton's residual to round-off)
+    out = _both(lambda: _bead(PERIODS, gauge="flux", floor_angle=90.0),
+                ["g 5", "r", "g 5"] + ["hessian"]*6)
+    assert out["lines"][2] < 1e-8
+    assert abs(out["lines"][0] - out["flux"][0]) < 1e-4*abs(out["flux"][0])
+
+
+def _film(periods, beads, H, h=0.25):
+    """A liquid layer from the floor (z = 0, 90 degrees) to a flat sheet at
+    H, over beads of radius 0.4 wholly inside it (no contact line)."""
+    L = np.asarray(periods, float)
+    nx, ny = int(round(L[0]/h)), 2*int(round(L[1]/(2*h)))
+    X, Y = np.meshgrid(np.arange(nx)*L[0]/nx, np.arange(ny)*L[1]/ny, indexing="ij")
+    v = np.c_[X.ravel(), Y.ravel(), np.full(nx*ny, H)]
+    at = lambda i, j: (i % nx)*ny + (j % ny)     # noqa: E731
+    f = [t for i in range(nx) for j in range(ny)
+         for t in ((at(i, j), at(i + 1, j), at(i + 1, j + 1)),
+                   (at(i, j), at(i + 1, j + 1), at(i, j + 1)))]
+    cons = {"bottom": C.plane((0, 0, 1), 0.0, contact_angle=90.0)}
+    for k, c in enumerate(beads):
+        cons[f"bead{k}"] = C.sphere(tuple(c), 0.4, contact_angle=30.0, gauge="flux")
+    ev = pyse.Evolver()
+    ev.load_arrays(v, np.array(f), constraints=cons, bodies=[pyse.Body(volume=None)],
+                   periods=tuple(periods))
+    return ev
+
+
+def test_the_lines_gauge_counts_the_beads_a_body_holds_whole():
+    # (no contact line to carry them: a vertical ray through the body's
+    # facets decides, and their volume and wetting go to the body whole)
+    beads = [(0.5, 0.6, 0.6), (1.4, 1.5, 0.5)]
+    out = _both(lambda: _film(PERIODS, beads, 1.2))
+    cell = PERIODS[0]*PERIODS[1]
+    V = cell*1.2 - 2*4/3*np.pi*0.4**3
+    E = cell - 2*np.cos(np.radians(30.0))*4*np.pi*0.4**2
+    assert out["lines"][3][4] == 2
+    assert abs(out["lines"][1] - V) < 1e-10 and abs(out["lines"][0] - E) < 1e-10
+    assert abs(out["flux"][1] - V) < 1e-6 and abs(out["flux"][0] - E) < 1e-6
+
+
+def test_the_lines_gauge_leaves_a_wetted_floor_to_the_fields():
+    # (a floor's own wetting is a facet integral of the fields' kind: the
+    # lines don't take it, and the flux gauge stays)
+    out = _both(lambda: _bead(PERIODS, gauge="flux", floor_angle=50.0))
+    assert out["lines"][3][0] == 0
+    assert out["lines"][:2] == out["flux"][:2]

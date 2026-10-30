@@ -84,6 +84,10 @@ struct gen_quant_method basic_gen_methods[] =
   {"edge_vector_integral",EDGE,NEED_SIDE|NEED_GAUSS|ORIENTABLE_METHOD,
       SPEC_VECTOR, NULL,
       edge_vector_integral,edge_vector_integral_grad,edge_vector_integral_hess,NULL},
+  /* pySE: a sphere's contact lines' wetting and content (pyse_contact.c) */
+  {"pyse_contact_integral",EDGE,NEED_SIDE|NEED_GAUSS|NEED_CONTACT_WINGS|ORIENTABLE_METHOD,
+      SPEC_VECTOR, pyse_contact_init,
+      pyse_contact_value,pyse_contact_grad,pyse_contact_hess,NULL},
   {"edge_general_integral",EDGE,NEED_SIDE|NEED_GAUSS,
         SPEC_SCALAR|SPEC_EXTRADIM, edge_general_init, edge_general_value,
          edge_general_grad,edge_general_hess,NULL},
@@ -1660,10 +1664,11 @@ REAL calc_quants(int mode  /* energy, constraint, and/or info flag bits */)
   { mi = METH_INSTANCE(k);
     if ( mi->flags & Q_DELETED ) continue;
     if ( mi->flags & Q_DOTHIS )
-      mi->value = mi->modulus*mi->newvalue;
+      mi->value = mi->modulus*(mi->newvalue + pyse_contact_constant(mi));  /* pySE: pyse_contact.c */
   }
 
   /* combine methods to quantities */
+  pyse_contact_refresh();  /* pySE: pyse_contact.c */
   for ( k = 0 ; k < gen_quant_count ; k++ )
   { q = GEN_QUANT(k);
     if ( q->flags & Q_DELETED ) continue;
@@ -1672,7 +1677,7 @@ REAL calc_quants(int mode  /* energy, constraint, and/or info flag bits */)
       #ifdef MPI_EVOLVER
       q->value = 0.0;
       #else
-      q->value = q->volconst;
+      q->value = q->volconst + pyse_contact_body_constant(k);  /* pySE: pyse_contact.c */
       #endif
       q->abstotal = 0.0;
       q->timestamp = global_timestamp;
@@ -2366,17 +2371,18 @@ void calc_quant_grads(
   { mi = METH_INSTANCE(k);
     if ( mi->flags & Q_DELETED ) continue;
     if ( mi->flags & Q_DOTHIS )
-    {  mi->value = mi->modulus*mi->newvalue;
+    {  mi->value = mi->modulus*(mi->newvalue + pyse_contact_constant(mi));  /* pySE: pyse_contact.c */
        mi->abstotal *= fabs(mi->modulus);
     }
   }
 
   /* combine methods to quantities */
+  pyse_contact_refresh();  /* pySE: pyse_contact.c */
   for ( k = 0 ; k < gen_quant_count ; k++ )
   { q = GEN_QUANT(k);
     if ( q->flags & Q_DELETED ) continue;
     if ( q->flags & mode ) 
-    { q->value = q->volconst;
+    { q->value = q->volconst + pyse_contact_body_constant(k);  /* pySE: pyse_contact.c */
       q->abstotal = 0.0;
       q->timestamp = global_timestamp;
     }
@@ -2899,17 +2905,18 @@ void calc_quant_hess(
   { mi = METH_INSTANCE(k);
     if ( mi->flags & Q_DELETED ) continue;
     if ( mi->flags & Q_DOTHIS )
-    {  mi->value = mi->modulus*mi->newvalue;
+    {  mi->value = mi->modulus*(mi->newvalue + pyse_contact_constant(mi));  /* pySE: pyse_contact.c */
        mi->abstotal *= fabs(mi->modulus);
     }
   }
 
   /* combine methods to quantities */
+  pyse_contact_refresh();  /* pySE: pyse_contact.c */
   for (  k = 0 ; k < gen_quant_count ; k++ )
   { q = GEN_QUANT(k);
     if ( q->flags & Q_DELETED ) continue;
     if ( q->flags & mode ) 
-    { q->value = q->volconst;
+    { q->value = q->volconst + pyse_contact_body_constant(k);  /* pySE: pyse_contact.c */
       q->abstotal = 0.0;
       q->timestamp = global_timestamp;
     }
@@ -3721,6 +3728,8 @@ void q_edge_setup(
     }
   } // end NEED_MARKED_WINGS
 
+  if ( needs & NEED_CONTACT_WINGS )
+    pyse_contact_wings(e_info);
   if ( needs & NEED_STRING_STAR )
   { edge_id e_id1,e_id2 = e_info->id,e_id3;
      /* careful of weird packaging */

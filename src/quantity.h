@@ -140,6 +140,7 @@ struct gen_quant_method {
 #define NEED_PART_STAR 0x800
 #define NEED_FULL_STAR 0x1000
 #define NEED_SURROUNDING_VERTICES 0x2000
+#define NEED_CONTACT_WINGS 0x4000  /* pyse_contact.c: neighbours along a contact line */
 #define ALL_NEEDS 0xFFF0
 /* flags bit for orientability */
 #define ORIENTABLE_METHOD 0x10000
@@ -523,6 +524,15 @@ extern REAL edge_scalar_integral_lagr_grad(QINFO);
 extern REAL edge_scalar_integral_lagr_hess(QINFO);
 
 extern REAL edge_vector_integral(QINFO);
+extern REAL pyse_contact_value(QINFO);
+extern REAL pyse_contact_grad(QINFO);
+extern REAL pyse_contact_hess(QINFO);
+extern void pyse_contact_init(QINT,MIPTR);
+extern void pyse_contact_wings(struct qinfo *);
+extern void pyse_contact_adopt(int);
+extern REAL pyse_contact_constant(MIPTR);
+extern REAL pyse_contact_body_constant(int);
+extern void pyse_contact_refresh(void);
 extern REAL edge_vector_integral_grad(QINFO);
 extern REAL edge_vector_integral_hess(QINFO);
 

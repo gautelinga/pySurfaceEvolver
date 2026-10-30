@@ -2093,6 +2093,7 @@ void convert_constraint_to_quantities( int i /* number of constraint */)
     else
        meth = new_method_instance("edge_vector_integral",inst_name);
     METH_INSTANCE(meth)->connum = i;
+    pyse_contact_adopt(meth);   /* pySE: a sphere's lines (pyse_contact.c) */
     METH_INSTANCE(meth)->flags |= IMPLICIT_INSTANCE|DEFAULT_INSTANCE;
     attach_method_num(gq,meth);
     if ( con->attr & GLOBAL ) 
@@ -2688,6 +2689,7 @@ void convert_body_to_quantity(body_id b_id)
     mi = METH_INSTANCE(meth1);
     mi->flags |= DEFAULT_INSTANCE | BODY_INSTANCE;
     mi->connum = j; 
+    pyse_contact_adopt(meth1);   /* pySE: a sphere's lines (pyse_contact.c) */
     attach_method_num(gq,meth1);
     con = get_constraint(j); /* may have moved */
     if ( web.representation == STRING )
@@ -3035,6 +3037,7 @@ int create_body_constraint_content_method(
     }
     METH_INSTANCE(meth1)->flags |= DEFAULT_INSTANCE | BODY_INSTANCE;
     METH_INSTANCE(meth1)->connum = connum;
+    pyse_contact_adopt(meth1);   /* pySE: a sphere's lines (pyse_contact.c) */
     con = get_constraint(connum); /* may have moved */
     if ( web.representation == STRING )
        METH_INSTANCE(meth1)->expr[0]  = con->convect[0];
@@ -3166,6 +3169,7 @@ void convert_bodies_to_quantities()
       mi = METH_INSTANCE(meth1);
       mi->flags |= DEFAULT_INSTANCE | BODY_INSTANCE;
       METH_INSTANCE(meth1)->connum = j;
+      pyse_contact_adopt(meth1);   /* pySE: a sphere's lines (pyse_contact.c) */
       con = get_constraint(j); /* may have moved */
       if ( web.representation == STRING )
          mi->expr[0]  = con->convect[0];
