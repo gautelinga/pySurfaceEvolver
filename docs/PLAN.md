@@ -217,6 +217,45 @@ loops, steps); P3 the curves, docs.
   stays deferred (its bar is the sets, a cluster job); local descents stay off
   (item 2 gave them nothing).
 
+**2026-10-30, later: the hang, the profile, the small fixes.**
+- **Cluster.** Olivia's drains failed in the parser (`${TIMEOUT:-set's}` in double
+  quotes); launch.sh now runs `bash -n` first. Olivia's ssh needs OTP, so herbie (UiO,
+  one Slurm node, 18 cores, key-only) is the pySE host for now
+  (user). Its cores are ~1.9x slower than the workstation's (Olivia's ~1.3x):
+  `PYSE_SPEED` in hosts/*.sh scales the per-run timeouts. A failing test on Olivia
+  (test_quantities_parallel) was the cube's path reaching a saddle there, the fast
+  and original loops agreeing: compared step by step now (7532ae2).
+- **The 64-bead lines run hung, deterministically** (Olivia and herbie alike, step
+  387, ~50 min at 99% CPU, memory growing). Read from the live process (py-spy and
+  gdb; C frames named by a -g rebuild of
+  the same commit, its .text byte-identical): one `g 1` of relax() after a change,
+  the energy at its start 6.3e35 (the surface flung apart by an earlier step), and
+  pyse_chop_lines splitting the stretched lines without end (1.75 million edges).
+  Fixed (df384e7): relax()'s rounds undo a step moving the energy 1e4 times its scale,
+  as a non-finite one; the chop leaves a step alone with an edge past 64 times its
+  length. Rerun: "the energy became 1.59e20", undone, on. Why the descent blew up is
+  being replayed (bench/topology hooks: the states before each descent at step 386+).
+- **Thread scaling, profiled (perf, 4 threads, 64-bead step 340).** The lines gauge's
+  step was 44% serial: its contact table rebuilt on one thread every pass (a fifth),
+  dual numbers copying their whole Hessian part (1.2 KB) at every operation and
+  reading their order from TLS, the native formulas found by a scan, a value pass's
+  records walked again serially. Fixed (82b35a2, e879404): the table kept until the
+  topology changes (counts, top_timestamp, a new stamp of edges' constraints in
+  skeleton.c), the angles on the threads and skipped at unchanged coordinates, duals
+  by order, a hash, records dropped as taken (one region a pass), the slab's volume
+  integrand in closed form, surface tension's Hessian on the threads in a slab.
+  Lines: 2.9x on one thread, 2.6x on four; flux ~4% on four. A dynamic schedule, a
+  permutation of the elements and OMP_WAIT_POLICY didn't help the ~20% of a step the
+  threads wait at a region's end (unexplained).
+- **Resuming from a checkpoint isn't exact** (a 32-bead run resumed at step 60 parts
+  at 61): the continuation's memory (its last three steps and their events, from
+  which a coming event is seen; the predictor's points and step; the backups'
+  states; the put-off history; quiet and stuck) is in two generators' locals, not in
+  the checkpoint. Exact resumes need that state made explicit and saved: a refactor
+  of recipes._topology_run, not done. Runs from the start are exact across machines.
+- corpus: a run silent for 5 minutes writes its threads' Python stacks to its log
+  (b960327; a thread holding the GIL: faulthandler's watchdog crashed a run).
+
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
 Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG
