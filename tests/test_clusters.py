@@ -119,6 +119,26 @@ def test_reconcile_gives_each_cluster_a_body_and_the_rest_to_the_largest():
     ev._liquid = None
 
 
+def test_reconcile_makes_no_body_of_a_piece_holding_no_liquid(monkeypatch):
+    # (a bubble's surface cut off from the liquid's on the grid: its liquid
+    # on its far side, a body of it held -0.52, minus the bubble. A pack's
+    # dry spot opened on a bead its liquid wetted made one of -4.19, and
+    # every change after was refused.) The clusters here pieces only, as
+    # where the surface touches walls the grid doesn't know.
+    outer = _ball((0, 0, 0), 1.0)
+    inner = _ball((0, 0, 0), 0.5)
+    ev = _load([outer, (inner[0], inner[1][:, [0, 2, 1]])])
+    monkeypatch.setattr(K, "_solids", lambda ev: ([], ["a wall the grid doesn't know"]))
+    volume = ev.body(1).volume
+    _run(ev)
+    with pytest.warns(UserWarning, match="pieces"):
+        K.reconcile(ev)
+    assert list(ev.bodies().ids) == [1]
+    assert ev.body(1).volume == pytest.approx(volume, rel=1e-12)
+    assert ev.body(1).target == pytest.approx(volume, rel=1e-12)
+    ev._liquid = None
+
+
 def test_reconcile_keeps_the_liquid_reaching_the_outlet_draining():
     # a thin layer on the floor and a larger drop above it, one body: the
     # layer drains (body 1), the drop is trapped at what it holds

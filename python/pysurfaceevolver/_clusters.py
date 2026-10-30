@@ -500,19 +500,37 @@ def reconcile(ev) -> None:
     it holds, and the rest of its target (what the run has yet to step, a
     cut's collapse) to its largest piece, the run's body's to the run's; so
     the targets' total stays as it was. Fixed volumes only; a free body is
-    left as it is."""
+    left as it is. A body it would make holding no volume (a piece of the
+    surface whose liquid is on its far side, cut off on the grid only:
+    after a dry spot opened on a bead the liquid wetted, its facets made a
+    body of -4.19, minus the bead, and every change after was refused) is
+    no pocket: its cluster stays with its body's largest."""
     run = getattr(ev, "_liquid", None)
     if run is None:
         return
+    start = ev._save()
+    hollow = _reconcile(ev, run, frozenset())
+    if hollow:
+        ev.restore(start)
+        _log.debug("clusters: %d pieces holding no liquid kept with their bodies", len(hollow))
+        _reconcile(ev, run, hollow)
+
+
+def _reconcile(ev, run: dict, hollow: frozenset) -> frozenset:
+    """reconcile()'s work, the clusters holding a facet whose id is in
+    ``hollow`` kept with their body's largest; the ids of a facet of each
+    body made that holds no volume (empty if none)."""
+    none: frozenset = frozenset()
     keep, outlet, original = run["keep"], run["outlet"], run["original"]
     bodies = ev.bodies()
     fixed = {int(i) for i, fx in zip(bodies.ids, bodies.fixed) if fx}
     c = clusters(ev, outlet)
     run["dry"] = False
     if not len(c.bodies):
-        return
+        return none
     m = ev.mesh()
     fb = np.asarray(m.facet_bodies)
+    fid = np.asarray(m.facet_ids)
     # (a cluster with no liquid on the grid, apart from the outlet, kept
     # with its body's largest: pieces enclosing nothing, which the
     # descents' tidying takes away, made bodies of no volume, some
@@ -526,11 +544,20 @@ def reconcile(ev) -> None:
         if empty and full:
             into = max(full, key=lambda cl: c.nodes[cl])
             side[(fb == b) & np.isin(side, empty)] = into
+        # (and those reconcile found holding no volume as bodies of their own)
+        mine = np.unique(side[fb == b])
+        mine = mine[mine >= 0]
+        hollows = [cl for cl in mine
+                   if np.isin(fid[((fb == b) & (side == cl)).any(axis=1)], list(hollow)).any()]
+        others = [cl for cl in mine if cl not in hollows]
+        if hollows and others:
+            into = max(others, key=lambda cl: (c.nodes[cl], int(((fb == b) & (side == cl)).sum())))
+            side[(fb == b) & np.isin(side, hollows)] = into
     on = np.isin(fb, list(fixed)) & (side >= 0)
     pairs = np.unique(np.c_[fb[on], side[on]], axis=0) if on.any() else np.zeros((0, 2), int)
     parts = [(int(b), int(cl)) for b, cl in pairs]
     if not parts:
-        return
+        return none
     facets = {p: int(((fb == p[0]) & (side == p[1])).any(axis=1).sum()) for p in parts}
 
     def size(p) -> tuple:
@@ -562,17 +589,19 @@ def reconcile(ev) -> None:
     if not moved:
         if run["dry"]:
             _log.debug("clusters: no liquid reaches the outlet (%s)", ", ".join(map(str, outlet)))
-        return
+        return none
     from ._surgery import _rebody
     total = float(np.sum(np.asarray(bodies.target)[np.asarray(bodies.fixed, bool)]))
     ev.command("recalc")                # (the volumes as the change left them)
     held = {b: ev.body(b).volume for b in of_body}
     target = {b: ev.body(b).target for b in of_body}
     volconst = {b: ev.body(b).volconst for b in of_body}
+    made = set()
     for cl in sorted(in_cluster):
         if not number[cl]:
             ev.command("pyse_new_body := new_body")
             number[cl] = int(ev.eval("pyse_new_body"))
+            made.add(number[cl])
     involved = sorted({b for b, _ in moved} | {number[cl] for _, cl in moved})
     for b, cl in moved:
         for s, name in ((0, "frontbody"), (1, "backbody")):
@@ -614,6 +643,11 @@ def reconcile(ev) -> None:
         body = ev.body(n)
         body.volconst = const[n]
     ev.command("recalc")
+    empty = sorted(n for n in made & final if not ev.body(n).volume > 0)
+    if empty:
+        fb = np.asarray(ev.mesh().facet_bodies)
+        fid = np.asarray(ev.mesh().facet_ids)
+        return frozenset(int(fid[np.flatnonzero((fb == n).any(axis=1))[0]]) for n in empty)
     for n in sorted(changed & final):
         body = ev.body(n)
         body.target = body.volume + rest[n]
@@ -625,3 +659,4 @@ def reconcile(ev) -> None:
                "; no liquid reaches the outlet" if run["dry"] else "",
                f"; the targets' total changed by {now - total:.3g}"
                if abs(now - total) > 1e-9*max(1.0, abs(total)) else "")
+    return none

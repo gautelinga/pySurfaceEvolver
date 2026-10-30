@@ -76,6 +76,14 @@
 
 ### Fixes
 
+- A topology run no longer makes a trapped body of a piece of the surface that holds
+  no liquid. Where the clusters' grid saw the liquid side of such a piece cut off (a
+  dry spot just opened on a bead the liquid wetted, the film round it under the
+  grid's spacing), the piece became a body whose liquid was on its far side: -4.19,
+  minus the bead, its target set so, and every change after it refused (22 times in
+  one step of a 32-bead pack). A body the reconciling would make holding no volume
+  now stays with its body's largest cluster. That pack's run: 40 refusals where it
+  had 124.
 - The contact-line gauge (`pyse.wet_area = "lines"`) no longer jumps where a contact
   line doubles back on itself. Each loop's wetted area was R^2 (2 pi - the turning
   angles at its vertices); at a turn of pi the angle's sign was round-off, and a move
