@@ -615,6 +615,35 @@ def test_the_lines_gauge_counts_the_beads_a_body_holds_whole():
     assert abs(out["flux"][1] - V) < 1e-6 and abs(out["flux"][0] - E) < 1e-6
 
 
+def test_the_lines_gauges_table_follows_restores_and_flips():
+    # (its table of contact edges is kept from pass to pass, rebuilt where the
+    # element counts, Evolver's topology stamp or the edges' constraints
+    # changed: a snapshot restored with the counts it had, equiangulation's
+    # flips at the same counts; each value is a table built afresh's)
+    was = pyse.wet_area
+    pyse.wet_area = "lines"
+    try:
+        ev = _bead(PERIODS, gauge="flux", floor_angle=90.0)
+        ev.command("r; g 3")
+        start = ev._save()
+        e0, v0 = ev.energy, ev.body(1).volume
+        counts = (len(ev.mesh().vertices), len(ev.mesh().edges))
+        ev.command("r; g 3")
+        ev.restore(start)
+        assert (len(ev.mesh().vertices), len(ev.mesh().edges)) == counts
+        assert (ev.energy, ev.body(1).volume) == (e0, v0)
+        edges = {frozenset(e) for e in np.asarray(ev.mesh().edges).tolist()}
+        ev.command("g 5; u")
+        assert {frozenset(e) for e in np.asarray(ev.mesh().edges).tolist()} != edges
+        ev.command("recalc")
+        kept = (ev.energy, ev.body(1).volume)
+        ev._register_native()          # (the table built afresh)
+        ev.command("recalc")
+        assert (ev.energy, ev.body(1).volume) == kept
+    finally:
+        pyse.wet_area = was
+
+
 def test_the_lines_gauge_leaves_a_wetted_floor_to_the_fields():
     # (a floor's own wetting is a facet integral of the fields' kind: the
     # lines don't take it, and the flux gauge stays)

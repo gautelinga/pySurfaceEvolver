@@ -786,10 +786,12 @@ static int acc_begin(int threads)
 }
 
 /* the element's values, area and forces from b's records [e0, end) into
-   thread me's sums; those records are then done */
+   thread me's sums; those records are then done, and dropped where none is
+   left (the serial additions then pass the element by: walking them was a
+   tenth of a 64-bead slab's gradient step at 4 threads) */
 static int acc_element(struct hbuf *b, long e0, int me)
 { long e;
-  int j;
+  int j, left = 0;
   for ( e = e0 ; e < b->n ; e++ )
   { struct hop *op = b->ops + e;
     switch ( op->kind )
@@ -823,8 +825,12 @@ static int acc_element(struct hbuf *b, long e0, int me)
         op->kind = OP_DONE;
         break;
       }
+      default:
+        if ( op->kind != OP_DONE ) left = 1;
+        break;
     }
   }
+  if ( !left ) b->n = e0;
   return 1;
 }
 
@@ -909,7 +915,12 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
     if ( fz_list && fz_type == type ) { list = fz_list; n = fz_n; }
   }
   if ( !list || n == 0 ) return 0;
-  chunk = (direct ? 512 : 64)*threads;   /* (the records a chunk keeps: direct ones few) */
+  /* (the records a chunk keeps: a direct pass's are dropped as its threads
+     take them, so it runs as one chunk, one parallel region: 3-4% of a
+     64-bead slab's gradient step at 4 threads against chunks of 512 a
+     thread; a dynamic schedule or the elements spread by a permutation
+     didn't help) */
+  chunk = direct ? n : 64*threads;
   fstart = (long*)malloc(2*chunk*sizeof(long));
   fthread = (int*)malloc(chunk*sizeof(int));
   ftrapped = (unsigned char*)malloc(chunk);

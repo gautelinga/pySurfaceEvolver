@@ -37,6 +37,10 @@
  */
 
 #include "include.h"
+#include "fastloops.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #if defined(__GNUC__)
 extern int pyse_slab(REAL *L) __attribute__((weak));
@@ -80,9 +84,10 @@ static int ngrp = 0, maxgrp = 0;
 static int *slot = NULL;            /* edge ordinal -> first entry, -1 */
 static int nslot = 0;
 static int pc_bad = 0;
-static int pc_built = 0;
+static int pc_geom_done = 0;         /* angles and constants since the last pyse_contact_refresh() */
 static int pc_stale = 1;             /* the table to be built at the next init */
-static long pc_stamp[4];            /* the elements and load it was built for */            /* built since the last pyse_contact_refresh() */
+static long pc_stamp[6];            /* the elements, load and topology it was built for */
+extern long pyse_edge_conmap_stamp;  /* (skeleton.c: an edge's constraints changed) */
 static unsigned long long topo_key = 0;
 static int *imm_body = NULL;        /* per sphere: the body (ordinal) it is inside, -1 */
 static int nimm_alloc = 0;
@@ -303,6 +308,39 @@ static int bodies_alloc(int n)
   return 1;
 }
 
+/* the turning angles, each group's area, n and the loops' constant: every
+   pass (the coordinates move; the table's topology is kept) */
+static void pc_geometry(void)
+{ int i, g;
+  int threads = fl_threads();
+  (void)threads;
+  /* (the angles on the threads, twice a gradient step; summed in order) */
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(static) num_threads(threads) if ( threads > 1 && nent >= 512 )
+#endif
+  for ( i = 0 ; i < nent ; i++ )
+  { struct pc_entry *q = ent + i;
+    REAL u[3], v[3], w[3];
+    const REAL *c = sph[q->s].c;
+    if ( q->prev < 0 ) { q->tauA = 0.0; continue; }
+    pc_delta(c,get_coord(ent[q->prev].A),u);
+    pc_delta(c,get_coord(q->A),v);
+    pc_delta(c,get_coord(q->B),w);
+    q->tauA = turning(u,v,w);
+  }
+  for ( g = 0 ; g < ngrp ; g++ ) grp[g].S = 0.0;
+  for ( i = 0 ; i < nent ; i++ ) grp[ent[i].group].S += ent[i].tauA;
+  for ( g = 0 ; g < ngrp ; g++ )
+  { struct pc_group *G = grp + g;
+    REAL R = sph[G->s].R, S, whole = 4*M_PI*R*R, n;
+    S = R*R*(2*M_PI*G->loops - G->S);
+    n = G->bad ? 0.0 : floor(S/whole);
+    G->S = S - n*whole;
+    G->K = G->bad ? 0.0 : R*R*(2*M_PI*G->loops - 4*M_PI*n);
+  }
+  pc_geom_done = 1;
+}
+
 /* the table: contact entries, their groups and lines, the turning angles
    and the constants */
 static void pc_build(void)
@@ -312,7 +350,6 @@ static void pc_build(void)
   unsigned long long key = 0;
 
   pc_slab = PC_SLAB(pc_L);
-  pc_built = 1;
   nent = 0; ngrp = 0; pc_bad = 0;
   if ( (int)web.skel[EDGE].max_ord + 1 > nslot )
   { nslot = (int)web.skel[EDGE].max_ord + 1 + 1024;
@@ -437,26 +474,7 @@ static void pc_build(void)
     key = mix(key,(unsigned long long)(ent[i].s*4096 + ent[i].b*2 + (ent[i].dir > 0)));
   }
 
-  /* turning angles, each group's area, n and loops' constant */
-  for ( i = 0 ; i < nent ; i++ )
-  { struct pc_entry *q = ent + i;
-    REAL u[3], v[3], w[3];
-    const REAL *c = sph[q->s].c;
-    if ( q->prev < 0 ) { q->tauA = 0.0; continue; }
-    pc_delta(c,get_coord(ent[q->prev].A),u);
-    pc_delta(c,get_coord(q->A),v);
-    pc_delta(c,get_coord(q->B),w);
-    q->tauA = turning(u,v,w);
-  }
-  for ( g = 0 ; g < ngrp ; g++ )
-  { struct pc_group *G = grp + g;
-    REAL R = sph[G->s].R, sum = 0.0, S, whole = 4*M_PI*R*R, n;
-    for ( j = G->first ; j < G->first + G->count ; j++ ) sum += ent[order[j]].tauA;
-    S = R*R*(2*M_PI*G->loops - sum);
-    n = G->bad ? 0.0 : floor(S/whole);
-    G->S = S - n*whole;
-    G->K = G->bad ? 0.0 : R*R*(2*M_PI*G->loops - 4*M_PI*n);
-  }
+  pc_geometry();
 
   /* beads with no line: inside a body or not (when the lines' topology changed) */
   if ( key != topo_key )
@@ -479,23 +497,32 @@ static void pc_build(void)
   free(order); free(by); free(sort_v); sort_v = NULL;
 }
 
-/* the table rebuilt at the first init of each pass (stale from the end of
-   the last one, pyse_contact_refresh(), and whenever the elements or the
-   load changed since it was built) */
+/* the table rebuilt where the topology changed since it was built (the
+   element counts, the load, Evolver's topology stamp, which edges' changes
+   of facets, vertices and bodies and a snapshot's restore bump, and the
+   edges' constraints), its angles and constants at the first init of each
+   pass (stale from the end of the last one, pyse_contact_refresh()); every
+   pass's rebuild was a fifth of a gradient step at 4 threads */
 
 static int pc_changed(void)
-{ long now[4] = { (long)web.skel[VERTEX].count, (long)web.skel[EDGE].count,
-                  (long)web.skel[EDGE].max_ord, PC_LOAD() };
+{ long now[6] = { (long)web.skel[VERTEX].count, (long)web.skel[EDGE].count,
+                  (long)web.skel[EDGE].max_ord, PC_LOAD(), (long)top_timestamp,
+                  pyse_edge_conmap_stamp };
   int k, changed = 0;
-  for ( k = 0 ; k < 4 ; k++ ) if ( now[k] != pc_stamp[k] ) { changed = 1; pc_stamp[k] = now[k]; }
+  for ( k = 0 ; k < 6 ; k++ ) if ( now[k] != pc_stamp[k] ) { changed = 1; pc_stamp[k] = now[k]; }
   return changed;
+}
+
+static void pc_current(void)
+{ if ( pc_changed() || pc_stale ) { pc_build(); pc_stale = 0; }
+  else if ( !pc_geom_done ) pc_geometry();
 }
 
 void pyse_contact_init(int mode, struct method_instance *mi)
 { (void)mode; (void)mi;
   if ( web.modeltype != LINEAR )
     kb_error(9901,"pyse_contact_integral: linear model only.\n",RECOVERABLE);
-  if ( pc_changed() || pc_stale ) { pc_build(); pc_stale = 0; }
+  pc_current();
 }
 
 /* the edge's neighbours along its line: v[2] beside the tail, v[3] the head */
@@ -525,97 +552,106 @@ void pyse_contact_wings(struct qinfo *e_info)
 #define ND 12
 typedef struct { REAL v, g[ND], h[ND][ND]; } d12;
 
-static __thread int dorder;     /* 0 value, 1 gradient, 2 Hessian (per call) */
+/* (each takes the order o the pass needs: 0 value, 1 gradient, 2 Hessian; a
+   thread-local one cost a TLS lookup at every operation) */
 
-static void dz(d12 *a, REAL v)
+/* r = t, the parts the pass needs (a whole d12 is 1.2 KB: copied whole,
+   a value or gradient pass spent most of its contact edges' time on it) */
+static void dset(int o, d12 *r, const d12 *t)
+{ r->v = t->v;
+  if ( o >= 1 ) memcpy(r->g,t->g,sizeof(r->g));
+  if ( o >= 2 ) memcpy(r->h,t->h,sizeof(r->h));
+}
+
+static void dz(int o, d12 *a, REAL v)
 { a->v = v;
-  if ( dorder >= 1 ) memset(a->g,0,sizeof(a->g));
-  if ( dorder >= 2 ) memset(a->h,0,sizeof(a->h));
+  if ( o >= 1 ) memset(a->g,0,sizeof(a->g));
+  if ( o >= 2 ) memset(a->h,0,sizeof(a->h));
 }
 
-static void dvar(d12 *a, REAL v, int i)
-{ dz(a,v);
-  if ( dorder >= 1 ) a->g[i] = 1.0;
+static void dvar(int o, d12 *a, REAL v, int i)
+{ dz(o,a,v);
+  if ( o >= 1 ) a->g[i] = 1.0;
 }
 
-static void dadd(d12 *r, const d12 *a, const d12 *b, REAL sb)   /* r = a + sb b */
+static void dadd(int o, d12 *r, const d12 *a, const d12 *b, REAL sb)   /* r = a + sb b */
 { int i, j;
   r->v = a->v + sb*b->v;
-  if ( dorder >= 1 ) for ( i = 0 ; i < ND ; i++ ) r->g[i] = a->g[i] + sb*b->g[i];
-  if ( dorder >= 2 )
+  if ( o >= 1 ) for ( i = 0 ; i < ND ; i++ ) r->g[i] = a->g[i] + sb*b->g[i];
+  if ( o >= 2 )
     for ( i = 0 ; i < ND ; i++ ) for ( j = 0 ; j < ND ; j++ ) r->h[i][j] = a->h[i][j] + sb*b->h[i][j];
 }
 
-static void dmul(d12 *r, const d12 *a, const d12 *b)
+static void dmul(int o, d12 *r, const d12 *a, const d12 *b)
 { d12 t;
   int i, j;
   t.v = a->v*b->v;
-  if ( dorder >= 1 ) for ( i = 0 ; i < ND ; i++ ) t.g[i] = a->v*b->g[i] + b->v*a->g[i];
-  if ( dorder >= 2 )
+  if ( o >= 1 ) for ( i = 0 ; i < ND ; i++ ) t.g[i] = a->v*b->g[i] + b->v*a->g[i];
+  if ( o >= 2 )
     for ( i = 0 ; i < ND ; i++ ) for ( j = 0 ; j < ND ; j++ )
       t.h[i][j] = a->v*b->h[i][j] + b->v*a->h[i][j] + a->g[i]*b->g[j] + a->g[j]*b->g[i];
-  *r = t;
+  dset(o,r,&t);
 }
 
-static void dscale(d12 *a, REAL s)
+static void dscale(int o, d12 *a, REAL s)
 { int i, j;
   a->v *= s;
-  if ( dorder >= 1 ) for ( i = 0 ; i < ND ; i++ ) a->g[i] *= s;
-  if ( dorder >= 2 ) for ( i = 0 ; i < ND ; i++ ) for ( j = 0 ; j < ND ; j++ ) a->h[i][j] *= s;
+  if ( o >= 1 ) for ( i = 0 ; i < ND ; i++ ) a->g[i] *= s;
+  if ( o >= 2 ) for ( i = 0 ; i < ND ; i++ ) for ( j = 0 ; j < ND ; j++ ) a->h[i][j] *= s;
 }
 
-static void dsqrt(d12 *r, const d12 *a)
+static void dsqrt(int o, d12 *r, const d12 *a)
 { REAL s = sqrt(a->v);
   int i, j;
   d12 t;
   t.v = s;
-  if ( dorder >= 1 ) for ( i = 0 ; i < ND ; i++ ) t.g[i] = a->g[i]/(2*s);
-  if ( dorder >= 2 )
+  if ( o >= 1 ) for ( i = 0 ; i < ND ; i++ ) t.g[i] = a->g[i]/(2*s);
+  if ( o >= 2 )
     for ( i = 0 ; i < ND ; i++ ) for ( j = 0 ; j < ND ; j++ )
       t.h[i][j] = a->h[i][j]/(2*s) - a->g[i]*a->g[j]/(4*s*s*s);
-  *r = t;
+  dset(o,r,&t);
 }
 
-static void datan2(d12 *r, const d12 *Y, const d12 *X)
+static void datan2(int o, d12 *r, const d12 *Y, const d12 *X)
 { REAL r2 = X->v*X->v + Y->v*Y->v;
   int i, j;
   d12 t;
   t.v = atan2(Y->v,X->v);
-  if ( dorder >= 1 && r2 > 0 )
+  if ( o >= 1 && r2 > 0 )
     for ( i = 0 ; i < ND ; i++ ) t.g[i] = (X->v*Y->g[i] - Y->v*X->g[i])/r2;
-  else if ( dorder >= 1 ) memset(t.g,0,sizeof(t.g));
-  if ( dorder >= 2 && r2 > 0 )
+  else if ( o >= 1 ) memset(t.g,0,sizeof(t.g));
+  if ( o >= 2 && r2 > 0 )
     for ( i = 0 ; i < ND ; i++ ) for ( j = 0 ; j < ND ; j++ )
       t.h[i][j] = (X->g[j]*Y->g[i] + X->v*Y->h[i][j] - Y->g[j]*X->g[i] - Y->v*X->h[i][j])/r2
         - (X->v*Y->g[i] - Y->v*X->g[i])*(2*X->v*X->g[j] + 2*Y->v*Y->g[j])/(r2*r2);
-  else if ( dorder >= 2 ) memset(t.h,0,sizeof(t.h));
-  *r = t;
+  else if ( o >= 2 ) memset(t.h,0,sizeof(t.h));
+  dset(o,r,&t);
 }
 
-static void ddot(d12 *r, const d12 *a, const d12 *b)
+static void ddot(int o, d12 *r, const d12 *a, const d12 *b)
 { d12 t;
-  dmul(r,a,b);
-  dmul(&t,a+1,b+1); dadd(r,r,&t,1.0);
-  dmul(&t,a+2,b+2); dadd(r,r,&t,1.0);
+  dmul(o,r,a,b);
+  dmul(o,&t,a+1,b+1); dadd(o,r,r,&t,1.0);
+  dmul(o,&t,a+2,b+2); dadd(o,r,r,&t,1.0);
 }
 
 /* the turning angle at v from u to w (each three duals) */
-static void dturning(d12 *r, const d12 *u, const d12 *v, const d12 *w)
+static void dturning(int o, d12 *r, const d12 *u, const d12 *v, const d12 *w)
 { d12 vv, uv, vw, uw, det, t, s, X, Y;
-  ddot(&vv,v,v); ddot(&uv,u,v); ddot(&vw,v,w); ddot(&uw,u,w);
+  ddot(o,&vv,v,v); ddot(o,&uv,u,v); ddot(o,&vw,v,w); ddot(o,&uw,u,w);
   /* det(u, v, w) = u . (v x w) */
-  dmul(&t,v+1,w+2); dmul(&s,v+2,w+1); dadd(&t,&t,&s,-1.0); dmul(&det,u,&t);
-  dmul(&t,v+2,w);   dmul(&s,v,w+2);   dadd(&t,&t,&s,-1.0); dmul(&s,u+1,&t); dadd(&det,&det,&s,1.0);
-  dmul(&t,v,w+1);   dmul(&s,v+1,w);   dadd(&t,&t,&s,-1.0); dmul(&s,u+2,&t); dadd(&det,&det,&s,1.0);
-  dsqrt(&t,&vv); dmul(&Y,&t,&det);
-  dmul(&X,&uv,&vw); dmul(&t,&uw,&vv); dadd(&X,&X,&t,-1.0);
-  datan2(r,&Y,&X);
+  dmul(o,&t,v+1,w+2); dmul(o,&s,v+2,w+1); dadd(o,&t,&t,&s,-1.0); dmul(o,&det,u,&t);
+  dmul(o,&t,v+2,w);   dmul(o,&s,v,w+2);   dadd(o,&t,&t,&s,-1.0); dmul(o,&s,u+1,&t); dadd(o,&det,&det,&s,1.0);
+  dmul(o,&t,v,w+1);   dmul(o,&s,v+1,w);   dadd(o,&t,&t,&s,-1.0); dmul(o,&s,u+2,&t); dadd(o,&det,&det,&s,1.0);
+  dsqrt(o,&t,&vv); dmul(o,&Y,&t,&det);
+  dmul(o,&X,&uv,&vw); dmul(o,&t,&uw,&vv); dadd(o,&X,&X,&t,-1.0);
+  datan2(o,r,&Y,&X);
 }
 
 /* an entry's term: wetted area share (*area) and the volume line term
    (*line), as duals in the element's slots 0..3 (tail, head, beside the
    tail, beside the head) */
-static void entry_terms(const struct pc_entry *q, struct qinfo *e_info, d12 *area, d12 *line)
+static void entry_terms(int o, const struct pc_entry *q, struct qinfo *e_info, d12 *area, d12 *line)
 { const struct pc_sphere *p = sph + q->s;
   d12 X[4][3], ta, tb, t, s;
   int slotA, slotB, slotP, slotN, i, k;
@@ -624,37 +660,37 @@ static void entry_terms(const struct pc_entry *q, struct qinfo *e_info, d12 *are
   { /* (slots 2 and 3 only where the setup found the line's neighbours) */
     if ( i < e_info->vcount ) pc_delta(p->c,get_coord(e_info->v[i]),w);
     else w[0] = w[1] = w[2] = 0.0;
-    for ( k = 0 ; k < 3 ; k++ ) dvar(&X[i][k],w[k],3*i + k);
+    for ( k = 0 ; k < 3 ; k++ ) dvar(o,&X[i][k],w[k],3*i + k);
   }
   if ( get_edge_tailv(e_info->id) == q->A ) { slotA = 0; slotB = 1; slotP = 2; slotN = 3; }
   else { slotA = 1; slotB = 0; slotP = 3; slotN = 2; }
   if ( e_info->vcount == 4 && q->prev >= 0 && q->next >= 0
        && e_info->v[slotP] == ent[q->prev].A && e_info->v[slotN] == ent[q->next].B )
-  { dturning(&ta,X[slotP],X[slotA],X[slotB]);
-    dturning(&tb,X[slotA],X[slotB],X[slotN]);
-    dadd(area,&ta,&tb,1.0);
-    dscale(area,-0.5*p->R*p->R);
+  { dturning(o,&ta,X[slotP],X[slotA],X[slotB]);
+    dturning(o,&tb,X[slotA],X[slotB],X[slotN]);
+    dadd(o,area,&ta,&tb,1.0);
+    dscale(o,area,-0.5*p->R*p->R);
   }
-  else dz(area,0.0);
+  else dz(o,area,0.0);
   /* line: -(a_x b_y - a_y b_x)((a_z + b_z)/6 + h/2), a = A - c, b = B - c */
   { d12 *a = X[slotA], *b = X[slotB];
     REAL h = p->c[2] - p->zf;
-    dmul(&t,a,b+1); dmul(&s,a+1,b); dadd(&t,&t,&s,-1.0);
-    dadd(&s,a+2,b+2,1.0); dscale(&s,1.0/6.0); s.v += h/2;
-    dmul(line,&t,&s); dscale(line,-1.0);
+    dmul(o,&t,a,b+1); dmul(o,&s,a+1,b); dadd(o,&t,&t,&s,-1.0);
+    dadd(o,&s,a+2,b+2,1.0); dscale(o,&s,1.0/6.0); s.v += h/2;
+    dmul(o,line,&t,&s); dscale(o,line,-1.0);
   }
 }
 
 /* the element's value (and derivatives) for instance mi */
 static REAL pc_eval(struct qinfo *e_info, int order)
-{ struct method_instance *mi = METH_INSTANCE(e_info->method);
-  int s = sphere_of(mi->connum), k, o, body = -1, i, j, a, b2;
+{ const int o = order;
+  struct method_instance *mi = METH_INSTANCE(e_info->method);
+  int s = sphere_of(mi->connum), k, eo, body = -1, i, j, a, b2;
   d12 tot, area, line;
-  dorder = order;
-  dz(&tot,0.0);
+  dz(o,&tot,0.0);
   if ( s < 0 || !nent ) goto out;
-  o = ordinal(e_info->id);
-  if ( o >= nslot ) goto out;
+  eo = ordinal(e_info->id);
+  if ( eo >= nslot ) goto out;
   if ( mi->flags & BODY_INSTANCE )
   { for ( j = 0 ; j < MMAXQUANTS ; j++ )
       if ( mi->quants[j] >= 0 )
@@ -664,18 +700,18 @@ static REAL pc_eval(struct qinfo *e_info, int order)
       }
     if ( body < 0 ) goto out;
   }
-  for ( k = slot[o] ; k >= 0 ; k = ent[k].other )
+  for ( k = slot[eo] ; k >= 0 ; k = ent[k].other )
   { const struct pc_entry *q = ent + k;
     if ( q->s != s || (body >= 0 && q->b != body) ) continue;
-    entry_terms(q,e_info,&area,&line);
+    entry_terms(o,q,e_info,&area,&line);
     if ( body >= 0 )
     { /* the body's content, as Evolver applies it: times sapp */
-      dscale(&area,-sph[s].R/3.0);
-      dadd(&area,&area,&line,1.0);
-      dadd(&tot,&tot,&area,(REAL)q->sapp);
+      dscale(o,&area,-sph[s].R/3.0);
+      dadd(o,&area,&area,&line,1.0);
+      dadd(o,&tot,&tot,&area,(REAL)q->sapp);
     }
     else
-    { dadd(&tot,&tot,&area,-sphere_k(sph + s));
+    { dadd(o,&tot,&tot,&area,-sphere_k(sph + s));
     }
   }
 out:
@@ -694,9 +730,8 @@ out:
    instance of ours started it (a pass of the volumes alone where no body
    has a line) */
 void pyse_contact_refresh(void)
-{ if ( nsph && (!pc_built || pc_changed()) ) pc_build();
-  pc_built = 0;
-  pc_stale = 1;
+{ if ( nsph ) pc_current();
+  pc_geom_done = 0;
 }
 
 /* what a body's volume (quantity k) adds beyond its edges: the loops'

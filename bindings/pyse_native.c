@@ -1238,6 +1238,28 @@ static struct formula_native formulas[FORMULA_NATIVES];
 static int formula_count = 0;
 static long formula_load = -1;
 
+/* the slot of a formula's expression, by a hash of its address (a scan of the
+   ~130 of a 64-bead slab, its walls and guards, at every vertex's projection
+   was 3% of a gradient step): slot + 1, 0 empty; read by the threads, written
+   only at registration */
+#define FORMULA_HASH 1024           /* (a power of two, twice FORMULA_NATIVES) */
+static int formula_hash[FORMULA_HASH];
+
+static unsigned formula_bucket(const struct expnode *ex)
+{ return (unsigned)((((unsigned long long)(size_t)ex >> 4)*0x9E3779B97F4A7C15ULL) >> 54)
+         & (FORMULA_HASH - 1);
+}
+
+static int formula_find(const struct expnode *ex)
+{ unsigned h = formula_bucket(ex);
+  int k;
+  while ( (k = formula_hash[h]) != 0 )
+  { if ( formulas[k - 1].key == ex ) return k - 1;
+    h = (h + 1) & (FORMULA_HASH - 1);
+  }
+  return -1;
+}
+
 static void formula_value(const struct formula_native *n, const REAL *x, REAL *f, REAL *g)
 { /* in the interpreter's order (the datafile's A + B + C = D taken as
      ((A + B) + C) - D, a plane's zero terms left out), so as to agree with it
@@ -1294,24 +1316,18 @@ static void formula_value(const struct formula_native *n, const REAL *x, REAL *f
 int pyse_native_formula(struct expnode *ex, REAL *x, REAL *f, REAL *grad)
 { int i;
   if ( formula_load != pyse_load_serial() ) return 0;
-  for ( i = 0 ; i < formula_count ; i++ )
-    if ( formulas[i].key == ex )
-    { formula_value(formulas + i,x,f,grad);
-      return 1;
-    }
-  return 0;
+  if ( (i = formula_find(ex)) < 0 ) return 0;
+  formula_value(formulas + i,x,f,grad);
+  return 1;
 }
 
 /* The slot of the closed form eval_all() takes for ex (as above), or -1:
    looked up once for a loop over the vertices (pyse_api.c's gap and normal
    queries), whose evaluations then go straight to it, the same values */
 int pyse_native_formula_slot(struct expnode *ex)
-{ int i;
-  if ( !ex || !(ex->flag & PYSE_NATIVE_FORMULA) || formula_load != pyse_load_serial() )
+{ if ( !ex || !(ex->flag & PYSE_NATIVE_FORMULA) || formula_load != pyse_load_serial() )
     return -1;
-  for ( i = 0 ; i < formula_count ; i++ )
-    if ( formulas[i].key == ex ) return i;
-  return -1;
+  return formula_find(ex);
 }
 
 void pyse_native_formula_at(int slot, const REAL *x, REAL *f, REAL *grad)
@@ -1347,6 +1363,7 @@ static int formula_register(int con, int kind, const double *p, int np)
       free(formulas[i].P); formulas[i].P = NULL;
     }
     formula_count = 0;
+    memset(formula_hash,0,sizeof(formula_hash));
     formula_load = pyse_load_serial();
   }
   if ( SDIM != 3 || kind < 0 || kind > 3 || con < 0 || con >= web.maxcon || np < 1 ) return 0;
@@ -1433,13 +1450,14 @@ static int formula_register(int con, int kind, const double *p, int np)
     for ( j = 0 ; j < 3 ; j++ )
       if ( gi[j] != gn[j] ) { free(n.P); return 0; }
   }
-  for ( i = 0 ; i < formula_count ; i++ )
-    if ( formulas[i].key == ex ) break;
-  if ( i == formula_count )
-  { if ( formula_count >= FORMULA_NATIVES ) return 0;
-    formula_count++;
+  if ( (i = formula_find(ex)) >= 0 ) free(formulas[i].P);
+  else
+  { unsigned h = formula_bucket(ex);
+    if ( formula_count >= FORMULA_NATIVES ) { free(n.P); return 0; }
+    i = formula_count++;
+    while ( formula_hash[h] ) h = (h + 1) & (FORMULA_HASH - 1);
+    formula_hash[h] = i + 1;
   }
-  if ( i < formula_count && formulas[i].key == ex ) free(formulas[i].P);
   formulas[i] = n;
   ex->flag |= PYSE_NATIVE_FORMULA;
   return 1;

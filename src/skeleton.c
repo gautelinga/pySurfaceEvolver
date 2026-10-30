@@ -2098,6 +2098,8 @@ void assure_v_constraints(vertex_id v_id)
 *
 * Purpose: Put an edge on a given level-set constraint.
 */
+long pyse_edge_conmap_stamp = 0;   /* pySE: bumped when an edge's constraints change */
+
 void set_e_constraint_map(  
   edge_id e_id,
   int n
@@ -2122,6 +2124,7 @@ void set_e_constraint_map(
   } 
   map[k] = (conmap_t)n; 
   map[0]++; /* counter */
+  pyse_edge_conmap_stamp++;   /* pySE: (pyse_contact.c's table) */
 
   set_attr(e_id,CONSTRAINT);
   constr = get_constraint(n);
@@ -2223,6 +2226,7 @@ void unset_e_constraint_map(
   map[0]--;
   for ( j = k ; j <= (int)*map ; j++ ) map[j] = map[j+1];
   map[j] = 0;
+  pyse_edge_conmap_stamp++;   /* pySE: (pyse_contact.c's table) */
   if ( map[0] == 0 ) unset_attr(e_id,CONSTRAINT);
 
   if ( everything_quantities_flag )

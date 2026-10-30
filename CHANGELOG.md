@@ -4,6 +4,21 @@
 
 ### Speed
 
+- Gradient steps with `pyse.wet_area = "lines"` are about 2.1x faster, on one thread
+  and on four (40 steps of a 64-bead slab on a quiet node: 3.3 to 1.55 s, and 1.32 to
+  0.62 s on 4 threads); the flux gauge's about 4% faster on 4 threads. Profiled
+  (perf): the contact lines' table (its edges found, sorted and linked) was rebuilt
+  on one thread at every pass, a fifth of a step; it is now kept until the topology
+  changes (the element counts, Evolver's topology stamp, which a restore bumps, or an
+  edge's constraints), the turning angles alone recomputed, on the threads. The
+  lines' dual numbers copied their whole second derivatives (1.2 KB) at every
+  operation, in value and gradient passes too, and read their order from thread-local
+  storage. A constraint's closed form was found by a scan of every registered one
+  (130 in a 64-bead slab) at every vertex's projection: a hash now. A pass's values
+  and forces, taken by the threads as they go, were walked again one element at a
+  time; the threads' records are dropped instead, and such a pass is one parallel
+  region rather than one per 512 elements a thread. The same values, to the last bit.
+
 - Topology runs no longer stall on a Newton step thrown far. Near a fold, a Newton
   step of `arclength()`'s corrector on an indefinite Hessian could move vertices by
   hundreds to ten thousand edge lengths; making it evaluated every integrand out there,
