@@ -164,6 +164,59 @@ loops, steps); P3 the curves, docs.
     ~14% of a step, ~8% of a run, for a sizeable C change.
   - Lower wall degrees (12, 10) weren't faster in noisy timings.
 
+**2026-10-30: "think big" batch (user chose 1-5, all).**
+- **1, wetted areas from the contact lines (`pyse.wet_area = "lines"`,
+  src/pyse_contact.c).**
+  - Gauss-Bonnet: a body's wetted region on a sphere, bounded by geodesic polygons
+    through the contact-line vertices, is R^2 (2 pi - turning angles) per loop, less
+    4 pi R^2 n (n = floor of the sum over 4 pi R^2). Volume: -R A/3 plus the line
+    integral of a quadratic B (curl B = (x - c)/3 - (0, 0, z - z_f)). Beads a body
+    holds whole: a vertical ray's parity through its facets and the cones over its
+    lines, recomputed when the lines' topology changes.
+  - An Evolver edge method (four vertices: the edge's and each end's neighbour along
+    the line; 12-variable second-order duals). Evolver's sphere energy and per-body
+    content instances are switched to it (pyse_contact_adopt, also where Evolver makes
+    new ones); the loops' and the whole beads' constants go in at the instance (energy)
+    and at the body's volume quantity (Evolver attaches a body's content instance to
+    its volume only once it has an edge).
+  - Checked: on step 340 of the 64-bead run, volumes against the flux gauge to 1e-6
+    (main body, 16 beads whole) and 5e-5 (trapped drops), energy 6e-7; the flat
+    meniscus start (all beads whole, no line) to 4e-10; gradient against finite
+    differences to 7 digits; Newton to 1e-10 at the flux gauge's rate.
+  - Speed: 20 gradient steps 0.56 vs 0.94 s (1.7x). 10-min A/B windows (2 threads):
+    from 254, lines drained 12.73 vs flux 4.50; from 340, 2.35 vs 7.20 (a long
+    descent with many changes at step 343). The paths part at once (a different
+    discretization), so the windows mostly say which events each path met.
+  - Limits: the linear model; a floor at 90 degrees or none (a wetted floor's area is
+    the fields' kind of facet integral); a branching or open line on a sphere leaves
+    its turning angles out (_core.contact_status counts them; none seen).
+  - Default left at "flux" until an end-to-end comparison (cluster).
+- **2, preconditioned descents: dropped.** Evolver's `sobolev_mode` changed nothing in
+  the Newton path (fasthess's area Hessian), and on the plateau state
+  (lib/c32s0_244_plateau) plain Newton converges in 3 steps (residual 0.8 to 2e-6) to
+  a stable minimum (no negative eigenvalues): the descents' cost isn't
+  ill-conditioning there. Gradient steps go 0.056 lower in energy, with residual 0.2,
+  which looks like in-plane mesh relaxation that Newton leaves to them.
+- **3, one guard against every sphere (`_surgery.ANY_SPHERE`).** In a slab a free
+  vertex takes one guard, the least of the spheres' terms at their nearest copies (C
+  closed form kind 3, constants read back from the interpreter, bit for bit), instead
+  of up to three per-sphere guards; vertices on a wall keep the per-wall guards. The
+  runs into beads that remained were all free vertices with their three guards full.
+  10-min A/B (both lines): runs into beads 43 -> 0 (from 254; none either way from
+  340), drained 12.73 -> 14.07 and 2.35 -> 2.65; crossings 47 -> 36 and 21 -> 51.
+  (7c81646)
+- Item 1 is 4d432ff. The scripts' edits had turned lexinit2.c, quantity.c and
+  quantity.h to LF; put back to CRLF before the commit.
+- **4, the cluster** (scripts and README in ~/pyse_scratch/cluster, Olivia,
+  partition small): build recipe works (43 s on 16 cores); tests and a
+  32-bead smoke run queued (287ca04). 7c81646 shipped and its build queued, then the
+  64-bead seed-0 run to breakthrough under each gauge (`--wet-area flux|lines`, one
+  core each): the end-to-end comparison that decides the default. idun needs
+  `ssh -fN ntnu` (2FA) first.
+- **5:** field batching is moot with the lines gauge; the corrector's trust region
+  stays deferred (its bar is the sets, a cluster job); local descents stay off
+  (item 2 gave them nothing).
+
 ## Released: 0.8.0 (2026-10-24, tag v0.8.0)
 
 Changes of topology, trapped liquid, periodic slabs and the flux gauge (CHANGELOG

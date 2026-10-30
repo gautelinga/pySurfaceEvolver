@@ -50,6 +50,11 @@
 
 ### Fixes
 
+- In a periodic slab, a free vertex in a topology descent now takes one guard against
+  every sphere (the nearest, at its nearest copy) instead of one per sphere, three at
+  most: in a 64-bead pack's crowded pores, vertices with their three guards went into
+  a fourth bead, and the run was undone. 10 minutes of that run: runs into beads 43
+  to 0, 10-13% more drained.
 - In a periodic slab, a sphere's guard (the one-sided copy of its constraint that
   keeps a topology descent's free vertices out of the solid) now holds at every copy
   of the cell: its formula takes the nearest image of the centre (Evolver's
@@ -80,6 +85,13 @@
   polynomials, the fields to ~5e-8 of Ewald's sum (a 64-bead slab's energies and
   volumes within 1e-11 of degree 14's; its gradient steps 9% faster than at 10). 10
   gives ~1e-9; read at each load.
+- `pyse.wet_area` (default "flux"): with "lines", a periodic slab's flux spheres take
+  their wetted areas and volumes from their contact lines alone (Gauss-Bonnet: the
+  turning angles along each loop, a polynomial line integral for the volume; beads a
+  body holds whole found by a ray through it), no fields over the facets. Exact for
+  the contact lines' geodesic polygons; the linear model and a floor at 90 degrees (or
+  none), else the fields. A 64-bead pack's gradient steps 1.7x faster, and 10 minutes
+  of its run from step 254 drained 2.8x as far.
 
 ## 0.8.1 (2026-10-25)
 
