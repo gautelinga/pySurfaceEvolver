@@ -76,6 +76,11 @@
 
 ### Fixes
 
+- Topology runs remesh round slivers (a facet's angle under 12 degrees) before each
+  descent and as a branch keeps its edges in range, a sliver the remeshing leaves where
+  it was not tried again in that descent. Four of eight refusal storms in a 32-bead set
+  (one descent of 400-2000 s, hundreds of its runs through the surface undone) began
+  on meshes with facets of 7.5-10.8 degrees, where steps run at 20-26.
 - A reload no longer renumbers the elements. A dump listed them in the order they were
   made and a load numbered them so, while after deletions their numbers weren't in
   that order: what pySE remembers by vertex number (the descents' target edge lengths)

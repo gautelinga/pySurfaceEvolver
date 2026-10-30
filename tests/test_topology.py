@@ -558,6 +558,24 @@ def test_constraint_names_are_the_gap_tables_without_the_gaps():
     assert any(n.startswith(_surgery.GUARD_PREFIX) for n in ev._constraint_names(True)[1])
 
 
+def test_slivers_are_remeshed_round():
+    # (a facet's angle under _SLIVER: remeshed round before a descent and as a
+    # branch keeps its edges; refusal storms began on such meshes)
+    from pysurfaceevolver import _surgery
+    ev = _sphere_bridge(0.09)
+    m = ev.mesh()
+    f, x = np.asarray(m.facets), ev.vertices.copy()
+    free = np.flatnonzero(~np.asarray(m.fixed, bool) & ~np.isnan(x[:, 0]))
+    on = {int(v) for v in np.asarray(m.edges)[m.edge_valence() == 1].ravel()}
+    k = next(i for i in range(len(f)) if not on & set(f[i].tolist()))
+    a, b, c = f[k]
+    x[c] = 0.92*(x[a] + x[b])/2 + 0.08*x[c]          # (squashed onto the facet's edge)
+    ev.vertices = x
+    assert len(_surgery._slivers(ev))
+    assert _surgery._even_slivers(ev, _surgery._edge_scale(ev))
+    assert ev.mesh_quality().angle_min > _surgery._SLIVER
+
+
 def test_a_resumable_run_gives_a_state_every_fifth_step():
     ev = _sphere_bridge(0.09)
     states = [s.index for s in recipes.arclength(ev, ev.body(1), -0.003, 12, topology=True,

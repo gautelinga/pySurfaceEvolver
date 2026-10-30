@@ -2771,6 +2771,9 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     # (what the last descent refined that is no longer close, coarsened
     # first: its targets back toward h0, as the next steps let them)
     _coarsen(ev, h0)
+    # (no slivers to start from: storms of runs through the surface began there)
+    _STUBBORN.clear()
+    _even_slivers(ev, h0)
     held, surface.sizes_held = surface.sizes_held, True
     # (and its runs make no changes of their own: relax()'s last resort,
     # Evolver's 't' on edges shrunk to a 20th of the median, pinched a
@@ -4424,6 +4427,63 @@ def _coming(found: list, before: list, periods=None) -> list:
     return coming(found, before, periods)
 
 
+# a facet angle under this many degrees is remeshed round before a descent and
+# as a branch keeps its edges: four of eight refusal storms in a 32-bead set
+# (a descent of 400-2000 s, hundreds of runs through the surface undone) began
+# with facets of 7.5-10.8 degrees, where steps run at 20-26 (under 12: 4% of
+# steps)
+_SLIVER = 12.0
+
+
+def _slivers(ev) -> np.ndarray:
+    """The centres of the facets with an angle under _SLIVER degrees."""
+    m = ev.mesh()
+    f = np.asarray(m.facets) if m.facets is not None else np.zeros((0, 3), int)
+    if not len(f):
+        return np.zeros((0, 3))
+    x = np.asarray(m.vertices)[:, :3]
+    p = [x[f[:, i]] for i in range(3)]
+    sides = [m.delta(p[i], p[(i + 1) % 3]) for i in range(3)]
+    small = np.full(len(f), 180.0)
+    for i in range(3):
+        a, b = sides[i], -sides[(i + 2) % 3]
+        cos = np.einsum("ij,ij->i", a, b)/np.maximum(
+            np.linalg.norm(a, axis=1)*np.linalg.norm(b, axis=1), 1e-300)
+        small = np.minimum(small, np.degrees(np.arccos(np.clip(cos, -1, 1))))
+    bad = small < _SLIVER
+    # (the centre at the nearest images in a slab)
+    return p[0][bad] + (sides[0][bad] - sides[2][bad])/3
+
+
+_STUBBORN: list = []      # (slivers a remeshing left where they were: not again, this descent)
+
+
+def _even_slivers(ev, h0: float) -> bool:
+    """The mesh remeshed round its slivers (_SLIVER); whether there were
+    any. One the remeshing leaves where it was (half an edge) isn't tried
+    again until the next descent (a branch remeshed round one 38 times in a
+    step)."""
+    centres = _slivers(ev)
+    L = _slab(ev)
+    if len(centres) and _STUBBORN:
+        known = np.concatenate(_STUBBORN)
+        near = np.array([np.linalg.norm(_delta(c, known, L), axis=1).min() < 0.5*h0
+                         for c in centres])
+        centres = centres[~near]
+    if not len(centres):
+        return False
+    _remesh_now(ev, h0, near=centres)
+    left = _slivers(ev)
+    if len(left):
+        kept = np.array([np.linalg.norm(_delta(c, centres, L), axis=1).min() < 0.5*h0
+                         for c in left])
+        if kept.any():
+            _STUBBORN.append(left[kept])
+    _log.debug("slivers: %d facets under %g degrees, remeshed round them (%d left there)",
+               len(centres), _SLIVER, int(kept.sum()) if len(left) else 0)
+    return True
+
+
 def _keep_edges(ev, h0: float, hi: Optional[float] = None) -> None:
     """Edges back in range after a change, by the checked edits (_edits):
     those shorter than 0.4 of their target (h0, finer where the surface
@@ -4443,15 +4503,16 @@ def _keep_edges(ev, h0: float, hi: Optional[float] = None) -> None:
     # where a pack's contact lines met 0.008 apart were never split)
     sizes = _sizes(ev, h0)
     target = sizes[np.asarray(m.edges)].mean(axis=1) if len(m.edges) else lengths
-    if not ((lengths < lo*target).any() or (lengths > hi*target).any()):
-        return
-    guarded = _guarded(ev)
-    _unguard(ev)
-    try:
-        _keep_edges_unguarded(ev, h0, m, sizes, hi)
-    finally:
-        if guarded:
-            guard(ev)
+    if (lengths < lo*target).any() or (lengths > hi*target).any():
+        guarded = _guarded(ev)
+        _unguard(ev)
+        try:
+            _keep_edges_unguarded(ev, h0, m, sizes, hi)
+        finally:
+            if guarded:
+                guard(ev)
+    # (and its slivers, edges in range or not: a branch crept on with them)
+    _even_slivers(ev, h0)
 
 
 def _carried(m, ids, sizes, h0: float) -> np.ndarray:
