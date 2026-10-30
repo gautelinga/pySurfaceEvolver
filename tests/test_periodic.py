@@ -584,11 +584,49 @@ def test_the_lines_gauge_with_the_floor_off_zero():
 
 
 def test_newton_steps_converge_with_the_lines_gauge():
-    # (the turning angles' second derivatives: Newton's residual to round-off)
+    # (the fan triangles' second derivatives: Newton's residual to round-off)
     out = _both(lambda: _bead(PERIODS, gauge="flux", floor_angle=90.0),
                 ["g 5", "r", "g 5"] + ["hessian"]*6)
     assert out["lines"][2] < 1e-8
     assert abs(out["lines"][0] - out["flux"][0]) < 1e-4*abs(out["flux"][0])
+
+
+def test_the_lines_gauge_is_continuous_where_a_line_doubles_back():
+    # (a contact-line vertex moved onto the arc back to the one before its
+    # neighbour: the line turns by pi there, and a nudge of 1e-6 either side
+    # flipped the turning angle's sign, the wetted area by 2 pi R^2 and the
+    # volume by half a bead's; the fan's triangles have no such point)
+    was = pyse.wet_area
+    pyse.wet_area = "lines"
+    try:
+        ev = _bead(PERIODS, gauge="flux", floor_angle=90.0)
+        m = ev.mesh()
+        c, R = np.array([0.0, 0.0, 0.55]), 0.5
+        on = np.asarray(ev.on_constraint("bead"))
+        line = np.asarray(m.edges)[(m.edge_valence() == 1) & on[np.asarray(m.edges)].all(axis=1)]
+        nb = {}
+        for a, b in line.tolist():
+            nb.setdefault(a, []).append(b)
+            nb.setdefault(b, []).append(a)
+        v = int(line[0][0])
+        u, w = nb[v]
+        x = ev.vertices.copy()
+        du, dv = m.delta(c, x[u, :3]), m.delta(c, x[v, :3])
+        mid = (du/np.linalg.norm(du) + dv/np.linalg.norm(dv))
+        side = np.cross(du, dv)
+        side /= np.linalg.norm(side)
+        found = []
+        for s in (-1e-6, 1e-6):
+            p = mid/np.linalg.norm(mid) + s*side
+            y = x.copy()
+            y[w, :3] = x[v, :3] + R*p/np.linalg.norm(p) - dv
+            ev.vertices = y
+            ev.command("recalc")
+            found.append((ev.energy, ev.body(1).volume))
+        assert abs(found[0][0] - found[1][0]) < 1e-4
+        assert abs(found[0][1] - found[1][1]) < 1e-4
+    finally:
+        pyse.wet_area = was
 
 
 def _film(periods, beads, H, h=0.25):

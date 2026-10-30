@@ -28,8 +28,10 @@ about 1e-9, the fields about 1.3x slower to evaluate.
 With `pyse.wet_area = "lines"` (read at each load), a slab's flux spheres take their
 wetted areas and volumes from their contact lines alone, with no fields. A region a
 body wets on a sphere, bounded by geodesic polygons through the contact-line vertices,
-has area R² (2π − the turning angles along each loop) per loop, less whole spheres
-where there are several loops (Gauss–Bonnet). Its share of the body's volume is
+has area R² times the solid angles of a fan of geodesic triangles from a point to each
+loop's edges, less whole spheres where there are several loops (Girard's theorem; the
+fan has no trouble where a line doubles back on itself, which a sum of turning angles
+had: a turn of π there). Its share of the body's volume is
 −R A / 3 plus a polynomial line integral. A bead with no contact line of a body is
 inside it whole or not at all: a vertical ray through the body's facets and the cones
 over its contact lines decides. That is exact for the polygons where the fields are

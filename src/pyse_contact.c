@@ -3,16 +3,22 @@
  * lines alone (pySE's gauge="lines" in a periodic slab).
  *
  * The wetted region of a sphere (centre c, radius R) bounded by geodesic
- * polygons through the contact-line vertices has, by Gauss-Bonnet (Girard),
- * area R^2 (2 pi - sum of the turning angles) per loop, the loop taken with
- * the wetted region on its left (seen from outside the sphere). A region
- * bounded by several loops is the sum of theirs less whole spheres: with S
- * the sum over a body's loops on a sphere, its wetted area is S - 4 pi R^2 n,
- * n = floor(S / 4 pi R^2) (exact unless the region is empty or the whole
- * sphere, which a loop can't bound). A turning angle needs a vertex and its
- * two neighbours along the line: each contact edge carries half of the
- * angle at each of its ends, so the method is an edge method seeing four
- * vertices (the edge's, and the neighbour of each along its line).
+ * polygons through the contact-line vertices has, per loop taken with the
+ * wetted region on its left (seen from outside the sphere), the area of the
+ * fan of geodesic triangles from a point P to its edges, R^2 times their
+ * signed solid angles (Van Oosterom and Strackee's), up to whole spheres: P
+ * any point, chosen each pass per loop as far as can be from the loop's
+ * antipodes (where a triangle's angle is undefined), the sum and its
+ * derivatives the same for any. A region bounded by several loops is the
+ * sum of theirs less whole spheres: with S the sum over a body's loops on a
+ * sphere, its wetted area is S - 4 pi R^2 n, n = floor(S / 4 pi R^2) (exact
+ * unless the region is empty or the whole sphere, which a loop can't bound).
+ * Each contact edge carries its own triangle, so the method is an edge
+ * method on the edge's two vertices. (Until 2026-10-30 the area was R^2 (2 pi
+ * - the turning angles at the vertices) per loop, Gauss-Bonnet: where the
+ * line doubled back on itself, a turn of pi, the angle's sign was round-off,
+ * and a move of 3e-7 changed a pack's wetted area by 2 pi R^2, its volume by
+ * half a bead; the fan's angles have no such point but its antipode.)
  *
  * With the bodies' volume a facet integral of (0, 0, z - z_f) (divergence 1,
  * zero on a floor z = z_f), the wetted part of sphere i adds
@@ -72,15 +78,19 @@ struct pc_entry
   int prev, next;           /* entries before and after along the line, -1 if none */
   int group;                /* the (sphere, body)'s group */
   int other;                /* another entry of the same edge, or -1 */
-  REAL tauA;                /* turning angle at A (this pass) */
+  int loop;                 /* its loop, -1 in a group with a branch or an open line */
+  REAL om;                  /* its fan triangle's solid angle (this pass) */
 };
 
-struct pc_group { int s, b, first, count, loops, bad; REAL S, K; };  /* K: the loops' constant area */
+struct pc_group { int s, b, first, count, loops, bad; REAL S, K; };  /* K: the whole spheres' constant area */
+struct pc_loop { int g; REAL P[3], near[7]; };   /* P: the fan's apex (unit, from the centre) */
 
 static struct pc_entry *ent = NULL;
 static int nent = 0, maxent = 0;
 static struct pc_group *grp = NULL;
 static int ngrp = 0, maxgrp = 0;
+static struct pc_loop *lp = NULL;
+static int nlp = 0, maxlp = 0;
 static int *slot = NULL;            /* edge ordinal -> first entry, -1 */
 static int nslot = 0;
 static int pc_bad = 0;
@@ -186,16 +196,18 @@ static void pc_delta(const REAL *c, const REAL *x, REAL *w)
     for ( i = 0 ; i < 2 ; i++ ) w[i] -= pc_L[i]*floor(w[i]/pc_L[i] + 0.5);
 }
 
-/* the turning angle at v from u to w (positions from the centre), left
-   turns about v positive */
-static REAL turning(const REAL *u, const REAL *v, const REAL *w)
-{ REAL vv = v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
-  REAL uv = u[0]*v[0] + u[1]*v[1] + u[2]*v[2];
-  REAL vw = v[0]*w[0] + v[1]*w[1] + v[2]*w[2];
-  REAL uw = u[0]*w[0] + u[1]*w[1] + u[2]*w[2];
-  REAL det = u[0]*(v[1]*w[2] - v[2]*w[1]) - u[1]*(v[0]*w[2] - v[2]*w[0])
-           + u[2]*(v[0]*w[1] - v[1]*w[0]);
-  return atan2(sqrt(vv)*det,uv*vw - uw*vv);
+/* the signed solid angle of the geodesic triangle (p, a, b), p a unit
+   vector, a and b positions from the centre: positive where a -> b runs
+   left about p seen from outside. tan(omega/2) = det(p, a, b)/(|a||b| +
+   (p.a)|b| + (a.b) + (p.b)|a|), as for unit a, b times |a||b| */
+static REAL omega(const REAL *p, const REAL *a, const REAL *b)
+{ REAL la = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+  REAL lb = sqrt(b[0]*b[0] + b[1]*b[1] + b[2]*b[2]);
+  REAL det = p[0]*(a[1]*b[2] - a[2]*b[1]) - p[1]*(a[0]*b[2] - a[2]*b[0])
+           + p[2]*(a[0]*b[1] - a[1]*b[0]);
+  REAL den = la*lb + (p[0]*a[0] + p[1]*a[1] + p[2]*a[2])*lb
+           + (a[0]*b[0] + a[1]*b[1] + a[2]*b[2]) + (p[0]*b[0] + p[1]*b[1] + p[2]*b[2])*la;
+  return 2*atan2(det,den);
 }
 
 static REAL angle_floor(void)
@@ -308,8 +320,9 @@ static int bodies_alloc(int n)
   return 1;
 }
 
-/* the turning angles, each group's area, n and the loops' constant: every
-   pass (the coordinates move; the table's topology is kept) */
+/* the loops' apexes, the fan triangles' angles, each group's area, n and
+   the whole spheres' constant: every pass (the coordinates move; the
+   table's topology is kept) */
 static REAL *pc_gx = NULL;           /* the entries' A and B as the angles were last taken at */
 static long pc_gx_size = 0;
 static int pc_gx_valid = 0;          /* (0: the table was rebuilt since) */
@@ -336,34 +349,78 @@ static void pc_geometry(void)
   }
   pc_gx_valid = pc_gx != NULL;
   if ( same ) { pc_geom_done = 1; return; }
-  /* (the angles on the threads, twice a gradient step; summed in order) */
+  /* each loop's apex: of the loop's mean direction and the six axes', the
+     one whose antipode is furthest from its vertices (the least 1 + P.a/|a|
+     over them greatest) */
+  { static const REAL axes[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+    int l, k;
+    for ( l = 0 ; l < nlp ; l++ )
+    { lp[l].P[0] = lp[l].P[1] = lp[l].P[2] = 0.0;
+      for ( k = 0 ; k < 7 ; k++ ) lp[l].near[k] = 2.0;
+    }
+    for ( i = 0 ; i < nent ; i++ )
+    { REAL a[3], la;
+      if ( ent[i].loop < 0 ) continue;
+      pc_delta(sph[ent[i].s].c,get_coord(ent[i].A),a);
+      la = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+      if ( la <= 0 ) continue;
+      for ( k = 0 ; k < 3 ; k++ ) lp[ent[i].loop].P[k] += a[k]/la;
+    }
+    for ( l = 0 ; l < nlp ; l++ )
+    { REAL m = sqrt(lp[l].P[0]*lp[l].P[0] + lp[l].P[1]*lp[l].P[1] + lp[l].P[2]*lp[l].P[2]);
+      if ( m > 0 ) for ( k = 0 ; k < 3 ; k++ ) lp[l].P[k] /= m;
+      else lp[l].near[6] = -1.0;            /* (no mean direction: an axis) */
+    }
+    for ( i = 0 ; i < nent ; i++ )
+    { REAL a[3], la;
+      struct pc_loop *L;
+      if ( ent[i].loop < 0 ) continue;
+      L = lp + ent[i].loop;
+      pc_delta(sph[ent[i].s].c,get_coord(ent[i].A),a);
+      la = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+      if ( la <= 0 ) continue;
+      for ( k = 0 ; k < 6 ; k++ )
+      { REAL t = 1.0 + (axes[k][0]*a[0] + axes[k][1]*a[1] + axes[k][2]*a[2])/la;
+        if ( t < L->near[k] ) L->near[k] = t;
+      }
+      if ( L->near[6] >= 0 )
+      { REAL t = 1.0 + (L->P[0]*a[0] + L->P[1]*a[1] + L->P[2]*a[2])/la;
+        if ( t < L->near[6] ) L->near[6] = t;
+      }
+    }
+    for ( l = 0 ; l < nlp ; l++ )
+    { int best = 6;
+      for ( k = 0 ; k < 6 ; k++ ) if ( lp[l].near[k] > lp[l].near[best] ) best = k;
+      if ( best < 6 ) for ( k = 0 ; k < 3 ; k++ ) lp[l].P[k] = axes[best][k];
+    }
+  }
+  /* (the triangles' angles on the threads, twice a gradient step; summed in order) */
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) num_threads(threads) if ( threads > 1 && nent >= 512 )
 #endif
   for ( i = 0 ; i < nent ; i++ )
   { struct pc_entry *q = ent + i;
-    REAL u[3], v[3], w[3];
+    REAL a[3], b[3];
     const REAL *c = sph[q->s].c;
-    if ( q->prev < 0 ) { q->tauA = 0.0; continue; }
-    pc_delta(c,get_coord(ent[q->prev].A),u);
-    pc_delta(c,get_coord(q->A),v);
-    pc_delta(c,get_coord(q->B),w);
-    q->tauA = turning(u,v,w);
+    if ( q->loop < 0 ) { q->om = 0.0; continue; }
+    pc_delta(c,get_coord(q->A),a);
+    pc_delta(c,get_coord(q->B),b);
+    q->om = omega(lp[q->loop].P,a,b);
   }
   for ( g = 0 ; g < ngrp ; g++ ) grp[g].S = 0.0;
-  for ( i = 0 ; i < nent ; i++ ) grp[ent[i].group].S += ent[i].tauA;
+  for ( i = 0 ; i < nent ; i++ ) grp[ent[i].group].S += ent[i].om;
   for ( g = 0 ; g < ngrp ; g++ )
   { struct pc_group *G = grp + g;
     REAL R = sph[G->s].R, S, whole = 4*M_PI*R*R, n;
-    S = R*R*(2*M_PI*G->loops - G->S);
+    S = R*R*G->S;
     n = G->bad ? 0.0 : floor(S/whole);
     G->S = S - n*whole;
-    G->K = G->bad ? 0.0 : R*R*(2*M_PI*G->loops - 4*M_PI*n);
+    G->K = G->bad ? 0.0 : -n*whole;
   }
   pc_geom_done = 1;
 }
 
-/* the table: contact entries, their groups and lines, the turning angles
+/* the table: contact entries, their groups and lines, the fan triangles' angles
    and the constants */
 static void pc_build(void)
 { edge_id e_id;
@@ -372,7 +429,7 @@ static void pc_build(void)
   unsigned long long key = 0;
 
   pc_slab = PC_SLAB(pc_L);
-  nent = 0; ngrp = 0; pc_bad = 0;
+  nent = 0; ngrp = 0; nlp = 0; pc_bad = 0;
   pc_gx_valid = 0;
   if ( (int)web.skel[EDGE].max_ord + 1 > nslot )
   { nslot = (int)web.skel[EDGE].max_ord + 1 + 1024;
@@ -424,6 +481,7 @@ static void pc_build(void)
         q->B = q->dir > 0 ? get_edge_headv(e_id) : get_edge_tailv(e_id);
         q->prev = q->next = -1;
         q->other = -1;
+        q->loop = -1;
       }
     }
   }
@@ -478,7 +536,13 @@ static void pc_build(void)
       { int k = order[a];
         if ( ent[k].group >= 0 ) continue;
         G->loops++;
-        while ( ent[k].group < 0 ) { ent[k].group = ngrp; k = ent[k].next; }
+        if ( nlp == maxlp )
+        { maxlp = maxlp ? 2*maxlp : 256;
+          lp = (struct pc_loop *)realloc(lp,maxlp*sizeof(*lp));
+        }
+        lp[nlp].g = ngrp;
+        while ( ent[k].group < 0 ) { ent[k].group = ngrp; ent[k].loop = nlp; k = ent[k].next; }
+        nlp++;
       }
     }
     else pc_bad++;
@@ -548,31 +612,9 @@ void pyse_contact_init(int mode, struct method_instance *mi)
   pc_current();
 }
 
-/* the edge's neighbours along its line: v[2] beside the tail, v[3] the head */
-void pyse_contact_wings(struct qinfo *e_info)
-{ int o, k;
-  edge_id e = e_info->id;
-  if ( !nent ) return;
-  o = ordinal(e);
-  if ( o >= nslot || (k = slot[o]) < 0 ) return;
-  { struct pc_entry *q = ent + k;
-    vertex_id tail = get_edge_tailv(e), head = get_edge_headv(e);
-    vertex_id nt, nh;
-    if ( q->prev < 0 || q->next < 0 ) return;
-    /* (along the line P -> A -> B -> N) */
-    if ( tail == q->A ) { nt = ent[q->prev].A; nh = ent[q->next].B; }
-    else { nt = ent[q->next].B; nh = ent[q->prev].A; }
-    e_info->v[2] = nt;
-    e_info->v[3] = nh;
-    e_info->x[2] = get_coord(nt);
-    e_info->x[3] = get_coord(nh);
-    e_info->vcount = 4;
-  }
-}
+/* ---- second-order duals in the edge's two vertices' six coordinates ---- */
 
-/* ---- second-order duals in the four vertices' twelve coordinates ---- */
-
-#define ND 12
+#define ND 6
 typedef struct { REAL v, g[ND], h[ND][ND]; } d12;
 
 /* (each takes the order o the pass needs: 0 value, 1 gradient, 2 Hessian; a
@@ -658,41 +700,43 @@ static void ddot(int o, d12 *r, const d12 *a, const d12 *b)
   dmul(o,&t,a+2,b+2); dadd(o,r,r,&t,1.0);
 }
 
-/* the turning angle at v from u to w (each three duals) */
-static void dturning(int o, d12 *r, const d12 *u, const d12 *v, const d12 *w)
-{ d12 vv, uv, vw, uw, det, t, s, X, Y;
-  ddot(o,&vv,v,v); ddot(o,&uv,u,v); ddot(o,&vw,v,w); ddot(o,&uw,u,w);
-  /* det(u, v, w) = u . (v x w) */
-  dmul(o,&t,v+1,w+2); dmul(o,&s,v+2,w+1); dadd(o,&t,&t,&s,-1.0); dmul(o,&det,u,&t);
-  dmul(o,&t,v+2,w);   dmul(o,&s,v,w+2);   dadd(o,&t,&t,&s,-1.0); dmul(o,&s,u+1,&t); dadd(o,&det,&det,&s,1.0);
-  dmul(o,&t,v,w+1);   dmul(o,&s,v+1,w);   dadd(o,&t,&t,&s,-1.0); dmul(o,&s,u+2,&t); dadd(o,&det,&det,&s,1.0);
-  dsqrt(o,&t,&vv); dmul(o,&Y,&t,&det);
-  dmul(o,&X,&uv,&vw); dmul(o,&t,&uw,&vv); dadd(o,&X,&X,&t,-1.0);
-  datan2(o,r,&Y,&X);
+/* omega(p, a, b) (a and b three duals each, p constant) */
+static void domega(int o, d12 *r, const REAL *p, const d12 *a, const d12 *b)
+{ d12 la, lb, det, den, t, s;
+  int k;
+  ddot(o,&la,a,a); dsqrt(o,&la,&la);
+  ddot(o,&lb,b,b); dsqrt(o,&lb,&lb);
+  /* det(p, a, b) = p . (a x b) */
+  dmul(o,&t,a+1,b+2); dmul(o,&s,a+2,b+1); dadd(o,&det,&t,&s,-1.0); dscale(o,&det,p[0]);
+  dmul(o,&t,a+2,b);   dmul(o,&s,a,b+2);   dadd(o,&t,&t,&s,-1.0); dadd(o,&det,&det,&t,p[1]);
+  dmul(o,&t,a,b+1);   dmul(o,&s,a+1,b);   dadd(o,&t,&t,&s,-1.0); dadd(o,&det,&det,&t,p[2]);
+  /* |a||b| + (p.a)|b| + a.b + (p.b)|a| */
+  dmul(o,&den,&la,&lb);
+  dz(o,&t,0.0); for ( k = 0 ; k < 3 ; k++ ) dadd(o,&t,&t,a+k,p[k]);
+  dmul(o,&t,&t,&lb); dadd(o,&den,&den,&t,1.0);
+  ddot(o,&t,a,b); dadd(o,&den,&den,&t,1.0);
+  dz(o,&t,0.0); for ( k = 0 ; k < 3 ; k++ ) dadd(o,&t,&t,b+k,p[k]);
+  dmul(o,&t,&t,&la); dadd(o,&den,&den,&t,1.0);
+  datan2(o,r,&det,&den);
+  dscale(o,r,2.0);
 }
 
 /* an entry's term: wetted area share (*area) and the volume line term
-   (*line), as duals in the element's slots 0..3 (tail, head, beside the
-   tail, beside the head) */
+   (*line), as duals in the element's slots 0, 1 (tail, head) */
 static void entry_terms(int o, const struct pc_entry *q, struct qinfo *e_info, d12 *area, d12 *line)
 { const struct pc_sphere *p = sph + q->s;
-  d12 X[4][3], ta, tb, t, s;
-  int slotA, slotB, slotP, slotN, i, k;
+  d12 X[2][3], t, s;
+  int slotA, slotB, i, k;
   REAL w[3];
-  for ( i = 0 ; i < 4 ; i++ )
-  { /* (slots 2 and 3 only where the setup found the line's neighbours) */
-    if ( i < e_info->vcount ) pc_delta(p->c,get_coord(e_info->v[i]),w);
-    else w[0] = w[1] = w[2] = 0.0;
+  for ( i = 0 ; i < 2 ; i++ )
+  { pc_delta(p->c,get_coord(e_info->v[i]),w);
     for ( k = 0 ; k < 3 ; k++ ) dvar(o,&X[i][k],w[k],3*i + k);
   }
-  if ( get_edge_tailv(e_info->id) == q->A ) { slotA = 0; slotB = 1; slotP = 2; slotN = 3; }
-  else { slotA = 1; slotB = 0; slotP = 3; slotN = 2; }
-  if ( e_info->vcount == 4 && q->prev >= 0 && q->next >= 0
-       && e_info->v[slotP] == ent[q->prev].A && e_info->v[slotN] == ent[q->next].B )
-  { dturning(o,&ta,X[slotP],X[slotA],X[slotB]);
-    dturning(o,&tb,X[slotA],X[slotB],X[slotN]);
-    dadd(o,area,&ta,&tb,1.0);
-    dscale(o,area,-0.5*p->R*p->R);
+  if ( get_edge_tailv(e_info->id) == q->A ) { slotA = 0; slotB = 1; }
+  else { slotA = 1; slotB = 0; }
+  if ( q->loop >= 0 )
+  { domega(o,area,lp[q->loop].P,X[slotA],X[slotB]);
+    dscale(o,area,p->R*p->R);
   }
   else dz(o,area,0.0);
   /* line: -(a_x b_y - a_y b_x)((a_z + b_z)/6 + h/2), a = A - c, b = B - c */
@@ -739,11 +783,11 @@ static REAL pc_eval(struct qinfo *e_info, int order)
   }
 out:
   if ( order >= 1 )
-    for ( a = 0 ; a < e_info->vcount && a < 4 ; a++ )
+    for ( a = 0 ; a < e_info->vcount && a < 2 ; a++ )
       for ( i = 0 ; i < 3 ; i++ ) e_info->grad[a][i] = tot.g[3*a + i];
   if ( order >= 2 )
-    for ( a = 0 ; a < e_info->vcount && a < 4 ; a++ )
-      for ( b2 = 0 ; b2 < e_info->vcount && b2 < 4 ; b2++ )
+    for ( a = 0 ; a < e_info->vcount && a < 2 ; a++ )
+      for ( b2 = 0 ; b2 < e_info->vcount && b2 < 2 ; b2++ )
         for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ )
           e_info->hess[a][b2][i][j] = tot.h[3*a + i][3*b2 + j];
   return tot.v;
@@ -757,7 +801,7 @@ void pyse_contact_refresh(void)
   pc_geom_done = 0;
 }
 
-/* what a body's volume (quantity k) adds beyond its edges: the loops'
+/* what a body's volume (quantity k) adds beyond its edges: the groups'
    constants on each sphere times -R/3, and the spheres inside it whole
    (a body's content instance on a sphere it has no edge on isn't part of
    its volume: Evolver attaches them as it applies them) */
@@ -774,8 +818,8 @@ REAL pyse_contact_body_constant(int k)
   return v;
 }
 
-/* what an energy instance adds beyond its edges: the loops' constants (2 pi R^2
-   a loop less the whole spheres n), and the spheres inside a body whole
+/* what an energy instance adds beyond its edges: the groups' constants (less
+   the whole spheres n), and the spheres inside a body whole
    (their area and volume); for the energy times -k */
 REAL pyse_contact_constant(struct method_instance *mi)
 { int s, g;

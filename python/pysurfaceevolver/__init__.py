@@ -55,7 +55,7 @@ flux_degree: int = 8
 #: How a periodic slab's flux spheres (``constraints.sphere(gauge="flux")``
 #: with periods) get their wetted areas and volumes: "flux", the fields'
 #: lattice sums over the liquid's facets; "lines", from the contact lines
-#: alone (Gauss-Bonnet: the turning angles along each line, a polynomial
+#: alone (Girard: a fan of geodesic triangles over each line, a polynomial
 #: line integral for the volume; the linear model, a floor at 90 degrees or
 #: none; otherwise "flux"). Read at each load.
 wet_area: str = "flux"

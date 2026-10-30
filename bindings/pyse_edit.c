@@ -3409,6 +3409,7 @@ int pyse_crossings(int far, long *count, double *where, long max)
    split slower on the crowded vertices). */
 static REAL line_chop = 0.0;
 #define CHOP_ROUNDS 6
+#define CHOP_FAN 32          /* a vertex's edges (six in a sound mesh) */
 
 double pyse_line_chop(double length)
 { double was = line_chop;
@@ -3433,6 +3434,16 @@ int pyse_chop_lines(void)
       len = norm3(d);
       if ( !(len <= (1 << CHOP_ROUNDS)*line_chop) ) { flung = 1; break; }   /* (NaN too) */
       if ( len > line_chop ) push(&long_,e);
+    }
+    /* (nor where a split would join a facet's far corner with more than
+       CHOP_FAN edges already: a fan. A 32-bead pack's flung surface, its
+       edges under 64 times the length, was split step after step into one
+       vertex's fan, each new edge walking its ring: 50 minutes in one
+       gradient step) */
+    for ( k = 0 ; k < long_.n && !flung ; k++ )
+    { facetedge_id fe = get_edge_fe(long_.a[k]);
+      if ( valid_id(fe) && vertex_valence(get_fe_tailv(get_prev_edge(fe))) > CHOP_FAN )
+        flung = 1;
     }
     if ( flung ) { long_.n = 0; break; }
     if ( !long_.n ) break;

@@ -76,6 +76,25 @@
 
 ### Fixes
 
+- The contact-line gauge (`pyse.wet_area = "lines"`) no longer jumps where a contact
+  line doubles back on itself. Each loop's wetted area was R^2 (2 pi - the turning
+  angles at its vertices); at a turn of pi the angle's sign was round-off, and a move
+  of 3e-7 changed the area by 2 pi R^2 and the volume by half a bead. Contacts made
+  where the surface had gone into a bead left such lines (spikes of 151-178 degrees,
+  then a turn of exactly pi), and most of the refusals as "Evolver can't step from
+  it" in a 32-bead set were these jumps, of 10-26 in energy. The area is now the fan
+  of geodesic triangles from a point to the loop's edges (their solid angles, Van
+  Oosterom and Strackee's), the point chosen each pass away from the loop: the same
+  area to round-off wherever the turning angles had theirs (a pack's states:
+  -276.34785269988765 for -276.3478526998878), continuous where the line doubles
+  back, and agreeing there with the flux gauge (body 1 at 55.1027, the flux gauge's
+  55.1028, the old 53.0083). Each contact edge now sees its own two vertices, not
+  four: gradient steps about 1.4x faster.
+- Splitting long contact-line edges in a gradient step no longer builds a fan. Each
+  split joins the facet's far corner; a flung surface whose edges were all under 64
+  times the length was split step after step into one vertex, each new edge walking
+  its ring (50 minutes in one step of a 32-bead pack). Past 32 edges at a far corner
+  the surface is taken as flung, nothing split, as past 64 times the length.
 - Remeshing no longer makes caps (facets with an angle of 160-175 degrees, a corner on
   the middle of the opposite edge). Two edits made them where the targets are fine (a
   quarter of the edge scale in a pack's necks): a split's new vertex collapsed into the

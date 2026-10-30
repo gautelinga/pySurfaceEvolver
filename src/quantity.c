@@ -85,7 +85,7 @@ struct gen_quant_method basic_gen_methods[] =
       SPEC_VECTOR, NULL,
       edge_vector_integral,edge_vector_integral_grad,edge_vector_integral_hess,NULL},
   /* pySE: a sphere's contact lines' wetting and content (pyse_contact.c) */
-  {"pyse_contact_integral",EDGE,NEED_SIDE|NEED_GAUSS|NEED_CONTACT_WINGS|ORIENTABLE_METHOD,
+  {"pyse_contact_integral",EDGE,NEED_SIDE|NEED_GAUSS|ORIENTABLE_METHOD,
       SPEC_VECTOR, pyse_contact_init,
       pyse_contact_value,pyse_contact_grad,pyse_contact_hess,NULL},
   {"edge_general_integral",EDGE,NEED_SIDE|NEED_GAUSS,
@@ -3728,8 +3728,6 @@ void q_edge_setup(
     }
   } // end NEED_MARKED_WINGS
 
-  if ( needs & NEED_CONTACT_WINGS )
-    pyse_contact_wings(e_info);
   if ( needs & NEED_STRING_STAR )
   { edge_id e_id1,e_id2 = e_info->id,e_id3;
      /* careful of weird packaging */

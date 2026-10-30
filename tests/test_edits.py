@@ -301,6 +301,23 @@ def test_line_chop_splits_nothing_on_a_surface_flung_apart():
     assert (ev.mesh().edge_valence() == 1).sum() == line.sum()
 
 
+def test_line_chop_makes_no_fans():
+    # (each split joins the facet's far corner: past 32 edges there the
+    # surface is taken as flung, nothing more split; a 32-bead pack's was
+    # split step after step into one vertex's fan, 50 minutes in a step)
+    from pysurfaceevolver import _core
+    ev = _drop()
+    m = ev.mesh()
+    was = _core.line_chop(float(m.edge_lengths()[m.edge_valence() == 1].max())/40)
+    try:
+        for _ in range(3):
+            ev.command("g 1")
+    finally:
+        _core.line_chop(was)
+    edges = np.asarray(ev.mesh().edges)
+    assert np.bincount(edges.ravel()).max() < 48       # (69 split regardless)
+
+
 def test_line_chop_keeps_contact_lines_short_through_gradient_steps():
     from pysurfaceevolver import _core
     ev = _drop()
