@@ -4,6 +4,10 @@
 
 ### Speed
 
+- A reload (`Evolver.restore` of a snapshot, a checkpoint's load) 19x faster in a
+  64-bead slab (1.1 to 0.06 s): the walls' native code was registered from three tables
+  of every vertex's gap to every constraint, for their numbers and names alone (now
+  `_constraint_names`); the descents' own such calls too.
 - Gradient steps with `pyse.wet_area = "lines"` are about 2.1x faster, on one thread
   and on four (40 steps of a 64-bead slab on a quiet node: 3.3 to 1.55 s, and 1.32 to
   0.62 s on 4 threads); the flux gauge's about 4% faster on 4 threads. Profiled
@@ -111,6 +115,18 @@
 
 ### API
 
+- `arclength(..., topology=True, resumable=True)`: every fifth step's `Step.state()`
+  gives the run's state there, picklable; `arclength(..., resume=state)`, with the
+  surface restored as it was at that step, goes on exactly as the run did (the same
+  steps, to the bit: a 32-bead run resumed at step 60 matched the original over 88
+  steps). The state is the continuation's own (its last steps and their events, the
+  branch's last points and step, the states it may back up to, the changes put off,
+  Evolver's random numbers); such a run keeps element ids through dumps and reloads,
+  reloads its surface at those steps (a long-lived process reuses deleted elements'
+  slots and visits elements in another order than a reload: a resumed run parted at
+  round-off three steps on), and keeps its backups as snapshots: about 3% slower.
+  bench/topology/corpus.py runs this way and resumes a crashed run exactly from the
+  newest such checkpoint.
 - `pyse.flux_degree` (default 8): the degree of the flux gauge's fast-sum
   polynomials, the fields to ~5e-8 of Ewald's sum (a 64-bead slab's energies and
   volumes within 1e-11 of degree 14's; its gradient steps 9% faster than at 10). 10

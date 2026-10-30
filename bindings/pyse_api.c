@@ -2030,6 +2030,14 @@ void pyse_edge_rewrap(edge_id e)
                                                    get_edge_headv(positive_id(e))));
 }
 long pyse_topology_stamp(void) { return top_timestamp; }
+
+/* Evolver's keep_originals: dumps record element ids, loads keep them (a
+   reloaded surface has the ids it had); the previous setting */
+int pyse_keep_ids(int on)
+{ int was = match_id_flag != 0;
+  match_id_flag = on ? 1 : 0;
+  return was;
+}
 /* The n lowest eigenpairs of the Hessian with the constraints held (as
    saddle and eigenprobe set it up, with linear_metric or area normalization
    if on): Evolver's ritz shifted below every eigenvalue, so the nearest are

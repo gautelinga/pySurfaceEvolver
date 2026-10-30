@@ -628,7 +628,7 @@ class _Engine:
         # topology runs' tidying called this per wall, 19% of a run)
         cached = getattr(self, "_known_constraints", None)
         if cached is None or cached[0] != surface.generation or key not in cached[1]:
-            nums, _, _, names = self._constraint_gaps()
+            nums, names = self._constraint_names()
             self._known_constraints = (surface.generation,
                                        {int(c) for c in nums} | {n for n in names if n})
         known = sorted(self._known_constraints[1], key=str)
@@ -641,6 +641,21 @@ class _Engine:
         if _core.count(_element_type(element)) == 0:
             return np.zeros(0, dtype=bool)
         return self.values(name, f"on_constraint {constraint}") != 0
+
+    def _constraint_names(self, guards: bool = False) -> "tuple[np.ndarray, List[str]]":
+        """The constraints' numbers and names, as _constraint_gaps gives them
+        (the same ones left out), without the gaps (a reload registered its
+        walls' native code from three gap tables, 0.9 of its 1.1 s at 64
+        beads)."""
+        if not hasattr(_core, "constraint_list"):
+            nums, _, _, names = self._constraint_gaps(guards)
+            return nums, names
+        _, listed = self._call(_core.constraint_list)
+        nums, _, names = listed.data
+        keep = [i for i, n in enumerate(names)
+                if (guards or not str(n).startswith(GUARD_PREFIX))
+                and (n or int(nums[i])) not in surface.retired]
+        return np.asarray(nums)[keep], [names[i] for i in keep]
 
     def _constraint_gaps(self, guards: bool = False
                          ) -> "tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]":
@@ -844,7 +859,7 @@ class _Engine:
             from ._periodic import slab_flux
             if self._register_contact():
                 return
-            nums, _, _, names = self._constraint_gaps()
+            nums, names = self._constraint_names()
             if slab_flux(dict(surface.walls),
                          {(name or int(c)): int(c) for c, name in zip(nums, names)},
                          self.periods, list(self.bodies().ids)):
@@ -856,7 +871,7 @@ class _Engine:
         native = {k: n for k, n in native.items() if n is not None}
         if not native or not hasattr(_core, "native_sphere"):
             return
-        nums, _, _, names = self._constraint_gaps()
+        nums, names = self._constraint_names()
         for c, name in zip(nums, names):
             data = native.get(name or int(c))
             if data is not None:
@@ -886,7 +901,7 @@ class _Engine:
             raise ValueError(f'pyse.wet_area must be "flux" or "lines", not {pyse.wet_area!r}')
         if ok:
             zf = float(floor[0].shape[2]) if floor else 0.0
-            nums, _, _, names = self._constraint_gaps()
+            nums, names = self._constraint_names()
             number = {(name or int(c)): int(c) for c, name in zip(nums, names)}
             for key, w in spheres.items():
                 c, R, angle, tension = w.slabflux
@@ -922,7 +937,7 @@ class _Engine:
             # (a slab: where each wall, and its guard, wants its vertices,
             # for C's unwrapping and gap queries: a sphere near its centre,
             # a floor anywhere)
-            nums, _, _, names = self._constraint_gaps(guards=True)
+            nums, names = self._constraint_names(guards=True)
             for c, name in zip(nums, names):
                 key: Any = name or int(c)
                 if isinstance(key, str) and key.startswith(GUARD_PREFIX):
@@ -952,7 +967,7 @@ class _Engine:
                 shapes[key] = (1, [*map(float, shape[1]), float(shape[2])**2])
         if not shapes:
             return
-        nums, _, _, names = self._constraint_gaps(guards=True)
+        nums, names = self._constraint_names(guards=True)
         from ._surgery import ANY_SPHERE, _sphere_centre
         for c, name in zip(nums, names):
             if name == ANY_SPHERE and self.periods is not None:
@@ -980,7 +995,7 @@ class _Engine:
         lines, facets = native_specs(dict(surface.walls))
         if not lines and not facets:
             return
-        nums, _, _, names = self._constraint_gaps()
+        nums, names = self._constraint_names()
         number = {(name or int(c)): int(c) for c, name in zip(nums, names)}
         for key, which, base, bc, terms in lines:
             if key in number:

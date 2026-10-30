@@ -234,9 +234,11 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     logger = logging.getLogger("pysurfaceevolver.topology")
     logger.addHandler(Handler())
     logger.setLevel(logging.DEBUG)
-    first = 0
+    first, run = 0, None
     if resume:
         ev, v0, first = restore_state(resume)
+        # (exact: the run's own state kept with the surface, the run as it was)
+        run = run_state(resume)
     else:
         # (the beads in the flux gauge where the run goes to breakthrough:
         # the pole gauge's volume bookkeeping lost whole beads' volumes where
@@ -272,9 +274,17 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     # (resumed: the attempt before it, to its checkpoint, carried on)
     before = {"kinds": Counter(), "falls": 0}
     if prior:
-        curve.update({int(k): tuple(rest) for k, *rest in prior.get("curve", []) if k < first})
+        # (to the checkpoint's step: an exact resume goes on after it, an older
+        # one yields it again, replacing it)
+        curve.update({int(k): tuple(rest) for k, *rest in prior.get("curve", []) if k <= first})
         work["passes"] = float(prior.get("passes", 0.0))
-        before.update(kinds=Counter(prior.get("kinds", {})), falls=int(prior.get("falls", 0)))
+        if "made" in prior:
+            # (each step's changes: those before the checkpoint taken over, from
+            # an earlier one than the attempt's last step too)
+            made.update({int(k): (list(v[0]), bool(v[1])) for k, v in prior["made"].items()
+                         if int(k) <= first})
+        else:
+            before.update(kinds=Counter(prior.get("kinds", {})), falls=int(prior.get("falls", 0)))
         result["resumed"] = prior.get("resumed", []) + [first]
     # (the liquid kept: at every step what the bodies hold is their targets,
     # the draining one's and the trapped ones'; the changes only move
@@ -299,19 +309,25 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         warnings.simplefilter("always")
         try:
             done, falls_at_start = False, 0
+            # (the arclength run's steps and numbering: a run resumed exactly
+            # goes on with the original's, an older checkpoint's afresh from it)
+            offset, count = (run["offset"], run["steps"]) if run else (first, STEPS - first)
             while not done:
                 taken = 0
-                for step in recipes.arclength(ev, ev.body(1), ds, STEPS - first, topology=True,
-                                              outlet=outlet):
+                for step in recipes.arclength(ev, ev.body(1), ds, count, topology=True,
+                                              outlet=outlet, resumable=bool(checkpoints),
+                                              resume=run["state"] if run else None):
                     taken += 1
                     check_liquid(step)
                     work["passes"] += (_core.work() - work["last"])/max(1, ev.counts["facets"])
                     result["passes"] = round(work["passes"])
-                    step.index += first
+                    step.index += offset
                     state["step"] = step.index
                     if checkpoints:
+                        own = step.state() if step.state else None
                         save_state(ev, os.path.join(checkpoints, f"step{step.index:04d}"), v0,
-                                   step.index)
+                                   step.index, run=None if own is None else
+                                   {"state": own, "offset": offset, "steps": count})
                         stale = os.path.join(checkpoints, f"step{step.index - KEEP:04d}")
                         for ext in (".fe", ".pkl"):
                             if os.path.exists(stale + ext):
@@ -329,6 +345,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                                          len(step.changes))
                     result["curve"] = [[k, *curve[k]] for k in sorted(curve)]
                     made[step.index] = ([e.kind for e in step.changes], step.fell)
+                    result["made"] = {str(k): v for k, v in sorted(made.items())}
                     kinds = before["kinds"] + Counter(kind for m, _ in made.values() for kind in m)
                     result.update(end=float(step.value), steps=step.index,
                                   changes=sum(kinds.values()), kinds=dict(kinds),
@@ -364,7 +381,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                         result["breakthrough"] = float(step.value)
                         done = True
                         break
-                if done or not resume or taken > 1 or falls_at_start >= 3:
+                if done or not resume or run or taken > 1 or falls_at_start >= 3:
                     break
                 # (resumed at a fold: a checkpoint is a branch's last point, and
                 # from it the branch takes no step, as the run itself didn't; the
@@ -431,9 +448,11 @@ COLUMN = 6.0    # the periodic sets' cell side: 3 bead diameters
 KEEP = 20       # checkpoints: the last this many steps' states kept
 
 
-def save_state(ev, path, v0, index):
+def save_state(ev, path, v0, index, run=None):
     """The surface (path.fe) and what pySE remembers of it (path.pkl), to
-    go on from (restore_state)."""
+    go on from (restore_state); ``run``: the run's own state there (a
+    resumable arclength step's ``state()``, its steps and their numbering),
+    for an exact resume (run_state)."""
     import pickle
     from pysurfaceevolver._engine import surface
     ev.dump(path + ".fe")
@@ -441,7 +460,16 @@ def save_state(ev, path, v0, index):
         pickle.dump({"walls": dict(surface.walls), "retired": set(surface.retired),
                      "energy_shift": list(surface.energy_shift),
                      "edge_scale": surface.edge_scale, "sizes": dict(surface.sizes),
-                     "start": v0, "step": index}, f)
+                     "start": v0, "step": index, "run": run}, f)
+
+
+def run_state(path):
+    """The run's own state a checkpoint kept (save_state's ``run``), or
+    None (an older checkpoint: the run then goes on from the surface alone,
+    afresh)."""
+    import pickle
+    with open(path + ".pkl", "rb") as f:
+        return pickle.load(f).get("run")
 
 
 def restore_state(path):
@@ -504,14 +532,26 @@ def cpu_groups(spec, jobs, threads):
 
 def latest_state(ck, part=None):
     """The checkpoint in ck to resume from (its path without the extension):
-    the one of the last step NAME.part has (its curve and counts that far),
-    else the newest; None if there is none."""
+    the newest with the run's own state (an exact resume: every fifth step's)
+    up to the last step NAME.part has; else the one of that last step (its
+    curve and counts that far), else the newest; None if there is none."""
     steps = sorted(f[:-4] for f in os.listdir(ck) if f.endswith(".pkl")) \
         if os.path.isdir(ck) else []
+    last = None
     if part and os.path.exists(part):
         at = f"step{int(json.load(open(part)).get('steps', -1)):04d}"
         if at in steps:
-            return os.path.join(ck, at)
+            last = at
+    for name in reversed(steps):
+        if last is not None and name > last:
+            continue
+        try:
+            if run_state(os.path.join(ck, name)) is not None:
+                return os.path.join(ck, name)
+        except Exception:
+            continue                # (a checkpoint cut short by the crash)
+    if last is not None:
+        return os.path.join(ck, last)
     return os.path.join(ck, steps[-1]) if steps else None
 
 

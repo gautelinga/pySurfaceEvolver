@@ -524,6 +524,49 @@ def test_a_descent_past_its_budget_stops_and_the_run_backs_up(monkeypatch, caplo
     assert not any(s.fell for s in steps)
 
 
+def test_a_resumable_run_resumed_from_a_step_goes_on_exactly(monkeypatch):
+    # (from a step's state, pickled, and the surface saved there: the same
+    # steps to the bit; every step with a state here (_CANONICAL 1), from an
+    # ordinary step's before the neck is cut and from the fall's after it)
+    import pickle
+    monkeypatch.setattr(recipes, "_CANONICAL", 1)
+    ev = _sphere_bridge(0.09)
+    run, kept = [], {}
+    for step in recipes.arclength(ev, ev.body(1), -0.003, 14, topology=True, resumable=True):
+        run.append((step.index, step.value, step.energy, step.fell, len(step.changes)))
+        if step.index in (6, 7):
+            kept[step.index] = (pickle.dumps(step.state()), ev.save())
+    assert [r[0] for r in run] == list(range(14))
+    assert not run[6][3] and run[7][3] and run[7][4] == 1 and any(r[3] for r in run[8:])
+    for at in (6, 7):
+        state, saved = kept[at]
+        ev.restore(saved)
+        again = [(s.index, s.value, s.energy, s.fell, len(s.changes))
+                 for s in recipes.arclength(ev, ev.body(1), -0.003, 14, topology=True,
+                                            resume=pickle.loads(state))]
+        assert again == run[at + 1:]
+
+
+def test_constraint_names_are_the_gap_tables_without_the_gaps():
+    from pysurfaceevolver import _surgery
+    ev = _sphere_bridge(0.09)
+    _surgery.guard(ev)
+    for guards in (False, True):
+        nums, _, _, names = ev._constraint_gaps(guards)
+        nums2, names2 = ev._constraint_names(guards)
+        assert list(nums2) == list(nums) and names2 == names
+    assert any(n.startswith(_surgery.GUARD_PREFIX) for n in ev._constraint_names(True)[1])
+
+
+def test_a_resumable_run_gives_a_state_every_fifth_step():
+    ev = _sphere_bridge(0.09)
+    states = [s.index for s in recipes.arclength(ev, ev.body(1), -0.003, 12, topology=True,
+                                                 resumable=True) if s.state is not None]
+    assert states == [5, 10]
+    with pytest.raises(ValueError, match="topology=True"):
+        next(recipes.arclength(ev, ev.body(1), -0.003, 3, resume={}))
+
+
 def test_a_run_past_its_budget_stops_after_its_last_step():
     # the run's work bounded: it ends with a warning after the step that
     # spent it, at the same step every time (work, not time); the caller's

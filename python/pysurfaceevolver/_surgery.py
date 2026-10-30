@@ -948,7 +948,7 @@ def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int
         # 16-bead pack's neck on a side wall was cut six times in a descent,
         # the body one piece still each time, the neck back where it was
         # cut, until the descent ran away)
-        nums, _, _, _ = ev._constraint_gaps()
+        nums, _ = ev._constraint_names()
         at_wall = ring[on[ring, walls[0]]]
         k = at_wall[np.argmin(np.linalg.norm(_delta(centre, x[at_wall], L), axis=1))]
         _, grad = ev._call(_core.constraint_normals, int(nums[walls[0]]))
@@ -1141,7 +1141,7 @@ def _dry_footprint(ev, m, x, ring, walls, gaps, event, what="neck against two so
     given: what names the case.)"""
     from ._events import Event
     from ._geometry import _chains
-    nums, _, _, names = ev._constraint_gaps()
+    nums, names = ev._constraint_names()
     edges, valence = np.asarray(m.edges), m.edge_valence()
     on = np.isnan(gaps)
     L = _slab(ev)
@@ -1318,7 +1318,7 @@ def _join_across(ev, event) -> None:
     under them, and laid onto it they wetted the wall more.)"""
     ids = np.asarray(ev.mesh().vertex_ids)[np.asarray(event.vertices, int)]
     _onto_copy(ev, event)
-    nums, _, _, names = ev._constraint_gaps()
+    nums, names = ev._constraint_names()
     num = int(nums[_column(nums, names, event.constraint)])
     left = _pinches_elsewhere(ev, num, ids)
     m = ev.mesh()
@@ -1949,7 +1949,7 @@ def contact(ev, event, keep=None) -> None:
     start = ev._save()
     ids = np.asarray(ev.mesh().vertex_ids)[np.asarray(event.vertices, int)]
     _onto_copy(ev, event)
-    nums, _, _, names = ev._constraint_gaps()
+    nums, names = ev._constraint_names()
     num = int(nums[_column(nums, names, event.constraint)])
     left = _pinches_elsewhere(ev, num, ids)
     _contact(ev, event, keep)
@@ -2173,7 +2173,7 @@ def _pole_quantum(ev, wall_key) -> float:
     0 for other walls (a plane, a sphere(gauge="flux"): no constants)."""
     wall = surface.walls.get(wall_key)
     if wall is None and isinstance(wall_key, (int, np.integer)):
-        nums, _, _, names = ev._constraint_gaps()
+        nums, names = ev._constraint_names()
         for c, name in zip(nums, names):
             if int(c) == int(wall_key):
                 wall = surface.walls.get(name or int(c))
@@ -2348,7 +2348,7 @@ def _edges_on(ev, keys) -> dict:
     """For each of the walls keys (the defined ones), which edges (mesh()
     rows) are on it, from one query (asked a wall at a time, 0.85 ms each,
     the tidying's 27k queries were 4.5% of a 16-bead pack's descent)."""
-    nums, _, _, names = ev._constraint_gaps()
+    nums, names = ev._constraint_names()
     number = {(n or int(k)): int(k) for k, n in zip(nums, names)}
     keys = [k for k in keys if k in number]
     if not keys:

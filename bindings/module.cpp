@@ -398,6 +398,27 @@ NB_MODULE(_core, m) {
     return r;
   }, CALLBACK_NAMES, "data: free vertices whose tangent cone Evolver's 'o' would pop");
 
+  m.def("constraint_list", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    std::vector<int> nums, attrs;
+    std::vector<const char *> names;
+    CallResult r = run_guarded([&] {
+      int k = 0;
+      int status = pyse_constraint_list(nullptr, nullptr, nullptr, 0, &k);
+      if (status != PYSE_OK) return status;
+      nums.resize(size_t(k)); attrs.resize(size_t(k)); names.resize(size_t(k));
+      return pyse_constraint_list(nums.data(), attrs.data(), names.data(), k, &k);
+    });
+    if (r.status == PYSE_OK) {
+      size_t k = nums.size();
+      nb::list py_names;
+      for (const char *s : names) py_names.append(nb::str(s ? s : ""));
+      r.data = nb::make_tuple(to_numpy(std::move(nums), {k}), to_numpy(std::move(attrs), {k}),
+                              py_names);
+    }
+    return r;
+  }, CALLBACK_NAMES, "The constraints' numbers, attribute bits and names (constraint_gaps "
+     "without the gaps).");
   m.def("constraint_gaps", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     std::vector<int> nums, attrs;
@@ -787,6 +808,27 @@ NB_MODULE(_core, m) {
   "sphere (kind 1, c and R^2), a slab's sphere at the nearest copy (kind 2), or the least "
   "of such spheres' (kind 3, c and R^2 by fours); False where it doesn't match the "
   "interpreter.");
+  m.def("keep_ids", [](bool on) {
+    Lock lock;
+    return bool(pyse_keep_ids(on ? 1 : 0));
+  }, "on"_a, "Whether dumps record element ids and loads keep them (Evolver's keep_originals: "
+     "a reloaded surface then has the ids it had, its elements linked in id order); returns the "
+     "previous setting.");
+  m.def("rng_state", []() {
+    Lock lock;
+    unsigned short probe[3] = {0, 0, 0};
+    unsigned short *was = seed48(probe);        // (reading it sets it: put back)
+    unsigned short keep[3] = {was[0], was[1], was[2]};
+    seed48(keep);
+    return std::vector<int>{keep[0], keep[1], keep[2]};
+  }, "drand48()'s state (Evolver's eigenvector probes start from its numbers; a load "
+     "reseeds it): three 16-bit words, for set_rng_state() (an exactly resumed run).");
+  m.def("set_rng_state", [](std::vector<int> s) {
+    Lock lock;
+    if ( s.size() != 3 ) throw std::invalid_argument("set_rng_state(): three 16-bit words");
+    unsigned short v[3] = {(unsigned short)s[0], (unsigned short)s[1], (unsigned short)s[2]};
+    seed48(v);
+  }, "state"_a, "Set drand48()'s state (see rng_state).");
   m.def("work", []() { Lock lock; return pyse_work_count(); },
         "The work done so far, in elements evaluated (a facet per energy, force or content "
         "pass, four per Hessian fill): deterministic, unlike the time taken.");

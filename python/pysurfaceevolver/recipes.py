@@ -54,6 +54,11 @@ class Step:
       on the way.
     * ``trapped``: with ``topology=True``, the volume of the liquid cut off
       from the run's body, held in bodies of its own (0 without any).
+    * ``state``: with ``arclength(..., topology=True, resumable=True)``, at
+      every fifth step, a function giving the run's state there (call it
+      before the next step is asked for): picklable, for
+      ``arclength(resume=...)`` from the surface as it is here. None otherwise
+      (and in a pickled Step).
     """
 
     index: int                 # position in ``values``
@@ -69,6 +74,16 @@ class Step:
     fell: bool = False         # reached by a descent after a change or a fall (topology=)
     changes: list = field(default_factory=list)  # the events whose changes were made
     trapped: float = 0.0       # the volume of the liquid cut off from the run's (topology=)
+    state: Optional[Callable[[], dict]] = field(default=None, repr=False, compare=False)
+
+    def __getstate__(self) -> dict:
+        d = dict(self.__dict__)
+        d["state"] = None           # (the run's, in its process: not kept)
+        d.pop("_branch_state", None)    # (the run's state has the one it needs)
+        return d
+
+    def __setstate__(self, d: dict) -> None:
+        self.__dict__.update(d)
 
 
 def _setter(what: Any) -> Callable[[Any, Any], None]:
@@ -682,6 +697,23 @@ _RUN_BUDGET = 1.5e6     # ... and its work, in passes over the surface (budget=)
 _TRIES = ((0, 0.5, None), (2, 0.5, 1.0), (5, 0.25, 0.9), (10, 0.5, 1.1))
 _TRIES_IN_RUN = 12      # ... and this many tries in a run at most
 _KEPT = (2, 5, 12)      # the states kept: the last steps' within 2, every 5th within 12
+# a resumable run reloads its surface after every this many steps (the layout
+# a reload gives, which a run resumed from that step's checkpoint has too: in
+# a process that deleted elements their slots are reused, the iteration order
+# isn't a reload's, and a resumed 32-bead run parted from the original at
+# round-off 3 steps on); only these steps carry a state to resume from
+_CANONICAL = 5
+
+
+def _canonical(ev) -> None:
+    """The surface reloaded into the layout a load of its dump in element
+    order gives (see _CANONICAL): twice, as a dump lists the elements in the
+    order they were made, and a load of that order leaves other free slots
+    and facet-edge orders than a load of the same surface listed by number
+    (a run resumed from a checkpoint reloaded once parted at round-off two
+    steps on)."""
+    for _ in range(2):
+        ev.restore(ev.save())
 # ... and the errors on the way it backs up from as from a stop (Evolver's,
 # EvolverError, and the edits' and Newton's): not the topology check's,
 # whose point is to stop at the first
@@ -707,6 +739,7 @@ class _Kept:
     history: list
     quiet: int
     stuck: int
+    portable: Any = None        # (a resumable run's: the surface as a Snapshot too)
 
 
 def _copied(memory: dict) -> dict:
@@ -723,7 +756,8 @@ class _Backups:
     at the shorter step), a stop there the next try; past it the step and
     the edge length are the run's own again."""
 
-    def __init__(self) -> None:
+    def __init__(self, portable: bool = False) -> None:
+        self.portable = portable        # (a resumable run: each state a Snapshot too)
         self.kept: List[_Kept] = []
         self.tries = 0                  # in the run
         self.here = 0                   # at the open place
@@ -735,11 +769,32 @@ class _Backups:
              stuck: int) -> None:
         from ._engine import surface
         memory = {k: v for k, v in vars(surface).items() if k not in ("generation", "name")}
-        self.kept.append(_Kept(index, step, ev._save(), _copied(memory), moves, list(history),
-                               quiet, stuck))
+        # (a resumable run's as Snapshots alone: backed up to by a reload,
+        # as a run resumed from a checkpoint is)
+        self.kept.append(_Kept(index, step, None if self.portable else ev._save(),
+                               _copied(memory), moves, list(history), quiet, stuck,
+                               ev.save() if self.portable else None))
         near, every, far = _KEPT
         self.kept = [k for k in self.kept if index - k.index <= near
                      or (k.index % every == 0 and index - k.index <= far)]
+
+    def export(self) -> dict:
+        """The backups, picklable (a resumable run's: its states as Snapshots)."""
+        kept = [dict(index=k.index, step=k.step, portable=k.portable, memory=_copied(k.memory),
+                     moves=k.moves, history=list(k.history), quiet=k.quiet, stuck=k.stuck)
+                for k in self.kept]
+        return dict(kept=kept, tries=self.tries, here=self.here, base=self.base,
+                    until=self.until, scale=self.scale)
+
+    @classmethod
+    def from_export(cls, d: dict) -> "_Backups":
+        b = cls(portable=True)
+        b.kept = [_Kept(k["index"], k["step"], None, _copied(k["memory"]), k["moves"],
+                        list(k["history"]), k["quiet"], k["stuck"], k["portable"])
+                  for k in d["kept"]]
+        b.tries, b.here, b.base, b.until, b.scale = (d["tries"], d["here"], d["base"],
+                                                     d["until"], d["scale"])
+        return b
 
     def past(self, index: int) -> bool:
         """Whether the run has just gone past the open place (the step and
@@ -765,10 +820,18 @@ class _Backups:
         base = min(failed, self.base) if self.here else failed
         back, factor, edges = _TRIES[here - 1]
         kept = next((k for k in reversed(self.kept) if k.index <= base - back), self.kept[0])
+        # (drand48's place kept: a Snapshot's restore reloads, which reseeds
+        # it, and a resumed run's states are Snapshots where the run's own
+        # were in memory)
+        rng = _core.rng_state() if hasattr(_core, "rng_state") else None
         try:
-            ev.restore(kept.saved)
+            ev.restore(kept.saved if kept.saved is not None else kept.portable)
         except ValueError:
-            return None             # (another surface loaded meanwhile)
+            if kept.portable is None:
+                return None             # (another surface loaded meanwhile)
+            ev.restore(kept.portable)
+        if rng is not None:
+            _core.set_rng_state(rng)
         vars(surface).update(_copied(kept.memory))
         if self.scale is None:
             self.scale = _edge_scale(ev)
@@ -790,7 +853,8 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
               remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
               events: Union[bool, float] = True, topology: bool = False,
               budget: Optional[float] = _RUN_BUDGET,
-              outlet: Union[None, str, Sequence[str]] = None) -> Iterator[Step]:
+              outlet: Union[None, str, Sequence[str]] = None,
+              resumable: bool = False, resume: Optional[dict] = None) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
     target volume or ``ev.quantity(name)``'s target).
@@ -918,7 +982,20 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     passes, past which it counts as stopped (and the run backs up). Work,
     not time: a run comes back the same on a slower or busier machine.
     None: no bound.
+
+    ``resumable`` (``topology=True``): every fifth step's :attr:`Step.state`
+    gives the run's state there, picklable; ``resume``: such a state, with the
+    surface restored as it was at that step (saved there, as a checkpoint
+    does, by :meth:`Evolver.dump` or :meth:`Evolver.save`), and the run goes
+    on exactly as it did from there (the same steps, to the bit). ``ds``,
+    ``steps`` and the other settings as the run had them. For that, such a
+    run reloads its surface at those steps (in a process that deleted
+    elements, the order they are visited in isn't a reload's), keeps element
+    ids through dumps and reloads, and keeps the states it may back up to as
+    snapshots (a dump each step): about 5% slower.
     """
+    if resume is not None and not topology:
+        raise ValueError("arclength(resume=...) resumes a topology=True run")
     if not topology:
         yield from _branch(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
                            halvings=halvings, along=along, remesh=remesh, events=events)
@@ -929,14 +1006,21 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
         ev.on_constraint(key)           # (an unknown name raises here)
     keep = what.number if isinstance(what, BodyView) else None
     previous = ev._liquid
-    ev._liquid = dict(keep=keep, outlet=outlets, dry=False,
-                      original=frozenset(int(i) for i in ev.bodies().ids))
+    ev._liquid = (dict(resume["liquid"]) if resume is not None else
+                  dict(keep=keep, outlet=outlets, dry=False,
+                       original=frozenset(int(i) for i in ev.bodies().ids)))
+    resumable = resumable or resume is not None
+    # (a resumable run's dumps keep the element ids, and its reloads too:
+    # pySE's memory of the surface by vertex and body numbers holds)
+    ids = _core.keep_ids(True) if resumable and hasattr(_core, "keep_ids") else None
     try:
         yield from _topology_run(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
                                  halvings=halvings, along=along, remesh=remesh, events=events,
-                                 budget=budget)
+                                 budget=budget, resumable=resumable, resume=resume)
     finally:
         ev._liquid = previous
+        if ids is not None:
+            _core.keep_ids(ids)
 
 
 def _trapped(ev) -> float:
@@ -965,8 +1049,12 @@ def _drained_out(ev) -> bool:
 
 
 def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, tidy: bool,
-                  halvings: int, along, remesh, events, budget) -> Iterator[Step]:
-    """arclength(topology=True)'s run (ev._liquid set)."""
+                  halvings: int, along, remesh, events, budget, resumable: bool = False,
+                  resume: Optional[dict] = None) -> Iterator[Step]:
+    """arclength(topology=True)'s run (ev._liquid set). ``resumable``: each
+    step yielded has its ``state`` (a picklable dict); ``resume``: such a
+    state, the run going on as from that yield (the surface the caller's,
+    as it was there)."""
     from ._analysis import EVENT_FACTOR
     factor = _event_factor(events) or EVENT_FACTOR
     set_value = _setter(what)
@@ -985,7 +1073,7 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
     # had its footprint dried in a fall, and the descent after it began by
     # gluing it back, the next fall's first event, until it ran away)
     history: list = []
-    backups, step_ds = _Backups(), ds
+    backups, step_ds = _Backups(portable=resumable), ds
     spent, counted = 0.0, _core.work()  # (the run's work, in passes; counted up to)
 
     def spend() -> bool:
@@ -1057,29 +1145,147 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                       UserWarning, stacklevel=4)
         return True
 
-    # (the liquid's clusters made bodies from the start: each trapped one
-    # its own, at the volume it holds)
-    reconcile(ev)
-    if drained_out():
-        return
-    while index < steps:
+    def remesh_h(r: Any) -> Optional[float]:
+        """The edge length a run's own remeshing keeps (None: none, or the
+        caller's)."""
+        return r.keywords["h0"] if isinstance(r, functools.partial) else None
+
+    def remesher(h: Optional[float]) -> Any:
+        if remesh is not None or h is None:
+            return remesh
+        return functools.partial(_keep_edges, h0=h, hi=_ON_THE_WAY)
+
+    def capture(kind: str, **extra: Any) -> dict:
+        """The run's state at a yield (Step.state, called while the run
+        waits there): picklable; the surface is the caller's to keep."""
+        from ._engine import surface
+        memory = {k: v for k, v in vars(surface).items() if k not in ("generation", "name")}
+        state = dict(kind=kind, index=index, quiet=quiet, stuck=stuck, start=start,
+                     remesh_h=remesh_h(run_remesh), last=list(last), moves=list(moves),
+                     history=list(history), step_ds=step_ds, spent=spent,
+                     backups=backups.export(), liquid=dict(ev._liquid),
+                     surface=_copied(memory), rng=_core.rng_state())
+        state.update(extra)
+        return state
+
+    seen: List[np.ndarray] = []
+
+    def after_step(step: Step, moved: bool) -> "tuple[str, Any]":
+        """What follows an ordinary step's yield: '' (on along the branch),
+        'lost' (its stability), 'event' (with the one coming: made instead),
+        'budget' (the run ends)."""
+        nonlocal counted, last, seen
+        if resumable and step.index % _CANONICAL == 0:
+            _canonical(ev)          # (a reload's layout: see _CANONICAL)
+        counted = _core.work()      # (not the caller's work between steps)
         if out_of_budget():
+            return "budget", None
+        orient_lines(ev)
+        move_poles(ev)      # (sphere(axis=): its pole kept off its contact lines)
+        last, seen = (last + [step])[-3:], (seen + [ev.vertices])[-2:]
+        if len(last) > 1 and _negative(last[-1]) > _negative(last[-2]):
+            # (not kept: backed up to, the run would go on along the
+            # unstable branch from it, its stability lost unseen)
+            return "lost", None
+        kept(step, moved)
+        coming = _coming(step.events, last[-2].events, ev.periods) if len(last) > 1 else []
+        coming += [e for e in step.events if _resting(e) and not any(e is c for c in coming)]
+        if coming:
+            return "event", coming[0]   # (the run would stop here: made instead)
+        return "", None
+
+    def after_settled(settled: Step, before: Optional[float]) -> bool:
+        """What follows the yield of where a change or fall ended: whether
+        the run ends."""
+        nonlocal counted, last, index, quiet, stuck
+        if resumable and settled.index % _CANONICAL == 0:
+            _canonical(ev)          # (a reload's layout: see _CANONICAL)
+        counted = _core.work()
+        if drained_out():
+            return True
+        last = [settled]
+        index += 1
+        quiet = 0 if settled.changes else quiet + 1
+        # (stuck: falls without a change that didn't move the value either;
+        # falls pushed on past a fold each to a stable state at less liquid
+        # are drainage, if the branch can't step from them: a pack's run
+        # stopped after three, 72% drained, each draining more)
+        moved_on = before is not None and abs(settled.value - before) > 1e-9*max(1.0, abs(before))
+        stuck = 0 if (settled.changes or moved_on) else stuck + 1
+        kept(settled, False)
+        if stuck >= 3 or quiet >= _QUIET_FALLS:
+            # (>=: backed up to such a state, the next fall like it stops too)
+            reason = ("three falls in a row ended without a change of topology or of the "
+                      "value" if stuck >= 3 else
+                      f"{quiet} falls in a row ended without a change of topology")
+            if go_back(reason):
+                return False
+            warnings.warn(f"arclength(): {reason}: stopping", UserWarning, stacklevel=4)
+            return True
+        return False
+
+    pending: Optional[dict] = None
+    if resume is not None:
+        # (from a step's state, the surface as it was there: the run as it
+        # was at that yield, what follows the yield first)
+        from ._engine import surface as memory_
+        index, quiet, stuck, start = (resume["index"], resume["quiet"], resume["stuck"],
+                                      resume["start"])
+        run_remesh = remesher(resume["remesh_h"])
+        last, moves, history = list(resume["last"]), list(resume["moves"]), list(resume["history"])
+        step_ds, spent = resume["step_ds"], resume["spent"]
+        backups = _Backups.from_export(resume["backups"])
+        vars(memory_).update(_copied(resume["surface"]))
+        _core.set_rng_state(resume["rng"])
+        pending = resume
+    else:
+        # (the liquid's clusters made bodies from the start: each trapped one
+        # its own, at the volume it holds)
+        reconcile(ev)
+        if drained_out():
             return
-        last = last[-1:]                # (the state a change ended in: events coming from it)
-        seen: List[np.ndarray] = []
-        lost, event, moved = False, None, False
+    while index < steps:
+        if pending is not None and pending["kind"] == "settled":
+            done_, pending = pending, None
+            if after_settled(done_["settled"], done_["before"]):
+                return
+            continue
         failure: Optional[Exception] = None
-        if not start and callable(run_remesh):
-            # (the edges in range from where a change or fall ended, not only
-            # from a branch's third point on: falling every few steps, a
-            # pack's surface went on with the edges a descent leaves, up to
-            # twice their targets, 0.41 for 0.2; the branch relaxes it first)
-            run_remesh(ev)
-        branch = _branch(ev, what, step_ds, steps - index + (0 if start else 1), bounds=bounds,
-                         tol=tol, tidy=tidy, halvings=halvings,
-                         along=along if start else None, remesh=run_remesh, events=events,
-                         report=start)
-        while True:
+        if pending is not None:
+            # (the branch as it was where it yielded the step)
+            p, pending = pending, None
+            seen = list(p["seen"])
+            lost, event, moved = False, None, p["moved"]
+            bargs = dict(p["branch_args"])
+            branch = _branch(ev, what, bargs["ds"], bargs["steps"], bounds=bounds, tol=tol,
+                             tidy=tidy, halvings=halvings, along=None,
+                             remesh=remesher(bargs["remesh_h"]), events=events,
+                             report=bargs["start"], resume=p["branch"])
+            after, coming_ = after_step(p["step"], moved)
+            if after == "budget":
+                return
+            lost, event = after == "lost", coming_
+            going = after == ""
+        else:
+            if out_of_budget():
+                return
+            last = last[-1:]                # (the state a change ended in: events coming from it)
+            seen = []
+            lost, event, moved = False, None, False
+            if not start and callable(run_remesh):
+                # (the edges in range from where a change or fall ended, not only
+                # from a branch's third point on: falling every few steps, a
+                # pack's surface went on with the edges a descent leaves, up to
+                # twice their targets, 0.41 for 0.2; the branch relaxes it first)
+                run_remesh(ev)
+            bargs = dict(ds=step_ds, steps=steps - index + (0 if start else 1), start=start,
+                         remesh_h=remesh_h(run_remesh))
+            branch = _branch(ev, what, step_ds, steps - index + (0 if start else 1),
+                             bounds=bounds, tol=tol, tidy=tidy, halvings=halvings,
+                             along=along if start else None, remesh=run_remesh, events=events,
+                             report=start)
+            going = True
+        while going:
             try:
                 step = next(branch)
             except StopIteration:
@@ -1098,23 +1304,20 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
             step.trapped = _trapped(ev)
             index += 1
             spend()
+            branch_state = getattr(step, "_branch_state", None)
+            if resumable and branch_state is not None and step.index % _CANONICAL == 0:
+                step.state = functools.partial(capture, "step", step=step, moved=moved,
+                                               seen=list(seen), branch=branch_state,
+                                               branch_args=dict(bargs))
             yield step
-            counted = _core.work()      # (not the caller's work between steps)
-            if out_of_budget():
+            after, coming_ = after_step(step, moved)
+            if after == "budget":
                 return
-            orient_lines(ev)
-            move_poles(ev)      # (sphere(axis=): its pole kept off its contact lines)
-            last, seen = (last + [step])[-3:], (seen + [ev.vertices])[-2:]
-            if len(last) > 1 and _negative(last[-1]) > _negative(last[-2]):
-                # (not kept: backed up to, the run would go on along the
-                # unstable branch from it, its stability lost unseen)
+            if after == "lost":
                 lost = True
                 break
-            kept(step, moved)
-            coming = _coming(step.events, last[-2].events, ev.periods) if len(last) > 1 else []
-            coming += [e for e in step.events if _resting(e) and not any(e is c for c in coming)]
-            if coming:
-                event = coming[0]       # (the run would stop here: made instead)
+            if after == "event":
+                event = coming_
                 break
         if index >= steps:
             return
@@ -1212,28 +1415,10 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                        fell=True, changes=cut, trapped=_trapped(ev))
         before = last[-1].value if last else None
         spend()
+        if resumable and settled.index % _CANONICAL == 0:
+            settled.state = functools.partial(capture, "settled", settled=settled, before=before)
         yield settled
-        counted = _core.work()
-        if drained_out():
-            return
-        last = [settled]
-        index += 1
-        quiet = 0 if cut else quiet + 1
-        # (stuck: falls without a change that didn't move the value either;
-        # falls pushed on past a fold each to a stable state at less liquid
-        # are drainage, if the branch can't step from them: a pack's run
-        # stopped after three, 72% drained, each draining more)
-        moved_on = before is not None and abs(settled.value - before) > 1e-9*max(1.0, abs(before))
-        stuck = 0 if (cut or moved_on) else stuck + 1
-        kept(settled, False)
-        if stuck >= 3 or quiet >= _QUIET_FALLS:
-            # (>=: backed up to such a state, the next fall like it stops too)
-            reason = ("three falls in a row ended without a change of topology or of the "
-                      "value" if stuck >= 3 else
-                      f"{quiet} falls in a row ended without a change of topology")
-            if go_back(reason):
-                continue
-            warnings.warn(f"arclength(): {reason}: stopping", UserWarning, stacklevel=3)
+        if after_settled(settled, before):
             return
 
 
@@ -1375,9 +1560,13 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
             bounds: Optional["tuple[float, float]"] = None, tol: float = 1e-8,
             tidy: bool = True, halvings: int = 6, along: Optional[np.ndarray] = None,
             remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
-            events: Union[bool, float] = True, report: bool = True) -> Iterator[Step]:
+            events: Union[bool, float] = True, report: bool = True,
+            resume: Optional[dict] = None) -> Iterator[Step]:
     """arclength() along one branch (see there), without falling; without
-    ``report``, its stops aren't warned of (the caller goes on from them)."""
+    ``report``, its stops aren't warned of (the caller goes on from them).
+    ``resume``: a step's ``_branch_state`` (each yielded from the second on
+    carries one): the branch goes on as from that yield, the surface as it
+    was there."""
     def say(message: str) -> None:
         if report:
             warnings.warn(message, UserWarning, stacklevel=4)
@@ -1443,61 +1632,81 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
         return bounds is not None and not (min(bounds) <= v <= max(bounds))
 
     from ._results import IterationResult
-    r = ev.relax(stability=False, tol=tol)
-    if not r.converged:
-        say("arclength(): the surface didn't relax at the start")
-        return
-    ok, negative, residual = _arc_settle(ev, put, float(value), tol, False)
-    points = [(float(value), ev.vertices)]
-    before = look()
-    crossed = crossings()
-    yield step(0, float(value), 0, negative, residual, before)
-    if steps < 2:
-        return
-    # the first step in the value alone (or along ``along`` at the value),
-    # halved like the others when Newton doesn't get there
-    # (back by the coordinates, or by a copy once tidying has flipped edges)
-    start, copy, first, x_start = ev._coords(), ev.save(), ds, ev.vertices
-    for _ in range(halvings + 1):
-        if along is None:
-            put(value + first)
-            kept = ev.newton(20, tol=tol)
-            iterations, ok = kept.newton_steps, False
-            if kept.converged:
-                ok, negative, residual = _arc_settle(ev, put, float(value + first), tol, tidy)
-                found = look() if ok else []
-                ok = ok and passed(found, crossed) is None
-        else:
-            tangent = (np.sign(first)*along, 0.0)
-            ok, iterations = _arc_correct(ev, put, x_start + first*along, float(value),
-                                          *tangent, tol, 12, abs(first))
+
+    def at(st: Step, points: list, crossed: int, before: list, h_next: float, index: int,
+           coming: list, v: float) -> Step:
+        """The yielded step with the branch's state there (_branch_state):
+        what the code after the yield needs, and the loop's carried values."""
+        st._branch_state = dict(points=list(points), crossed=crossed, before=list(before),  # type: ignore[attr-defined]
+                                h=h_next, index=index, coming=list(coming), v=v, steps=steps,
+                                ds=ds)
+        return st
+
+    if resume is not None:
+        points, crossed, before = list(resume["points"]), resume["crossed"], list(resume["before"])
+        if resume["coming"]:
+            stop(resume["v"], resume["coming"])
+            return
+        h, first_index = resume["h"], resume["index"] + 1
+    else:
+        first_index = 2
+    if resume is None:
+        r = ev.relax(stability=False, tol=tol)
+        if not r.converged:
+            say("arclength(): the surface didn't relax at the start")
+            return
+        ok, negative, residual = _arc_settle(ev, put, float(value), tol, False)
+        points = [(float(value), ev.vertices)]
+        before = look()
+        crossed = crossings()
+        yield step(0, float(value), 0, negative, residual, before)
+        if steps < 2:
+            return
+        # the first step in the value alone (or along ``along`` at the value),
+        # halved like the others when Newton doesn't get there
+        # (back by the coordinates, or by a copy once tidying has flipped edges)
+        start, copy, first, x_start = ev._coords(), ev.save(), ds, ev.vertices
+        for _ in range(halvings + 1):
+            if along is None:
+                put(value + first)
+                kept = ev.newton(20, tol=tol)
+                iterations, ok = kept.newton_steps, False
+                if kept.converged:
+                    ok, negative, residual = _arc_settle(ev, put, float(value + first), tol, tidy)
+                    found = look() if ok else []
+                    ok = ok and passed(found, crossed) is None
+            else:
+                tangent = (np.sign(first)*along, 0.0)
+                ok, iterations = _arc_correct(ev, put, x_start + first*along, float(value),
+                                              *tangent, tol, 12, abs(first))
+                if ok:
+                    ok, negative, residual = _arc_settle(ev, put, float(_current(ev, what)), tol,
+                                                         tidy, tangent, abs(first))
+                    found = look() if ok else []
+                    ok = ok and passed(found, crossed) is None
             if ok:
-                ok, negative, residual = _arc_settle(ev, put, float(_current(ev, what)), tol,
-                                                     tidy, tangent, abs(first))
-                found = look() if ok else []
-                ok = ok and passed(found, crossed) is None
-        if ok:
-            break
-        if not ev._put_back(start):
-            ev.restore(copy)
-        put(value)
-        first /= 2
-    if not ok:
-        where = f"at {value + 2*first:.6g}" if along is None else "along the given mode"
-        say(f"arclength(): no equilibrium found {where} by Newton steps (even with "
-                      f"steps of {abs(2*first):.3g}); the surface is back at the start")
-        return
-    v = float(_current(ev, what))
-    points.append((v, ev.vertices))
-    crossed = crossings()
-    coming = _coming(found, before, ev.periods)
-    before = found
-    yield step(1, v, iterations, negative, residual, found)
-    if coming:
-        stop(v, coming)
-        return
-    h = abs(first)              # (and back up to ds below)
-    for index in range(2, steps):
+                break
+            if not ev._put_back(start):
+                ev.restore(copy)
+            put(value)
+            first /= 2
+        if not ok:
+            where = f"at {value + 2*first:.6g}" if along is None else "along the given mode"
+            say(f"arclength(): no equilibrium found {where} by Newton steps (even with "
+                          f"steps of {abs(2*first):.3g}); the surface is back at the start")
+            return
+        v = float(_current(ev, what))
+        points.append((v, ev.vertices))
+        crossed = crossings()
+        coming = _coming(found, before, ev.periods)
+        before = found
+        yield at(step(1, v, iterations, negative, residual, found), points, crossed, before,
+                 abs(first), 1, coming, v)
+        if coming:
+            stop(v, coming)
+            return
+        h = abs(first)              # (and back up to ds below)
+    for index in range(first_index, steps):
         if remesh_now is not None:
             # (a remeshed surface that doesn't settle is put back as it was:
             # the run goes on, and remeshing is tried again after the next point)
@@ -1591,7 +1800,8 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
         crossed = crossings()
         coming = _coming(found, before, ev.periods)
         before = found
-        yield step(index, v, iterations, negative, residual, found)
+        yield at(step(index, v, iterations, negative, residual, found), points, crossed,
+                 before, min(abs(ds), 2*h), index, coming, v)
         if coming:
             stop(v, coming)
             return
