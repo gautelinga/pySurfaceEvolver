@@ -59,6 +59,7 @@ _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
 _CONTACT_SPLITS = 3            # relax(): splits of long contact-line spokes, at most
 _CONTACT_PASSES = 2           # relax(): relaxes after splitting long contact-line spokes, at most
 _ROUND_BLOWUP = 2             # a gradient round more than doubling the residual or a target gap is undone
+_END_STEPS = 3                # relax(): steps at most after the last tidying, to meet the targets
 _ENERGY_BLOWUP = 1e4           # ... and a step moving the energy by this many times its scale (a surface flung apart)
 _STAGE_GAP = 0.25             # relax() stages a target further off than this (relative) if a round folds facets,
 _STAGE = 0.1                  # ... each moving the targets by at most this (relative),
@@ -1508,9 +1509,15 @@ class _Run:
                 self.slowed = True
                 break
         # vertex averaging moves volumes a little (on a degenerate mesh a lot),
-        # and the next round's steps would project them back: at the end, one
-        # step does
-        if tidy and len(trace.energy) > first and ev._target_gap()[0] > _TARGET_LOST:
+        # and the next round's steps would project them back: at the end,
+        # steps do, up to _END_STEPS (one left a pack's trapped body of 0.03
+        # 0.5% off, 3% after 'u; V': within Evolver's tolerance, which is
+        # relative to the sum of the volume's terms' sizes, ten times the
+        # volume there; a topology descent's run was undone for it, over and
+        # over. A second step met it to 2e-8)
+        for _ in range(_END_STEPS):
+            if not (tidy and len(trace.energy) > first and ev._target_gap()[0] > _TARGET_LOST):
+                break
             trace.step(ev)
         trace.settled = quiet >= _WINDOW
         steps = len(trace.energy) - first

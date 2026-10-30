@@ -3069,7 +3069,10 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                             if not falling:
                                 guard(ev)
                             continue
-                        return None, changes, "the descent ran away (volumes or energy)"
+                        # (the reason the last run gone wrong had; it said
+                        # "volumes or energy", and a pack's were crossings)
+                        why = _LAST_WRONG[0] if _LAST_WRONG else "its runs"
+                        return None, changes, f"the descent ran away ({why})"
                 guard(ev)
                 _checked(ev, "a relax run")
             if remeshing and not (chunk is not None and chunk.converged):
@@ -3612,6 +3615,7 @@ def _implausible(ev, before: tuple, trace=None) -> str:
            "through a wall" if _outside(ev) > out else "")
     if why:
         _log.debug("implausible run: %s", why)
+        _LAST_WRONG[:] = [why]
     if why == "crossings":
         _note_crossed(ev)
         _PUSH_AT.extend(_off_walls(ev, _CROSSED_AT[0]))
@@ -3653,6 +3657,7 @@ def _note_crossed(ev) -> None:
 
 _CROSSED_AT: list = []             # (where the last run judged crossed did)
 _RUN_FAILED: list = []             # (Evolver's error in the last run, if it failed: _away_from_poles)
+_LAST_WRONG: list = []             # (why the last run judged gone wrong was: _implausible)
 
 
 def _crossings(ev) -> int:

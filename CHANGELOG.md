@@ -76,6 +76,14 @@
 
 ### Fixes
 
+- `relax()` ends with the volumes on their targets after its last tidying. Vertex
+  averaging moves volumes that have terms off the facets (a contact-line gauge's, a
+  constraint's content); one gradient step after it restored them only to Evolver's
+  tolerance, relative to the sum of the terms' sizes: ten times the volume of a pack's
+  trapped body of 0.03, which was left 0.5% off, and a topology descent undid the run
+  for it, over and over (a 32-bead run spent its budget so). Up to three steps now
+  meet them (the second did, to 2e-8). A descent that runs away says why its last
+  run went wrong (it said "volumes or energy"; mostly it is crossings).
 - A topology run no longer makes a trapped body of a piece of the surface that holds
   no liquid. Where the clusters' grid saw the liquid side of such a piece cut off (a
   dry spot just opened on a bead the liquid wetted, the film round it under the
