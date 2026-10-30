@@ -574,6 +574,15 @@ def test_the_lines_gauge_is_the_flux_gauge_to_its_discretization():
     assert np.all(gaps[2] < gaps[0]/10)
 
 
+def test_the_lines_gauge_with_the_floor_off_zero():
+    # (the volume's facet integrand (0, 0, z - z_f) in closed form: its
+    # offset; wrong, the volume would be off by z_f times the floor's area)
+    out = _both(lambda: _bead(PERIODS, gauge="flux", zf=0.3, floor_angle=90.0))
+    assert out["lines"][3][0] > 0
+    assert abs(out["lines"][1] - out["flux"][1]) < 1e-4
+    assert abs(out["lines"][0] - out["flux"][0]) < 1e-4
+
+
 def test_newton_steps_converge_with_the_lines_gauge():
     # (the turning angles' second derivatives: Newton's residual to round-off)
     out = _both(lambda: _bead(PERIODS, gauge="flux", floor_angle=90.0),

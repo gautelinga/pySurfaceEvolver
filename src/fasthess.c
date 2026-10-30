@@ -1381,10 +1381,17 @@ static int linear_ok(void)
       && !web.torus_flag;
 }
 
+/* (a slab periodic in x and y: the area's Hessian takes the sides at the
+   minimum image, set for its loop alone; the body's paths stay serial) */
+static int side_slab = 0;
+static REAL side_L[2];
+
 static void side_of(vertex_id *c, int i, REAL *side)
 { REAL *t = get_coord(c[i]), *h = get_coord(c[(i+1)%3]);
   int k;
   for ( k = 0 ; k < SDIM ; k++ ) side[k] = h[k] - t[k];   /* get_fe_side() */
+  if ( side_slab )
+    for ( k = 0 ; k < 2 ; k++ ) side[k] -= side_L[k]*floor(side[k]/side_L[k] + 0.5);
 }
 
 /* area_hessian()'s loop body */
@@ -1444,8 +1451,20 @@ static void area_facet(struct linsys *S, facet_id f_id, vertex_id *c, int me,
 }
 
 int fl_area_hessian(struct linsys *S, REAL *rhs)
-{ if ( !linear_ok() ) return 0;
-  return run_elements(S,rhs,FACET,area_facet,NULL,hess_threads());
+{ int done;
+  side_slab = 0;     /* (set for this loop alone: a Ctrl-C's jump out can't leave it) */
+  if ( !linear_ok() )
+  { /* (a slab: the facets' sides at the minimum image, as Evolver's wraps
+       give them, every edge shorter than half a period) */
+    if ( fl_disabled() || threadflag || web.representation != SOAPFILM
+         || web.modeltype != LINEAR || SDIM != 3 || !follow_slab(NULL) )
+      return 0;
+    follow_slab(side_L);
+    side_slab = 1;
+  }
+  done = run_elements(S,rhs,FACET,area_facet,NULL,hess_threads());
+  side_slab = 0;
+  return done;
 }
 
 /* body_hessian()'s first facet loop: volume constraint gradients */
@@ -1517,7 +1536,8 @@ static void body_linear_facet(struct linsys *S, facet_id f_id, vertex_id *c, int
 }
 
 int fl_body_hessian_linear(struct linsys *S, REAL *rhs, REAL *Z)
-{ if ( !linear_ok() ) return 0;
+{ side_slab = 0;
+  if ( !linear_ok() ) return 0;
   return run_elements(S,rhs,FACET,body_linear_facet,Z,hess_threads());
 }
 

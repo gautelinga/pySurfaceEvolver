@@ -310,10 +310,32 @@ static int bodies_alloc(int n)
 
 /* the turning angles, each group's area, n and the loops' constant: every
    pass (the coordinates move; the table's topology is kept) */
+static REAL *pc_gx = NULL;           /* the entries' A and B as the angles were last taken at */
+static long pc_gx_size = 0;
+static int pc_gx_valid = 0;          /* (0: the table was rebuilt since) */
+
 static void pc_geometry(void)
-{ int i, g;
+{ int i, g, same;
   int threads = fl_threads();
   (void)threads;
+  /* (a gradient step's second pass at the coordinates of its first: the
+     angles and constants as they are) */
+  if ( 6L*nent > pc_gx_size )
+  { REAL *p = (REAL*)realloc(pc_gx,(6L*nent + 1024)*sizeof(REAL));
+    if ( !p ) { free(pc_gx); pc_gx = NULL; pc_gx_size = 0; pc_gx_valid = 0; }
+    else { pc_gx = p; pc_gx_size = 6L*nent + 1024; pc_gx_valid = 0; }
+  }
+  same = pc_gx_valid && pc_gx;
+  for ( i = 0 ; pc_gx && i < nent ; i++ )
+  { REAL *x = pc_gx + 6L*i;
+    const REAL *a = get_coord(ent[i].A), *b = get_coord(ent[i].B);
+    if ( memcmp(x,a,3*sizeof(REAL)) || memcmp(x + 3,b,3*sizeof(REAL)) )
+    { same = 0;
+      memcpy(x,a,3*sizeof(REAL)); memcpy(x + 3,b,3*sizeof(REAL));
+    }
+  }
+  pc_gx_valid = pc_gx != NULL;
+  if ( same ) { pc_geom_done = 1; return; }
   /* (the angles on the threads, twice a gradient step; summed in order) */
 #ifdef _OPENMP
   #pragma omp parallel for schedule(static) num_threads(threads) if ( threads > 1 && nent >= 512 )
@@ -351,6 +373,7 @@ static void pc_build(void)
 
   pc_slab = PC_SLAB(pc_L);
   nent = 0; ngrp = 0; pc_bad = 0;
+  pc_gx_valid = 0;
   if ( (int)web.skel[EDGE].max_ord + 1 > nslot )
   { nslot = (int)web.skel[EDGE].max_ord + 1 + 1024;
     slot = (int*)realloc(slot,nslot*sizeof(int));

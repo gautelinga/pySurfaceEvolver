@@ -901,6 +901,14 @@ class _Engine:
             self.command(f"{WETTING_QUANTITY}.modulus := {0 if ok else 1}")
         if ok:
             self._register_native_formulas()
+            if hasattr(_core, "native_flux"):
+                # (the volume's facet integrand (0, 0, z - z_f) in closed form, the
+                # method and each body's copy of it: the interpreter's at every
+                # Gauss point was 5% of the threads' time in a gradient step)
+                from ._periodic import VOLUME_METHOD
+                zf = float(floor[0].shape[2]) if floor else 0.0
+                for name in [VOLUME_METHOD] + [f"body_{int(b)}_vol_meth" for b in self.bodies().ids]:
+                    _core.native_flux(name, 0, 0, 1, [zf, 0.0, 0.0], [])
             self.command("recalc")
         return ok
 

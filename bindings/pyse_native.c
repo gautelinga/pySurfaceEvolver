@@ -251,9 +251,9 @@ struct flux_group
 
 struct flux_field
 { struct expnode *key;
-  int base;                      /* 0 none, 1 (0,0,z), 2 a sphere's content part,
+  int base;                      /* 0 none, 1 (0,0,z - z_f), 2 a sphere's content part,
                                     3 a plane's content, 4 a plane's wetting */
-  REAL bc[12];                   /* 2: the sphere's centre; 3: n_z, o, u, v;
+  REAL bc[12];                   /* 1: z_f; 2: the sphere's centre; 3: n_z, o, u, v;
                                     4: angle, tension, o, u, v */
   int nterm;
   struct flux_term *term;
@@ -950,7 +950,7 @@ static void flux_base(const struct flux_field *f, const REAL *x, REAL floor, REA
   { v[m] = 0.0;
     for ( i = 0 ; i < 3 ; i++ ) g[m][i] = 0.0;
   }
-  if ( f->base == 1 ) { v[2] = x[2]; g[2][2] = 1.0; }
+  if ( f->base == 1 ) { v[2] = x[2] - f->bc[0]; g[2][2] = 1.0; }   /* (bc[0]: a floor's z_f) */
   else if ( f->base == 2 )
   { REAL XX = x[0] - f->bc[0], YY = x[1] - f->bc[1], ZZ = x[2] - f->bc[2];
     v[0] = ZZ/3.0*YY;        g[0][1] = ZZ/3.0; g[0][2] = YY/3.0;

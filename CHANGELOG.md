@@ -18,6 +18,13 @@
   and forces, taken by the threads as they go, were walked again one element at a
   time; the threads' records are dropped instead, and such a pass is one parallel
   region rather than one per 512 elements a thread. The same values, to the last bit.
+- And 1.4x more with the lines gauge on one thread (1.3x on four): a gradient
+  step's second pass at its first's coordinates takes the turning angles as they were
+  (the same to the bit as a table built afresh); the volume's facet integrand
+  (0, 0, z - z_f) is evaluated in closed form, not by the interpreter at each Gauss
+  point. Altogether 2.9x on one thread and 2.6x on four since the lines gauge came.
+  Newton steps in a slab put surface tension's Hessian together on the threads (its
+  facets' sides at the minimum image), as without periods.
 
 - Topology runs no longer stall on a Newton step thrown far. Near a fold, a Newton
   step of `arclength()`'s corrector on an indefinite Hessian could move vertices by
