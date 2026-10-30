@@ -47,7 +47,7 @@ try:
         ev.command(c)
         out.append([ev.total_energy] + [q.value for q in ev.quantities().values()])
 except EvolverError as e:
-    out = str(e).strip().splitlines()[0]
+    out.append(str(e).strip().splitlines()[0])   # the rows before it kept
 print(json.dumps(out))
 """
 
@@ -67,6 +67,9 @@ def test_integral_quantities_match_original(tmp_path):
         fast = run(path, {"PYSE_THREADS": threads})
         assert len(fast) == len(original)
         for row, row0 in zip(fast, original):
+            if isinstance(row0, str):      # an error (a Newton step refused where the
+                assert row == row0         # path differs, as on another libm): the same
+                continue
             for v, v0 in zip(row, row0):
                 assert v == pytest.approx(v0, rel=1e-9), threads
 
@@ -75,7 +78,7 @@ def test_integrand_errors_reported_as_before(tmp_path):
     path = datafile(tmp_path, "sqrt(z-0.5)")   # negative on the bottom facets
     original = run(path, {"PYSE_NO_FAST_LOOPS": "1"})
     fast = run(path, {"PYSE_THREADS": "8"})
-    assert isinstance(original, str) and "Square root of negative" in original
+    assert isinstance(original[-1], str) and "Square root of negative" in original[-1]
     assert fast == original
 
 
