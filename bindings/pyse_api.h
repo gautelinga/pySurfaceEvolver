@@ -169,6 +169,7 @@ int pyse_native_simd(int on);
    d) or a sphere (kind 1: p = c, R^2), where that matches the interpreter at
    test points (1; else 0). */
 int pyse_native_formula_register(int con, int kind, const double *p);
+int pyse_native_formula_register_many(int con, const double *p, int np);  /* kind 3 */
 /* Gradient steps with fewer energy evaluations (src/iterate.c,
    pyse_fast_steps: the move at scale 0 left out where nothing changed since
    the last step, the scale from a parabola with the energy's slope where it

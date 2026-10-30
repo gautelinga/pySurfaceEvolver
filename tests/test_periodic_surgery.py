@@ -339,6 +339,32 @@ def test_a_spheres_guard_in_a_slab_holds_at_every_copy():
     assert "floor" not in S._guard_formula(_bead(None), "bead")
 
 
+def test_a_slabs_free_vertices_take_one_guard_against_every_sphere():
+    # (the least of the spheres' guard terms, at their nearest copies: with a
+    # guard a sphere and three at most, a free vertex in a crowded pore went
+    # into a fourth bead; its closed form registered, C checking it bit for
+    # bit against the interpreter's nested minimum)
+    from pysurfaceevolver import _core
+    drop = shapes.cap(0.7, 0.7, nr=6, nt=24)
+    ev = pyse.Evolver()
+    ev.load_arrays(_into_cell(drop.vertices, PERIODS), drop.faces,
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                                2: C.sphere((0, 0, 1.2), 0.5, contact_angle=90.0),
+                                3: C.sphere((0.9, 1.0, 0.5), 0.4, contact_angle=90.0)},
+                   vertex_constraints={1: drop.rims["rim"]},
+                   bodies=[pyse.Body(volume=None)], periods=PERIODS)
+    S.guard(ev)
+    nums, _, dist, names = ev._constraint_gaps(guards=True)
+    names = [str(n) for n in names]
+    on = np.isnan(dist)
+    col = names.index(S.ANY_SPHERE)
+    assert on[:, col].any()
+    spheres = [names.index(f"pyse_guard_{k}") for k in (2, 3) if f"pyse_guard_{k}" in names]
+    free = ~on[:, [i for i, n in enumerate(names) if not n.startswith("pyse_guard_")]].any(axis=1)
+    assert not on[np.ix_(free, spheres)].any()
+    assert _core.native_formula(int(nums[col]), 3, [0.0, 0.0, 1.2, 0.25, 0.9, 1.0, 0.5, 0.16])
+
+
 def test_a_vertex_put_on_a_sphere_is_moved_home_first():
     ev = _bead(PERIODS)
     m = ev.mesh()

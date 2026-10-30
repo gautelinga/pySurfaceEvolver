@@ -945,7 +945,15 @@ class _Engine:
         if not shapes:
             return
         nums, _, _, names = self._constraint_gaps(guards=True)
+        from ._surgery import ANY_SPHERE, _sphere_centre
         for c, name in zip(nums, names):
+            if name == ANY_SPHERE and self.periods is not None:
+                # (a slab's guard against every sphere: the least of their
+                # terms, in the order _any_sphere_formula wrote them)
+                spheres = [k for k in shapes if shapes[k][0] == 1 and _sphere_centre(k) is not None
+                           and getattr(surface.walls[k], "contact_angle", None) is not None]
+                _core.native_formula(int(c), 3, [v for k in spheres for v in shapes[k][1]])
+                continue
             key = name or int(c)
             if isinstance(key, str) and key.startswith(GUARD_PREFIX):
                 key = key[len(GUARD_PREFIX):]

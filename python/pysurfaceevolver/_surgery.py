@@ -22,6 +22,9 @@ _SEAM = 3.0     # the cut's tips are tidied within this many median edges
 _TOUCH = 0.05   # a solid this close (in its event's edges): the surface resting on it
 _GUARD_REACH = 5.0  # free vertices are guarded from the walls within this many median edges
 _GUARDS = 3         # ... the nearest this many (a free vertex hits at most that many at once)
+# in a slab, a free vertex's guard against the spheres: one, against the
+# nearest at its nearest copy (_any_sphere_formula)
+ANY_SPHERE = GUARD_PREFIX + "any_sphere"
 _POLE_MARGIN = 0.5  # a sphere(axis=)'s pole moved when a contact line comes this near (radii)
 _POLE_TRIES = 3     # a run that came within half that done again this often, the poles moved
 _POLE_CHUNK = 10    # runs in chunks of this many steps, the poles moved ahead of the lines between
@@ -245,6 +248,12 @@ def guard(ev) -> None:
         if name not in names:
             ev.command(f"define constraint {name} nonnegative formula: {_guard_formula(ev, key)}")
             defined.append(name)
+    spheres = [k for k in walls if _sphere_centre(k) is not None]
+    many = _slab(ev) is not None and len(spheres) >= 2
+    if many and ANY_SPHERE not in names:
+        ev.command(f"define constraint {ANY_SPHERE} nonnegative formula: "
+                   f"{_any_sphere_formula(ev, spheres)} = 0")
+        defined.append(ANY_SPHERE)
     if defined:
         ev._register_native_formulas()      # (theirs in closed form too)
         nums, _, dist, names = ev._constraint_gaps(guards=True)
@@ -280,6 +289,17 @@ def guard(ev) -> None:
     # runs undone so in one descent, which then ran away; nor the two nearest,
     # as before that: a free vertex by a bead in the corner, guarded against
     # the bead and one side, went 0.23 out through the other)
+    any_rows = np.zeros(len(sel), dtype=bool)
+    if many:
+        # (a free vertex: one guard against every sphere, the nearest at its
+        # nearest copy, and the other walls' own: with three guards against
+        # three beads, free vertices in a 64-bead pack's crowded pores went
+        # into a fourth, 0.2-4.6 edges deep, 4% of a stretch's runs undone)
+        is_sphere = np.array([k in spheres for k in walls])
+        free = on.sum(axis=1) == 0
+        deep = (np.nan_to_num(signed[:, is_sphere], nan=0.0) < -0.1*h).any(axis=1)
+        any_rows = free & ~deep & np.isfinite(gap[:, is_sphere]).any(axis=1)
+        gap[np.ix_(free, is_sphere)] = np.inf
     order = _guard_order(gap)
     rows = np.arange(len(sel))[:, None]
     picked = np.isfinite(gap[rows, order]) & (np.arange(order.shape[1])[None, :] < room[:, None])
@@ -338,7 +358,15 @@ def guard(ev) -> None:
     # at 2k facets, six gradient steps' worth; a surface guarded as it was
     # makes no change at all
     gcols = [_column(nums, names, f"{GUARD_PREFIX}{key}") for key in walls]
-    gone = [i for i, n in enumerate(names) if n.startswith(GUARD_PREFIX) and i not in gcols]
+    acol = names.index(ANY_SPHERE) if many else None
+    gone = [i for i, n in enumerate(names) if n.startswith(GUARD_PREFIX) and i not in gcols
+            and i != acol]
+    if acol is not None:
+        want = np.zeros(len(dist), dtype=bool)
+        want[sel[any_rows]] = True
+        have = np.isnan(dist[:, acol])
+        _set_guards(ev, [int(nums[acol])], (have & ~want)[:, None], False)
+        _set_guards(ev, [int(nums[acol])], (want & ~have)[:, None], True)
     now = np.isnan(dist[:, gcols])
     _set_guards(ev, [int(nums[i]) for i in gone + gcols],
                 np.c_[np.isnan(dist[:, gone]), now & ~chosen], False)
@@ -361,6 +389,18 @@ def _guard_formula(ev, key) -> str:
         return f"({v} - {c!r} - {float(p)!r}*floor(({v} - {c!r})/{float(p)!r} + 0.5))"
     return (f"{image('x', float(centre[0]), L[0])}^2 + {image('y', float(centre[1]), L[1])}^2 "
             f"+ (z - {float(centre[2])!r})^2 = {R*R!r}")
+
+
+def _any_sphere_formula(ev, keys) -> str:
+    """The least of the spheres keys' guard terms (|x - c|^2 - R^2 at the
+    nearest copy of c), as minimum(t1, minimum(t2, ...)): ANY_SPHERE's
+    formula, = 0 (in C, _engine's kind 3)."""
+    terms = [f"{_guard_formula(ev, k).split(' = ')[0]} - {float(getattr(surface.walls[k], 'shape')[2])**2!r}"
+             for k in keys]
+    out = terms[-1]
+    for t in reversed(terms[:-1]):
+        out = f"minimum({t}, {out})"
+    return out
 
 
 def _home_by_spheres(ev, keys) -> None:

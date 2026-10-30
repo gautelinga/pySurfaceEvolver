@@ -774,12 +774,19 @@ NB_MODULE(_core, m) {
   }, "kind"_a, "wall"_a, "x"_a, "A periodic flux-gauge integrand at x: value, derivatives (3+9+27).");
   m.def("native_formula", [](int con, int kind, std::vector<double> p) {
     Lock lock;
+    if ( kind == 3 )
+    { if ( p.empty() || p.size() % 4 )
+        throw std::invalid_argument("native_formula(): kind 3 takes spheres, c and R^2 by fours");
+      return bool(pyse_native_formula_register_many(con, p.data(), int(p.size()/4)));
+    }
     if ( p.size() != 4 )
       throw std::invalid_argument("native_formula(): p 4 numbers (n, d or c, R^2)");
     return bool(pyse_native_formula_register(con, kind, p.data()));
   }, "con"_a, "kind"_a, "p"_a,
-  "Register constraint con's formula in closed form: a plane (kind 0, n and d) or a "
-  "sphere (kind 1, c and R^2); False where it doesn't match the interpreter.");
+  "Register constraint con's formula in closed form: a plane (kind 0, n and d), a "
+  "sphere (kind 1, c and R^2), a slab's sphere at the nearest copy (kind 2), or the least "
+  "of such spheres' (kind 3, c and R^2 by fours); False where it doesn't match the "
+  "interpreter.");
   m.def("work", []() { Lock lock; return pyse_work_count(); },
         "The work done so far, in elements evaluated (a facet per energy, force or content "
         "pass, four per Hessian fill): deterministic, unlike the time taken.");

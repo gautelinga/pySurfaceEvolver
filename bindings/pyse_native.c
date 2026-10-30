@@ -1230,6 +1230,8 @@ struct formula_native
   REAL p[4];
   REAL L[2];
   REAL sign;                     /* the interpreter's value is sign times ours */
+  REAL *P;                       /* kind 3: spheres (c, R^2) by fours, the least of */
+  int np;                        /* kind 2's terms over them (a guard against any) */
 };
 
 static struct formula_native formulas[FORMULA_NATIVES];
@@ -1260,6 +1262,22 @@ static void formula_value(const struct formula_native *n, const REAL *x, REAL *f
     REAL Z = x[2] - n->p[2];
     v = (X*X + Y*Y) + Z*Z - n->p[3];
     if ( g ) { g[0] = 2.0*X; g[1] = 2.0*Y; g[2] = 2.0*Z; }
+  }
+  else if ( n->kind == 3 )
+  { /* minimum(t_1, minimum(t_2, ... t_n)), Evolver's minimum: the second
+       where the first is greater */
+    int k;
+    REAL gg[3] = {0,0,0};
+    for ( k = n->np - 1 ; k >= 0 ; k-- )
+    { const REAL *q = n->P + 4*k;
+      REAL a = x[0] - q[0], b = x[1] - q[1];
+      REAL X = a - n->L[0]*floor(a/n->L[0] + 0.5), Y = b - n->L[1]*floor(b/n->L[1] + 0.5);
+      REAL Z = x[2] - q[2];
+      REAL t = (X*X + Y*Y) + Z*Z - q[3];
+      if ( k == n->np - 1 || !(t > v) )
+      { v = t; gg[0] = 2.0*X; gg[1] = 2.0*Y; gg[2] = 2.0*Z; }
+    }
+    if ( g ) for ( i = 0 ; i < 3 ; i++ ) g[i] = gg[i];
   }
   else
   { REAL X = x[0] - n->p[0], Y = x[1] - n->p[1], Z = x[2] - n->p[2];
@@ -1304,7 +1322,18 @@ void pyse_native_formula_at(int slot, const REAL *x, REAL *f, REAL *grad)
    (kind 1: c, R^2) or a slab's sphere at the nearest image (kind 2: c, R^2,
    the slab's periods); 1 if registered (the closed form matching the
    interpreter, value and gradient, at test points), else 0 */
+static int formula_register(int con, int kind, const double *p, int np);
+
 int pyse_native_formula_register(int con, int kind, const double *p)
+{ return formula_register(con,kind,p,1);
+}
+
+/* kind 3: the least of np spheres' kind-2 terms (p: c, R^2 by fours) */
+int pyse_native_formula_register_many(int con, const double *p, int np)
+{ return formula_register(con,3,p,np);
+}
+
+static int formula_register(int con, int kind, const double *p, int np)
 { struct constraint *cn;
   struct expnode *ex;
   struct formula_native n;
@@ -1314,12 +1343,15 @@ int pyse_native_formula_register(int con, int kind, const double *p)
   native_serial++;
   if ( formula_load != pyse_load_serial() )
   { for ( i = 0 ; i < formula_count ; i++ )
-      formulas[i].key = NULL;    /* (the old load's expressions are gone) */
+    { formulas[i].key = NULL;    /* (the old load's expressions are gone) */
+      free(formulas[i].P); formulas[i].P = NULL;
+    }
     formula_count = 0;
     formula_load = pyse_load_serial();
   }
-  if ( SDIM != 3 || kind < 0 || kind > 2 || con < 0 || con >= web.maxcon ) return 0;
-  if ( kind == 2 && !pyse_slab(n.L) ) return 0;
+  if ( SDIM != 3 || kind < 0 || kind > 3 || con < 0 || con >= web.maxcon || np < 1 ) return 0;
+  if ( (kind == 2 || kind == 3) && !pyse_slab(n.L) ) return 0;
+  n.P = NULL; n.np = 0;
   cn = get_constraint(con);
   if ( !cn || !(cn->attr & IN_USE) || !cn->formula ) return 0;
   ex = cn->formula;
@@ -1327,6 +1359,28 @@ int pyse_native_formula_register(int con, int kind, const double *p)
   n.kind = kind;
   n.sign = 1.0;
   ex->flag &= ~PYSE_NATIVE_FORMULA;      /* (the interpreter for the test) */
+  if ( kind == 3 )
+  { /* (as given: the test below takes them bit for bit or not at all) */
+    n.P = (REAL*)malloc(4*np*sizeof(REAL));
+    if ( !n.P ) return 0;
+    n.np = np;
+    /* each sphere's constants read back as kind 2's, at its centre (where
+       its term, -R^2, is the least) */
+    for ( i = 0 ; i < np ; i++ )
+    { REAL x[3], c[3], f0, g0[2*MAXCOORD], fc, gc[2*MAXCOORD];
+      for ( j = 0 ; j < 3 ; j++ ) x[j] = p[4*i + j];
+      eval_all(ex,x,SDIM,&f0,g0,NULLID);
+      for ( j = 0 ; j < 3 ; j++ ) c[j] = x[j] - g0[j]/2.0;
+      eval_all(ex,c,SDIM,&fc,gc,NULLID);
+      for ( j = 0 ; j < 3 ; j++ ) n.P[4*i + j] = c[j];
+      n.P[4*i + 3] = -fc;
+      for ( j = 0 ; j < 4 ; j++ )
+        if ( fabs(n.P[4*i + j] - p[4*i + j]) > 1e-9*(1.0 + fabs(p[4*i + j])) )
+        { free(n.P); return 0; }
+    }
+    for ( j = 0 ; j < 4 ; j++ ) n.p[j] = n.P[j];
+  }
+  else
   { /* the constants as Evolver parsed them, read back from its interpreter
        (exactly: a sphere's gradient at 0 is -2c, its value at c -R^2; a
        plane's gradient n, its value at 0 -d), not as given: its parser and
@@ -1367,16 +1421,17 @@ int pyse_native_formula_register(int con, int kind, const double *p)
     for ( j = 0 ; j < 4 ; j++ )
       if ( fabs(fabs(n.p[j]) - fabs(p[j])) > 1e-9*(1.0 + fabs(p[j])) ) return 0;
   }
-  for ( k = 0 ; k < 8 ; k++ )
+  for ( k = 0 ; k < 8*(kind == 3 ? (np < 16 ? np : 16) : 1) ; k++ )
   { REAL x[3], fi, gi[2*MAXCOORD], fn, gn[3];
-    for ( j = 0 ; j < 3 ; j++ ) x[j] = (kind ? p[j] : 0.0) + pts[k][j];
+    const double *at = kind == 3 ? p + 4*(k/8)*(np < 16 ? 1 : np/16) : p;
+    for ( j = 0 ; j < 3 ; j++ ) x[j] = (kind ? at[j] : 0.0) + (kind == 3 ? 0.5 : 1.0)*pts[k % 8][j];
     eval_all(ex,x,SDIM,&fi,gi,NULLID);
     formula_value(&n,x,&fn,gn);
     /* (bit for bit: else the interpreter's own arithmetic, a rotated
        frame's say, and this one's would part in the last bits) */
-    if ( fi != fn ) return 0;
+    if ( fi != fn ) { free(n.P); return 0; }
     for ( j = 0 ; j < 3 ; j++ )
-      if ( gi[j] != gn[j] ) return 0;
+      if ( gi[j] != gn[j] ) { free(n.P); return 0; }
   }
   for ( i = 0 ; i < formula_count ; i++ )
     if ( formulas[i].key == ex ) break;
@@ -1384,6 +1439,7 @@ int pyse_native_formula_register(int con, int kind, const double *p)
   { if ( formula_count >= FORMULA_NATIVES ) return 0;
     formula_count++;
   }
+  if ( i < formula_count && formulas[i].key == ex ) free(formulas[i].P);
   formulas[i] = n;
   ex->flag |= PYSE_NATIVE_FORMULA;
   return 1;
