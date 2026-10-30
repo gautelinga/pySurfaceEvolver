@@ -136,6 +136,55 @@ def stop_class(message):
     return _shape(message)[:80]
 
 
+STALL = 300.0   # seconds without a log line before a run writes its stacks to its log
+
+
+class _Watched:
+    """A run's log, watched: no line for `stall` seconds and every thread's
+    Python stack goes into it (again each `stall` while it lasts), so a run
+    stuck in C shows the call it is in with no debugger attached (a 64-bead
+    run hung an hour in one gradient step, found only by attaching to it).
+    A thread of its own, holding the GIL as it reads the stacks (pySE lets
+    it go in its commands; faulthandler's watchdog reads them without it and
+    crashed a run). 0: off."""
+
+    def __init__(self, f, stall):
+        import threading
+        self.f, self.stall = f, stall
+        self.last = time.time()
+        self.done = threading.Event()
+        if stall > 0:
+            threading.Thread(target=self._watch, daemon=True, name="stall watchdog").start()
+
+    def _watch(self):
+        import traceback
+        while not self.done.wait(min(self.stall, max(0.01, self.last + self.stall - time.time()))):
+            quiet = time.time() - self.last
+            if quiet < self.stall:
+                continue
+            names = {t.ident: t.name for t in __import__("threading").enumerate()}
+            text = [f"no log line for {quiet:.0f} s; the threads' stacks:\n"]
+            for ident, frame in sys._current_frames().items():
+                if names.get(ident) == "stall watchdog":
+                    continue
+                text.append(f"  thread {names.get(ident, ident)}:\n")
+                text += ["    " + line for line in "".join(traceback.format_stack(frame)).splitlines(True)]
+            self.f.write("".join(text))
+            self.f.flush()
+            self.last = time.time()
+
+    def write(self, text):
+        return self.f.write(text)
+
+    def flush(self):
+        self.f.flush()
+        self.last = time.time()
+
+    def close(self):
+        self.done.set()
+        self.f.close()
+
+
 def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resume=None,
         gauge=None, flux_degree=None, frames=None):
     """One run, in this process: NAME.json and NAME.log in out. checkpoints:
@@ -161,7 +210,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
 
     part = os.path.join(out, f"{name}.part")
     prior = json.load(open(part)) if resume and os.path.exists(part) else None
-    log = open(os.path.join(out, f"{name}.log"), "a" if resume else "w")
+    log = _Watched(open(os.path.join(out, f"{name}.log"), "a" if resume else "w"),
+                   float(os.environ.get("PYSE_CORPUS_STALL", STALL)))
     t0 = time.time() - (prior.get("seconds", 0.0) if prior else 0.0)
     if resume:
         log.write(f"{time.time() - t0:8.1f}s resumed from {resume}\n")
