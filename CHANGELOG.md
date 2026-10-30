@@ -76,6 +76,13 @@
 
 ### Fixes
 
+- A reload no longer renumbers the elements. A dump listed them in the order they were
+  made and a load numbered them so, while after deletions their numbers weren't in
+  that order: what pySE remembers by vertex number (the descents' target edge lengths)
+  went to other vertices after a snapshot's restore, a checkpoint's load or a run's
+  backup. `Evolver.dump` (and so `save()` and checkpoints) keeps the numbers now
+  (Evolver's `keep_originals`), and a load of such a file gives them back; a
+  datafile without it is numbered as before.
 - A descent that flung the surface apart no longer hangs. In a 64-bead pack (the
   contact-line gauge), a gradient step raised the energy from about -500 to 6e35;
   `relax()` went on stepping (only a non-finite energy ended its rounds), and each

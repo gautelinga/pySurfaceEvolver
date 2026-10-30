@@ -283,6 +283,11 @@ class _Engine:
             if e.errnum == _core.ERR_NO_DATAFILE:
                 raise FileNotFoundError(f"Cannot open datafile {path!r}") from None
             raise
+        finally:
+            # (a datafile's keep_originals sets it for the loads after too: a
+            # user's datafile numbered as Evolver numbers it, the next time)
+            if hasattr(_core, "keep_ids"):
+                _core.keep_ids(False)
         return output
 
     def _check_bodies(self) -> None:
@@ -452,9 +457,18 @@ class _Engine:
         """Save the current surface as a datafile (Evolver's ``dump``).
 
         Numbers are written with 17 significant digits, so loading the file
-        gives back the same coordinates exactly.
+        gives back the same coordinates exactly, and the elements keep their
+        numbers (Evolver's ``keep_originals``).
         """
-        self.command(f'dump "{os.fspath(path)}"')
+        # (the numbers kept: what pySE remembers by vertex and body number,
+        # the descents' target edge lengths say, holds after a reload; a
+        # reload renumbered the vertices in the order they were made)
+        was = _core.keep_ids(True) if hasattr(_core, "keep_ids") else None
+        try:
+            self.command(f'dump "{os.fspath(path)}"')
+        finally:
+            if was is not None:
+                _core.keep_ids(was)
 
     def save(self) -> Snapshot:
         """Take a snapshot of the surface, to :meth:`restore` later.

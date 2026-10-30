@@ -476,6 +476,31 @@ def test_save_and_restore_are_exact(load):
     np.testing.assert_array_equal(carried_on, reference.vertices)
 
 
+def test_a_reload_keeps_the_element_numbers(load, tmp_path):
+    # (after deletions the numbers aren't in the order the elements were
+    # made; a dump keeps them, and what pySE remembers by vertex number with
+    # them, so a snapshot's restore or a datafile's load gives them back)
+    from pysurfaceevolver._engine import surface
+    ev = load("cube.fe")
+    ev.command("r; r; g 5")
+    lengths = ev.mesh().edge_lengths()
+    ev.command(f"t {float(np.percentile(lengths, 30))}; r; g 2")
+    ids, x = ev.mesh().vertex_ids, ev.vertices
+    assert not np.all(np.diff(ids) > 0)              # (the slots of the deleted reused)
+    surface.sizes = {int(i): float(k) for k, i in enumerate(ids)}
+    sizes = dict(surface.sizes)
+    snapshot = ev.save()
+    ev.dump(tmp_path / "kept.fe")
+    ev.restore(snapshot)
+    by = dict(zip(ev.mesh().vertex_ids.tolist(), map(tuple, ev.vertices)))
+    assert by == dict(zip(ids.tolist(), map(tuple, x))) and surface.sizes == sizes
+    ev.load(tmp_path / "kept.fe")
+    assert dict(zip(ev.mesh().vertex_ids.tolist(), map(tuple, ev.vertices))) == by
+    # (a user's datafile is numbered as Evolver numbers it, after a dump's load)
+    ev.load("cube.fe")
+    assert list(ev.mesh().vertex_ids) == list(range(1, len(ev.vertices) + 1))
+
+
 def test_snapshot_keeps_lagrange_model_and_parameters(load, tmp_path):
     ev = load("mound.fe")
     ev.parameters["angle"] = 60

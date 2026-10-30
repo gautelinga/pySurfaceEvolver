@@ -990,9 +990,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     on exactly as it did from there (the same steps, to the bit). ``ds``,
     ``steps`` and the other settings as the run had them. For that, such a
     run reloads its surface at those steps (in a process that deleted
-    elements, the order they are visited in isn't a reload's), keeps element
-    ids through dumps and reloads, and keeps the states it may back up to as
-    snapshots (a dump each step): about 5% slower.
+    elements, the order they are visited in isn't a reload's: dumps keep
+    the element numbers) and keeps the states it may back up to as
+    snapshots (a dump each step): about 3% slower.
     """
     if resume is not None and not topology:
         raise ValueError("arclength(resume=...) resumes a topology=True run")
@@ -1010,17 +1010,12 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                   dict(keep=keep, outlet=outlets, dry=False,
                        original=frozenset(int(i) for i in ev.bodies().ids)))
     resumable = resumable or resume is not None
-    # (a resumable run's dumps keep the element ids, and its reloads too:
-    # pySE's memory of the surface by vertex and body numbers holds)
-    ids = _core.keep_ids(True) if resumable and hasattr(_core, "keep_ids") else None
     try:
         yield from _topology_run(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
                                  halvings=halvings, along=along, remesh=remesh, events=events,
                                  budget=budget, resumable=resumable, resume=resume)
     finally:
         ev._liquid = previous
-        if ids is not None:
-            _core.keep_ids(ids)
 
 
 def _trapped(ev) -> float:
