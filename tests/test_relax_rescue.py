@@ -25,6 +25,24 @@ def test_non_finite_energy_puts_the_round_back(cube, monkeypatch):
     assert np.array_equal(cube.vertices, start)    # the round's start: the first one
 
 
+def test_energy_blown_up_finite_puts_the_round_back(cube, monkeypatch):
+    # finite but flung apart (6e35 from -500 in a 64-bead pack): as non-finite
+    cube.relax(stability=False)
+    cube.body(1).target = 1.3
+    start = cube.vertices
+    real = _core.total_energy
+    calls = []
+
+    def energy():
+        calls.append(1)
+        return 6.3e35 if len(calls) == 2 else real()   # the first step
+
+    monkeypatch.setattr(_core, "total_energy", energy)
+    with pytest.raises(EvolverError, match="energy became 6.3e[+]35"):
+        cube.relax(stability=False)
+    assert np.array_equal(cube.vertices, start)
+
+
 def test_failed_newton_first_attempt_is_skipped_next_call(cube, monkeypatch):
     # Lagrange model: five gradient steps and Newton first; when that fails
     # the surface goes back, the usual rounds follow, and the next call skips

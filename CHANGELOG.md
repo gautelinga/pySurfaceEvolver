@@ -50,6 +50,14 @@
 
 ### Fixes
 
+- A descent that flung the surface apart no longer hangs. In a 64-bead pack (the
+  contact-line gauge), a gradient step raised the energy from about -500 to 6e35;
+  `relax()` went on stepping (only a non-finite energy ended its rounds), and each
+  step's splitting of long contact-line edges cut the stretched lines up, to 1.75
+  million edges in an hour, every split slower on the crowded vertices. A round whose
+  energy moves by 10^4 times its scale is now undone as a non-finite one is, and the
+  splitting leaves the step alone when an edge is longer than six rounds of halving
+  can bring down (64 times the length), for the descent's checks to undo.
 - In a periodic slab, a free vertex in a topology descent now takes one guard against
   every sphere (the nearest, at its nearest copy) instead of one per sphere, three at
   most: in a 64-bead pack's crowded pores, vertices with their three guards went into

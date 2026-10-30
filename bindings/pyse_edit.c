@@ -3391,8 +3391,13 @@ int pyse_crossings(int far, long *count, double *where, long max)
    one-sided constraints both ends are on too (the guards a descent keeps the
    vertices out of the solids with: a midpoint without them, on a side wall,
    went 0.05 out through the side wall it meets at the box's edge, and the
-   run was undone). */
+   run was undone). An edge beyond what six rounds can bring down (64 times
+   the length) is no stretched line but a surface flung apart: nothing is
+   split then, and the step is left for the descent's checks to undo (split
+   anyway, a 64-bead pack's lines grew to 1.75 million edges in an hour, each
+   split slower on the crowded vertices). */
 static REAL line_chop = 0.0;
+#define CHOP_ROUNDS 6
 
 double pyse_line_chop(double length)
 { double was = line_chop;
@@ -3406,15 +3411,19 @@ int pyse_chop_lines(void)
   int round, k, total = 0;
   if ( line_chop <= 0 || web.representation != SOAPFILM ) return 0;
   slab_set();
-  for ( round = 0 ; round < 6 ; round++ )
-  { long_.n = 0;
+  for ( round = 0 ; round < CHOP_ROUNDS ; round++ )
+  { int flung = 0;
+    long_.n = 0;
     FOR_ALL_EDGES(e)
-    { REAL *a, *b, d[3], bb[3];
+    { REAL *a, *b, d[3], bb[3], len;
       if ( (get_eattr(e) & (CONSTRAINT|FIXED)) != CONSTRAINT || valence(e) != 1 ) continue;
       a = get_coord(get_edge_tailv(e)); b = vimg(a,get_edge_headv(e),bb);
       for ( k = 0 ; k < 3 ; k++ ) d[k] = b[k] - a[k];
-      if ( norm3(d) > line_chop ) push(&long_,e);
+      len = norm3(d);
+      if ( !(len <= (1 << CHOP_ROUNDS)*line_chop) ) { flung = 1; break; }   /* (NaN too) */
+      if ( len > line_chop ) push(&long_,e);
     }
+    if ( flung ) { long_.n = 0; break; }
     if ( !long_.n ) break;
     for ( k = 0 ; k < long_.n ; k++ )
     { vertex_id t, h, mid;

@@ -285,6 +285,22 @@ def test_equiangulation_makes_no_chord_between_contact_line_vertices():
     assert {frozenset(e) for e in np.asarray(ev.mesh().edges).tolist()} == edges
 
 
+def test_line_chop_splits_nothing_on_a_surface_flung_apart():
+    # an edge beyond what six rounds of halving bring down (64 lengths) is a
+    # blown-up step, not a stretched line: nothing split (a 64-bead pack's
+    # lines grew to 1.75 million edges in an hour), left for the checks
+    from pysurfaceevolver import _core
+    ev = _drop()
+    m = ev.mesh()
+    line = m.edge_valence() == 1
+    was = _core.line_chop(float(m.edge_lengths()[line].max())/100)
+    try:
+        ev.command("g 1")
+    finally:
+        _core.line_chop(was)
+    assert (ev.mesh().edge_valence() == 1).sum() == line.sum()
+
+
 def test_line_chop_keeps_contact_lines_short_through_gradient_steps():
     from pysurfaceevolver import _core
     ev = _drop()

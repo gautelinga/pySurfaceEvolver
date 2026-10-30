@@ -59,6 +59,7 @@ _GRADIENT_ONLY_TOL = 1e-9      # ... or this one when no Newton follows
 _CONTACT_SPLITS = 3            # relax(): splits of long contact-line spokes, at most
 _CONTACT_PASSES = 2           # relax(): relaxes after splitting long contact-line spokes, at most
 _ROUND_BLOWUP = 2             # a gradient round more than doubling the residual or a target gap is undone
+_ENERGY_BLOWUP = 1e4           # ... and a step moving the energy by this many times its scale (a surface flung apart)
 _STAGE_GAP = 0.25             # relax() stages a target further off than this (relative) if a round folds facets,
 _STAGE = 0.1                  # ... each moving the targets by at most this (relative),
 _STAGE_STEPS = 20             # ... with this many gradient steps (tidied as usual)
@@ -1436,6 +1437,7 @@ class _Run:
         energy_tol = self.energy_tol if energy_tol is None else energy_tol
         callback, every = self.callback, self.every
         previous = _core.total_energy()
+        scale = max(abs(previous), _core.total_area(), 1.0)
         quiet = 0
         best = np.inf
         first = len(trace.energy)
@@ -1447,11 +1449,15 @@ class _Run:
             trace.step(ev)
             if callback is not None and i % every == 0:
                 callback(cast("Evolver", ev), i)
-            if not np.isfinite(trace.energy[-1]):
+            if (not np.isfinite(trace.energy[-1])
+                    or abs(trace.energy[-1] - previous) > _ENERGY_BLOWUP*scale):
+                # (a finite one too: a step that flung the surface apart, the
+                # energy 6e35 from -500, went on stepping, and splitting its
+                # stretched contact lines filled the memory for an hour)
                 bad = trace.energy[-1]
                 where = ("the surface is back where that round began" if ev._put_back(start)
                          else "its topology changed during the round, so it stays as it is")
-                raise EvolverError(f"relax(): the energy became {bad} during gradient steps; "
+                raise EvolverError(f"relax(): the energy became {bad:.6g} during gradient steps; "
                                    + where)
             if tidy and i == 1 and ev._tidy_kinds()[0] and not average_only:
                 # a coarse start triangulated badly is equiangulated before
