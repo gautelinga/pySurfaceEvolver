@@ -83,6 +83,12 @@
 
 ### Fixes
 
+- A topology descent no longer puts vertices back out of a solid where that passes
+  the surface through itself: the push-outs beside contact lines went unchecked, and
+  in a 32-bead pack they took a descent from no crossings to 252. Each later run was
+  judged against that many, and the descent merged them away one a run, 12 s each:
+  6000 s at one step and the run's budget spent. Replayed from the step before, it
+  reached breakthrough in 720 s.
 - A neck whose ring reaches three or more solids (liquid in the throat between three
   beads) is cut as one against two is, a footprint dried at a time, not refused. A set
   of 32-bead runs refused 43 such cuts, and the surface then passed through itself

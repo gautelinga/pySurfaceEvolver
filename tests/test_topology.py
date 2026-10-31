@@ -1400,6 +1400,29 @@ def test_the_relaxing_of_a_tidied_state_is_judged_as_runs_are():
     assert _surgery._checked_relax(ev, 1e-8).converged
 
 
+def test_a_push_out_of_a_solid_that_crosses_the_surface_is_undone(monkeypatch):
+    # (unchecked, a pack's push-outs beside a bead took its descent from no
+    # crossings to 252, the baseline its later runs were judged against)
+    from types import SimpleNamespace
+    from pysurfaceevolver import _surgery
+    ev = _drop_under_a_sphere()
+    m = ev.mesh()
+    rim = set(np.asarray(m.edges)[m.edge_valence() == 1].ravel().tolist())
+    row = next(int(b) for a, b in np.asarray(m.edges)
+               if int(a) in rim and int(b) not in rim)
+    x = ev.vertices.copy()
+    x[row, 2] = -0.01
+    ev.vertices = x
+    through = [SimpleNamespace(vertices=[row], constraint=1)]
+    counts = iter([0, 1])
+    monkeypatch.setattr(_surgery, "_crossings", lambda ev: next(counts))
+    assert not _surgery._push_out(ev, through, 0.1)
+    assert ev.vertices[row, 2] == pytest.approx(-0.01)
+    monkeypatch.setattr(_surgery, "_crossings", lambda ev: 0)
+    assert _surgery._push_out(ev, through, 0.1)
+    assert 0 < ev.vertices[row, 2] < 1e-3
+
+
 def test_a_run_evolver_fails_in_is_undone_and_implausible():
     # (a pack's relax() run met an internal error, cone_analyze on a mesh a
     # failed change left; the descent goes on as from a run gone wrong)

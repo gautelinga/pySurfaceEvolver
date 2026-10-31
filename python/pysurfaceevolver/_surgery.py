@@ -4816,15 +4816,31 @@ def _push_beside_lines(ev, keys, h: float, at: np.ndarray) -> None:
             rows = rows[far < 3.0*h]
         if len(rows):
             through.append(SimpleNamespace(vertices=rows, constraint=key))
-    if through:
-        _push_out(ev, through, h)
+    if through and _push_out(ev, through, h):
         _log.debug("pushed out beside a contact line: %d vertices",
                    sum(len(t.vertices) for t in through))
 
 
-def _push_out(ev, through: list, h: float) -> None:
+def _push_out(ev, through: list, h: float) -> bool:
     """Put the vertices that have gone through a solid back on the surface's
-    side of it, along its normal, a thousandth of an edge out."""
+    side of it, along its normal, a thousandth of an edge out; not where
+    that passes the surface through itself (as every change is checked: a
+    32-bead pack's push-outs beside a bead took its descent from no
+    crossings to 252, which each later run was judged against, and the
+    descent merged them away one a run, 600 s and more). Whether it was."""
+    if not through:
+        return False
+    crossed, start = _crossings(ev), ev._save()
+    _move_out(ev, through, h)
+    if _crossings(ev) > crossed:
+        ev.restore(start)
+        _log.debug("not pushed out of a solid: the surface would pass through itself")
+        return False
+    return True
+
+
+def _move_out(ev, through: list, h: float) -> None:
+    """_push_out's move, unchecked."""
     nums, _, dist, names = ev._constraint_gaps()
     if _slab(ev) is not None:
         # (in a slab, first at their images by a sphere's centre, where its
