@@ -1330,12 +1330,18 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
             stalled = event is None
         if stalled:
             value = _current(ev, what)
-            # (the first branch ends the run only where it took no step: one
-            # that went on to a fold goes on past it as a later branch does,
-            # a pack's run resumed short of its fold stopped there)
-            if (start and not moved) or (bounds is not None
-                                         and not (min(bounds) <= value <= max(bounds))):
+            # (a first branch that went on to a fold goes on past it as a
+            # later branch does: a pack's run resumed short of its fold
+            # stopped there)
+            if bounds is not None and not (min(bounds) <= value <= max(bounds)):
                 return
+            if start and not moved:
+                # (one that took no step: down from a step on, as from a
+                # stalled branch's; a 64-bead pack's flat start, 0.005 above
+                # its top bead, found no equilibrium a step down by Newton
+                # steps, and the run ended there, nothing drained)
+                set_value(ev, value + step_ds)
+                ev.command("recalc")
         start = False
         if remesh is None:
             # after a change the mesh is uneven where it was made (a joined
