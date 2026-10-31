@@ -2719,6 +2719,11 @@ _MARGIN = 0.5           # ... made again there (or undone) only at under this sh
 _PUT_OFF = 20           # ... or after this many iterations of the descent put off
 _BUDGET = 100000        # a descent's work at most, in passes over its surface (_core.work: an
                         # energy, force or content evaluation of every facet is one)
+# ... and its runs gone wrong (judged implausible: _implausible), at most: past
+# them it has run away (a 32-bead pack's descents that did get somewhere had 38
+# at most in 99 of 100, those that ran away or spent their budget 100 at the
+# median, after 100-800 s each, and the run backed up from them all the same)
+_WRONG_RUNS = 60
 
 
 def _median_edge(m) -> float:
@@ -2837,6 +2842,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         guard(ev)
     since, stuck = 0, False
     work = _core.work()                 # (where the budget began)
+    wrong = _WRONG[0]                   # (the runs gone wrong before it: _WRONG_RUNS)
     closing, fresh = True, None         # whether the tidying closes patches; the iteration's start
     shut: list = []                     # patches closed in this descent: (wall, middle)
     made_at: list = []                  # changes made in it: (kind, solid, place)
@@ -2946,6 +2952,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 # changes made and undone at a side wall, within its turns)
                 return None, changes, (f"the descent's budget spent ({spent:.0f} passes over "
                                        f"the surface in {turn} iterations)") \
+                    + (f" (the last change not made: {refused})" if refused else "")
+            if _WRONG[0] - wrong > _WRONG_RUNS:
+                last = f", the last: {_LAST_WRONG[0]}" if _LAST_WRONG else ""
+                return None, changes, (f"the descent ran away ({_WRONG[0] - wrong} runs gone "
+                                       f"wrong{last})") \
                     + (f" (the last change not made: {refused})" if refused else "")
             since += 1
             if since > _FALL_ITERATIONS:
@@ -3621,6 +3632,7 @@ def _implausible(ev, before: tuple, trace=None) -> str:
     if why:
         _log.debug("implausible run: %s", why)
         _LAST_WRONG[:] = [why]
+        _WRONG[0] += 1
     if why == "crossings":
         _note_crossed(ev)
         _PUSH_AT.extend(_off_walls(ev, _CROSSED_AT[0]))
@@ -3663,6 +3675,7 @@ def _note_crossed(ev) -> None:
 _CROSSED_AT: list = []             # (where the last run judged crossed did)
 _RUN_FAILED: list = []             # (Evolver's error in the last run, if it failed: _away_from_poles)
 _LAST_WRONG: list = []             # (why the last run judged gone wrong was: _implausible)
+_WRONG = [0]                       # (the runs judged gone wrong so far: _WRONG_RUNS)
 
 
 def _crossings(ev) -> int:
