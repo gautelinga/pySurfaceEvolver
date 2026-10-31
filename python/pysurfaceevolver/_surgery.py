@@ -2710,8 +2710,6 @@ _FINE = 0.25            # _sizes: the finest target edge, in h0
 _GRADE = 0.5            # _sizes: how fast the targets grow away from a gap (per length)
 _COARSEN = 1.5          # _sizes: a vertex's target grows at most this much a remeshing
 _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
-_LOCAL_SWEEPS = 2       # ... in this many sweeps (_edits.remesh's 3: the third made a pack's
-                        # local remeshing a third slower, its edges no better in range)
 _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
 _PINCHED = 0.05         # a neck three edges round, each under this times the edge scale: collapsed
 _GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient steps
@@ -3862,8 +3860,7 @@ def _remesh_now(ev, h0: float, near=None) -> None:
                 ratio = m.edge_lengths()/sizes[edges].mean(axis=1)
                 region[edges[(ratio > 2) | (ratio < 0.5)].ravel()] = True
             region = np.flatnonzero(region)
-        done = remesh(ev, h0, sizes=sizes, region=region,
-                      **({} if region is None else {"sweeps": _LOCAL_SWEEPS}))
+        done = remesh(ev, h0, sizes=sizes, region=region)
         _log.debug("remeshed: %s", done)
         _drop_crushed(ev)
     finally:
