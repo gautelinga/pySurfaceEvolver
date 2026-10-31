@@ -199,9 +199,9 @@ print(f"at the end the curvature of the draining liquid is {-end.pressures[0]:.2
 ```
 
 ```text
-the liquid starts at volume 28.07; at 9.56 the ring between the beads is cut off, holding 0.2828
-over the next 14 steps the draining liquid goes down to 2.60; the ring holds its volume to 3e-15
-at the end the curvature of the draining liquid is 1.00, the ring's 0.12
+the liquid starts at volume 28.07; at 9.62 the ring between the beads is cut off, holding 0.2374
+over the next 14 steps the draining liquid goes down to 2.66; the ring holds its volume to 2e-15
+at the end the curvature of the draining liquid is 1.00, the ring's 0.36
 ```
 
 ```{figure} _static/drainage_ring_shapes.png
@@ -218,7 +218,7 @@ Just before the cut (left), just after it (middle, the ring orange) and at the e
   draining liquid's volume.
 
 The draining liquid's volume and curvature (blue) and the ring's (orange), the cut
-dotted. The ring's volume is fixed; its curvature settles from 0.15 to 0.12 in the
+dotted. The ring's volume is fixed; its curvature settles from 0.38 to 0.36 in the
 first steps after the cut and then stays, while the draining liquid's goes on
 changing.
 ```

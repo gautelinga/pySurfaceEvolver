@@ -276,9 +276,9 @@ print(f"together {total:.6f}; then drop 1 drained to {steps[-1].volumes[0]:.2f},
 ```
 
 ```text
-from 0.0792: unstable at 0.0777, where it fell; the neck cut 0.06 from the mid-plane
-drop 1: 0.8 of the liquid, pressure 4.2, within 0.5% of the exact cap's
-drop 2: 0.2 of the liquid, pressure 6.2, within 0.5% of the exact cap's
+from 0.0792: unstable at 0.0777, where it fell; the neck cut 0.32 from the mid-plane
+drop 1: 0.9 of the liquid, pressure 4.1, within 0.5% of the exact cap's
+drop 2: 0.1 of the liquid, pressure 7, within 0.5% of the exact cap's
 together 0.077708; then drop 1 drained to 0.06, drop 2 kept at its volume
 ```
 
@@ -294,12 +294,15 @@ How the liquid splits between the drops is the one result here that depends on m
 than equilibrium: two drops hold any split, and which one forms depends on the way
 down. The fall is a descent of the energy, steepest along the unstable mode, not the
 liquid's flow, and the split moves with how the fall is taken. Here the smaller drop
-holds 17% to 19% of the liquid from run to run (the threads' round-off in the last
-step before the fall, which the fall carries a long way); falling from 0.0762 (a step
-of 0.003 from the last stable bridge) it held 25%, and on the mesh refined once less
-(2048 facets) 18% to 22% as the steps along the mode and the gradient steps between
-them were varied. Read the split as a rough figure; the drops' pressures are exact
-for the split they have.
+holds 7% to 12% of the liquid: with NumPy 2.5, 10.2% on one thread, 6.6% on two and
+8.7% on four; with NumPy 1.26, 12.0% to 12.2%. The round-off in the last step before
+the fall (the threads' sums, NumPy's arithmetic) is carried a long way by the fall; on
+one installation and thread count it is the same from run to run. Small changes to
+the steps move it as much: before the Newton steps' sums were made the same from run
+to run, it held 17% to 19%; falling from 0.0762 (a step of 0.003 from the last stable
+bridge) it held 25%, and on the mesh refined once less (2048 facets) 18% to 22%, as
+the steps along the mode and the gradient steps between them were varied. Read the
+split as a rough figure; the drops' pressures are exact for the split they have.
 
 ## What it means
 
