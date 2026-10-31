@@ -194,7 +194,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
     where an earlier attempt left NAME.part, its curve, counts and time are
     carried on and the log appended to (launch(): a crashed run resumed).
     frames: every this many steps the state kept in OUT/frames/NAME (for a
-    film of the run: bench/topology/film.py)."""
+    film of the run: bench/topology/film.py; a multiple of 5 makes each one
+    a state to resume exactly from, --resume)."""
     import logging, warnings
     import numpy as np
     sys.path.insert(0, HERE)
@@ -205,6 +206,9 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         pyse.flux_degree = int(flux_degree)
     if os.environ.get("PYSE_WET_AREA"):
         pyse.wet_area = os.environ["PYSE_WET_AREA"]     # (--wet-area)
+    if os.environ.get("PYSE_WRONG_RUNS"):
+        from pysurfaceevolver import _surgery
+        _surgery._WRONG_RUNS = int(os.environ["PYSE_WRONG_RUNS"])     # (--wrong-runs)
     if os.environ.get("PYSE_LOCAL_DESCENTS"):
         recipes.LOCAL_DESCENTS = True       # (falls by local descents: being validated)
 
@@ -259,7 +263,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                   start=v0, target=target, end=v0, steps=0, reached=False, stop="",
                   stop_class="", changes=0, kinds={}, falls=0, facets=ev.counts["facets"],
                   python=sys.executable, pyse=os.path.dirname(pyse.__file__),
-                  flux_degree=pyse.flux_degree, wet_area=pyse.wet_area, threads=pyse.threads(),
+                  flux_degree=pyse.flux_degree, wet_area=pyse.wet_area,
+                  wrong_runs=_wrong_runs(), threads=pyse.threads(),
                   cpus=sorted(os.sched_getaffinity(0)))
     # (per step: the kinds of the changes made, whether it fell; a step
     # the run backed up past is no longer the run's)
@@ -315,7 +320,7 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
             while not done:
                 taken = 0
                 for step in recipes.arclength(ev, ev.body(1), ds, count, topology=True,
-                                              outlet=outlet, resumable=bool(checkpoints),
+                                              outlet=outlet, resumable=bool(checkpoints or frames),
                                               resume=run["state"] if run else None):
                     taken += 1
                     check_liquid(step)
@@ -323,11 +328,11 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                     result["passes"] = round(work["passes"])
                     step.index += offset
                     state["step"] = step.index
+                    own = step.state() if step.state else None
+                    own = None if own is None else {"state": own, "offset": offset, "steps": count}
                     if checkpoints:
-                        own = step.state() if step.state else None
                         save_state(ev, os.path.join(checkpoints, f"step{step.index:04d}"), v0,
-                                   step.index, run=None if own is None else
-                                   {"state": own, "offset": offset, "steps": count})
+                                   step.index, run=own)
                         stale = os.path.join(checkpoints, f"step{step.index - KEEP:04d}")
                         for ext in (".fe", ".pkl"):
                             if os.path.exists(stale + ext):
@@ -335,7 +340,10 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                     if frames and step.index % int(frames) == 0:
                         film = os.path.join(out, "frames", name)
                         os.makedirs(film, exist_ok=True)
-                        save_state(ev, os.path.join(film, f"step{step.index:04d}"), v0, step.index)
+                        # (with the run's own state where the step has it: a frame to
+                        # resume exactly from too, kept after the run gets there)
+                        save_state(ev, os.path.join(film, f"step{step.index:04d}"), v0, step.index,
+                                   run=own)
                     for k in [k for k in made if k >= step.index]:
                         del made[k]
                     for k in [k for k in curve if k >= step.index]:
@@ -446,6 +454,12 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
 
 COLUMN = 6.0    # the periodic sets' cell side: 3 bead diameters
 KEEP = 20       # checkpoints: the last this many steps' states kept
+
+
+def _wrong_runs():
+    """A descent's runs gone wrong at most, as this run has it (--wrong-runs)."""
+    from pysurfaceevolver import _surgery
+    return getattr(_surgery, "_WRONG_RUNS", None)
 
 
 def save_state(ev, path, v0, index, run=None):
@@ -712,11 +726,14 @@ def main(argv):
                          "default: not pinned (a cluster's scheduler places them)")
     ap.add_argument("--timeout", type=float, help="each run's time limit in seconds (default: the set's)")
     ap.add_argument("--frames", type=int,
-                    help="keep every this many steps' state in OUT/frames/NAME (a film: film.py)")
+                    help="keep every this many steps' state in OUT/frames/NAME (a film: film.py; "
+                         "at a multiple of 5 each one resumes exactly: --one ... --resume)")
     ap.add_argument("--flux-degree", type=int,
                     help="pyse.flux_degree for the runs (the flux gauge's fast sum)")
     ap.add_argument("--wet-area", choices=("flux", "lines"),
                     help="pyse.wet_area for the runs (a slab's flux spheres: fields or contact lines)")
+    ap.add_argument("--wrong-runs", type=int,
+                    help="a descent's runs gone wrong at most (default: _surgery._WRONG_RUNS)")
     ap.add_argument("--gauge", choices=("flux", "pole"),
                     help="the beads' gauge (default: flux to breakthrough, else pole)")
     ap.add_argument("--out")
@@ -731,6 +748,8 @@ def main(argv):
     args = ap.parse_args(argv)
     if args.wet_area:
         os.environ["PYSE_WET_AREA"] = args.wet_area     # (each run's process reads it)
+    if args.wrong_runs is not None:
+        os.environ["PYSE_WRONG_RUNS"] = str(args.wrong_runs)
     if args.threads < 1 or args.jobs < 1:
         ap.error("--threads and --jobs must be at least 1")
     if args.summary:
