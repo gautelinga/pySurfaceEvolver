@@ -28,8 +28,13 @@ def test_relax_simplex_takes_no_newton(load):
 def test_relax_without_hessian_runs_gradient_rounds(load):
     # tankex: gap energy on a curved wall, no Hessian ("third derivatives");
     # relax() goes on with plain gradient rounds instead of stopping early
+    # (one thread: the gradient rounds' path depends on the sums' last bits,
+    # which differ between thread counts; since the passes went static in
+    # fours (f03c6e2) four threads stop at 203 steps, residual 1.7, as the
+    # next test's paths do)
     ev = load("tankex.fe")
-    r = ev.relax(levels=2)
+    with pyse.threads_limit(1):
+        r = ev.relax(levels=2)
     assert r.newton_steps == 0
     assert len(r.energy) > 400
     assert ev.total_energy < 1.52          # the residual watch stopped at 1.71
