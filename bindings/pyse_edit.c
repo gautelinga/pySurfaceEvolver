@@ -513,12 +513,16 @@ static void item_of(struct gitem *it, element_id id, const REAL *lo, const REAL 
   for ( d = 0 ; d < 3 ; d++ ) { it->lo[d] = below(lo[d]); it->hi[d] = above(hi[d]); }
 }
 
-/* (a slab's: the box moved to the image whose centre is nearest the item's) */
+/* (a slab's: the box moved to the image whose centre is nearest the item's;
+   none where the centres are within a period, without the floor(): most
+   queries are, and the floor and division were a fifth of a remesh) */
 static int apart_slab(const struct gitem *it, const REAL *lo, const REAL *hi, REAL tol)
 { REAL l[3], h[3];
   int d;
   for ( d = 0 ; d < 2 ; d++ )
-  { REAL s = slab_L[d]*floor(((it->lo[d] + it->hi[d]) - (lo[d] + hi[d]))/(2*slab_L[d]) + 0.5);
+  { REAL gap = (it->lo[d] + it->hi[d]) - (lo[d] + hi[d]);
+    REAL s = gap >= -slab_L[d] && gap < slab_L[d] ? 0
+             : slab_L[d]*floor(gap/(2*slab_L[d]) + 0.5);
     l[d] = lo[d] + s; h[d] = hi[d] + s;
   }
   l[2] = lo[2]; h[2] = hi[2];
