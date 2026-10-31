@@ -88,13 +88,6 @@
   of 32-bead runs refused 43 such cuts, and the surface then passed through itself
   in the cascade of necks around them: a run replayed from the step before went on
   instead of backing up, 6 steps further in 250 s.
-- Topology descents mend folds in the contact lines after each run, and as they keep
-  their edges: an arc crossing the arc two or three on along the same line (a Z,
-  which the surface's crossing count leaves out as the mesh's to mend; nothing did).
-  The lines' vertices between are smoothed along the line, the fold's middle edge
-  collapsed where that isn't enough. A pack's line on a bead folded in a descent took
-  the contact-line gauge's wetted area by its arcs' angles under nothing, the whole
-  bead then, its volume 3.9 off the flux gauge's.
 - `relax()` ends with the volumes on their targets after its last tidying. Vertex
   averaging moves volumes that have terms off the facets (a contact-line gauge's, a
   constraint's content); one gradient step after it restored them only to Evolver's

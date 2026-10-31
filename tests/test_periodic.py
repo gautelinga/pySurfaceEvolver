@@ -629,35 +629,6 @@ def test_the_lines_gauge_is_continuous_where_a_line_doubles_back():
         pyse.wet_area = was
 
 
-def test_a_folded_contact_line_is_found_and_mended():
-    # (two neighbours along a line swapped: a Z, its first and last arcs
-    # crossing, which the surface's crossing count leaves to the mesh; the
-    # descents mend such folds after each run)
-    from pysurfaceevolver import _surgery
-    was = pyse.wet_area
-    pyse.wet_area = "lines"
-    try:
-        ev = _bead(PERIODS, gauge="flux", floor_angle=90.0)
-        ev.command("r")
-        energy = ev.energy
-        m = ev.mesh()
-        edges = np.asarray(m.edges)
-        on = np.asarray(ev.on_constraint("bead"))
-        a, b = (int(v) for v in edges[(m.edge_valence() == 1) & on[edges].all(axis=1)][0])
-        assert not _surgery._line_folds(ev)
-        x = ev.vertices.copy()
-        x[[a, b]] = x[[b, a]]
-        ev.vertices = x
-        ev.command("recalc")
-        assert _surgery._line_folds(ev) == [sorted([a, b])]
-        assert _surgery._mend_line_folds(ev) == 1
-        ev.command("recalc")
-        assert not _surgery._line_folds(ev)
-        assert ev.energy == pytest.approx(energy, abs=1e-3)
-    finally:
-        pyse.wet_area = was
-
-
 def _film(periods, beads, H, h=0.25):
     """A liquid layer from the floor (z = 0, 90 degrees) to a flat sheet at
     H, over beads of radius 0.4 wholly inside it (no contact line)."""

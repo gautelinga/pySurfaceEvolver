@@ -3080,9 +3080,6 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                         return None, changes, f"the descent ran away ({why})"
                 guard(ev)
                 _checked(ev, "a relax run")
-                # (and the contact lines' folds mended: see _line_folds)
-                if _mend_line_folds(ev):
-                    _checked(ev, "mending the contact lines' folds")
             if remeshing and not (chunk is not None and chunk.converged):
                 _keep_edges(ev, h0)
                 _checked(ev, "keeping the edges in range")
@@ -4497,115 +4494,6 @@ def _even_slivers(ev, h0: float) -> bool:
     return True
 
 
-_FOLD_SPAN = (2, 3)      # a contact line's fold: an arc crossing the arc this many on along it
-
-
-def _line_folds(ev) -> list:
-    """Folds of the contact lines on the spheres: an arc (a contact-line
-    edge, as its facet runs it) crossing the arc _FOLD_SPAN places on along
-    the same body's line, on a great-circle test from the sphere's centre;
-    per fold the vertex rows between the two arcs. (The surface's crossing
-    count leaves out arcs this near along a line, folds the mesh's to mend;
-    nothing mended them, and a pack's line on a bead folded six times: its
-    wetted area by the turning of the arcs 0.007 under nothing, taken as
-    the whole bead less 0.007, the volume 3.9 and the energy 11 off the
-    flux gauge's, until a contact there put it right and was refused for
-    the jump.)"""
-    m = ev.mesh()
-    if m.facets is None or not len(m.facets):
-        return []
-    E, f = np.asarray(m.edges), np.asarray(m.facets)
-    line = E[m.edge_valence() == 1]
-    if not len(line):
-        return []
-    fb = np.asarray(m.facet_bodies) if m.facet_bodies is not None else np.zeros((len(f), 2), int)
-    x = np.asarray(m.vertices)[:, :3]
-    sides = np.r_[f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]
-    row = {(int(a), int(b)): int(r) for (a, b), r in zip(sides, np.tile(np.arange(len(f)), 3))}
-    folds = []
-    for key, w in surface.walls.items():
-        shape = getattr(w, "shape", None)
-        if shape is None or shape[0] != "sphere":
-            continue
-        try:
-            c = np.asarray(shape[1], float)
-        except (TypeError, ValueError):
-            continue
-        on = np.asarray(ev.on_constraint(key))
-        mine = line[on[line[:, 0]] & on[line[:, 1]]]
-        if len(mine) < 4:
-            continue
-        tail, head, body = [], [], []
-        for a, b in mine.tolist():
-            r = row.get((a, b))
-            if r is None:
-                a, b, r = b, a, row.get((b, a))
-            if r is None:
-                continue
-            tail.append(a)
-            head.append(b)
-            body.append(int(fb[r, 0] or fb[r, 1]))
-        at = {(bd, t): i for i, (bd, t) in enumerate(zip(body, tail))}
-        nxt = np.array([at.get((bd, h), -1) for bd, h in zip(body, head)])
-        d = _delta(c, x, _slab(ev))
-        u = d/np.maximum(np.linalg.norm(d, axis=1), 1e-300)[:, None]
-        A, B = u[np.asarray(tail)], u[np.asarray(head)]
-        n = np.cross(A, B)
-        for span in _FOLD_SPAN:
-            j = np.arange(len(tail))
-            for _ in range(span):
-                j = np.where(j >= 0, nxt[np.maximum(j, 0)], -1)
-            i = np.flatnonzero(j >= 0)
-            j = j[i]
-            cross = ((np.einsum("ij,ij->i", n[i], A[j])*np.einsum("ij,ij->i", n[i], B[j]) < 0)
-                     & (np.einsum("ij,ij->i", n[j], A[i])*np.einsum("ij,ij->i", n[j], B[i]) < 0)
-                     & (np.einsum("ij,ij->i", A[i] + B[i], A[j] + B[j]) > 0))
-            for k in i[cross]:
-                rows, a = [], int(nxt[k])
-                for _ in range(span - 1):
-                    rows.append(tail[a])
-                    a = int(nxt[a])
-                rows.append(tail[a])
-                folds.append(sorted(set(rows)))
-    return folds
-
-
-def _mend_line_folds(ev) -> int:
-    """The contact lines' folds (_line_folds) mended by the checked edits
-    (_edits): the vertices between the crossing arcs smoothed along their
-    line (up to four times), and where a fold is still there its middle
-    edge collapsed. How many were found."""
-    from ._edits import edit
-    folds = _line_folds(ev)
-    if not folds:
-        return 0
-    found, left = len(folds), folds
-    guarded = _guarded(ev)
-    _unguard(ev)
-    try:
-        for _ in range(4):
-            ids = np.asarray(ev.mesh().vertex_ids)
-            edit(ev, "smooth", ids[np.unique(np.concatenate(folds))], smoothing=1.0)
-            left = _line_folds(ev)
-            if not left:
-                break
-            folds = left
-        else:
-            m = ev.mesh()
-            E, eid = np.asarray(m.edges), np.asarray(m.edge_ids)
-            index = {frozenset(map(int, e)): k for k, e in enumerate(E)}
-            middle = [index.get(frozenset(r[:2])) for r in left if len(r) >= 2]
-            middle = [eid[k] for k in middle if k is not None]
-            if middle:
-                edit(ev, "collapse", middle)
-            left = _line_folds(ev)
-    finally:
-        if guarded:
-            guard(ev)
-    _log.debug("contact lines' folds: %d, mended (%d left)", found, len(left))
-    return found
-
-
 def _keep_edges(ev, h0: float, hi: Optional[float] = None) -> None:
     """Edges back in range after a change, by the checked edits (_edits):
     those shorter than 0.4 of their target (h0, finer where the surface
@@ -4635,7 +4523,6 @@ def _keep_edges(ev, h0: float, hi: Optional[float] = None) -> None:
                 guard(ev)
     # (and its slivers, edges in range or not: a branch crept on with them)
     _even_slivers(ev, h0)
-    _mend_line_folds(ev)
 
 
 def _carried(m, ids, sizes, h0: float) -> np.ndarray:
