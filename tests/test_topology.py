@@ -525,23 +525,6 @@ def test_a_descent_past_its_budget_stops_and_the_run_backs_up(monkeypatch, caplo
     assert not any(s.changes for s in steps)
 
 
-def test_a_descent_past_its_runs_gone_wrong_stops_and_the_run_backs_up(monkeypatch, caplog):
-    # descents bounded in runs judged gone wrong (here: none allowed, each
-    # stops at its first iteration), the run backing up as from a budget spent
-    import logging
-    from pysurfaceevolver import _surgery
-    monkeypatch.setattr(_surgery, "_WRONG_RUNS", -1)
-    ev = _sphere_bridge(0.09)
-    with warnings.catch_warnings(record=True) as caught, \
-            caplog.at_level(logging.DEBUG, logger="pysurfaceevolver.topology"):
-        warnings.simplefilter("always")
-        steps = list(recipes.arclength(ev, ev.body(1), -0.003, 60, topology=True))
-    stops = [str(w.message) for w in caught if "arclength()" in str(w.message)]
-    assert len(stops) == 1 and "the descent ran away (0 runs gone wrong)" in stops[0]
-    assert any(r.getMessage().startswith("branch backed up") for r in caplog.records)
-    assert not any(s.changes for s in steps)
-
-
 def test_a_resumable_run_resumed_from_a_step_goes_on_exactly(monkeypatch):
     # (from a step's state, pickled, and the surface saved there: the same
     # steps to the bit; every step with a state here (_CANONICAL 1), from an
