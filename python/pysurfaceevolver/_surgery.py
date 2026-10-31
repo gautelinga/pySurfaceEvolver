@@ -1967,24 +1967,10 @@ def contact(ev, event, keep=None) -> None:
         ev.restore(start)
         if not len(pinched):
             raise
-        try:
-            _onto_copy(ev, event)
-            _contact(ev, event, keep, grow=pinched)
-            _separate_pinches(ev, num, left)
-            _log.debug("patch grown over the vertices its line went through twice")
-        except ValueError:
-            # (the facets round them rising off the solid: kept off them
-            # instead; refused, a 32-bead pack's contacts there came again
-            # and again, in its longest steps)
-            ev.restore(start)
-            try:
-                _onto_copy(ev, event)
-                _contact(ev, event, keep, keep_off=pinched)
-                _separate_pinches(ev, num, left)
-            except ValueError:
-                ev.restore(start)
-                raise
-            _log.debug("patch kept off the vertices its line went through twice")
+        _onto_copy(ev, event)
+        _contact(ev, event, keep, grow=pinched)
+        _separate_pinches(ev, num, left)
+        _log.debug("patch grown over the vertices its line went through twice")
 
 
 def _pinches_elsewhere(ev, num: int, ids) -> frozenset:
@@ -2022,7 +2008,7 @@ def _separate_pinches(ev, num: int, left: frozenset = frozenset()) -> None:
                          f"separated ({REASONS[int(r[r != 0][0])]})")
 
 
-def _contact(ev, event, keep=None, grow=(), keep_off=()) -> None:
+def _contact(ev, event, keep=None, grow=()) -> None:
     kind = getattr(event, "kind", None)
     if kind not in ("solid", "contact lines"):
         raise ValueError("contact() makes a contact: an Event of kind 'solid' or "
@@ -2109,14 +2095,6 @@ def _contact(ev, event, keep=None, grow=(), keep_off=()) -> None:
             raise ValueError("contact(): a vertex the contact line goes through twice "
                              "can't be separated, nor the patch grown over it")
         gone = gone | ring
-    if len(keep_off):
-        # (the patch's facets at those vertices left out, the new line then
-        # clear of them)
-        at = np.flatnonzero(np.isin(np.asarray(m.vertex_ids), keep_off))
-        gone = _one_fan(f, gone & ~np.isin(f, at).any(axis=1))
-        if not gone.any():
-            raise ValueError("contact(): a vertex the contact line goes through twice "
-                             "can't be separated, nor the patch grown over it or kept off it")
     gone = _clear_of_touching(ev, num, f, gone, on, dist, nums, c, float(event.scale))
     if not gone.any():
         raise ValueError("contact(): the place is where two walls touch")
