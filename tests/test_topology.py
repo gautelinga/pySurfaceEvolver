@@ -1450,6 +1450,47 @@ def test_a_sheet_thinnest_at_a_wall_ruptures_there():
     assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
 
 
+def _throat_of_three_spheres():
+    """An hourglass (waist 0.05 across, 60 degrees) whose waist three spheres
+    of radius 0.15 cut into, their contacts made: the liquid through the
+    throat between them, the neck's ring meeting all three."""
+    t = np.linspace(0, np.pi, 41)
+    z = -np.cos(t)
+    r = np.sin(t)*(0.05 + 0.55*z**2)
+    sh = shapes.revolve(np.where(r < 1e-12, 0.0, r), z, 36)
+    D = 0.18
+    ev = pyse.Evolver()
+    ev.load_arrays(sh.vertices, sh.faces, bodies=[pyse.Body(volume=None)],
+                   constraints={f"b{k}": C.sphere((D*np.cos(a), D*np.sin(a), 0.0), 0.15,
+                                                  contact_angle=60.0)
+                                for k, a in enumerate(np.arange(3)*2*np.pi/3 + np.pi/36)})
+    ev.body(1).target = ev.body(1).volume
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for _ in range(6):
+            through = [e for e in ev.events() if e.kind == "solid" and e.gap < 0]
+            if not through:
+                break
+            ev.contact(through[0], relax=False)
+    return ev
+
+
+def test_a_neck_in_the_throat_of_three_solids_dries_a_footprint():
+    # (its ring reaches three beads: refused, 43 times in a set of 32-bead
+    # runs, the descents running away after; one footprint is dried across,
+    # as for two, one solid at a time)
+    from pysurfaceevolver import _surgery
+    ev = _throat_of_three_spheres()
+    assert {k: len(ev.contact_lines(k)) for k in ("b0", "b1", "b2")} == {"b0": 1, "b1": 1, "b2": 1}
+    neck = [e for e in ev.events() if e.kind == "neck"]
+    assert neck
+    v, x = ev.body(1).volume, ev.vertices.copy()
+    assert ev.pinch_off(neck[0], relax=False) == []
+    assert ev.vertices.shape != x.shape or not np.allclose(ev.vertices, x)
+    assert list(ev.bodies().ids) == [1] and ev.body(1).volume == pytest.approx(v, rel=5e-3)
+    assert _surgery.check_topology(ev) == [] and _surgery._crossings(ev) == 0
+
+
 def test_a_contact_separates_only_its_own_pinches(monkeypatch):
     # a vertex the contact line already goes through twice away from the
     # event (a pack's, on a side wall, unseparable: every contact on that

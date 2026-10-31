@@ -83,6 +83,11 @@
 
 ### Fixes
 
+- A neck whose ring reaches three or more solids (liquid in the throat between three
+  beads) is cut as one against two is, a footprint dried at a time, not refused. A set
+  of 32-bead runs refused 43 such cuts, and the surface then passed through itself
+  in the cascade of necks around them: a run replayed from the step before went on
+  instead of backing up, 6 steps further in 250 s.
 - Topology descents mend folds in the contact lines after each run, and as they keep
   their edges: an arc crossing the arc two or three on along the same line (a Z,
   which the surface's crossing count leaves out as the mesh's to mend; nothing did).

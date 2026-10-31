@@ -969,16 +969,21 @@ def pinch_off(ev, event, relax: bool = True, footprint: bool = True) -> List[int
                 and (on[ring].sum(axis=1) <= 1).all()
                 and not (border[ring] & ~on[ring].any(axis=1)).any())
         if not lone:
-            two = (len(walls) == 2 and not m.fixed[ring].any()
-                   and (on[ring].sum(axis=1) <= 1).all()
-                   and not (border[ring] & ~on[ring].any(axis=1)).any())
-            if two:
+            several = (len(walls) >= 2 and not m.fixed[ring].any()
+                       and (on[ring].sum(axis=1) <= 1).all()
+                       and not (border[ring] & ~on[ring].any(axis=1)).any())
+            if several:
                 # a neck against two solids (a bead and a side wall, liquid in
                 # the wedge between them): its footprint on one of them dried
                 # across (the two strands of contact line either side of it
                 # joined over the wet ground: contact()); the liquid then
-                # joins only over the other, whose neck comes next
-                _dry_footprint(ev, m, x, ring, walls, gaps, event)
+                # joins only over the other, whose neck comes next. Against
+                # three (a throat between three beads: 43 refusals in a set
+                # of 32-bead runs, the descents running away after) likewise,
+                # one solid at a time
+                _dry_footprint(ev, m, x, ring, walls, gaps, event,
+                               what="neck against two solids" if len(walls) == 2
+                               else f"neck against {len(walls)} solids")
                 return []
             raise ValueError("pinch_off(): the neck reaches a fixed vertex, two constraints "
                              "or the surface's free border")
