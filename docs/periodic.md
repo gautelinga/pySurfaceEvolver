@@ -25,8 +25,9 @@ sources directly, the rest by local harmonic expansions, the lattice's far tail 
 Ewald's sum) at the default `pyse.flux_degree = 8`; `pyse.flux_degree = 10` takes it to
 about 1e-9, the fields about 1.3x slower to evaluate.
 
-With `pyse.wet_area = "lines"` (read at each load), a slab's flux spheres take their
-wetted areas and volumes from their contact lines alone, with no fields. A region a
+By default (`pyse.wet_area = "lines"`, read at each load), a slab's flux spheres take
+their wetted areas and volumes from their contact lines alone, with no fields;
+`pyse.wet_area = "flux"` takes them from the fields instead. A region a
 body wets on a sphere, bounded by geodesic polygons through the contact-line vertices,
 has area R² times the solid angles of a fan of geodesic triangles from a point to each
 loop's edges, less whole spheres where there are several loops (Girard's theorem; the

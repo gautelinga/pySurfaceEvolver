@@ -53,12 +53,12 @@ tessellation_limit: Optional[int] = 10_000_000
 flux_degree: int = 8
 
 #: How a periodic slab's flux spheres (``constraints.sphere(gauge="flux")``
-#: with periods) get their wetted areas and volumes: "flux", the fields'
-#: lattice sums over the liquid's facets; "lines", from the contact lines
-#: alone (Girard: a fan of geodesic triangles over each line, a polynomial
-#: line integral for the volume; the linear model, a floor at 90 degrees or
-#: none; otherwise "flux"). Read at each load.
-wet_area: str = "flux"
+#: with periods) get their wetted areas and volumes: "lines", from the
+#: contact lines alone (Girard: a fan of geodesic triangles over each line,
+#: a polynomial line integral for the volume; the linear model, a floor at
+#: 90 degrees or none; otherwise "flux"); "flux", the fields' lattice sums
+#: over the liquid's facets. Read at each load.
+wet_area: str = "lines"
 
 #: Seconds a call waits while Evolver runs a call from another thread, then
 #: EvolverBusyError; None: fail at once; float("inf"): wait as long as needed.

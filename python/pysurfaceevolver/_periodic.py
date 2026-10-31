@@ -327,6 +327,29 @@ def _fit(p: int):
     return _FIT[p]
 
 
+def _sources_apart(beads, sources, lattice, zf) -> None:
+    """Every source but a sphere's own must lie outside it: its field's flux
+    through the sphere's wetted part is a line integral only then (a sphere
+    crossing the floor or a box's wall has its mirror inside it; with the
+    contact lines' gauge, the wetted region would reach into the other solid).
+    sources: rows (x, y, z, sphere, own) or none: the spheres' centres and,
+    with a floor at zf, their mirrors; lattice: the periods (0: none)."""
+    radii = [float(w.slabflux[1]) for _, w in beads]
+    srcs = (np.array(sources, float).reshape(-1, 5) if sources else np.array(
+        [[*w.slabflux[0], i, 1.0] for i, (_, w) in enumerate(beads)]
+        + ([[w.slabflux[0][0], w.slabflux[0][1], 2*zf - w.slabflux[0][2], i, 0.0]
+            for i, (_, w) in enumerate(beads)] if zf is not None else []), float))
+    for j, (key, w) in enumerate(beads):
+        d = srcs[:, :3] - np.asarray(w.slabflux[0], float)
+        if lattice[0] > 0:
+            d[:, :2] -= np.asarray(lattice)*np.round(d[:, :2]/np.asarray(lattice))
+        inside = (np.linalg.norm(d, axis=1) < radii[j]) & ~((srcs[:, 3] == j) & (srcs[:, 4] != 0))
+        if inside.any():
+            raise ValueError(f"constraint {key}: a sphere with gauge='flux' must not cross the "
+                             "floor, a box's wall or another such sphere (another source, or "
+                             "its own image, inside it)")
+
+
 def slab_flux(walls: Dict[Any, Any], number: Dict[Any, int], periods, bodies) -> bool:
     """Set up the periodic flux gauge's fields in C and register the
     integrands (after a load; number: wall key -> constraint number). False
@@ -386,22 +409,7 @@ def slab_flux(walls: Dict[Any, Any], number: Dict[Any, int], periods, bodies) ->
                 (c + np.array(radii)[:, None]).max(axis=0)
             m = 3*max(radii)
             grid = [lo[0] - m, lo[1] - m, hi[0] - lo[0] + 2*m, hi[1] - lo[1] + 2*m]
-    # every source but a sphere's own must lie outside it: its field's flux
-    # through the sphere's wetted part is a line integral only then (a sphere
-    # crossing the floor or a box's wall has its mirror inside it)
-    srcs = (np.array(sources, float).reshape(-1, 5) if sources else np.array(
-        [[*w.slabflux[0], i, 1.0] for i, (_, w) in enumerate(beads)]
-        + ([[w.slabflux[0][0], w.slabflux[0][1], 2*zf - w.slabflux[0][2], i, 0.0]
-            for i, (_, w) in enumerate(beads)] if floor else []), float))
-    for j, (key, w) in enumerate(beads):
-        d = srcs[:, :3] - np.asarray(w.slabflux[0], float)
-        if lattice[0] > 0:
-            d[:, :2] -= np.asarray(lattice)*np.round(d[:, :2]/np.asarray(lattice))
-        inside = (np.linalg.norm(d, axis=1) < radii[j]) & ~((srcs[:, 3] == j) & (srcs[:, 4] != 0))
-        if inside.any():
-            raise ValueError(f"constraint {key}: a sphere with gauge='flux' must not cross the "
-                             "floor, a box's wall or another such sphere (another source, or "
-                             "its own image, inside it)")
+    _sources_apart(beads, sources, lattice, zf if floor else None)
     ok = _core.slabflux_setup(lattice, zf, rows, fa, ft,
                               [h, s["kappa"], s["p"], s["kappa_w"], s["p_w"], s["M"], s["p_T"]],
                               list(u.ravel()), int(H.shape[1]), list(H.ravel()),

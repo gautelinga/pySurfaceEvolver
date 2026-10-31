@@ -914,7 +914,10 @@ class _Engine:
         if pyse.wet_area not in ("flux", "lines"):
             raise ValueError(f'pyse.wet_area must be "flux" or "lines", not {pyse.wet_area!r}')
         if ok:
+            from ._periodic import _sources_apart
             zf = float(floor[0].shape[2]) if floor else 0.0
+            _sources_apart(list(spheres.items()), [], list(map(float, self.periods or ())),
+                           zf if floor else None)
             nums, names = self._constraint_names()
             number = {(name or int(c)): int(c) for c, name in zip(nums, names)}
             for key, w in spheres.items():

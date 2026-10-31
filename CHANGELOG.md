@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- `pyse.wet_area` defaults to "lines": a periodic slab's flux spheres take their
+  wetted areas and volumes from their contact lines. On a set of nine 32-bead drainage
+  runs (3 seeds x 3 contact angles) it reached breakthrough in 8 where the fields
+  reached 3, in about a third of the time. "flux" keeps the fields.
+
 ### Speed
 
 - A reload (`Evolver.restore` of a snapshot, a checkpoint's load) 19x faster in a
@@ -206,7 +213,7 @@
   polynomials, the fields to ~5e-8 of Ewald's sum (a 64-bead slab's energies and
   volumes within 1e-11 of degree 14's; its gradient steps 9% faster than at 10). 10
   gives ~1e-9; read at each load.
-- `pyse.wet_area` (default "flux"): with "lines", a periodic slab's flux spheres take
+- `pyse.wet_area` (now default "lines", above): with "lines", a periodic slab's flux spheres take
   their wetted areas and volumes from their contact lines alone (Gauss-Bonnet: the
   turning angles along each loop, a polynomial line integral for the volume; beads a
   body holds whole found by a ray through it), no fields over the facets. Exact for
