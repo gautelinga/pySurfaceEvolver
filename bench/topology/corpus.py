@@ -14,7 +14,7 @@ usage: python bench/topology/corpus.py [--set quick|small|wide|wide-half|full]
                                        [--only NAME ...] [--h H] [--ds DS]
                                        [--gauge flux|pole] [--cpus fast|all|LIST]
                                        [--flux-degree P] [--ds-area]
-                                       [--wet-area flux|lines]
+                                       [--wet-area flux|lines] [--budget PASSES]
        python bench/topology/corpus.py --summary DIR
        python bench/topology/corpus.py --compare DIR_A DIR_B
 
@@ -186,7 +186,7 @@ class _Watched:
 
 
 def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resume=None,
-        gauge=None, flux_degree=None, frames=None):
+        gauge=None, flux_degree=None, frames=None, budget=None):
     """One run, in this process: NAME.json and NAME.log in out. checkpoints:
     a directory each step's state goes to (stepNNNN.fe and .pkl, the last
     KEEP kept); resume: such a state (its path without the extension), the
@@ -261,7 +261,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                   stop_class="", changes=0, kinds={}, falls=0, facets=ev.counts["facets"],
                   python=sys.executable, pyse=os.path.dirname(pyse.__file__),
                   flux_degree=pyse.flux_degree, wet_area=pyse.wet_area, threads=pyse.threads(),
-                  cpus=sorted(os.sched_getaffinity(0)))
+                  cpus=sorted(os.sched_getaffinity(0)),
+                  budget=float(budget) if budget else recipes._RUN_BUDGET)
     # (per step: the kinds of the changes made, whether it fell; a step
     # the run backed up past is no longer the run's)
     made = {}
@@ -317,7 +318,8 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                 taken = 0
                 for step in recipes.arclength(ev, ev.body(1), ds, count, topology=True,
                                               outlet=outlet, resumable=bool(checkpoints or frames),
-                                              resume=run["state"] if run else None):
+                                              resume=run["state"] if run else None,
+                                              **({"budget": float(budget)} if budget else {})):
                     taken += 1
                     check_liquid(step)
                     work["passes"] += (_core.work() - work["last"])/max(1, ev.counts["facets"])
@@ -559,7 +561,8 @@ def latest_state(ck, part=None):
     return os.path.join(ck, steps[-1]) if steps else None
 
 
-def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None, frames=None):
+def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None, frames=None,
+           budget=None):
     """One run in its own process; cpus: the CPUs to pin it to (None: not
     pinned). Its checkpoints in OUT/ck/NAME (removed when it gets there); a
     run whose process died (no NAME.json, not a timeout: a crash) resumed
@@ -583,6 +586,7 @@ def launch(cfg, out, python, threads=1, gauge=None, flux_degree=None, cpus=None,
                                + (["--gauge", gauge] if gauge else [])
                                + (["--flux-degree", str(flux_degree)] if flux_degree else [])
                                + (["--frames", str(frames)] if frames else [])
+                               + (["--budget", str(budget)] if budget else [])
                                + ["--checkpoints", ck] + (["--resume", resume] if resume else []),
                                env=env, capture_output=True, text=True,
                                timeout=max(1.0, timeout - (time.time() - t)),
@@ -694,7 +698,7 @@ def main(argv):
         # --one NAME N L SEED THETA H DS OUT [GOAL] [--checkpoints DIR] [--resume STATE]
         options = {}
         while len(argv) > 2 and argv[-2] in ("--checkpoints", "--resume", "--gauge",
-                                             "--flux-degree", "--frames"):
+                                             "--flux-degree", "--frames", "--budget"):
             options[argv[-2][2:].replace("-", "_")] = argv[-1]
             argv = argv[:-2]
         name, n, L, seed, theta, h, ds, out = argv[1:9]
@@ -724,6 +728,9 @@ def main(argv):
                     help="pyse.wet_area for the runs (a slab's flux spheres: fields or contact lines)")
     ap.add_argument("--gauge", choices=("flux", "pole"),
                     help="the beads' gauge (default: flux to breakthrough, else pole)")
+    ap.add_argument("--budget", type=float,
+                    help="each run's work, in passes over the surface (arclength's budget=; "
+                         "default its own)")
     ap.add_argument("--out")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--h", type=float, help="the set's runs at this edge length")
@@ -763,7 +770,7 @@ def main(argv):
         cpus = free.get() if groups else None
         try:
             return launch(c, out, args.python, args.threads, args.gauge, args.flux_degree, cpus,
-                          args.frames)
+                          args.frames, args.budget)
         finally:
             if cpus:
                 free.put(cpus)
