@@ -1010,12 +1010,15 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                   dict(keep=keep, outlet=outlets, dry=False,
                        original=frozenset(int(i) for i in ev.bodies().ids)))
     resumable = resumable or resume is not None
+    from ._analysis import EVENT_FACTOR
+    capped = _core.set_step_cap(STEP_CAP, 0.8*EVENT_FACTOR)
     try:
         yield from _topology_run(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
                                  halvings=halvings, along=along, remesh=remesh, events=events,
                                  budget=budget, resumable=resumable, resume=resume)
     finally:
         ev._liquid = previous
+        _core.set_step_cap(capped, 0.8*EVENT_FACTOR if capped else 0.0)
 
 
 def _trapped(ev) -> float:
@@ -1533,6 +1536,14 @@ def _negative(step: Step) -> int:
 # target) where the value is a body's target; off by default while they are
 # validated
 LOCAL_DESCENTS = False
+
+# a topology run's gradient steps capped so the surface doesn't pass through
+# itself: no pair of its pieces closing more than this share of its gap in a
+# step, and a run ending where a capped pair comes within an event's gap
+# (_core.set_step_cap; 0: off). From 64-bead cascades, 25 min on one core:
+# the volume drained as far or further at six frames of six, the runs undone
+# 148 to 21, 417 to 32; a breakthrough 156 s against 429
+STEP_CAP = 0.5
 
 
 def _descend(ev, factor: float, tol: float, keep, history: Optional[list], body: Optional[int],

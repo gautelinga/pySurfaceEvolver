@@ -3686,12 +3686,12 @@ def _crossings(ev) -> int:
 
 _CROSSINGS: list = [None, 0]       # (the state's key, its crossings)
 
-# (trial, env PYSE_TANGLES_LOCAL: a run judged crossed only where a crossing it
-# brought is away from those it began with, not where a tangle already there
-# shifts: with steps that can't cross, a 64-bead pack's runs were still undone,
-# one in six of its steps adding a crossing inside a tangle a volume restore
-# had left, its edges sliding 1e-4)
-_TANGLES_LOCAL = bool(os.environ.get("PYSE_TANGLES_LOCAL"))
+# (a run judged crossed only where a crossing it brought is away from those it
+# began with, not where a tangle already there shifts: with steps that can't
+# cross, a 64-bead pack's runs were still undone, one in six of its steps
+# adding a crossing inside a tangle a volume restore had left, its edges
+# sliding 1e-4; env PYSE_TANGLES_LOCAL=0: as before)
+_TANGLES_LOCAL = os.environ.get("PYSE_TANGLES_LOCAL", "1") != "0"
 
 
 def _crossing_places(ev) -> np.ndarray:
