@@ -1450,6 +1450,11 @@ class _Run:
             trace.step(ev)
             if callback is not None and i % every == 0:
                 callback(cast("Evolver", ev), i)
+            if _core.step_cap_contact(False):
+                # (a capped step met two pieces of the surface within an
+                # event's gap: the change there is the caller's to make, and
+                # the steps after only crawl, each halving the gap)
+                break
             if (not np.isfinite(trace.energy[-1])
                     or abs(trace.energy[-1] - previous) > _ENERGY_BLOWUP*scale):
                 # (a finite one too: a step that flung the surface apart, the

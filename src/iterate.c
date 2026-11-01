@@ -20,6 +20,13 @@ extern int pyse_chop_lines(void) __attribute__((weak));
 static int (*pyse_chop_lines)(void) = 0;
 #endif
 #include "fastloops.h"
+/* pySE: a gradient step capped so the surface doesn't pass through itself
+   (bindings/pyse_stepcap.c; off unless set) */
+#if defined(__GNUC__)
+extern REAL pyse_step_cap(REAL scale) __attribute__((weak));
+#else
+static REAL (*pyse_step_cap)(REAL) = 0;
+#endif
 /* pySE: a slab periodic in x and y (bindings/pyse_api.c): its volumes are
    z dx dy, exact, never a cell's volume off (as calcforc.c's) */
 #if defined(__GNUC__)
@@ -276,6 +283,8 @@ void iterate()
   REAL scale0,scale1=0.0,scale2=0.0;  /* for interpolation */
   int old_flag = iterate_flag;
   REAL old_energy = web.total_energy; /* for estimate */
+  REAL step_cap = -1.0;  /* pySE: the scale pyse_step_cap left (< 0: none) */
+  REAL searched = 0.0;   /* pySE: the line search's, before it */
 
 #ifndef MPI_EVOLVER
   if ( web.skel[VERTEX].count == 0 )
@@ -486,6 +495,16 @@ have_scale:
   if ( !web.motion_flag )
     if ( web.scale > web.maxscale ) 
       web.scale = web.maxscale; /* max on movement */
+  if ( pyse_step_cap && web.scale > 0.0 && web.scale_scale > 0.0 )
+  { /* pySE: no pair of the surface's pieces closing more than a share of
+       its gap (pyse_stepcap.c) */
+    REAL move = web.scale_scale*web.scale, capped = pyse_step_cap(move);
+    if ( capped < move )
+    { searched = web.scale;
+      web.scale = capped/web.scale_scale;
+      step_cap = web.scale;
+    }
+  }
 
   if ( itdebug ) printf("Final scale: %g\n",(double)web.scale);
   move_vertices(ACTUAL_MOVE,web.scale_scale*web.scale);
@@ -530,6 +549,7 @@ have_scale:
   { /* go back and use scale1 */
     restore_coords(&saved,SAVE_IN_ATTR);
     web.scale = scale1; /* known to decrease energy */
+    if ( step_cap >= 0.0 && web.scale > step_cap ) web.scale = step_cap;  /* pySE */
     move_vertices(ACTUAL_MOVE,web.scale);
     if ( cg_hvector ) /* restart conjugate gradient */
        cg_restart();
@@ -593,6 +613,9 @@ have_scale:
                 areaname,web.total_area,web.total_energy,web.scale);
 #endif
   if ( !quiet_go_flag ) outstring(msg);
+  /* pySE: the next step's search from the scale this one's found, not from
+     the cap (a pair's capped step would have it doubling up again) */
+  if ( step_cap >= 0.0 && searched > web.scale ) web.scale = searched;
 
   vgrad_end();
   unsave_coords(&saved,SAVE_IN_ATTR);

@@ -757,6 +757,7 @@ def _away_from_poles(ev, run, n: int) -> tuple:
     from ._errors import EvolverError
     start, energy = ev._save(), (ev.energy, _crossings(ev), ev._target_gap()[0], _outside(ev))
     _RUN_FAILED.clear()
+    _core.step_cap_contact(True)
     result: Any = None
     left, k, tries = n, min(n, _POLE_CHUNK), 0
     while left > 0:
@@ -785,7 +786,7 @@ def _away_from_poles(ev, run, n: int) -> tuple:
                 _log.debug("runs shortened to %d steps (lines sweeping across poles)", k)
             continue
         left -= step
-        if left <= 0 or getattr(result, "converged", False):
+        if left <= 0 or getattr(result, "converged", False) or _core.step_cap_contact(False):
             break
         coming = [p[0] for p in _pole_lines(ev) if p[6] < _POLE_MARGIN]
         if coming:

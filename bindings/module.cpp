@@ -835,6 +835,35 @@ NB_MODULE(_core, m) {
   m.def("set_fast_steps", [](bool on) { Lock lock; return bool(pyse_set_fast_steps(on)); },
         "on"_a, "Gradient steps with fewer energy evaluations (off by default); returns the "
         "previous setting.");
+  m.def("set_step_cap", [](double frac, double contact) {
+    Lock lock; return pyse_set_step_cap(frac, contact); },
+        "frac"_a, "contact"_a = 0.0,
+        "Gradient steps capped so the surface doesn't pass through itself: no pair "
+        "of a vertex and a facet, or of two edges, more than a ring apart closing more than "
+        "frac of its gap in a step, no vertex moving more than a mean edge (0: off, the "
+        "default); a capped pair within contact local edges flags a contact "
+        "(step_cap_contact). Returns the previous frac.");
+  m.def("step_cap_contact", [](bool clear) { Lock lock; return bool(pyse_step_cap_contact(clear)); },
+        "clear"_a, "Whether a capped step met a pair within the contact distance since last "
+        "cleared (clear: clear it).");
+  m.def("step_cap_counts", []() {
+    Lock lock;
+    long c[3];
+    pyse_step_cap_counts(c);
+    return nb::make_tuple(c[0], c[1], c[2]);
+  }, "Gradient steps the cap looked at, capped by a pair, capped by the longest move.");
+  m.def("step_cap_last", [](bool keep) {
+    Lock lock;
+    double s;
+    const double *x, *v;
+    long n = pyse_step_cap_last(keep, &s, &x, &v);
+    std::vector<double> X(x ? x : (const double*)nullptr, x ? x + 3*n : (const double*)nullptr);
+    std::vector<double> V(v ? v : (const double*)nullptr, v ? v + 3*n : (const double*)nullptr);
+    if ( !x ) n = 0;
+    return nb::make_tuple(s, to_numpy(std::move(X), {size_t(n), size_t(3)}),
+                          to_numpy(std::move(V), {size_t(n), size_t(3)}));
+  }, "keep"_a, "Debugging: keep each capped step's start (keep), and return the last one's "
+     "scale, coordinates and velocities by vertex ordinal.");
   m.def("line_chop", [](double length) { Lock lock; return pyse_line_chop(length); }, "length"_a,
         "With length > 0, each gradient step ends with contact-line edges longer than it "
         "split onto their constraints (0: off); returns the previous setting.");

@@ -176,6 +176,15 @@ int pyse_native_formula_register_many(int con, const double *p, int np);  /* kin
    can be, each move's content predicted for its restoring motion; off by
    default); returns the previous setting. */
 int pyse_set_fast_steps(int on);
+/* Gradient steps capped so the surface doesn't pass through itself: no pair
+   of a vertex and a facet, or of two edges, more than a ring apart closing
+   more than frac of its gap in a step, no vertex moving more than a mean
+   edge (pyse_stepcap.c; 0: off, the default); returns the previous setting. */
+double pyse_set_step_cap(double frac, double contact_at);
+int pyse_step_cap_contact(int clear);
+/* steps looked at, capped by a pair, capped by the longest move (3 longs) */
+void pyse_step_cap_counts(long *out);
+long pyse_step_cap_last(int keep, double *scale, const double **x, const double **v);
 double pyse_work_count(void);
 /* For each edge and each of the constraints nums, whether the edge is on it
    (out: edges x ncon, row-major). */

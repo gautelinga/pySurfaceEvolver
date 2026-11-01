@@ -211,6 +211,12 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         pyse.flux_degree = int(flux_degree)
     if os.environ.get("PYSE_WET_AREA"):
         pyse.wet_area = os.environ["PYSE_WET_AREA"]     # (--wet-area)
+    if os.environ.get("PYSE_STEP_CAP"):
+        # (gradient steps capped so the surface doesn't pass through itself:
+        # the share of a gap a pair may close in a step, _core.set_step_cap)
+        from pysurfaceevolver import _core
+        from pysurfaceevolver._analysis import EVENT_FACTOR
+        _core.set_step_cap(float(os.environ["PYSE_STEP_CAP"]), 0.8*EVENT_FACTOR)
     if os.environ.get("PYSE_LOCAL_DESCENTS"):
         recipes.LOCAL_DESCENTS = True       # (falls by local descents: being validated)
 
