@@ -185,6 +185,11 @@ class _Watched:
         self.f.close()
 
 
+class _Breakthrough(BaseException):
+    """The gas at the floor in a descent (one(): the run ends there). Not an
+    Exception: the run's code doesn't take it for a failure of its own."""
+
+
 def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resume=None,
         gauge=None, flux_degree=None, frames=None, budget=None):
     """One run, in this process: NAME.json and NAME.log in out. checkpoints:
@@ -227,6 +232,12 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
             if goal == "breakthrough" and "constraint bottom" in text \
                     and "the liquid between thinning" in text and not state.get("floor"):
                 state["floor"] = text
+                log.write(f"{time.time() - t0:8.1f}s step {state['step']:4d}  {text}\n")
+                log.flush()
+                # (and the run ends there, in the descent: the rest of it, the
+                # cascade going on to equilibrium past the outlet, took 520 and
+                # 700 s of two 64-bead runs' 4457 and 5906)
+                raise _Breakthrough(text)
             log.write(f"{time.time() - t0:8.1f}s step {state['step']:4d}  {text}\n")
             log.flush()
 
@@ -402,6 +413,13 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
                 if fell is None:
                     raise RuntimeError(f"the fall from where the run resumed stopped: {why}")
                 first = state["step"] + 1
+        except _Breakthrough:
+            # (the gas at the floor in a descent: reached at the volume it held,
+            # the step's, the step itself not taken)
+            result.update(reached=True, breakthrough=float(ev.body(1).target),
+                          end=float(ev.body(1).target), seconds=time.time() - t0)
+            work["passes"] += (_core.work() - work["last"])/max(1, ev.counts["facets"])
+            result["passes"] = round(work["passes"])
         except Exception as error:
             import traceback
             log.write(traceback.format_exc())
