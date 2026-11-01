@@ -755,7 +755,9 @@ def _away_from_poles(ev, run, n: int) -> tuple:
     from their targets and the vertices through a wall there (for
     _plausible)."""
     from ._errors import EvolverError
-    start, energy = ev._save(), (ev.energy, _crossings(ev), ev._target_gap()[0], _outside(ev))
+    crossed = _crossings(ev)
+    start, energy = ev._save(), (ev.energy, crossed, ev._target_gap()[0], _outside(ev),
+                                 _crossing_places(ev) if crossed and _TANGLES_LOCAL else None)
     _RUN_FAILED.clear()
     _core.step_cap_contact(True)
     result: Any = None
@@ -3617,7 +3619,7 @@ def _implausible(ev, before: tuple, trace=None) -> str:
            "volumes" if ev._target_gap()[0] > max(1e-3, gap) else
            "poles" if _near_poles(ev, _POLE_MARGIN/2) else
            "energy" if jumped else
-           "crossings" if _crossings(ev) > crossed else
+           "crossings" if _more_crossings(ev, crossed, before[4] if len(before) > 4 else None) else
            "through a wall" if _outside(ev) > out else "")
     if why:
         _log.debug("implausible run: %s", why)
@@ -3683,6 +3685,32 @@ def _crossings(ev) -> int:
 
 
 _CROSSINGS: list = [None, 0]       # (the state's key, its crossings)
+
+# (trial, env PYSE_TANGLES_LOCAL: a run judged crossed only where a crossing it
+# brought is away from those it began with, not where a tangle already there
+# shifts: with steps that can't cross, a 64-bead pack's runs were still undone,
+# one in six of its steps adding a crossing inside a tangle a volume restore
+# had left, its edges sliding 1e-4)
+_TANGLES_LOCAL = bool(os.environ.get("PYSE_TANGLES_LOCAL"))
+
+
+def _crossing_places(ev) -> np.ndarray:
+    from ._edits import crossing_places
+    return crossing_places(ev, far=True)
+
+
+def _more_crossings(ev, crossed: int, places=None) -> bool:
+    """Whether the surface crosses itself more than it did (crossed, at
+    places): with places, only by a crossing more than two edges from all
+    of them."""
+    if _crossings(ev) <= crossed:
+        return False
+    if places is None or not len(places):
+        return True
+    now = _crossing_places(ev)
+    reach = 2*_edge_scale(ev)
+    d = _delta(now[:, None, :], places[None, :, :], _slab(ev))
+    return bool((np.linalg.norm(d, axis=2).min(axis=1) > reach).any())
 
 
 def _change_nearest(ev, factor: float, keep, skip=None, saved=None, refused=None, later=None,
