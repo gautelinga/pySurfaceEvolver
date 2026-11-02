@@ -15,6 +15,7 @@ from . import _core
 KINDS = ("neck", "touch", "solid", "contact lines")
 NECK = 4.0      # a neck counts within this many times the gap two sheets do
 SHEET = 0.25    # a neck whose waist normals' second moment is under this of the first: a sheet
+COARSE = 0.1    # a gap under this many edges is an event even where its group is most of its piece
 WEDGE = 0.7     # next to a contact line: closer than this share of its wedge's height
 
 
@@ -244,7 +245,14 @@ def _self(x, f, e, h, normal, behind, ahead, with_bodies, moving, folded,
         nearest = _first_least(label[a], g)
         for group, members in _split(label):
             k = nearest.get(group)
-            if k is None or 2*len(members) > size[piece[members]].max():
+            # (but not where its narrowest gap is under COARSE of an edge, which
+            # no mesh too coarse makes: at a search of 1 edge, a 64-bead pack's
+            # neck 0.0029 across on edges of 0.2 joined the sheets round it in
+            # a group of more than half its piece, and was dropped, though
+            # found at 0.5 edges: _sizes, searching at 1, left it unrefined,
+            # and every run across it passed the surface through itself)
+            if k is None or (2*len(members) > size[piece[members]].max()
+                             and g[k] >= COARSE*h[a[k]]):
                 continue
             if kind == "neck" and g[k] >= r[a[k]] and sheet(
                     normal[waist(x, members, (x[a[k]] + cc[k])/2, g[k], h[a[k]], periods)]):

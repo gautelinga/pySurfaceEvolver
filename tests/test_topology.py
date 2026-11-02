@@ -284,6 +284,22 @@ def test_two_spheres_about_to_touch_are_an_event():
     assert np.linalg.norm(found[0].where) < 0.05
 
 
+def test_a_gap_far_below_the_edges_is_an_event_where_all_of_its_piece_faces_itself():
+    # a flat lens, all of it within an edge of its other face: a mesh too
+    # coarse for it at 0.1 thick, no event; at 0.01 thick, under a tenth of
+    # its edges, an event (where a pack's neck 0.0029 across, its group more
+    # than half its piece at a search of 1 edge, was dropped)
+    t = np.linspace(0, np.pi, 9)
+    for half, found in ((0.05, False), (0.005, True)):
+        lens = shapes.revolve(np.sin(t), -half*np.cos(t), 16)
+        ev = pyse.Evolver()
+        ev.load_arrays(lens.vertices, lens.faces, bodies=[pyse.Body(volume=None)])
+        events = ev.events(1.0)
+        assert bool(events) == found
+        if found:
+            assert events[0].gap < 2*half
+
+
 def test_contact_lines_about_to_meet_are_an_event():
     assert _two_drops(60.0, 0.3).events() == []
     found = [e for e in _two_drops(60.0, 0.02).events() if e.kind == "contact lines"]
