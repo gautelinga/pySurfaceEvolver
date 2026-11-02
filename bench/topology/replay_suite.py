@@ -46,8 +46,10 @@ def _spent(frame: str) -> float:
 def run(manifest: str, out: str, passes: float, jobs: int, builds: list) -> None:
     frames = json.load(open(manifest))
     todo = []
-    for label, pyse in builds:
-        for fr in frames:
+    # (the builds interleaved frame by frame, so that each frame's replays run
+    # side by side, under the same load)
+    for fr in frames:
+        for label, pyse in builds:
             dest = os.path.join(out, label, fr["name"])
             if os.path.exists(os.path.join(dest, "done")):
                 continue
@@ -71,10 +73,14 @@ def run(manifest: str, out: str, passes: float, jobs: int, builds: list) -> None
             print(f"started {label}/{name}", flush=True)
         for item in list(running):
             p, dest, log, t0 = item
-            if p.poll() is not None:
+            pid, status, usage = os.wait4(p.pid, os.WNOHANG)
+            if pid:
+                p.returncode = os.waitstatus_to_exitcode(status)
                 log.close()
+                # (its CPU time too: less load-dependent than the wall time)
                 with open(os.path.join(dest, "done"), "w") as f:
-                    f.write(f"{p.returncode} {time.time() - t0:.1f}\n")
+                    f.write(f"{p.returncode} {time.time() - t0:.1f} "
+                            f"{usage.ru_utime + usage.ru_stime:.1f}\n")
                 running.remove(item)
                 print(f"done {dest} ({p.returncode})", flush=True)
         time.sleep(2)
@@ -87,11 +93,20 @@ def _result(dest: str) -> dict:
     return {}
 
 
+def _cpu(dest: str) -> float:
+    """A replay's CPU seconds (run's done file), NaN if not kept."""
+    try:
+        parts = open(os.path.join(dest, "done")).read().split()
+        return float(parts[2])
+    except (OSError, IndexError, ValueError):
+        return float("nan")
+
+
 def report(out: str) -> None:
     labels = sorted(d for d in os.listdir(out) if os.path.isdir(os.path.join(out, d)))
     names = sorted({n for lab in labels for n in os.listdir(os.path.join(out, lab))})
     print(f"{'frame':18s} {'build':10s} {'V end':>9s} {'steps':>6s} {'changes':>7s} "
-          f"{'passes':>7s} {'seconds':>8s}  ended")
+          f"{'passes':>7s} {'seconds':>8s} {'cpu':>7s}  ended")
     for name in names:
         for lab in labels:
             dest = os.path.join(out, lab, name)
@@ -104,7 +119,7 @@ def report(out: str) -> None:
             stop = "reached" if r.get("reached") else (r.get("stop") or "")
             stop = "budget" if "budget spent" in stop else stop
             print(f"{name:18s} {lab:10s} {r.get('end', float('nan')):9.3f} {r.get('steps', 0):6d} "
-                  f"{r.get('changes', 0):7d} {r.get('passes', 0):7d} {r.get('seconds', 0):8.0f}  "
+                  f"{r.get('changes', 0):7d} {r.get('passes', 0):7d} {r.get('seconds', 0):8.0f} {_cpu(dest):7.0f}  "
                   f"{stop[:60]}")
         print()
     # (each build's totals over the frames all builds have: the volume reached
@@ -116,7 +131,8 @@ def report(out: str) -> None:
               if os.path.isdir(os.path.join(out, lab, n))]
         print(f"{lab:10s} frames {len(rs)}  V end summed {sum(r.get('end', 0) for r in rs):9.3f}  "
               f"reached {sum(bool(r.get('reached')) for r in rs)}  passes {sum(r.get('passes', 0) for r in rs)}  "
-              f"seconds {sum(r.get('seconds', 0) for r in rs):.0f}")
+              f"seconds {sum(r.get('seconds', 0) for r in rs):.0f}  cpu "
+              f"{sum(_cpu(os.path.join(out, lab, n)) for n in done if os.path.isdir(os.path.join(out, lab, n))):.0f}")
 
 
 def main() -> None:
