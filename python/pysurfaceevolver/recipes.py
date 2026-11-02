@@ -1721,11 +1721,31 @@ def _branch(ev, what: Any, ds: float, steps: int, *,
     else:
         first_index = 2
     if resume is None:
+        # (judged as the descents' runs are: where relaxing passes the surface
+        # through itself, undone, the branch begun where the fall or descent
+        # left it, and ended there if its settling does so too; taken as the
+        # branch's start, a 64-bead pack's relax from where a fall ended
+        # crossed 22 times, which its descents' runs then took as tangles it
+        # began with and crossed beside, 180 crossings in one, every change
+        # and push-out near them refused, and the step went on for hours.
+        # Ended at the first crossing, two packs' descents from there
+        # stalled, their runs leaving the state as it was)
+        from ._surgery import _log
+        crossed, start_state = crossings(), ev._save()
         r = ev.relax(stability=False, tol=tol)
-        if not r.converged:
+        if factor is not None and crossings() > crossed:
+            _log.debug("branch begun unrelaxed: relaxing passed the surface through itself")
+            ev.restore(start_state)
+        elif not r.converged:
             say("arclength(): the surface didn't relax at the start")
             return
+        settled = ev._save()
         ok, negative, residual = _arc_settle(ev, put, float(value), tol, False)
+        if factor is not None and crossings() > crossed:
+            _log.debug("branch not begun: settling passed the surface through itself")
+            ev.restore(settled)
+            say("arclength(): settling at the start passed the surface through itself")
+            return
         points = [(float(value), ev.vertices)]
         before = look()
         crossed = crossings()
