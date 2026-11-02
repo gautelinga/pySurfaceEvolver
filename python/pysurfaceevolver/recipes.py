@@ -1128,6 +1128,27 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
     # gluing it back, the next fall's first event, until it ran away)
     history: list = []
     backups, step_ds = _Backups(portable=resumable), ds
+    # (the states falls began at that failed: deterministic, a fall from the
+    # same state fails the same way, and the try that would make it is
+    # passed over: a 64-bead pack's fall ran away, the run backed up to the
+    # point it fell from, and fell from there again step for step, 500 s)
+    failed_falls: set = set()
+
+    def fall_key() -> tuple:
+        return (float(_current(ev, what)), float(ev.energy), tuple(ev.counts.values()))
+
+    def fall(f: Callable[[], "tuple[Any, list, str]"]) -> "tuple[Any, list, str]":
+        key = fall_key()
+        if key in failed_falls:
+            return None, [], "the same fall as one that failed (from the same state)"
+        try:
+            result = f()
+        except _RETRIED:
+            failed_falls.add(key)
+            raise
+        if result[0] is None:
+            failed_falls.add(key)
+        return result
     spent, counted = 0.0, _core.work()  # (the run's work, in passes; counted up to)
 
     def spend() -> bool:
@@ -1217,7 +1238,8 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         state = dict(kind=kind, index=index, quiet=quiet, stuck=stuck, start=start,
                      remesh_h=remesh_h(run_remesh), last=list(last), moves=list(moves),
                      history=list(history), step_ds=step_ds, spent=spent,
-                     backups=backups.export(), liquid=dict(ev._liquid),
+                     backups=backups.export(), failed_falls=sorted(failed_falls),
+                     liquid=dict(ev._liquid),
                      surface=_copied(memory), rng=_core.rng_state(),
                      vertex_ids=np.asarray(ev.mesh().vertex_ids).copy())
         state.update(extra)
@@ -1290,6 +1312,7 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         last, moves, history = list(resume["last"]), list(resume["moves"]), list(resume["history"])
         step_ds, spent = resume["step_ds"], resume["spent"]
         backups = _Backups.from_export(resume["backups"])
+        failed_falls.update((k[0], k[1], tuple(k[2])) for k in resume.get("failed_falls", []))
         vars(memory_).update(_copied(resume["surface"]))
         _core.set_rng_state(resume["rng"])
         pending = resume
@@ -1462,9 +1485,9 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                 far = max(stable*way, last[-1].value*way)*way
                 set_value(ev, far + (stable - previous))
                 ev.command("recalc")
-                result, cut, why = _fall(ev, factor, tol, keep, history, body)
+                result, cut, why = fall(lambda: _fall(ev, factor, tol, keep, history, body))
             else:
-                result, cut, why = _fall(ev, factor, tol, keep, history, body)
+                result, cut, why = fall(lambda: _fall(ev, factor, tol, keep, history, body))
             if result is not None:
                 _smooth(ev, factor, tol)
         except _RETRIED as error:
