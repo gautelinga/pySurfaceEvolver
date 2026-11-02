@@ -2964,6 +2964,16 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                 return None, changes, (f"the descent's budget spent ({spent:.0f} passes over "
                                        f"the surface in {turn} iterations)") \
                     + (f" (the last change not made: {refused})" if refused else "")
+            # (_CROWD changes made or refused at one place, of any kind: the
+            # descent churning there, stopped, and the run backs up to take
+            # the step again, shorter. A 64-bead pack's sheet where three
+            # beads touch a fourth, 0.03 apart, had contacts, merges, necks
+            # and spikes made, refused and made again there, a change every
+            # few seconds, until its budget ran out or it ran away)
+            churn = _crowded(ev, made_at, refused_at)
+            if churn is not None:
+                return None, changes, (f"the descent churned at ({', '.join(f'{c:.4g}' for c in churn[0])}): "
+                                       f"{churn[1]} changes made or refused there")
             since += 1
             if since > _FALL_ITERATIONS:
                 # (first, after a change, the change nearest to coming,
@@ -3373,6 +3383,32 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                            f"change, and as many after remeshing" if since > _FALL_ITERATIONS else
                            f"no stable state within {_FALL_TOTAL*_FALL_ITERATIONS} steps") \
         + (f" (the last change not made: {refused})" if refused else "")
+
+
+_CROWD = 8              # changes made or refused at one place in a descent, of any kind, ...
+_CROWD_REFUSED = 3      # ... this many of them refused: it churns there
+
+
+def _crowded(ev, made_at: list, refused_at: list) -> "Optional[tuple]":
+    """Where a descent churns: the place of its last change made or
+    refused (its changes as (kind, solid, place)) and how many of them all lie
+    within _PLACE of its edges of it, where that many reach _CROWD with
+    _CROWD_REFUSED of them refused; else None. (Not a cascade whose changes
+    are all made: a 64-bead pack's liquid drained a throat between six
+    beads, ten contacts made within three edges, and stopped there the run
+    ended.)"""
+    if len(made_at) + len(refused_at) < _CROWD or len(refused_at) < _CROWD_REFUSED:
+        return None
+    L, reach = _slab(ev), _PLACE*_edge_scale(ev)
+    made = np.asarray([w for _, _, w in made_at], float).reshape(-1, 3)
+    refused = np.asarray([w for _, _, w in refused_at], float).reshape(-1, 3)
+    for last in [at[-1][2] for at in (made_at, refused_at) if at]:
+        last = np.asarray(last, float)
+        n_made = int((np.linalg.norm(_delta(last, made, L), axis=1) < reach).sum()) if len(made) else 0
+        n_ref = int((np.linalg.norm(_delta(last, refused, L), axis=1) < reach).sum())
+        if n_made + n_ref >= _CROWD and n_ref >= _CROWD_REFUSED:
+            return last, n_made + n_ref
+    return None
 
 
 def _again(ev, e, made_at: list, refused_at: list, undone_at: list) -> bool:
