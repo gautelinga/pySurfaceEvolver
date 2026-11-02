@@ -5,6 +5,77 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
+## Resume here (2026-11-02): 64-bead periodic runs toward an hour each
+
+Branch `periodic-packs`, local commits only (none pushed). Goal unchanged: every 64-bead
+run to breakthrough, each under an hour on one herbie core; then 128 beads.
+
+**Where the sets stand (herbie, 9 runs, 1 thread each, budget 3e6).**
+- job 100 (f65982d): 3/9 reached in 8 h.
+- job 104 (ca354fe): 7/9 by 1 h 49 (reached at 1300-5798 s), cancelled at 3 h 08.
+- set 110 (99acec1): 5/9 at 1 h 21, cancelled. Set 112 (b2419d3): 7/9 (2045-5108 s),
+  cancelled at 3 h 49; its s2_t25 spent four descents' budgets (1100-1700 s each).
+- set 116 (ec9f89b, tag 2026-11-02_periodic-64-ec9f89b-highplat): running.
+- Breakthrough comes at quite different volumes from set to set (paths change with any
+  fix): judge sets by runs reached and total time, changes by the replay suite.
+
+**Fixed (2026-11-02), each found by replaying a frame of a slow or failing run:**
+- 7efad5b: a gap far below the edges (under 0.1 of one) is an event even where its
+  group is most of its piece (a 64-bead neck of 0.0029 was dropped).
+- ca354fe, 07044de: the branch's starting relax and the descents' Newton finish
+  (_try_finish) undone where they pass the surface through itself (0 -> 22 and
+  0 -> 65 crossings, unchecked; the descents then tolerated the tangle and it grew).
+- 6025052: the branch's points remapped across canonical reloads and resumes (every
+  5th step the predictor was the surface with its rows shuffled: 444k crossings, the
+  corrector failing at every halving).
+- b17e42d, 99acec1: ANY_SPHERE's least over a grid cell's candidate spheres (bit for
+  bit) and the contact integrals' value and gradient in closed form: a gradient
+  step's instructions -29%.
+- b2419d3: necks flattened below the mesh (three-edge rings that are caps) cut, and
+  rings reaching a contact line collapsed onto it (a thread pressed flat against a
+  bead stalled descents at a step scale of 5e-5; crawling steps 81% -> 3%).
+- d5f80e9, ec9f89b: a descent's plateau (runs not converging) finished by Newton
+  every 2 iterations, not 10 (500 gradient steps after each change before the first
+  try), and above _PLATEAU too (residual under 4) after 10 iterations without a change
+  (s2_t25's descent at residual 2.3-3 ran its 100k-pass budget out; a finish from
+  there converges in 5 Newton steps, 0.5 s).
+
+**Tools.** `bench/topology/replay_suite.py` (916bcf6, 35df787): frames resumed for a
+fixed number of passes (deterministic: two replays of a build agree exactly; herbie and
+the workstation too), builds side by side, CPU time kept. 13 frames and the manifest in
+~/pyse_scratch/s64/suite (each a slow or failing place: tangles, crawls, plateaus, neck
+loops, a cascade). The passes count a Hessian as 4 passes, where a 64-bead Newton pair
+costs ~10 gradient steps: changes to Newton show in CPU time, not at equal passes; the
+workstation's load makes CPU times +-20% per frame. Log scan of a set's descents:
+~/pyse_scratch/s64/scan/scan.py. Unstripped builds for callgrind/gdb: pip --target
+with -C install.strip=false -C cmake.build-type=RelWithDebInfo (perf has no tools for
+the current kernel). herbie's installed _core is stripped: replay locally instead.
+
+**Tried and dropped (2026-11-02).** Forcing the nearest change when runs crawl (global:
+no gain; at the crawl's place: +26% work), the step corrector stopped at 1e-5 with the
+settle finishing (CPU -1.4%, noise), remeshing between points backed off after failed
+settles (no path changed). Bead cell lists for the gap table and a closed-form sphere
+projection measured at ~3.5% and ~4% of a run: deferred.
+
+**Where the time goes now** (jobs 104, 110, 112): descents ~60% of a run, the branch
+(predictor, corrector, settle) ~40%. Descents of 60-300 s are ~30% of a run: cascades
+(43% of those: ~20 changes, 5.7 s a change), neck loops (18%: the same neck put off and
+made again, ~27 runs undone a descent), plateaus and crawls (10%, now fixed), churn
+(10%). Descents over 300 s: 1-16%.
+
+**Open.**
+- Newton converges only linearly on the packs' meshes (0.01-0.1 a step after the first;
+  quadratic on a small periodic bead, either gauge): most of the corrector's Newton
+  pairs are its slow tail or tries that fail at 12 iterations. Not the native formulas,
+  flux or spheres, the guards, the step cap; hessian_normal can't be off (a singular
+  Hessian). Likely the normal-only Hessian missing the coupling of the discrete
+  equilibrium's tangential forces to the normals' turning. To be scoped.
+- Neck loops: a neck "made" by drying a footprint (sheet against a wall, neck against
+  two solids) comes back at the same place, put off, made again.
+- Evolver's limit of 8 quantities a method instance (DATAFILE ERROR 1564, body_8's
+  wetting method on a bead) hit once (job 104 s2_t15 step 303), backed up past.
+- 128 beads: not started.
+
 ## Resume here (2026-10-26): periodic packs of 32 and 64 beads, pressure curves
 
 0.8.1 released (2026-10-26, tag v0.8.1 at 3c1f15e). Wall facets parked (branch
