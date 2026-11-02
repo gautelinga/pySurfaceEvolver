@@ -135,6 +135,9 @@ struct ctx
   int changed;                     /* an edit made (or undone) */
   REAL cell_h;                     /* the grids' cells, times h (0: 1) */
   int fcache;                      /* facets' vertices kept in fv (a remesh): see fverts() */
+  struct grid fsave, esave;        /* the grids at the batch's snapshot (grids_save) */
+  REAL save_lo[3], save_hi[3], save_pad;
+  int saved;
   vertex_id *fv;                   /* per facet ordinal: its three vertices */
   long fv_size;
 };
@@ -660,6 +663,73 @@ static void grids_build(struct ctx *c)
   c->epoch++;
   grid_build(c,&c->fgrid,FACET);
   grid_build(c,&c->egrid,EDGE);
+}
+
+/* A batch's grids as they were when it took its snapshot, put back with it
+   where an edit is undone instead of made again (each undo built them
+   again: a third of the edits' time in a 64-bead pack's descents, 3.4 ms
+   a build at 6.7k facets against a copy's tenth of that). Only in batches
+   of plain edits: a remesh's grids fill its facets' vertices too (fcache),
+   a smoothing batch's are padded and stamped (epoch) as its moves go. */
+static void grid_release(struct grid *g)
+{ if ( !g->built ) return;
+  slots_free(g);
+  temp_free((char *)g->items);
+  if ( g->xitems ) { temp_free((char *)g->xitems); temp_free((char *)g->xnext); }
+  memset(g,0,sizeof(*g));
+}
+
+static void grid_copy(struct grid *dst, const struct grid *src)
+{ *dst = *src;
+  if ( !src->built ) return;
+  dst->key = (long *)temp_calloc(src->cap,sizeof(long));
+  dst->bstart = (long *)temp_calloc(src->cap,sizeof(long));
+  dst->xhead = (long *)temp_calloc(src->cap,sizeof(long));
+  dst->bcount = (int *)temp_calloc(src->cap,sizeof(int));
+  memcpy(dst->key,src->key,src->cap*sizeof(long));
+  memcpy(dst->bstart,src->bstart,src->cap*sizeof(long));
+  memcpy(dst->xhead,src->xhead,src->cap*sizeof(long));
+  memcpy(dst->bcount,src->bcount,src->cap*sizeof(int));
+  dst->items = (struct gitem *)temp_calloc(src->total ? src->total : 1,sizeof(struct gitem));
+  memcpy(dst->items,src->items,(src->total ? src->total : 1)*sizeof(struct gitem));
+  if ( src->xitems )
+  { dst->xitems = (struct gitem *)temp_calloc(src->xmax,sizeof(struct gitem));
+    dst->xnext = (long *)temp_calloc(src->xmax,sizeof(long));
+    memcpy(dst->xitems,src->xitems,src->xn*sizeof(struct gitem));
+    memcpy(dst->xnext,src->xnext,src->xn*sizeof(long));
+  }
+}
+
+static void grids_unsave(struct ctx *c)
+{ if ( !c->saved ) return;
+  grid_release(&c->fsave);
+  grid_release(&c->esave);
+  c->saved = 0;
+}
+
+static void grids_save(struct ctx *c)
+{ int d;
+  grids_unsave(c);
+  if ( c->fcache || c->in_cells || !c->fgrid.built || !c->egrid.built ) return;
+  grid_copy(&c->fsave,&c->fgrid);
+  grid_copy(&c->esave,&c->egrid);
+  for ( d = 0 ; d < 3 ; d++ ) { c->save_lo[d] = c->box_lo[d]; c->save_hi[d] = c->box_hi[d]; }
+  c->save_pad = c->pad;
+  c->saved = 1;
+}
+
+/* the grids as the snapshot's (grids_save), else built again */
+static void grids_put_back(struct ctx *c)
+{ int d;
+  if ( !c->saved ) { grids_build(c); return; }
+  grid_release(&c->fgrid);
+  grid_release(&c->egrid);
+  grid_copy(&c->fgrid,&c->fsave);
+  grid_copy(&c->egrid,&c->esave);
+  for ( d = 0 ; d < 3 ; d++ ) { c->box_lo[d] = c->save_lo[d]; c->box_hi[d] = c->save_hi[d]; }
+  c->pad = c->save_pad;
+  c->grids_due = 0;
+  c->epoch++;
 }
 
 /* elements an edit made or changed: in the cells their boxes are in now,
@@ -1438,9 +1508,11 @@ static void ensure_grids(struct ctx *c)
 }
 
 static void before(struct ctx *c, struct ids *verts, struct counts *was)
-{ if ( c->snapping && !c->snap ) { c->snap = pyse_snapshot_hold(); c->snap_k = c->cur_k; }
+{ int taken = 0;
+  if ( c->snapping && !c->snap ) { c->snap = pyse_snapshot_hold(); c->snap_k = c->cur_k; taken = 1; }
   if ( c->batch ) keys_now(c->batch);
   ensure_grids(c);
+  if ( taken ) grids_save(c);
   if ( c->clean && c->near_on ) near_verify(c,verts);
   patch(c,verts,was,PATCH_BEFORE,NULL,NULL);
 }
@@ -2781,6 +2853,7 @@ static void run_batch(struct ctx *c, struct edit_args *a)
          8 s, quadratic in the facets) */
       pyse_snapshot_drop(c->snap);
       c->snap = NULL;
+      grids_unsave(c);
       made = 0;
     }
     r = one(c,a,k);
@@ -2799,7 +2872,7 @@ static void run_batch(struct ctx *c, struct edit_args *a)
     for ( ;; )
     { int again = 0;
       pyse_snapshot_put_back(c->snap);
-      grids_build(c);
+      grids_put_back(c);
       c->vok_now++;                  /* (those found clean were of a later surface) */
       for ( j = base ; j < k && !again ; j++ )
         if ( a->results[j] == PYSE_EDIT_DONE )
@@ -2814,6 +2887,7 @@ static void run_batch(struct ctx *c, struct edit_args *a)
       if ( !again ) break;
     }
   }
+  grids_unsave(c);
   if ( c->snap ) pyse_snapshot_drop(c->snap);
   else if ( c->snapping && count )
     free_discards(DISCARDS_ALL);   /* (as the snapshot it didn't take: the same numbering after) */

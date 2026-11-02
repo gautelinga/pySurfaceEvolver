@@ -2639,8 +2639,13 @@ static void restore_slots(struct snapshot *s)
   }
 }
 
+static void snapshot_restore_(struct snapshot *s, int recalc_after);
+
 static void snapshot_restore_body(void *arg)
-{ struct snapshot *s = (struct snapshot *)arg;
+{ snapshot_restore_((struct snapshot *)arg,1); }
+
+static void snapshot_restore_(struct snapshot *s, int recalc_after)
+{
   int type, b, i, k;
 
   /* the attributes' layout as it was (a constraint list grown since moved
@@ -2750,10 +2755,13 @@ static void snapshot_restore_body(void *arg)
   web_timestamp = top_timestamp = ++global_timestamp;
   fl_body_stamp++;
   FL_ATTR_CHANGED();
-  recalc();
+  if ( recalc_after ) recalc();
 }
 
-void pyse_snapshot_put_back(struct snapshot *s) { snapshot_restore_body(s); }
+/* (an edit batch's undo: not recalculated, the batch replaying its edits
+   and recalculating once at its end; the recalc was most of an undo's
+   time, 4 of 4.5 ms on a 64-bead pack's 6.7k facets) */
+void pyse_snapshot_put_back(struct snapshot *s) { snapshot_restore_(s,0); }
 
 int pyse_snapshot_restore(long handle)
 { struct snapshot *s = NULL;
