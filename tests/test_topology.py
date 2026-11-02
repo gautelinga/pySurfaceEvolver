@@ -1151,6 +1151,26 @@ def test_a_neck_collapsed_below_the_mesh_is_cut():
     ev.command("g 1")
 
 
+
+def test_a_neck_flattened_below_the_mesh_is_cut():
+    # the hourglass's waist pressed flat, not shrunk: its three vertices on a
+    # segment 0.6 long, the middle one 1e-6 off it (a cap, no needle): a
+    # neck collapsed as surely, cut there, two bodies holding the volume
+    from pysurfaceevolver import _surgery as S
+    v, f = _hourglass(0.3)
+    v[4:7] = [[0.3, 0, 1], [0, 1e-6, 1], [-0.3, 0, 1]]
+    ev, volume = _held(v, f)
+    m = ev.mesh()
+    h = S._median_edge(m)
+    assert m.edge_lengths().min() > S._PINCHED*h        # (not shrunk)
+    assert [r.tolist() for r in S._collapsed_rings(m, h)] == [[4, 5, 6]]
+    assert S._pinch_collapsed(ev) == 1
+    bodies = list(ev.bodies().ids)
+    assert len(bodies) == 2
+    assert sum(ev.body(b).target for b in bodies) == pytest.approx(volume, rel=1e-6)
+    assert not S._collapsed_rings(ev.mesh(), S._median_edge(ev.mesh()))
+    ev.command("g 1")
+
 def test_a_spike_collapsed_below_the_mesh_is_taken_off():
     # the hourglass's top cone replaced by a spike on its waist (three facets
     # to one apex, a filament thinned to a cone 1e-5 across at its base): cut

@@ -2715,6 +2715,7 @@ _COARSEN = 1.5          # _sizes: a vertex's target grows at most this much a re
 _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
 _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
 _PINCHED = 0.05         # a neck three edges round, each under this times the edge scale: collapsed
+_FLAT_RING = 1e-3       # ... or flattened: its triangle a cap, its height under this times the edge scale
 _GRADIENT_RUN = 10      # ... or, where one went wrong, this many plain gradient steps
 _STALLED = 2            # runs in a row leaving the state as it was: the descent stalled
 _PLACE = 3.0            # changes at one place: on one solid, within this many of their edges
@@ -4002,27 +4003,64 @@ _PINCH_LEFT: set = set()      # _pinch_collapsed: necks (their vertices' ids) it
 
 
 def _collapsed_rings(m, h: float) -> list:
-    """Necks collapsed below the mesh: three vertices joined by edges under
-    _PINCHED times the median edge h that are no facet (a tube three edges round, shrunk to a
-    point). Rows of m's vertices, one triple per neck."""
+    """Necks collapsed below the mesh: three vertices joined by edges that
+    are no facet (a tube three edges round), shrunk to a point (its edges
+    under _PINCHED times the median edge h) or flattened (its triangle a
+    cap, its edges under 2 h and its height under _FLAT_RING h and a
+    hundredth of its shortest edge: the tube's cross-section a segment, not
+    a needle's point beside an edge: a 64-bead pack's thread pressed flat against a
+    bead, 0.36 long and 7e-5 thick, whose facets no edit could tidy, every
+    collapse failing the link condition, and the descent's gradient steps
+    crawled round it at a ten-thousandth of their scale). Rows of m's
+    vertices, one triple per neck."""
     edges = np.asarray(m.edges)
     if not len(edges):
         return []
-    short = edges[m.edge_lengths() < _PINCHED*h]
-    if not len(short):
+    lengths = np.asarray(m.edge_lengths(), float)
+    n = int(edges.max()) + 1
+    lo, hi = edges.min(axis=1).astype(np.int64), edges.max(axis=1).astype(np.int64)
+    keys = lo*n + hi
+    order = np.argsort(keys)
+    keys, length = keys[order], lengths[order]
+    # the triangles: each vertex's neighbours taken in pairs (wedges), those
+    # whose ends are joined
+    src = np.r_[lo, hi]
+    dst = np.r_[hi, lo]
+    by = np.argsort(src, kind="stable")
+    src, dst = src[by], dst[by]
+    start = np.searchsorted(src, np.arange(n + 1))
+    degree = np.diff(start)
+    found = []
+    for i in range(int(degree.max(initial=0))):
+        for j in range(i + 1, int(degree.max(initial=0))):
+            at = np.flatnonzero(degree > j)
+            if not len(at):
+                break
+            p, q = dst[start[at] + i], dst[start[at] + j]
+            a, b = np.minimum(p, q), np.maximum(p, q)
+            k = np.searchsorted(keys, a*n + b)
+            k = np.minimum(k, len(keys) - 1)
+            joined = keys[k] == a*n + b
+            found.append(np.sort(np.c_[at[joined], a[joined], b[joined]], axis=1))
+    if not found:
         return []
-    facets = {tuple(sorted(t)) for t in np.asarray(m.facets).tolist()}
-    joined: dict = {}
-    for a, b in short.tolist():
-        joined.setdefault(a, set()).add(b)
-        joined.setdefault(b, set()).add(a)
-    rings = set()
-    for a, b in short.tolist():
-        for c in joined[a] & joined[b]:
-            t = tuple(sorted((a, b, c)))
-            if t not in facets:
-                rings.add(t)
-    return [np.array(t) for t in sorted(rings)]
+    tri = np.unique(np.concatenate(found), axis=0)
+    facets = np.sort(np.asarray(m.facets), axis=1).astype(np.int64)
+    fkeys = (facets[:, 0]*n + facets[:, 1])*n + facets[:, 2]
+    tkeys = (tri[:, 0]*n + tri[:, 1])*n + tri[:, 2]
+    tri = tri[~np.isin(tkeys, fkeys)]
+    if not len(tri):
+        return []
+    # each one's edges (a<b, a<c, b<c), and its height over the longest from
+    # them (Heron's area, in the stable order: the sides largest first)
+    side = np.stack([length[np.searchsorted(keys, tri[:, u]*n + tri[:, v])]
+                     for u, v in ((0, 1), (0, 2), (1, 2))], axis=1)
+    x, y, z = (-np.sort(-side, axis=1)).T
+    area = 0.25*np.sqrt(np.maximum((x + (y + z))*(z - (x - y))*(z + (x - y))*(x + (y - z)), 0.0))
+    shrunk = (side < _PINCHED*h).all(axis=1)
+    height = 2*area/np.maximum(x, 1e-300)
+    flat = (side < 2*h).all(axis=1) & (height < _FLAT_RING*h) & (height < 0.01*z)
+    return [np.array(t) for t in tri[shrunk | flat].tolist()]
 
 
 def _collapsed_clusters(m, h: float) -> list:
@@ -4105,8 +4143,10 @@ def _pinch_collapsed(ev) -> int:
     and Evolver's 't' merged them later, pinching the surface along edges
     (relax()'s last resort, now held in descents); left, they crossed run
     after run. Each cut kept only if it passes the surface through nothing
-    and Evolver can step from it; not where the ring reaches a wall, a
-    fixed vertex or the surface's border. How many."""
+    and Evolver can step from it; not where the ring reaches a fixed
+    vertex, a wall off its contact lines or the surface's border off a
+    wall; where it reaches a contact line (two vertices at most, on one
+    wall), collapsed onto those. How many."""
     made = 0
     for _ in range(20):
         m = ev.mesh()
@@ -4117,16 +4157,25 @@ def _pinch_collapsed(ev) -> int:
         border = np.zeros(len(x), dtype=bool)
         border[np.asarray(m.edges)[m.edge_valence() == 1].ravel()] = True
         _, _, gaps, _ = ev._constraint_gaps()
-        on = np.isnan(gaps).any(axis=1) if gaps.size else np.zeros(len(x), dtype=bool)
-        held = np.asarray(m.fixed, dtype=bool) | border | on
+        walls = np.isnan(gaps) if gaps.size else np.zeros((len(x), 0), dtype=bool)
+        on = walls.any(axis=1)
+        # (a ring may reach a contact line, its vertices there on one wall:
+        # collapsed onto them, they stay on it, as pinch_off's neck against a
+        # wall; a 64-bead pack's flattened thread ran from a bead's contact
+        # line, and left, the descent crawled round it)
+        line = on & border
+        held = np.asarray(m.fixed, dtype=bool) | (border & ~on) | (on & ~border)
         cut = False
         ids = np.asarray(m.vertex_ids)
         for ring in _collapsed_clusters(m, h):
             key = frozenset(int(i) for i in ids[ring])
-            side = None if held[ring].any() or key in _PINCH_LEFT else _ring_sides(f, ring)
+            at_line = ring[line[ring]]
+            side = None if held[ring].any() or key in _PINCH_LEFT or len(at_line) > 2 \
+                or (len(at_line) and len({tuple(walls[v]) for v in at_line.tolist()}) > 1) \
+                else _ring_sides(f, ring)
             if side is None:
                 continue
-            centre = _middle(x[ring], _slab(ev))
+            centre = _middle(x[at_line] if len(at_line) else x[ring], _slab(ev))
             across = float(np.linalg.norm(_delta(x[ring][None], x[ring][:, None], _slab(ev)),
                                           axis=2).max())
             crossed, start, energy = _crossings(ev), ev._save(), ev.energy
