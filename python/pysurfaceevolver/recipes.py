@@ -1562,6 +1562,9 @@ def _change(ev, event, factor: float, tol: float, keep,
             ev.restore(start)
             raise ValueError("the change passed the surface through itself")
     except ValueError:
+        # (and the surface as it was, whatever the change left: as the
+        # descents' _try_change)
+        ev.restore(start)
         history.append(here._replace(what="refused"))
         return down(False)
     except EvolverError as error:

@@ -1956,24 +1956,32 @@ def contact(ev, event, keep=None) -> None:
     be either, the contact is refused."""
     start = ev._save()
     ids = np.asarray(ev.mesh().vertex_ids)[np.asarray(event.vertices, int)]
-    _onto_copy(ev, event)
-    nums, names = ev._constraint_names()
-    num = int(nums[_column(nums, names, event.constraint)])
-    left = _pinches_elsewhere(ev, num, ids)
-    _contact(ev, event, keep)
+    # (refused, the surface as it was: the retry's separation failing too
+    # left a 64-bead pack's grown patch in place, its surface through itself,
+    # and the descent after it, judging crossings from there, let the tangle
+    # grow to 785 and stalled)
     try:
-        _separate_pinches(ev, num, left)
-    except ValueError:
-        m = ev.mesh()
-        pinched = [int(i) for i in np.asarray(m.vertex_ids)[_pinch_rows(ev, m, num)]
-                   if int(i) not in left]
-        ev.restore(start)
-        if not len(pinched):
-            raise
         _onto_copy(ev, event)
-        _contact(ev, event, keep, grow=pinched)
-        _separate_pinches(ev, num, left)
-        _log.debug("patch grown over the vertices its line went through twice")
+        nums, names = ev._constraint_names()
+        num = int(nums[_column(nums, names, event.constraint)])
+        left = _pinches_elsewhere(ev, num, ids)
+        _contact(ev, event, keep)
+        try:
+            _separate_pinches(ev, num, left)
+        except ValueError:
+            m = ev.mesh()
+            pinched = [int(i) for i in np.asarray(m.vertex_ids)[_pinch_rows(ev, m, num)]
+                       if int(i) not in left]
+            ev.restore(start)
+            if not len(pinched):
+                raise
+            _onto_copy(ev, event)
+            _contact(ev, event, keep, grow=pinched)
+            _separate_pinches(ev, num, left)
+            _log.debug("patch grown over the vertices its line went through twice")
+    except ValueError:
+        ev.restore(start)
+        raise
 
 
 def _pinches_elsewhere(ev, num: int, ids) -> frozenset:
@@ -2781,6 +2789,7 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     chop = _core.line_chop(_LINE_CHOP*h0)
     _CROSSED_AT.clear()
     _PINCH_LEFT.clear()
+    _PINCH_TRIED.clear()
     # (what the last descent refined that is no longer close, coarsened
     # first: its targets back toward h0, as the next steps let them)
     _coarsen(ev, h0)
@@ -4012,6 +4021,8 @@ def _tidy(ev, h0: float, shut: list, close: bool = True) -> None:
 
 
 _PINCH_LEFT: set = set()      # _pinch_collapsed: necks (their vertices' ids) it couldn't cut, this descent
+_PINCH_TRIED: list = []       # ... and where it cut or tried to, this descent (on the surface
+_PINCH_OWNER: list = [None]   # ... of the Evolver whose id this is)
 
 
 def _collapsed_rings(m, h: float) -> list:
@@ -4160,6 +4171,9 @@ def _pinch_collapsed(ev) -> int:
     wall; where it reaches a contact line (two vertices at most, on one
     wall), collapsed onto those. How many."""
     made = 0
+    if _PINCH_OWNER[0] != id(ev):
+        _PINCH_TRIED.clear()
+        _PINCH_OWNER[0] = id(ev)
     for _ in range(20):
         m = ev.mesh()
         if m.facets is None or not len(m.facets):
@@ -4188,6 +4202,15 @@ def _pinch_collapsed(ev) -> int:
             if side is None:
                 continue
             centre = _middle(x[at_line] if len(at_line) else x[ring], _slab(ev))
+            # (_AGAIN tries at one place in a descent at most, cut or not: a
+            # 64-bead pack's crumpled sheet over a bead made one flattened
+            # spike after another, 0.02-0.2 across, each taken off or
+            # refused, 680 in 40 minutes, the rings new each time)
+            if len(_PINCH_TRIED) and int((np.linalg.norm(
+                    _delta(centre, np.asarray(_PINCH_TRIED), _slab(ev)), axis=1)
+                    < _PLACE*h).sum()) >= _AGAIN:
+                continue
+            _PINCH_TRIED.append(np.asarray(centre, float))
             across = float(np.linalg.norm(_delta(x[ring][None], x[ring][:, None], _slab(ev)),
                                           axis=2).max())
             crossed, start, energy = _crossings(ev), ev._save(), ev.energy
