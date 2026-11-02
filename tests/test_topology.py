@@ -544,7 +544,10 @@ def test_a_descent_past_its_budget_stops_and_the_run_backs_up(monkeypatch, caplo
 def test_a_resumable_run_resumed_from_a_step_goes_on_exactly(monkeypatch):
     # (from a step's state, pickled, and the surface saved there: the same
     # steps to the bit; every step with a state here (_CANONICAL 1), from an
-    # ordinary step's before the neck is cut and from the fall's after it)
+    # ordinary step's before the neck is cut and from the fall's after it;
+    # the branch on from there through every step's reload, not stopped
+    # short: its points held in the rows before the reload, the prediction
+    # was the surface shuffled, and step 9 fell back to step 8's value)
     import pickle
     monkeypatch.setattr(recipes, "_CANONICAL", 1)
     ev = _sphere_bridge(0.09)
@@ -554,7 +557,7 @@ def test_a_resumable_run_resumed_from_a_step_goes_on_exactly(monkeypatch):
         if step.index in (6, 7):
             kept[step.index] = (pickle.dumps(step.state()), ev.save())
     assert [r[0] for r in run] == list(range(14))
-    assert not run[6][3] and run[7][3] and run[7][4] == 1 and any(r[3] for r in run[8:])
+    assert not run[6][3] and run[7][3] and run[7][4] == 1 and not any(r[3] for r in run[8:])
     for at in (6, 7):
         state, saved = kept[at]
         ev.restore(saved)

@@ -729,12 +729,18 @@ def _canonical_keeping(ev, steps: Sequence[Step], seen: List[np.ndarray]) -> Non
     _rows_kept(ev, ids, steps, seen)
 
 
-def _rows_kept(ev, ids: np.ndarray, steps: Sequence[Step], seen: List[np.ndarray]) -> None:
+def _rows_kept(ev, ids: np.ndarray, steps: Sequence[Step], seen: List[np.ndarray],
+               branches: Sequence[dict] = ()) -> None:
     """The rows the run holds, of a mesh whose rows were the vertices
     numbered ``ids``, put where those vertices are now: the steps' events
-    (the coming change is made with them) and the vertices seen at the last
-    points (_at_fold compares them row by row). An event's vertices gone
-    since are left out."""
+    (the coming change is made with them), the vertices seen at the last
+    points (_at_fold compares them row by row) and the points of the
+    branches' states (the steps', and ``branches``), in place, so the branch
+    going on from them predicts from them (it held them in the old rows: a
+    64-bead pack's predictions, every fifth step, were the surface with its
+    rows shuffled, 444,000 crossings and 4.2 from the last point, and every
+    halving of the step failed, the branch stopping short). An event's
+    vertices gone since are left out."""
     ids = np.asarray(ids)
     now = np.asarray(ev.mesh().vertex_ids)
     if len(now) == len(ids) and bool((now == ids).all()):
@@ -752,11 +758,18 @@ def _rows_kept(ev, ids: np.ndarray, steps: Sequence[Step], seen: List[np.ndarray
             v = np.asarray(e.vertices, int)
             v = old[v[(v >= 0) & (v < len(old))]]
             events[k] = dataclasses.replace(e, vertices=v[v >= 0])
+    whole = len(now) == len(ids) and bool((old >= 0).all())
     for k, x in enumerate(seen):
-        if len(x) == len(ids) and len(now) == len(ids) and (old >= 0).all():
+        if len(x) == len(ids) and whole:
             moved = np.empty_like(x)
             moved[old] = x
             seen[k] = moved
+    held = [getattr(step, "_branch_state", None) for step in steps] + list(branches)
+    arrays = {id(x): x for state in held if state for _, x in state["points"]
+              if len(x) == len(ids)}
+    if whole:
+        for x in arrays.values():
+            x[old] = x.copy()
 # ... and the errors on the way it backs up from as from a stop (Evolver's,
 # EvolverError, and the edits' and Newton's): not the topology check's,
 # whose point is to stop at the first
@@ -1285,7 +1298,8 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         held = [resume[k] for k in ("step", "settled") if k in resume]
         if "vertex_ids" in resume:
             seen_then = list(resume.get("seen", []))
-            _rows_kept(ev, resume["vertex_ids"], last + held, seen_then)
+            _rows_kept(ev, resume["vertex_ids"], last + held, seen_then,
+                       [resume["branch"]] if resume.get("branch") else [])
             if "seen" in resume:
                 pending = dict(resume, seen=seen_then)
         else:

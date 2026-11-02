@@ -372,3 +372,30 @@ def test_a_newton_step_thrown_far_isnt_made():
         assert np.linalg.norm(ev.vertices - x, axis=1).max() <= 2e-6*size
     finally:
         _core.set_step_limits(*was)
+
+def test_a_reload_carries_the_rows_the_run_holds():
+    """_rows_kept: rows held for a mesh whose rows were other vertices (as
+    before a reload) put where those vertices are now: an event's vertices,
+    the vertices seen, and a branch's points, in place (the branch holds the
+    same arrays), the step's and a resumed state's."""
+    import dataclasses
+    from types import SimpleNamespace
+
+    @dataclasses.dataclass
+    class Event:
+        vertices: np.ndarray
+    ev = _wire_catenoid(0)
+    x = ev.vertices
+    ids = np.asarray(ev.mesh().vertex_ids)
+    then = ids[::-1]                    # (the rows were the vertices reversed)
+    event = Event(np.array([0, 1]))
+    point, resumed = x[::-1].copy(), x[::-1].copy()
+    step = SimpleNamespace(events=[event], _branch_state={"points": [(0.6, point)]})
+    seen = [x[::-1].copy()]
+    held = step._branch_state["points"][0][1]
+    recipes._rows_kept(ev, then, [step], seen, [{"points": [(0.6, resumed)]}])
+    assert held is point
+    np.testing.assert_array_equal(point, x)
+    np.testing.assert_array_equal(resumed, x)
+    np.testing.assert_array_equal(seen[0], x)
+    assert list(step.events[0].vertices) == [len(x) - 1, len(x) - 2]
