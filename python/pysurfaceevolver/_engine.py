@@ -127,6 +127,9 @@ class _SurfaceMemory:
         self.edge_scale: Optional[float] = None
         self.sizes: Dict[int, float] = {}    # descents: the last target edge per vertex number
         self.sizes_held = False             # in a descent: the targets don't coarsen
+        # _edits.walls(): each two-sided wall's solid side, by (number, name),
+        # voted by the vertices when first asked
+        self.wall_sides: Dict[Tuple[int, str], int] = {}
 
 
 surface = _SurfaceMemory()

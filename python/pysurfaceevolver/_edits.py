@@ -11,7 +11,7 @@ from typing import Any, Iterable, List, Tuple
 import numpy as np
 
 from . import _core
-from ._engine import surface
+from ._engine import GUARD_PREFIX, surface
 
 OPS = {"collapse": 1, "flip": 2, "split": 3, "smooth": 4, "snap": 5, "separate": 6,
        "degenerate": 7, "merge": 8, "bridge": 9, "remesh": 10, "patch": 11, "unzip": 12}
@@ -35,20 +35,32 @@ def walls(ev) -> Tuple[List[int], List[int]]:
     """The walls (pySE's constraints with a shape, not guards or retired
     ones) as constraint numbers, and each one's solid side (+1: where its
     formula is negative) as events() takes it: a one-sided constraint's
-    forbidden side, else the side the fewest vertices are on."""
-    nums, attrs, dist, names = ev._constraint_gaps()
+    forbidden side, else the side the fewest vertices are on, as they were
+    when the wall was first asked about (surface.wall_sides: the vote, every
+    vertex's gap to every wall, was 40% of a 64-bead pack's edits' time, 23
+    ms a call at 4.6k vertices, and a bead's or a plane's side doesn't
+    change)."""
+    _, listed = ev._call(_core.constraint_list)
+    nums, attrs, names = listed.data
     out, sides = [], []
     for c in range(len(nums)):
-        if (names[c] or int(nums[c])) not in surface.walls:
+        name = names[c]
+        if str(name).startswith(GUARD_PREFIX) or (name or int(nums[c])) in surface.retired \
+                or (name or int(nums[c])) not in surface.walls:
             continue
-        d = np.asarray(dist)[:, c]
-        off = d[~np.isnan(d)]
         if attrs[c] & 2:
             side = 1
         elif attrs[c] & 1:
             side = -1
         else:
-            side = 1 if (off > 0).sum() >= (off < 0).sum() else -1
+            if (int(nums[c]), name) not in surface.wall_sides:
+                gap_nums, _, dist, gap_names = ev._constraint_gaps()
+                for k in range(len(gap_nums)):
+                    d = np.asarray(dist)[:, k]
+                    off = d[~np.isnan(d)]
+                    surface.wall_sides[(int(gap_nums[k]), gap_names[k])] = \
+                        1 if (off > 0).sum() >= (off < 0).sum() else -1
+            side = surface.wall_sides[(int(nums[c]), name)]
         out.append(int(nums[c]))
         sides.append(side)
     return out, sides
