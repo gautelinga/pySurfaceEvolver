@@ -748,6 +748,86 @@ static void entry_terms(int o, const struct pc_entry *q, struct qinfo *e_info, d
   }
 }
 
+/* entry_terms' value and gradient (order 0 or 1) in closed form: the
+   values in the duals' order of operations, bit for bit; the gradients
+   (g: the tail's three, then the head's) by hand. (The duals, 1.2 KB each,
+   took a quarter of a 64-bead pack's gradient step, its value pass as much
+   as its gradient's) */
+static void entry_terms_1(int o, const struct pc_entry *q, struct qinfo *e_info,
+                          REAL *area, REAL *ag, REAL *line, REAL *lg)
+{ const struct pc_sphere *p = sph + q->s;
+  REAL X[2][3], *a, *b, h = p->c[2] - p->zf, t, sv;
+  int i, k, ia, ib;
+  for ( i = 0 ; i < 2 ; i++ ) pc_delta(p->c,get_coord(e_info->v[i]),X[i]);
+  if ( get_edge_tailv(e_info->id) == q->A ) { ia = 0; ib = 1; }
+  else { ia = 1; ib = 0; }
+  a = X[ia]; b = X[ib];
+  if ( o >= 1 ) for ( k = 0 ; k < 6 ; k++ ) ag[k] = lg[k] = 0.0;
+  *area = 0.0;
+  if ( q->loop >= 0 )
+  { const REAL *P = lp[q->loop].P;
+    REAL la = sqrt((a[0]*a[0] + a[1]*a[1]) + a[2]*a[2]);
+    REAL lb = sqrt((b[0]*b[0] + b[1]*b[1]) + b[2]*b[2]);
+    REAL det = ((a[1]*b[2] - a[2]*b[1])*P[0] + P[1]*(a[2]*b[0] - a[0]*b[2]))
+               + P[2]*(a[0]*b[1] - a[1]*b[0]);
+    REAL pa = (P[0]*a[0] + P[1]*a[1]) + P[2]*a[2], pb = (P[0]*b[0] + P[1]*b[1]) + P[2]*b[2];
+    REAL ab = (a[0]*b[0] + a[1]*b[1]) + a[2]*b[2];
+    REAL den = ((la*lb + pa*lb) + ab) + pb*la;
+    REAL RR = p->R*p->R;
+    *area = 2.0*atan2(det,den)*RR;
+    if ( o >= 1 )
+    { REAL r2 = den*den + det*det, ca = (lb + pb)/la, cb = (la + pa)/lb;
+      REAL dda[3], ddb[3], dna[3], dnb[3];
+      /* det = p . (a x b): d/da = b x p, d/db = p x a */
+      dda[0] = b[1]*P[2] - b[2]*P[1]; dda[1] = b[2]*P[0] - b[0]*P[2]; dda[2] = b[0]*P[1] - b[1]*P[0];
+      ddb[0] = P[1]*a[2] - P[2]*a[1]; ddb[1] = P[2]*a[0] - P[0]*a[2]; ddb[2] = P[0]*a[1] - P[1]*a[0];
+      for ( k = 0 ; k < 3 ; k++ )
+      { dna[k] = ca*a[k] + lb*P[k] + b[k];
+        dnb[k] = cb*b[k] + la*P[k] + a[k];
+      }
+      if ( r2 > 0 )
+        for ( k = 0 ; k < 3 ; k++ )
+        { ag[3*ia + k] = 2.0*RR*(den*dda[k] - det*dna[k])/r2;
+          ag[3*ib + k] = 2.0*RR*(den*ddb[k] - det*dnb[k])/r2;
+        }
+    }
+  }
+  /* line: -(a_x b_y - a_y b_x)((a_z + b_z)/6 + h/2) */
+  t = a[0]*b[1] - a[1]*b[0];
+  sv = (a[2] + b[2])*(1.0/6.0) + h/2;
+  *line = t*sv*-1.0;
+  if ( o >= 1 )
+  { lg[3*ia + 0] = -sv*b[1]; lg[3*ia + 1] = sv*b[0]; lg[3*ia + 2] = -t/6.0;
+    lg[3*ib + 0] = sv*a[1];  lg[3*ib + 1] = -sv*a[0]; lg[3*ib + 2] = -t/6.0;
+  }
+}
+
+/* pc_eval for order 0 or 1, by entry_terms_1 */
+static REAL pc_eval_1(struct qinfo *e_info, int o, int s, int body, int eo)
+{ REAL tot = 0.0, tg[6] = {0,0,0,0,0,0};
+  int k, i, a;
+  for ( k = slot[eo] ; k >= 0 ; k = ent[k].other )
+  { const struct pc_entry *q = ent + k;
+    REAL area, ag[6], line, lg[6];
+    if ( q->s != s || (body >= 0 && q->b != body) ) continue;
+    entry_terms_1(o,q,e_info,&area,ag,&line,lg);
+    if ( body >= 0 )
+    { REAL c = -sph[s].R/3.0, sa = (REAL)q->sapp;
+      tot = tot + sa*(area*c + line);
+      if ( o >= 1 ) for ( i = 0 ; i < 6 ; i++ ) tg[i] += sa*(ag[i]*c + lg[i]);
+    }
+    else
+    { REAL kk = -sphere_k(sph + s);
+      tot = tot + kk*area;
+      if ( o >= 1 ) for ( i = 0 ; i < 6 ; i++ ) tg[i] += kk*ag[i];
+    }
+  }
+  if ( o >= 1 )
+    for ( a = 0 ; a < e_info->vcount && a < 2 ; a++ )
+      for ( i = 0 ; i < 3 ; i++ ) e_info->grad[a][i] = tg[3*a + i];
+  return tot;
+}
+
 /* the element's value (and derivatives) for instance mi */
 static REAL pc_eval(struct qinfo *e_info, int order)
 { const int o = order;
@@ -767,6 +847,7 @@ static REAL pc_eval(struct qinfo *e_info, int order)
       }
     if ( body < 0 ) goto out;
   }
+  if ( o < 2 ) return pc_eval_1(e_info,o,s,body,eo);
   for ( k = slot[eo] ; k >= 0 ; k = ent[k].other )
   { const struct pc_entry *q = ent + k;
     if ( q->s != s || (body >= 0 && q->b != body) ) continue;
