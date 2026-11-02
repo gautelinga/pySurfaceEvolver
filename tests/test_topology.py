@@ -1135,6 +1135,18 @@ def _held(v, f):
     return ev, volume
 
 
+
+def test_a_contacts_patch_takes_the_facets_beside_it_lying_on_the_solid():
+    # a strip of facets 0-1-2-3 (each sharing an edge with the next) and a
+    # facet 4 apart: the patch, facet 0, grows over 1 and 2 (their corners
+    # all on the solid), not over 3 (a corner off it) nor 4 (not joined)
+    from pysurfaceevolver import _surgery as S
+    f = np.array([[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5], [6, 7, 8]])
+    on = np.array([False, True, True, True, True, False, True, True, True])
+    gone = np.array([True, False, False, False, False])
+    assert S._with_lying(f, gone, on).tolist() == [True, True, True, False, False]
+    assert S._with_lying(f, gone, np.zeros(9, bool)).tolist() == gone.tolist()
+
 def test_a_neck_collapsed_below_the_mesh_is_cut():
     # a body pinched to a waist 1e-5 across, three edges round, below what
     # events() sees: cut there, two bodies holding the volume between them

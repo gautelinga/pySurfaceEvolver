@@ -2106,10 +2106,35 @@ def _contact(ev, event, keep=None, grow=()) -> None:
             raise ValueError("contact(): a vertex the contact line goes through twice "
                              "can't be separated, nor the patch grown over it")
         gone = gone | ring
+    # (and over the facets beside it lying on the solid already, all three
+    # corners on it: left, the new contact line ran over them, a 64-bead
+    # pack's patch on a bead in the wedge it makes with another, 0.03 apart,
+    # its line through two such facets, the contact refused there time after
+    # time)
+    gone = _with_lying(f, gone, on)
     gone = _clear_of_touching(ev, num, f, gone, on, dist, nums, c, float(event.scale))
     if not gone.any():
         raise ValueError("contact(): the place is where two walls touch")
     _dissolve_onto(ev, m, gone, event.constraint)
+
+
+def _with_lying(f, gone, on) -> np.ndarray:
+    """The patch's facets (mask over the facets f) and those joined to it
+    across edges, facet by facet, that lie on its solid (their corners all
+    on it: on, per vertex)."""
+    gone = np.asarray(gone, bool).copy()
+    lying = on[f].all(axis=1)
+    if not (lying & ~gone).any():
+        return gone
+    f = np.asarray(f, np.int64)
+    pair = np.stack([np.minimum(f[:, k], f[:, (k + 1) % 3])*(1 << 32)
+                     + np.maximum(f[:, k], f[:, (k + 1) % 3]) for k in range(3)], axis=1)
+    for _ in range(len(f)):
+        add = lying & ~gone & np.isin(pair, pair[gone]).any(axis=1)
+        if not add.any():
+            break
+        gone |= add
+    return gone
 
 
 def _clear_of_touching(ev, num: int, f, gone, on, dist, nums, col: int, h: float):
@@ -2231,6 +2256,18 @@ def _dissolve_onto(ev, m, gone, key) -> None:
     moved = x.copy()
     put = put[~on[put]]
     moved[put] -= (dist[put, c])[:, None]*normal[put]
+    # (onto a sphere exactly, along its radius at the centre's nearest copy:
+    # the step by the formula's gap, f/|grad f|, is the distance only near it;
+    # a vertex 0.28 from a 64-bead pack's bead centre, its gap -1.68, was put
+    # 0.96 outside the bead, the patch through the surface 37 times)
+    centre = _sphere_centre(key)
+    shape = getattr(surface.walls.get(key), "shape", None)
+    if centre is not None and len(put):
+        R = float(shape[2])
+        w = _delta(centre, x[put], _slab(ev))
+        r = np.linalg.norm(w, axis=1)
+        ok = r > 1e-9*R
+        moved[put[ok]] = x[put[ok]] - w[ok] + w[ok]*(R/r[ok])[:, None]
     ev.vertices = moved
     bodies = [int(i) for i in ev.bodies().ids]
     volume = {i: ev.body(i).volume for i in bodies}
