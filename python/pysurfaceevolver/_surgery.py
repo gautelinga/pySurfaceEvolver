@@ -3493,13 +3493,23 @@ def _try_finish(ev, tol: float) -> Any:
     """A descent's try at finishing from where it is: Newton steps, then
     relax() (or relax() alone where they don't converge: a drop free to move
     as a whole, which relax() deflates). relax()'s result where that
-    converged to a stable, sound state; else the surface put back, None."""
-    start = ev._save()
+    converged to a stable, sound state; else the surface put back, None.
+    Nor where either passed the surface through itself (more crossings than
+    it began with: a 64-bead pack's Newton steps here took 0 crossings to
+    65 in a pore between three beads, the descent ended there as relaxed,
+    and the runs after, judged from that tangle, let it grow to 95)."""
+    start, crossed = ev._save(), _crossings(ev)
     for finish in ("newton", "relax"):
-        if finish == "newton" and not ev.newton(20, tol=tol).converged:
-            continue
+        if finish == "newton":
+            converged = ev.newton(20, tol=tol).converged
+            if _crossings(ev) > crossed:
+                ev.restore(start)
+                continue
+            if not converged:
+                continue
         r = ev.relax(tol=tol)
-        if r.converged and r.stable is not False and _sound(r.health):
+        if r.converged and r.stable is not False and _sound(r.health) \
+                and _crossings(ev) <= crossed:
             return r
         ev.restore(start)
     return None
