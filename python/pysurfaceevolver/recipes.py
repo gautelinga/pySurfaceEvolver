@@ -21,6 +21,7 @@ A run stopped for any reason resumes from its last finished step with
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import os
 import pickle
@@ -714,6 +715,48 @@ def _canonical(ev) -> None:
     steps on)."""
     for _ in range(2):
         ev.restore(ev.save())
+
+
+def _canonical_keeping(ev, steps: Sequence[Step], seen: List[np.ndarray]) -> None:
+    """_canonical, the rows the run holds put where their vertices are now
+    (_rows_kept): the reload keeps the vertices' numbers and places but not
+    their rows (a 64-bead pack's, after a remesh, 4552 of 4586 rows moved),
+    and a contact made with the rows of the event found before the reload
+    took facets 1.4 from its bead, its edges stretched to 2.5, and the
+    descent stalled for hours."""
+    ids = np.asarray(ev.mesh().vertex_ids).copy()
+    _canonical(ev)
+    _rows_kept(ev, ids, steps, seen)
+
+
+def _rows_kept(ev, ids: np.ndarray, steps: Sequence[Step], seen: List[np.ndarray]) -> None:
+    """The rows the run holds, of a mesh whose rows were the vertices
+    numbered ``ids``, put where those vertices are now: the steps' events
+    (the coming change is made with them) and the vertices seen at the last
+    points (_at_fold compares them row by row). An event's vertices gone
+    since are left out."""
+    ids = np.asarray(ids)
+    now = np.asarray(ev.mesh().vertex_ids)
+    if len(now) == len(ids) and bool((now == ids).all()):
+        return
+    row = np.full(int(max(ids.max(initial=0), now.max(initial=0))) + 1, -1)
+    row[now] = np.arange(len(now))
+    old = row[ids]                      # (each old row's row now; -1: none)
+    done: set = set()
+    for step in steps:
+        events = getattr(step, "events", None)
+        if not events or id(events) in done:
+            continue
+        done.add(id(events))
+        for k, e in enumerate(events):
+            v = np.asarray(e.vertices, int)
+            v = old[v[(v >= 0) & (v < len(old))]]
+            events[k] = dataclasses.replace(e, vertices=v[v >= 0])
+    for k, x in enumerate(seen):
+        if len(x) == len(ids) and len(now) == len(ids) and (old >= 0).all():
+            moved = np.empty_like(x)
+            moved[old] = x
+            seen[k] = moved
 # ... and the errors on the way it backs up from as from a stop (Evolver's,
 # EvolverError, and the edits' and Newton's): not the topology check's,
 # whose point is to stop at the first
@@ -1162,7 +1205,8 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                      remesh_h=remesh_h(run_remesh), last=list(last), moves=list(moves),
                      history=list(history), step_ds=step_ds, spent=spent,
                      backups=backups.export(), liquid=dict(ev._liquid),
-                     surface=_copied(memory), rng=_core.rng_state())
+                     surface=_copied(memory), rng=_core.rng_state(),
+                     vertex_ids=np.asarray(ev.mesh().vertex_ids).copy())
         state.update(extra)
         return state
 
@@ -1174,7 +1218,7 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         'budget' (the run ends)."""
         nonlocal counted, last, seen
         if resumable and step.index % _CANONICAL == 0:
-            _canonical(ev)          # (a reload's layout: see _CANONICAL)
+            _canonical_keeping(ev, last + [step], seen)    # (a reload's layout: see _CANONICAL)
         counted = _core.work()      # (not the caller's work between steps)
         if out_of_budget():
             return "budget", None
@@ -1197,7 +1241,7 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         the run ends."""
         nonlocal counted, last, index, quiet, stuck
         if resumable and settled.index % _CANONICAL == 0:
-            _canonical(ev)          # (a reload's layout: see _CANONICAL)
+            _canonical_keeping(ev, [settled], seen)    # (a reload's layout: see _CANONICAL)
         counted = _core.work()
         if drained_out():
             return True
@@ -1236,6 +1280,20 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         vars(memory_).update(_copied(resume["surface"]))
         _core.set_rng_state(resume["rng"])
         pending = resume
+        # (the rows it holds are of the surface as it was then: a load lists
+        # the vertices in another order, as _canonical's does)
+        held = [resume[k] for k in ("step", "settled") if k in resume]
+        if "vertex_ids" in resume:
+            seen_then = list(resume.get("seen", []))
+            _rows_kept(ev, resume["vertex_ids"], last + held, seen_then)
+            if "seen" in resume:
+                pending = dict(resume, seen=seen_then)
+        else:
+            # (a state kept without them: the events where the run waited
+            # found again, the surface the same)
+            for step in held:
+                if getattr(step, "events", None):
+                    step.events[:] = ev.events(factor)
     else:
         # (the liquid's clusters made bodies from the start: each trapped one
         # its own, at the volume it holds)
