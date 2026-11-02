@@ -2699,6 +2699,8 @@ _NEWTON_NEAR = 1.0      # ... and below which its relax() runs take Newton steps
                         # alone level off at 0.1-0.5, the tidying between rounds disturbing it)
 _FALL_TRY = 10          # iterations between such tries
 _PLATEAU = 2.0          # ... and below which they try where the runs don't converge (a plateau)
+_PLATEAU_TRY = 2        # ... every this many iterations (each _CHUNK gradient steps), not
+                        # _FALL_TRY's
 _FLAT = 0.05            # a facet crushed flat: its area under this many h^2 (h the mean edge)
 _AGAIN = 3              # a change made this often at one place in a descent: not again there
 _FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
@@ -3215,8 +3217,11 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     # between rounds stirs the surface, residual 0.4-2 and the
                     # energy wandering by 0.03, a 32-bead column's descent 2000
                     # gradient steps there, 400 s, to its budget's end; four
-                    # Newton steps from there converge in a second)
-                    if residual < _PLATEAU and tried >= _FALL_TRY:
+                    # Newton steps from there converge in a second. Every other
+                    # iteration: at _FALL_TRY's ten, 500 gradient steps after
+                    # each change, a 64-bead pack's descents spent most of
+                    # their runs on such plateaus, each finish 0.3 s)
+                    if residual < _PLATEAU and tried >= _PLATEAU_TRY:
                         tried = 0
                         done = _try_finish(ev, tol)
                         if done is not None:
