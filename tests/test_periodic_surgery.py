@@ -365,6 +365,45 @@ def test_a_slabs_free_vertices_take_one_guard_against_every_sphere():
     assert _core.native_formula(int(nums[col]), 3, [0.0, 0.0, 1.2, 0.25, 0.9, 1.0, 0.5, 0.16])
 
 
+
+def test_the_guard_against_every_sphere_is_the_least_of_them_everywhere():
+    # (C takes the least of the spheres' terms over those that can be the
+    # least in the point's cell of a grid: still the least of them all, at
+    # points over the cell and its copies, above and below the spheres too)
+    from pysurfaceevolver import _core
+    rng = np.random.default_rng(3)
+    L = np.array(PERIODS)
+    centres = np.c_[rng.uniform(-1, 1, (12, 2))*L/2, rng.uniform(0.3, 1.5, 12)]
+    radii = rng.uniform(0.15, 0.3, 12)
+    drop = shapes.cap(0.7, 0.7, nr=6, nt=24)
+    ev = pyse.Evolver()
+    ev.load_arrays(_into_cell(drop.vertices, PERIODS), drop.faces,
+                   constraints={1: C.plane((0, 0, 1), 0.0, contact_angle=90.0),
+                                **{k + 2: C.sphere(tuple(c), r, contact_angle=90.0)
+                                   for k, (c, r) in enumerate(zip(centres, radii))}},
+                   vertex_constraints={1: drop.rims["rim"]},
+                   bodies=[pyse.Body(volume=None)], periods=PERIODS)
+    S.guard(ev)
+    S._unguard(ev)                      # (the guards defined, no vertex on them)
+    nums, _, _, names = ev._constraint_gaps(guards=True)
+    col = [str(m) for m in names].index(S.ANY_SPHERE)
+    assert _core.native_formula(int(nums[col]), 3,
+                                [v for c, r in zip(centres, radii) for v in (*c, r*r)])
+    n = len(ev.vertices)
+    for _ in range(40):
+        x = np.c_[rng.uniform(-1.5, 1.5, (n, 2))*L, rng.uniform(-1.0, 2.5, n)]
+        ev.vertices = x
+        x = ev.vertices                 # (the rim's kept on its plane)
+        gap = ev._constraint_gaps(guards=True)[2][:, col]
+        d = x[:, None, :] - centres[None]
+        d[..., :2] -= L*np.floor(d[..., :2]/L + 0.5)
+        t = (d*d).sum(axis=2) - radii**2
+        k = t.argmin(axis=1)
+        least = t[np.arange(n), k]
+        np.testing.assert_allclose(gap, least/(2*np.linalg.norm(d[np.arange(n), k], axis=1)),
+                                   rtol=1e-12, atol=1e-14)
+
+
 def test_a_vertex_put_on_a_sphere_is_moved_home_first():
     ev = _bead(PERIODS)
     m = ev.mesh()

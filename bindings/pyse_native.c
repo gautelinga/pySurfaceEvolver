@@ -1232,6 +1232,9 @@ struct formula_native
   REAL sign;                     /* the interpreter's value is sign times ours */
   REAL *P;                       /* kind 3: spheres (c, R^2) by fours, the least of */
   int np;                        /* kind 2's terms over them (a guard against any) */
+  int *cand, *cstart;            /* kind 3: by a grid's cells, the spheres that can be */
+  int nc[3];                     /* the least there (formula_grid), cstart[c] to */
+  REAL lo[3], h[3];              /* cstart[c+1] in cand; the grid x, y over a period */
 };
 
 static struct formula_native formulas[FORMULA_NATIVES];
@@ -1258,6 +1261,121 @@ static int formula_find(const struct expnode *ex)
     h = (h + 1) & (FORMULA_HASH - 1);
   }
   return -1;
+}
+
+static void formula_free(struct formula_native *n)
+{ free(n->P); free(n->cand); free(n->cstart);
+  n->P = NULL; n->cand = n->cstart = NULL;
+}
+
+/* 1D: the least and the most distance from [u0, u1] (in [0, L)) to c's
+   images (c in [0, L)), widened by e */
+static void circle_reach(REAL u0, REAL u1, REAL c, REAL L, REAL e, REAL *lo, REAL *hi)
+{ REAL d0 = fabs(u0 - c), d1 = fabs(u1 - c), far = c + L/2;
+  d0 = d0 < L - d0 ? d0 : L - d0;
+  d1 = d1 < L - d1 ? d1 : L - d1;
+  if ( far >= L ) far -= L;
+  *lo = (c >= u0 && c <= u1) ? 0.0 : (d0 < d1 ? d0 : d1);
+  *hi = (far >= u0 && far <= u1) ? L/2 : (d0 > d1 ? d0 : d1);
+  *lo = *lo > e ? *lo - e : 0.0;
+  *hi += e;
+}
+
+/* kind 3's grid: x, y over a period [0, L), z over the spheres' heights and
+   two radii past, cells of half the largest radius; each cell's spheres are
+   those whose term's least there is no more than the least of the terms'
+   most (the bounds widened by a millionth of the period: the terms are
+   computed from x, the cells from x mod L). The least term at a point is
+   then among its cell's, the same one, and the loop over a 64-bead pack's
+   all at every guarded vertex's projection was 13% of a gradient step. 0 if
+   out of memory (the loop over all then) */
+static int formula_grid(struct formula_native *n)
+{ int j, k, c, ncell, count = 0, cap;
+  REAL rmax = 0.0, zmin = 0.0, zmax = 0.0, e = 1e-6*(n->L[0] + n->L[1]);
+  REAL *lb, *ub;
+  for ( k = 0 ; k < n->np ; k++ )
+  { REAL r = sqrt(fabs(n->P[4*k + 3])), z = n->P[4*k + 2];
+    if ( r > rmax ) rmax = r;
+    if ( k == 0 || z < zmin ) zmin = z;
+    if ( k == 0 || z > zmax ) zmax = z;
+  }
+  if ( !(rmax > 0) ) return 0;
+  n->lo[0] = n->lo[1] = 0.0;
+  n->lo[2] = zmin - 2*rmax;
+  for ( j = 0 ; j < 3 ; j++ )
+  { REAL span = j < 2 ? n->L[j] : (zmax + 2*rmax) - n->lo[2];
+    n->nc[j] = (int)ceil(span/(rmax/2));
+    if ( n->nc[j] < 1 ) n->nc[j] = 1;
+    if ( n->nc[j] > 64 ) n->nc[j] = 64;
+    n->h[j] = span/n->nc[j];
+  }
+  ncell = n->nc[0]*n->nc[1]*n->nc[2];
+  lb = (REAL*)malloc(2*n->np*sizeof(REAL));
+  n->cstart = (int*)malloc((ncell + 1)*sizeof(int));
+  cap = 8*ncell;
+  n->cand = (int*)malloc(cap*sizeof(int));
+  if ( !lb || !n->cstart || !n->cand )
+  { free(lb); free(n->cstart); free(n->cand); n->cstart = n->cand = NULL; return 0; }
+  ub = lb + n->np;
+  for ( c = 0 ; c < ncell ; c++ )
+  { int ix = c % n->nc[0], iy = (c/n->nc[0]) % n->nc[1], iz = c/(n->nc[0]*n->nc[1]);
+    REAL least = 0.0;
+    for ( k = 0 ; k < n->np ; k++ )
+    { const REAL *q = n->P + 4*k;
+      REAL dl[3], dh[3];
+      for ( j = 0 ; j < 2 ; j++ )
+      { int i_ = j ? iy : ix;
+        REAL cc = q[j] - n->L[j]*floor(q[j]/n->L[j]);
+        circle_reach(i_*n->h[j],(i_ + 1)*n->h[j],cc,n->L[j],e,dl + j,dh + j);
+      }
+      { REAL z0 = n->lo[2] + iz*n->h[2], z1 = z0 + n->h[2];
+        dl[2] = q[2] < z0 ? z0 - q[2] : q[2] > z1 ? q[2] - z1 : 0.0;
+        dh[2] = fabs(z0 - q[2]) > fabs(z1 - q[2]) ? fabs(z0 - q[2]) : fabs(z1 - q[2]);
+        dl[2] = dl[2] > e ? dl[2] - e : 0.0;
+        dh[2] += e;
+      }
+      lb[k] = dl[0]*dl[0] + dl[1]*dl[1] + dl[2]*dl[2] - q[3];
+      ub[k] = dh[0]*dh[0] + dh[1]*dh[1] + dh[2]*dh[2] - q[3];
+      if ( k == 0 || ub[k] < least ) least = ub[k];
+    }
+    n->cstart[c] = count;
+    for ( k = 0 ; k < n->np ; k++ )
+      if ( lb[k] <= least + e*e )
+      { if ( count == cap )
+        { int *more = (int*)realloc(n->cand,2*cap*sizeof(int));
+          if ( !more )
+          { free(lb); free(n->cstart); free(n->cand); n->cstart = n->cand = NULL; return 0; }
+          n->cand = more; cap *= 2;
+        }
+        n->cand[count++] = k;
+      }
+  }
+  n->cstart[ncell] = count;
+  free(lb);
+  return 1;
+}
+
+static void formula_value(const struct formula_native *n, const REAL *x, REAL *f, REAL *g);
+
+/* whether kind 3's grid gives what the loop over all its spheres does, bit
+   for bit, at each cell's centre and near its lowest corner */
+static int formula_grid_agrees(struct formula_native *n)
+{ int c, j, ncell = n->nc[0]*n->nc[1]*n->nc[2];
+  int *cand = n->cand;
+  for ( c = 0 ; c < ncell ; c++ )
+  { int at[3] = {c % n->nc[0], (c/n->nc[0]) % n->nc[1], c/(n->nc[0]*n->nc[1])}, s;
+    for ( s = 0 ; s < 2 ; s++ )
+    { REAL x[3], fg, gg[3], fa, ga[3];
+      for ( j = 0 ; j < 3 ; j++ )
+        x[j] = n->lo[j] + (at[j] + (s ? 1e-7 : 0.5))*n->h[j];
+      formula_value(n,x,&fg,gg);
+      n->cand = NULL;
+      formula_value(n,x,&fa,ga);
+      n->cand = cand;
+      if ( fg != fa || gg[0] != ga[0] || gg[1] != ga[1] || gg[2] != ga[2] ) return 0;
+    }
+  }
+  return 1;
 }
 
 static void formula_value(const struct formula_native *n, const REAL *x, REAL *f, REAL *g)
@@ -1288,15 +1406,31 @@ static void formula_value(const struct formula_native *n, const REAL *x, REAL *f
   else if ( n->kind == 3 )
   { /* minimum(t_1, minimum(t_2, ... t_n)), Evolver's minimum: the second
        where the first is greater */
-    int k;
+    int k, from = 0, to = n->np, cell = -1;
     REAL gg[3] = {0,0,0};
-    for ( k = n->np - 1 ; k >= 0 ; k-- )
-    { const REAL *q = n->P + 4*k;
-      REAL a = x[0] - q[0], b = x[1] - q[1];
-      REAL X = a - n->L[0]*floor(a/n->L[0] + 0.5), Y = b - n->L[1]*floor(b/n->L[1] + 0.5);
-      REAL Z = x[2] - q[2];
-      REAL t = (X*X + Y*Y) + Z*Z - q[3];
-      if ( k == n->np - 1 || !(t > v) )
+    if ( n->cand )
+    { /* (the spheres of x's cell: formula_grid; the loop over all where x is
+         past the grid in z, or not finite) */
+      REAL u = x[0] - n->L[0]*floor(x[0]/n->L[0]), w = x[1] - n->L[1]*floor(x[1]/n->L[1]);
+      REAL zz = (x[2] - n->lo[2])/n->h[2];
+      if ( zz >= 0 && zz < n->nc[2] && u >= 0 && w >= 0 )
+      { int ix = (int)(u/n->h[0]), iy = (int)(w/n->h[1]);
+        if ( ix >= n->nc[0] ) ix = n->nc[0] - 1;
+        if ( iy >= n->nc[1] ) iy = n->nc[1] - 1;
+        cell = ix + n->nc[0]*(iy + n->nc[1]*(int)zz);
+        from = n->cstart[cell]; to = n->cstart[cell + 1];
+      }
+    }
+    for ( i = to - 1 ; i >= from ; i-- )
+    { const REAL *q;
+      REAL a, b, X, Y, Z, t;
+      k = cell >= 0 ? n->cand[i] : i;
+      q = n->P + 4*k;
+      a = x[0] - q[0]; b = x[1] - q[1];
+      X = a - n->L[0]*floor(a/n->L[0] + 0.5); Y = b - n->L[1]*floor(b/n->L[1] + 0.5);
+      Z = x[2] - q[2];
+      t = (X*X + Y*Y) + Z*Z - q[3];
+      if ( i == to - 1 || !(t > v) )
       { v = t; gg[0] = 2.0*X; gg[1] = 2.0*Y; gg[2] = 2.0*Z; }
     }
     if ( g ) for ( i = 0 ; i < 3 ; i++ ) g[i] = gg[i];
@@ -1360,7 +1494,7 @@ static int formula_register(int con, int kind, const double *p, int np)
   if ( formula_load != pyse_load_serial() )
   { for ( i = 0 ; i < formula_count ; i++ )
     { formulas[i].key = NULL;    /* (the old load's expressions are gone) */
-      free(formulas[i].P); formulas[i].P = NULL;
+      formula_free(formulas + i);
     }
     formula_count = 0;
     memset(formula_hash,0,sizeof(formula_hash));
@@ -1368,7 +1502,7 @@ static int formula_register(int con, int kind, const double *p, int np)
   }
   if ( SDIM != 3 || kind < 0 || kind > 3 || con < 0 || con >= web.maxcon || np < 1 ) return 0;
   if ( (kind == 2 || kind == 3) && !pyse_slab(n.L) ) return 0;
-  n.P = NULL; n.np = 0;
+  n.P = NULL; n.np = 0; n.cand = n.cstart = NULL;
   cn = get_constraint(con);
   if ( !cn || !(cn->attr & IN_USE) || !cn->formula ) return 0;
   ex = cn->formula;
@@ -1393,9 +1527,11 @@ static int formula_register(int con, int kind, const double *p, int np)
       n.P[4*i + 3] = -fc;
       for ( j = 0 ; j < 4 ; j++ )
         if ( fabs(n.P[4*i + j] - p[4*i + j]) > 1e-9*(1.0 + fabs(p[4*i + j])) )
-        { free(n.P); return 0; }
+        { formula_free(&n); return 0; }
     }
     for ( j = 0 ; j < 4 ; j++ ) n.p[j] = n.P[j];
+    if ( formula_grid(&n) && !formula_grid_agrees(&n) )
+    { free(n.cand); free(n.cstart); n.cand = n.cstart = NULL; }
   }
   else
   { /* the constants as Evolver parsed them, read back from its interpreter
@@ -1446,14 +1582,14 @@ static int formula_register(int con, int kind, const double *p, int np)
     formula_value(&n,x,&fn,gn);
     /* (bit for bit: else the interpreter's own arithmetic, a rotated
        frame's say, and this one's would part in the last bits) */
-    if ( fi != fn ) { free(n.P); return 0; }
+    if ( fi != fn ) { formula_free(&n); return 0; }
     for ( j = 0 ; j < 3 ; j++ )
-      if ( gi[j] != gn[j] ) { free(n.P); return 0; }
+      if ( gi[j] != gn[j] ) { formula_free(&n); return 0; }
   }
-  if ( (i = formula_find(ex)) >= 0 ) free(formulas[i].P);
+  if ( (i = formula_find(ex)) >= 0 ) formula_free(formulas + i);
   else
   { unsigned h = formula_bucket(ex);
-    if ( formula_count >= FORMULA_NATIVES ) { free(n.P); return 0; }
+    if ( formula_count >= FORMULA_NATIVES ) { formula_free(&n); return 0; }
     i = formula_count++;
     while ( formula_hash[h] ) h = (h + 1) & (FORMULA_HASH - 1);
     formula_hash[h] = i + 1;
