@@ -354,9 +354,6 @@ REAL pyse_step_cap(REAL scale)
             if ( gf.key[3*it] != ii || gf.key[3*it+1] != jj || gf.key[3*it+2] != kk ) continue;
             if ( fstamp[f] == stamp ) continue;
             fstamp[f] = stamp;
-            if ( !far_apart(v_id,FV[f][0]) || !far_apart(v_id,FV[f][1])
-                 || !far_apart(v_id,FV[f][2]) )
-              continue;
             img(p,X[ordinal(FV[f][0])],c[0]);
             img(c[0],X[ordinal(FV[f][1])],c[1]);
             img(c[0],X[ordinal(FV[f][2])],c[2]);
@@ -368,6 +365,12 @@ REAL pyse_step_cap(REAL scale)
                      + w[2]*V[ordinal(FV[f][2])][m];
             }
             sc = pair_scale(pp,q,V[o],u,tiny,&gap);
+            /* (the pair's rings walked only where it would count: most
+               pairs a step looks at take nothing off it) */
+            if ( sc >= s && !(sc < scale && contact_factor > 0 && !contact) ) continue;
+            if ( !far_apart(v_id,FV[f][0]) || !far_apart(v_id,FV[f][1])
+                 || !far_apart(v_id,FV[f][2]) )
+              continue;
             if ( sc < s ) { s = sc; capped = 1; }
             if ( sc < scale && contact_factor > 0 && !contact )
             { REAL e = (sqrt((c[1][0]-c[0][0])*(c[1][0]-c[0][0]) + (c[1][1]-c[0][1])*(c[1][1]-c[0][1])
@@ -410,9 +413,6 @@ REAL pyse_step_cap(REAL scale)
             if ( o2 <= k || estamp[o2] == stamp ) continue;
             estamp[o2] = stamp;
             ot = get_edge_tailv(E[o2]); oh = get_edge_headv(E[o2]);
-            if ( !far_apart(et,ot) || !far_apart(et,oh) || !far_apart(eh,ot)
-                 || !far_apart(eh,oh) )
-              continue;
             t2 = ordinal(ot); h2 = ordinal(oh);
             img(X[t],X[t2],p2);
             img(p2,X[h2],q2);
@@ -424,6 +424,10 @@ REAL pyse_step_cap(REAL scale)
               u2[m] = (1 - tt)*V[t2][m] + tt*V[h2][m];
             }
             sc = pair_scale(x1,x2,u1,u2,tiny,&gap);
+            if ( sc >= s && !(sc < scale && contact_factor > 0 && !contact) ) continue;
+            if ( !far_apart(et,ot) || !far_apart(et,oh) || !far_apart(eh,ot)
+                 || !far_apart(eh,oh) )
+              continue;
             if ( sc < s ) { s = sc; capped = 1; }
             if ( sc < scale && contact_factor > 0 && !contact )
             { REAL l1 = sqrt((y[0]-X[t][0])*(y[0]-X[t][0]) + (y[1]-X[t][1])*(y[1]-X[t][1])
