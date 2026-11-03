@@ -36,6 +36,22 @@ wheels incl. cmake>=3.26 and the MUMPS sources from ~/pyse_scratch/cluster/munin
 reference BLAS. Packs differ by machine (same seed): munin's runs are other cases.
 Replay suite: 14 frames (manifest64.json). The bead-contact churn reproduces from frame
 s0t15_750_neckloop in ~1 min (~/pyse_scratch/s64/neck/repro.sh).
+Later on 2026-11-03:
+- Deep in beads: accepted branch states are shallow (deepest 0.068 inside, 7 frames);
+  deep points only in failed corrector tries (rolled back). Coarse "gone through" events
+  (edges 0.5-1) come at falls, ~20 a set of ~2000, nearly all made; 2 in sets 112-118
+  ended in a crossings back-up the run passed. Nothing to fix.
+- 7251f3d: a snapshot's restore puts back the quantities each method belongs to (a method
+  kept through a snapshot kept the quantities it joined since, freed by the restore: a
+  stale slot each time, up to Evolver's 8, DATAFILE ERROR 1564, once in job 104, then
+  "too many errors in datafile" but the run went on). Not reproduced: a build printing
+  every second attachment saw none on 3 replayed frames; the fix makes restore exact.
+- Newton stage 2: corrector pairs converge by 0.01-0.1 a pair (5-7 pairs). Anderson
+  mixing (depth 1, 2) of the corrector's iterates: no fewer pairs, failed calls still
+  fail (they wander out of the basin, not converge slowly). Dropped. Failed correctors
+  ran their 12 pairs (42 s of 400 on s0t15_595_late); stopping one after 3 steps that
+  don't shrink: suite passes -1.3%, CPU -2.6%, same paths on 12/14 frames, timings
+  +-15% noise. Dropped (small).
 
 **Where the sets stand (herbie, 9 runs, 1 thread each, budget 3e6).**
 - job 100 (f65982d): 3/9 reached in 8 h.
