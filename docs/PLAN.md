@@ -52,6 +52,16 @@ Later on 2026-11-03:
   ran their 12 pairs (42 s of 400 on s0t15_595_late); stopping one after 3 steps that
   don't shrink: suite passes -1.3%, CPU -2.6%, same paths on 12/14 frames, timings
   +-15% noise. Dropped (small).
+- Set 158 (85389d1, herbie): 9/9 reached, 0 failures, 656-24466 s. Time follows the
+  share drained at breakthrough (the gas at the floor), not the angle: 0.44-0.71 in
+  11 min-2 h, the three at 0.82 in 5.9-6.8 h (1048-1276 changes). Set 373 (60e6ac4,
+  munin): 8/9; s0_t25 failed on the churn stop (19 stops, 12 back-ups spent). Its frames
+  595-605 replayed here: 60e6ac4 churns (4 stops on 600), HEAD (16bd6e0) none.
+- Late falls profiled (frames s2_t15 705, s0_t15 820, s2_t20 635): 87-95% in descents,
+  gradient steps 57-72% (~90 ms a step at 7-8k facets), settling after neck cuts 13-37%.
+  Per step (perf): calc_quants 11%, step cap 11%, local_calc_content 10%, move_vertices
+  6%, project_all 5%, contact-line gauge 8%: no single target. 280eded: the step cap's
+  ring walks only for pairs that would cap (same paths, CPU -4.7%).
 
 **Where the sets stand (herbie, 9 runs, 1 thread each, budget 3e6).**
 - job 100 (f65982d): 3/9 reached in 8 h.
