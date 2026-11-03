@@ -62,6 +62,15 @@ Later on 2026-11-03:
   Per step (perf): calc_quants 11%, step cap 11%, local_calc_content 10%, move_vertices
   6%, project_all 5%, contact-line gauge 8%: no single target. 280eded: the step cap's
   ring walks only for pairs that would cap (same paths, CPU -4.7%).
+- Dropped: skipping the settle after a neck cut where other changes are coming (5 of 35
+  cuts had any; settles fail ~80% either way; CPU -3%). Local descents again, fixed and
+  adaptive (the region grown round the vertices out of balance, 3-8 edges, stalled ones
+  grown too; patch ~/pyse_scratch/s64/local/adaptive_local.diff): 17-frame suite, volume
+  drained a second 2.0-3.6 against global 3.2-4.1 (fallbacks to global 21 -> 7, grown
+  regions stall against the frozen rest; frozen steps still cost a whole step in C). In
+  packs the jumps are descents after a change, not falls from the mode (1 in 20).
+  LOCAL_DESCENTS stays off. Timing on miles is unreliable (another user's jobs: identical
+  global replays 46% apart): timings on herbie or munin.
 
 **Where the sets stand (herbie, 9 runs, 1 thread each, budget 3e6).**
 - job 100 (f65982d): 3/9 reached in 8 h.
