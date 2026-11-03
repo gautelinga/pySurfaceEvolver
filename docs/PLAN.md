@@ -10,6 +10,33 @@ dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 Branch `periodic-packs`, local commits only (none pushed). Goal unchanged: every 64-bead
 run to breakthrough, each under an hour on one herbie core; then 128 beads.
 
+**2026-11-03 update.** Sets: 116 (ec9f89b) 6/9 (2694-5253 s), cancelled; 118 (f294277)
+5/9 on identical paths, 1.6x slower (another user's non-Slurm jobs, load 40-50: herbie's
+times unreliable then), cancelled; 158 (85389d1, all fixes below) running on herbie; 373
+(60e6ac4) on munin. Fixes since 5c973cf, each from a replayed failing frame:
+- ec9f89b: plateau finish also at residual < 4 after 10 quiet iterations.
+- f294277: contact()'s retry raising left its grown patch (1 crossing; recipes._change
+  took the error as "nothing changed"), and the descent grew the tangle to 785, a spike
+  storm (680 cut or refused) on top: contact() and recipes._change now restore on a
+  refusal; collapsed-neck tries bounded (_AGAIN) per place in a descent.
+- 3177cc8: a fall from the state a failed fall began at is passed over (the first back-up
+  try had replayed it step for step, 500 s).
+- 60e6ac4: a descent churning at one place (8 changes, 3+ refused, within _PLACE edges,
+  any kind) stops; the run backs up and steps past shorter. (Where beads touch, 0.03
+  apart, contacts, merges, necks and spikes were made and refused there for hours.)
+- 16bd6e0 (+85389d1 rename): a contact's patch takes the facets beside it lying on the
+  solid (_patch_with_facets_on_solid; left out, the new line ran through them: refused);
+  vertices go onto a sphere exactly (radial), not by the formula's gap (a vertex 0.28
+  from a bead's centre was put 0.96 outside it).
+Tried and dropped: augmented_hessian (fixes Newton on a flat periodic sheet, where the
+area Hessian is singular and the projected solve's zero pivot stiffens one vertex; no gain
+on packs), smaller separation offsets, a loose step-corrector tolerance, remesh back-off.
+munin as a second host: hosts/munin.sh, offline (no network): standalone CPython 3.12,
+wheels incl. cmake>=3.26 and the MUMPS sources from ~/pyse_scratch/cluster/munin_prep;
+reference BLAS. Packs differ by machine (same seed): munin's runs are other cases.
+Replay suite: 14 frames (manifest64.json). The bead-contact churn reproduces from frame
+s0t15_750_neckloop in ~1 min (~/pyse_scratch/s64/neck/repro.sh).
+
 **Where the sets stand (herbie, 9 runs, 1 thread each, budget 3e6).**
 - job 100 (f65982d): 3/9 reached in 8 h.
 - job 104 (ca354fe): 7/9 by 1 h 49 (reached at 1300-5798 s), cancelled at 3 h 08.
