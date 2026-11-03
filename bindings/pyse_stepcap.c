@@ -24,6 +24,9 @@
 #include "include.h"
 #include "pyse_api.h"
 #include "pyse_internal.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 static REAL cap_frac = 0.0;     /* 0: off */
 static REAL contact_factor = 0.0;   /* a capped pair within this many local edges: contact */
@@ -229,9 +232,138 @@ static void facet_corners(facet_id f, vertex_id *v)
   for ( k = 0 ; k < 3 ; k++, fe = get_next_edge(fe) ) v[k] = get_fe_tailv(fe);
 }
 
+/* ---- the pairs ------------------------------------------------------ */
+
+#define CAP_CHUNK 256           /* vertices (edges) a chunk */
+#define CAP_PAR_MIN 1024        /* threads only for this many vertices or more */
+
+struct cap_pairs                /* what the chunks share, read only */
+{ struct cell_grid *gf, *ge;
+  vertex_id (*FV)[3];
+  edge_id *E;
+  REAL scale, tiny;
+};
+
+struct cap_acc { REAL s; int capped, contact; };    /* a chunk's */
+
+/* vertex v_id against the facets within its reach */
+static void vertex_pairs(const struct cap_pairs *pc, vertex_id v_id, long *fstamp, long stamp,
+                         struct cap_acc *acc)
+{ const struct cell_grid *gf = pc->gf;
+  vertex_id (*FV)[3] = pc->FV;
+  REAL scale = pc->scale, tiny = pc->tiny;
+  long o = ordinal(v_id), a[3], b[3], i, j, kk;
+  REAL lo[3], hi[3], p[3], pad = speed[o]*acc->s/cap_frac;
+  int d;
+  for ( d = 0 ; d < 3 ; d++ ) { p[d] = X[o][d]; lo[d] = p[d] - pad; hi[d] = p[d] + pad; }
+  box_home(lo,hi);
+  cell_range(gf,lo,hi,a,b);
+  for ( i = a[0] ; i <= b[0] ; i++ )
+    for ( j = a[1] ; j <= b[1] ; j++ )
+      for ( kk = a[2] ; kk <= b[2] ; kk++ )
+      { long ii = i, jj = j, it;
+        wrap_index(gf,&ii,&jj);
+        for ( it = gf->head[cell_hash(gf,ii,jj,kk)] ; it >= 0 ; it = gf->next[it] )
+        { long f = gf->item[it];
+          REAL c[3][3], q[3], u[3], w[3], pp[3], sc, gap;
+          int m;
+          if ( gf->key[3*it] != ii || gf->key[3*it+1] != jj || gf->key[3*it+2] != kk ) continue;
+          if ( fstamp[f] == stamp ) continue;
+          fstamp[f] = stamp;
+          img(p,X[ordinal(FV[f][0])],c[0]);
+          img(c[0],X[ordinal(FV[f][1])],c[1]);
+          img(c[0],X[ordinal(FV[f][2])],c[2]);
+          img(c[0],p,pp);
+          nearest_on_triangle(pp,c[0],c[1],c[2],w);
+          for ( m = 0 ; m < 3 ; m++ )
+          { q[m] = w[0]*c[0][m] + w[1]*c[1][m] + w[2]*c[2][m];
+            u[m] = w[0]*V[ordinal(FV[f][0])][m] + w[1]*V[ordinal(FV[f][1])][m]
+                   + w[2]*V[ordinal(FV[f][2])][m];
+          }
+          sc = pair_scale(pp,q,V[o],u,tiny,&gap);
+          /* (the pair's rings walked only where it would count: most
+             pairs a step looks at take nothing off it) */
+          if ( sc >= acc->s && !(sc < scale && contact_factor > 0 && !acc->contact) ) continue;
+          if ( !far_apart(v_id,FV[f][0]) || !far_apart(v_id,FV[f][1])
+               || !far_apart(v_id,FV[f][2]) )
+            continue;
+          if ( sc < acc->s ) { acc->s = sc; acc->capped = 1; }
+          if ( sc < scale && contact_factor > 0 && !acc->contact )
+          { REAL e = (sqrt((c[1][0]-c[0][0])*(c[1][0]-c[0][0]) + (c[1][1]-c[0][1])*(c[1][1]-c[0][1])
+                           + (c[1][2]-c[0][2])*(c[1][2]-c[0][2]))
+                      + sqrt((c[2][0]-c[1][0])*(c[2][0]-c[1][0]) + (c[2][1]-c[1][1])*(c[2][1]-c[1][1])
+                             + (c[2][2]-c[1][2])*(c[2][2]-c[1][2]))
+                      + sqrt((c[0][0]-c[2][0])*(c[0][0]-c[2][0]) + (c[0][1]-c[2][1])*(c[0][1]-c[2][1])
+                             + (c[0][2]-c[2][2])*(c[0][2]-c[2][2])))/3;
+            if ( gap < contact_factor*e ) acc->contact = 1;
+          }
+        }
+      }
+}
+
+/* edge k against the edges within its reach, the other's index higher */
+static void edge_pairs(const struct cap_pairs *pc, long k, long *estamp, long stamp,
+                       struct cap_acc *acc)
+{ const struct cell_grid *ge = pc->ge;
+  edge_id *E = pc->E;
+  REAL scale = pc->scale, tiny = pc->tiny;
+  vertex_id et = get_edge_tailv(E[k]), eh = get_edge_headv(E[k]);
+  long t = ordinal(et), h = ordinal(eh), a[3], b[3], i, j, kk;
+  REAL y[3], lo[3], hi[3], pad = (speed[t] > speed[h] ? speed[t] : speed[h])*acc->s/cap_frac;
+  int d;
+  img(X[t],X[h],y);
+  for ( d = 0 ; d < 3 ; d++ )
+  { lo[d] = fmin(X[t][d],y[d]) - pad; hi[d] = fmax(X[t][d],y[d]) + pad; }
+  box_home(lo,hi);
+  cell_range(ge,lo,hi,a,b);
+  for ( i = a[0] ; i <= b[0] ; i++ )
+    for ( j = a[1] ; j <= b[1] ; j++ )
+      for ( kk = a[2] ; kk <= b[2] ; kk++ )
+      { long ii = i, jj = j, it;
+        wrap_index(ge,&ii,&jj);
+        for ( it = ge->head[cell_hash(ge,ii,jj,kk)] ; it >= 0 ; it = ge->next[it] )
+        { long o2 = ge->item[it];
+          vertex_id ot, oh;
+          REAL p2[3], q2[3], x1[3], x2[3], u1[3], u2[3], ss, tt, sc, gap;
+          long t2, h2;
+          int m;
+          if ( ge->key[3*it] != ii || ge->key[3*it+1] != jj || ge->key[3*it+2] != kk ) continue;
+          if ( o2 <= k || estamp[o2] == stamp ) continue;
+          estamp[o2] = stamp;
+          ot = get_edge_tailv(E[o2]); oh = get_edge_headv(E[o2]);
+          t2 = ordinal(ot); h2 = ordinal(oh);
+          img(X[t],X[t2],p2);
+          img(p2,X[h2],q2);
+          nearest_on_segments(X[t],y,p2,q2,&ss,&tt);
+          for ( m = 0 ; m < 3 ; m++ )
+          { x1[m] = X[t][m] + ss*(y[m] - X[t][m]);
+            x2[m] = p2[m] + tt*(q2[m] - p2[m]);
+            u1[m] = (1 - ss)*V[t][m] + ss*V[h][m];
+            u2[m] = (1 - tt)*V[t2][m] + tt*V[h2][m];
+          }
+          sc = pair_scale(x1,x2,u1,u2,tiny,&gap);
+          if ( sc >= acc->s && !(sc < scale && contact_factor > 0 && !acc->contact) ) continue;
+          if ( !far_apart(et,ot) || !far_apart(et,oh) || !far_apart(eh,ot)
+               || !far_apart(eh,oh) )
+            continue;
+          if ( sc < acc->s ) { acc->s = sc; acc->capped = 1; }
+          if ( sc < scale && contact_factor > 0 && !acc->contact )
+          { REAL l1 = sqrt((y[0]-X[t][0])*(y[0]-X[t][0]) + (y[1]-X[t][1])*(y[1]-X[t][1])
+                           + (y[2]-X[t][2])*(y[2]-X[t][2]));
+            REAL l2 = sqrt((q2[0]-p2[0])*(q2[0]-p2[0]) + (q2[1]-p2[1])*(q2[1]-p2[1])
+                           + (q2[2]-p2[2])*(q2[2]-p2[2]));
+            if ( gap < contact_factor*(l1 + l2)/2 ) acc->contact = 1;
+          }
+        }
+      }
+}
+
 REAL pyse_step_cap(REAL scale)
-{ long nv, nf, ne, k, fi, *fstamp = NULL, *estamp = NULL, stamp = 0;
-  vertex_id v_id;
+{ long nv, nf, ne, k, fi, nvl, nch;
+  vertex_id v_id, *VID = NULL;
+  struct cap_pairs pc;
+  REAL smin;
+  int anycap, anycontact;
   edge_id e_id;
   facet_id f_id;
   facet_id *F = NULL;
@@ -332,113 +464,65 @@ REAL pyse_step_cap(REAL scale)
     grid_add(&ge,lo,hi,k);
   }
 
+  /* the pairs in fixed chunks of the vertices, then of the edges, each
+     chunk's least scale its own (its pads from the scale it has come to) and
+     the least of them taken: the scale any order gives (a pair that caps the
+     step is within every chunk's reach), and with the contacts met the same
+     whatever the threads */
+  nvl = 0;
+  FOR_ALL_VERTICES(v_id) nvl++;
+  VID = (vertex_id*)malloc((nvl + 1)*sizeof(vertex_id));
+  nvl = 0;
+  FOR_ALL_VERTICES(v_id) VID[nvl++] = v_id;
+  pc.gf = &gf; pc.ge = &ge; pc.FV = FV; pc.E = E; pc.scale = scale; pc.tiny = tiny;
+
   /* vertex against facet */
-  fstamp = (long*)calloc(nf + 1,sizeof(long));
-  FOR_ALL_VERTICES(v_id)
-  { long o = ordinal(v_id), a[3], b[3], i, j, kk;
-    REAL lo[3], hi[3], p[3], pad = speed[o]*s/cap_frac;
-    int d;
-    for ( d = 0 ; d < 3 ; d++ ) { p[d] = X[o][d]; lo[d] = p[d] - pad; hi[d] = p[d] + pad; }
-    box_home(lo,hi);
-    cell_range(&gf,lo,hi,a,b);
-    stamp++;
-    for ( i = a[0] ; i <= b[0] ; i++ )
-      for ( j = a[1] ; j <= b[1] ; j++ )
-        for ( kk = a[2] ; kk <= b[2] ; kk++ )
-        { long ii = i, jj = j, it;
-          wrap_index(&gf,&ii,&jj);
-          for ( it = gf.head[cell_hash(&gf,ii,jj,kk)] ; it >= 0 ; it = gf.next[it] )
-          { long f = gf.item[it];
-            REAL c[3][3], q[3], u[3], w[3], pp[3], sc, gap;
-            int m;
-            if ( gf.key[3*it] != ii || gf.key[3*it+1] != jj || gf.key[3*it+2] != kk ) continue;
-            if ( fstamp[f] == stamp ) continue;
-            fstamp[f] = stamp;
-            img(p,X[ordinal(FV[f][0])],c[0]);
-            img(c[0],X[ordinal(FV[f][1])],c[1]);
-            img(c[0],X[ordinal(FV[f][2])],c[2]);
-            img(c[0],p,pp);
-            nearest_on_triangle(pp,c[0],c[1],c[2],w);
-            for ( m = 0 ; m < 3 ; m++ )
-            { q[m] = w[0]*c[0][m] + w[1]*c[1][m] + w[2]*c[2][m];
-              u[m] = w[0]*V[ordinal(FV[f][0])][m] + w[1]*V[ordinal(FV[f][1])][m]
-                     + w[2]*V[ordinal(FV[f][2])][m];
-            }
-            sc = pair_scale(pp,q,V[o],u,tiny,&gap);
-            /* (the pair's rings walked only where it would count: most
-               pairs a step looks at take nothing off it) */
-            if ( sc >= s && !(sc < scale && contact_factor > 0 && !contact) ) continue;
-            if ( !far_apart(v_id,FV[f][0]) || !far_apart(v_id,FV[f][1])
-                 || !far_apart(v_id,FV[f][2]) )
-              continue;
-            if ( sc < s ) { s = sc; capped = 1; }
-            if ( sc < scale && contact_factor > 0 && !contact )
-            { REAL e = (sqrt((c[1][0]-c[0][0])*(c[1][0]-c[0][0]) + (c[1][1]-c[0][1])*(c[1][1]-c[0][1])
-                             + (c[1][2]-c[0][2])*(c[1][2]-c[0][2]))
-                        + sqrt((c[2][0]-c[1][0])*(c[2][0]-c[1][0]) + (c[2][1]-c[1][1])*(c[2][1]-c[1][1])
-                               + (c[2][2]-c[1][2])*(c[2][2]-c[1][2]))
-                        + sqrt((c[0][0]-c[2][0])*(c[0][0]-c[2][0]) + (c[0][1]-c[2][1])*(c[0][1]-c[2][1])
-                               + (c[0][2]-c[2][2])*(c[0][2]-c[2][2])))/3;
-              if ( gap < contact_factor*e ) contact = 1;
-            }
-          }
-        }
+  smin = s; anycap = 0; anycontact = contact;
+  nch = (nvl + CAP_CHUNK - 1)/CAP_CHUNK;
+#ifdef _OPENMP
+  #pragma omp parallel num_threads(nvl >= CAP_PAR_MIN ? omp_get_max_threads() : 1) \
+      reduction(min:smin) reduction(|:anycap,anycontact)
+#endif
+  { long *fstamp = (long*)calloc(nf + 1,sizeof(long)), stamp = 0, ch;
+#ifdef _OPENMP
+    #pragma omp for schedule(dynamic,1)
+#endif
+    for ( ch = 0 ; ch < nch ; ch++ )
+    { struct cap_acc acc;
+      long w;
+      acc.s = s; acc.capped = 0; acc.contact = contact;
+      for ( w = ch*CAP_CHUNK ; w < nvl && w < (ch+1)*CAP_CHUNK ; w++ )
+        vertex_pairs(&pc,VID[w],fstamp,++stamp,&acc);
+      if ( acc.s < smin ) smin = acc.s;
+      anycap |= acc.capped; anycontact |= acc.contact;
+    }
+    free(fstamp);
   }
+  s = smin; capped |= anycap; contact |= anycontact;
 
   /* edge against edge (each pair once: the other's index higher) */
-  estamp = (long*)calloc(ne + 1,sizeof(long));
-  for ( k = 0 ; k < ne ; k++ )
-  { vertex_id et = get_edge_tailv(E[k]), eh = get_edge_headv(E[k]);
-    long t = ordinal(et), h = ordinal(eh), a[3], b[3], i, j, kk;
-    REAL y[3], lo[3], hi[3], pad = (speed[t] > speed[h] ? speed[t] : speed[h])*s/cap_frac;
-    int d;
-    img(X[t],X[h],y);
-    for ( d = 0 ; d < 3 ; d++ )
-    { lo[d] = fmin(X[t][d],y[d]) - pad; hi[d] = fmax(X[t][d],y[d]) + pad; }
-    box_home(lo,hi);
-    cell_range(&ge,lo,hi,a,b);
-    stamp++;
-    for ( i = a[0] ; i <= b[0] ; i++ )
-      for ( j = a[1] ; j <= b[1] ; j++ )
-        for ( kk = a[2] ; kk <= b[2] ; kk++ )
-        { long ii = i, jj = j, it;
-          wrap_index(&ge,&ii,&jj);
-          for ( it = ge.head[cell_hash(&ge,ii,jj,kk)] ; it >= 0 ; it = ge.next[it] )
-          { long o2 = ge.item[it];
-            vertex_id ot, oh;
-            REAL p2[3], q2[3], x1[3], x2[3], u1[3], u2[3], ss, tt, sc, gap;
-            long t2, h2;
-            int m;
-            if ( ge.key[3*it] != ii || ge.key[3*it+1] != jj || ge.key[3*it+2] != kk ) continue;
-            if ( o2 <= k || estamp[o2] == stamp ) continue;
-            estamp[o2] = stamp;
-            ot = get_edge_tailv(E[o2]); oh = get_edge_headv(E[o2]);
-            t2 = ordinal(ot); h2 = ordinal(oh);
-            img(X[t],X[t2],p2);
-            img(p2,X[h2],q2);
-            nearest_on_segments(X[t],y,p2,q2,&ss,&tt);
-            for ( m = 0 ; m < 3 ; m++ )
-            { x1[m] = X[t][m] + ss*(y[m] - X[t][m]);
-              x2[m] = p2[m] + tt*(q2[m] - p2[m]);
-              u1[m] = (1 - ss)*V[t][m] + ss*V[h][m];
-              u2[m] = (1 - tt)*V[t2][m] + tt*V[h2][m];
-            }
-            sc = pair_scale(x1,x2,u1,u2,tiny,&gap);
-            if ( sc >= s && !(sc < scale && contact_factor > 0 && !contact) ) continue;
-            if ( !far_apart(et,ot) || !far_apart(et,oh) || !far_apart(eh,ot)
-                 || !far_apart(eh,oh) )
-              continue;
-            if ( sc < s ) { s = sc; capped = 1; }
-            if ( sc < scale && contact_factor > 0 && !contact )
-            { REAL l1 = sqrt((y[0]-X[t][0])*(y[0]-X[t][0]) + (y[1]-X[t][1])*(y[1]-X[t][1])
-                             + (y[2]-X[t][2])*(y[2]-X[t][2]));
-              REAL l2 = sqrt((q2[0]-p2[0])*(q2[0]-p2[0]) + (q2[1]-p2[1])*(q2[1]-p2[1])
-                             + (q2[2]-p2[2])*(q2[2]-p2[2]));
-              if ( gap < contact_factor*(l1 + l2)/2 ) contact = 1;
-            }
-          }
-        }
+  smin = s; anycap = 0; anycontact = contact;
+  nch = (ne + CAP_CHUNK - 1)/CAP_CHUNK;
+#ifdef _OPENMP
+  #pragma omp parallel num_threads(nvl >= CAP_PAR_MIN ? omp_get_max_threads() : 1) \
+      reduction(min:smin) reduction(|:anycap,anycontact)
+#endif
+  { long *estamp = (long*)calloc(ne + 1,sizeof(long)), stamp = 0, ch;
+#ifdef _OPENMP
+    #pragma omp for schedule(dynamic,1)
+#endif
+    for ( ch = 0 ; ch < nch ; ch++ )
+    { struct cap_acc acc;
+      long w;
+      acc.s = s; acc.capped = 0; acc.contact = contact;
+      for ( w = ch*CAP_CHUNK ; w < ne && w < (ch+1)*CAP_CHUNK ; w++ )
+        edge_pairs(&pc,w,estamp,++stamp,&acc);
+      if ( acc.s < smin ) smin = acc.s;
+      anycap |= acc.capped; anycontact |= acc.contact;
+    }
+    free(estamp);
   }
+  s = smin; capped |= anycap; contact |= anycontact;
   grid_free(&gf); grid_free(&ge);
 
 done:
@@ -447,7 +531,7 @@ done:
     last_X = (REAL*)X; last_V = (REAL*)V; last_n = nv; last_s = s < scale ? s : scale;
     X = V = NULL;
   }
-  free(X); free(V); free(speed); free(F); free(FV); free(E); free(fstamp); free(estamp);
+  free(X); free(V); free(speed); free(F); free(FV); free(E); free(VID);
   X = V = NULL; speed = NULL;
   if ( capped ) cap_capped++;
   else if ( moved ) cap_moved++;
