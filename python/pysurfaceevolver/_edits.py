@@ -53,17 +53,24 @@ def walls(ev) -> Tuple[List[int], List[int]]:
         elif attrs[c] & 1:
             side = -1
         else:
-            if (int(nums[c]), name) not in surface.wall_sides:
-                gap_nums, _, dist, gap_names = ev._constraint_gaps()
-                for k in range(len(gap_nums)):
-                    d = np.asarray(dist)[:, k]
-                    off = d[~np.isnan(d)]
-                    surface.wall_sides[(int(gap_nums[k]), gap_names[k])] = \
-                        1 if (off > 0).sum() >= (off < 0).sum() else -1
-            side = surface.wall_sides[(int(nums[c]), name)]
+            side = wall_side(ev, nums[c], name)
         out.append(int(nums[c]))
         sides.append(side)
     return out, sides
+
+
+def wall_side(ev, num, name) -> int:
+    """A two-sided wall's side the most vertices are on (+1: where its
+    formula is positive), as they were when the wall was first asked about
+    (surface.wall_sides; see walls())."""
+    if (int(num), name) not in surface.wall_sides:
+        gap_nums, _, dist, gap_names = ev._constraint_gaps()
+        for k in range(len(gap_nums)):
+            d = np.asarray(dist)[:, k]
+            off = d[~np.isnan(d)]
+            surface.wall_sides[(int(gap_nums[k]), gap_names[k])] = \
+                1 if (off > 0).sum() >= (off < 0).sum() else -1
+    return surface.wall_sides[(int(num), name)]
 
 
 def edit(ev, op: str, ids: Iterable, sizes=None, **params) -> np.ndarray:

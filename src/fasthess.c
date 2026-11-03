@@ -879,14 +879,6 @@ static void quant_value_element(struct linsys *S, element_id id, vertex_id *c, i
 static void quant_grad_element(struct linsys *S, element_id id, vertex_id *c, int me,
                                struct hbuf *b, void *ctx);
 
-/* the elements run_elements() runs over instead of all of a type's (the
-   frozen elements' cache, fz_ready(): the live ones) */
-static element_id *fz_list = NULL;
-static long fz_n = 0;
-static int fz_type = -1;
-static int fz_area_capture = 0;      /* (fz_ready's sums: fl_total_area_add() gives them) */
-static double fz_area_got = 0.0;
-
 static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
                         void *ctx, int threads)
 { int direct = (fn == quant_value_element || fn == quant_grad_element); static struct hbuf buf[FH_MAXTHREADS];
@@ -904,16 +896,12 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   { corners = fl_facet_corners();
     list = fl_facet_list(&n);
     if ( !corners ) return 0;
-    if ( fz_list && fz_type == type ) { list = fz_list; n = fz_n; }
     if ( web.modeltype == QUADRATIC )   /* the control points instead */
     { if ( !(corners = fl_facet_ctrl()) ) return 0;
       stride = 6;
     }
   }
-  else
-  { list = fl_element_list(type,&n);
-    if ( fz_list && fz_type == type ) { list = fz_list; n = fz_n; }
-  }
+  else list = fl_element_list(type,&n);
   if ( !list || n == 0 ) return 0;
   /* (the records a chunk keeps: a direct pass's are dropped as its threads
      take them, so it runs as one chunk, one parallel region: 3-4% of a
@@ -1052,260 +1040,12 @@ void fh_reset(void) { recording = NULL; pc_S = NULL; pc_live = 0; }
    while run_elements() runs (the addition is made in element order),
    added right away otherwise. */
 void fl_total_area_add(REAL area)
-{ if ( fz_area_capture ) { fz_area_got += (double)area; return; }   /* (fz_ready's sums) */
-  if ( recording )
+{ if ( recording )
   { struct hop op;
     op.kind = OP_AREA; op.x[0] = area;
     put(recording,&op);
   }
   else binary_tree_add(web.total_area_addends,area);
-}
-
-/* ---- frozen elements (pySE) ------------------------------------------------
-   With fl_freeze(1), a facet or edge whose vertices are all fixed is left out
-   of the quantity loops: no vertex on it moves, so it adds no gradient or
-   Hessian row, and its values (each method instance's, its share of the total
-   area) are the same at every pass: summed once (fz_ready) and added. A local
-   descent freezes all but a region and then costs what the region costs
-   (fixed vertices alone save nothing: every facet's integrals were evaluated
-   each step). The sums are made again when the topology, the attributes (the
-   fixed ones), the frozen vertices' coordinates or the angle floor change;
-   other parameters the integrands read must not change while frozen. Linear
-   soapfilm surfaces only. */
-static int fz_on = 0;
-struct fz_cache
-{ int valid;
-  long top, count, maxord;
-  double xsum, floor;
-  unsigned long long sig;      /* the frozen elements: fz_sig() */
-  element_id *live, *frozen;
-  long nlive, nfrozen, cap;
-  double *s, *a, *area;        /* per method instance: signed and absolute sums, area */
-  unsigned char *summed;       /* ... and whether it was summed (active then: Q_DOTHIS) */
-  long nm;
-};
-static struct fz_cache fz[NUMELEMENTS];
-
-/* the frozen and live facets and edges the last passes took (0: not frozen) */
-void fl_freeze_counts(long *out)
-{ out[0] = fz[FACET].valid ? fz[FACET].nfrozen : 0; out[1] = fz[FACET].valid ? fz[FACET].nlive : 0;
-  out[2] = fz[EDGE].valid ? fz[EDGE].nfrozen : 0; out[3] = fz[EDGE].valid ? fz[EDGE].nlive : 0;
-}
-
-int fl_freeze(int on)
-{ int was = fz_on, t;
-  fz_on = on;
-  for ( t = 0 ; t < NUMELEMENTS ; t++ ) fz[t].valid = 0;
-  return was;
-}
-
-static int fz_vertex_fixed(vertex_id v) { return (get_vattr(v) & FIXED) != 0; }
-
-/* the frozen elements' vertices' coordinates summed (a change: made again) */
-static double fz_xsum(struct fz_cache *z, int type, vertex_id *corners)
-{ double sum = 0.0;
-  long k;
-  int i, j;
-  for ( k = 0 ; k < z->nfrozen ; k++ )
-  { element_id id = z->frozen[k];
-    vertex_id v[3];
-    int nv;
-    if ( type == FACET ) { vertex_id *c = corners + 3*ordinal(id); v[0] = c[0]; v[1] = c[1]; v[2] = c[2]; nv = 3; }
-    else { v[0] = get_edge_tailv(id); v[1] = get_edge_headv(id); nv = 2; }
-    for ( i = 0 ; i < nv ; i++ )
-    { REAL *x = get_coord(v[i]);
-      if ( !fz_vertex_fixed(v[i]) ) return NAN;     /* (unfixed: no longer frozen) */
-      for ( j = 0 ; j < SDIM ; j++ ) sum += (double)x[j]*(1.0 + 0.37*j + 0.11*i);
-    }
-  }
-  return sum;
-}
-
-static double fz_floor(void)
-{ int k = lookup_global("pyse_angle_floor");
-  return k >= 0 ? (double)globals(k)->value.real : 0.0;
-}
-
-/* the frozen elements, their vertices and methods hashed (in any order): a
-   topology change elsewhere (a flip, a split, an edit in the live region)
-   leaves it, and the sums with it, as they were */
-static unsigned long long fz_mix(unsigned long long h)
-{ h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL;
-  return h ^ (h >> 33);
-}
-
-static unsigned long long fz_sig(struct fz_cache *z, int type, vertex_id *corners)
-{ unsigned long long sig = (unsigned long long)z->nfrozen;
-  int meth_offset = get_meth_offset(type);
-  long k;
-  for ( k = 0 ; k < z->nfrozen ; k++ )
-  { element_id id = z->frozen[k];
-    struct element *e_ptr = elptr(id);
-    unsigned long long h = fz_mix((unsigned long long)id);
-    int i;
-    if ( type == FACET )
-      for ( i = 0 ; i < 3 ; i++ ) h = fz_mix(h + (unsigned long long)corners[3*ordinal(id) + i]);
-    else
-    { h = fz_mix(h + (unsigned long long)get_edge_tailv(id));
-      h = fz_mix(h + (unsigned long long)get_edge_headv(id));
-    }
-    for ( i = 0 ; i < e_ptr->method_count ; i++ )
-      h = fz_mix(h + (unsigned long long)(long)((int*)((char*)e_ptr + meth_offset))[i]);
-    sig += h;
-  }
-  return sig;
-}
-
-/* the elements of list into the live and frozen ones (0: out of memory) */
-static int fz_partition(struct fz_cache *z, int type, element_id *list, long n,
-                        vertex_id *corners)
-{ long k;
-  if ( z->cap < n )
-  { element_id *a = (element_id*)realloc(z->live,n*sizeof(element_id));
-    element_id *b = a ? (element_id*)realloc(z->frozen,n*sizeof(element_id)) : NULL;
-    if ( a ) z->live = a;
-    if ( !a || !b ) return 0;
-    z->frozen = b; z->cap = n;
-  }
-  z->nlive = z->nfrozen = 0;
-  for ( k = 0 ; k < n ; k++ )
-  { element_id id = list[k];
-    int all;
-    if ( type == FACET )
-    { vertex_id *c = corners + 3*ordinal(id);
-      all = fz_vertex_fixed(c[0]) && fz_vertex_fixed(c[1]) && fz_vertex_fixed(c[2]);
-    }
-    else all = fz_vertex_fixed(get_edge_tailv(id)) && fz_vertex_fixed(get_edge_headv(id));
-    if ( all ) z->frozen[z->nfrozen++] = id; else z->live[z->nlive++] = id;
-  }
-  return 1;
-}
-
-/* the frozen elements' values summed, serially: the method instances active
-   now (Evolver sets up those it evaluates: another's value function wrote
-   outside its blocks) not summed yet (all of them: fresh) */
-static void fz_sum(struct fz_cache *z, int type, vertex_id *corners, int fresh)
-{ struct qinfo qi;
-  unsigned char *now = (unsigned char*)calloc(z->nm + 1,1);
-  int meth_offset = get_meth_offset(type), needs = 0, mk, any = 0;
-  long k;
-  if ( !now ) { z->valid = 0; return; }
-  for ( mk = LOW_INST ; mk < meth_inst_count && mk <= z->nm ; mk++ )
-  { struct method_instance *mi = METH_INSTANCE(mk);
-    if ( !(mi->flags & Q_DELETED) && (mi->flags & Q_DOTHIS) && mi->type == type
-         && (fresh || !z->summed[mk]) )
-    { needs |= basic_gen_methods[mi->gen_method].flags;
-      now[mk] = 1; any = 1;
-    }
-  }
-  if ( any )
-  { memset(&qi,0,sizeof(qi));       /* (zeroed, as quant_elements()'s static ones are) */
-    q_info_init(&qi,METHOD_VALUE);
-    for ( k = 0 ; k < z->nfrozen ; k++ )
-    { element_id id = z->frozen[k];
-      struct element *e_ptr = elptr(id);
-      int flag, kk, inum, mm, sign, setup_flag = 0;
-      qi.id = id;
-      FOR_ELEMENT_METHODS(type,e_ptr,meth_offset,flag,kk,inum,mm,sign)
-      { struct method_instance *mi = METH_INSTANCE(abs(mm));
-        REAL value;
-        if ( !now[abs(mm)] ) continue;
-        qi.method = abs(mm);
-        if ( !setup_flag )
-        { element_setup(NULL,&qi,type,corners ? corners + 3*ordinal(id) : NULL,needs);
-          setup_flag = 1;
-        }
-        fz_area_capture = 1; fz_area_got = 0.0;
-        value = (*basic_gen_methods[mi->gen_method].value)(&qi);
-        fz_area_capture = 0;
-        if ( mi->flags & ELEMENT_MODULUS_FLAG ) value *= *(REAL*)get_extra(qi.id,mi->elmodulus);
-        if ( sign < 0 ) value = -value;
-        z->s[abs(mm)] += value;
-        z->a[abs(mm)] += fabs(value);
-        z->area[abs(mm)] += fz_area_got;
-      }
-    }
-    q_info_free(&qi);
-  }
-  for ( mk = LOW_INST ; mk <= z->nm ; mk++ ) if ( now[mk] ) z->summed[mk] = 1;
-  free(now);
-}
-
-/* the live elements of a type, with the frozen ones' sums made where they
-   are stale; NULL where nothing is frozen (or it can't be) */
-static struct fz_cache *fz_ready(int type, element_id *list, long n)
-{ struct fz_cache *z = fz + type;
-  vertex_id *corners = NULL;
-  int stale;
-  if ( type != FACET && type != EDGE ) return NULL;
-  if ( type == FACET && !(corners = fl_facet_corners()) ) return NULL;
-  /* (not the attributes' stamp: Evolver sets some attribute nearly every pass;
-     the frozen vertices still fixed and where they were, fz_xsum, is what counts) */
-  stale = !z->valid || z->floor != fz_floor() || z->nm != meth_inst_count;
-  if ( !stale && (z->top != top_timestamp || z->count != web.skel[type].count
-                  || z->maxord != (long)web.skel[type].max_ord) )
-  { /* (the topology changed: the elements parted again, the sums kept where
-       the frozen ones are the same; a descent's flips and edits in its
-       region made them again at every few steps, a whole pass each) */
-    if ( !fz_partition(z,type,list,n,corners) ) { z->valid = 0; return NULL; }
-    if ( fz_sig(z,type,corners) == z->sig )
-    { z->top = top_timestamp;
-      z->count = web.skel[type].count; z->maxord = (long)web.skel[type].max_ord;
-    }
-    else stale = 1;
-  }
-  if ( !stale && !(fz_xsum(z,type,corners) == z->xsum) ) stale = 2;
-  if ( !stale )
-  { /* method instances active now that weren't summed (the energy's and the
-       content's passes take different ones; only active ones are set up for
-       evaluating): theirs added */
-    int mk, missing = 0;
-    for ( mk = LOW_INST ; mk < meth_inst_count ; mk++ )
-    { struct method_instance *mi = METH_INSTANCE(mk);
-      if ( !(mi->flags & Q_DELETED) && (mi->flags & Q_DOTHIS) && mi->type == type
-           && !z->summed[mk] ) missing = 1;
-    }
-    if ( missing ) fz_sum(z,type,corners,0);
-  }
-  if ( stale )
-  { if ( !fz_partition(z,type,list,n,corners) ) { z->valid = 0; return NULL; }
-    z->nm = meth_inst_count;
-    free(z->s); free(z->a); free(z->area); free(z->summed);
-    z->s = (double*)calloc(z->nm + 1,sizeof(double));
-    z->a = (double*)calloc(z->nm + 1,sizeof(double));
-    z->area = (double*)calloc(z->nm + 1,sizeof(double));
-    z->summed = (unsigned char*)calloc(z->nm + 1,1);
-    if ( !z->s || !z->a || !z->area || !z->summed ) { z->valid = 0; return NULL; }
-    fz_sum(z,type,corners,1);
-    z->top = top_timestamp;
-    z->count = web.skel[type].count; z->maxord = (long)web.skel[type].max_ord;
-    z->floor = fz_floor();
-    z->xsum = fz_xsum(z,type,corners);
-    z->sig = fz_sig(z,type,corners);
-    z->valid = 1;
-  }
-  return z->nfrozen > 0 ? z : NULL;
-}
-
-/* the frozen elements' sums added as the pass would have: values (qmode
-   METHOD_VALUE: and the area) or new values */
-static void fz_add(struct fz_cache *z, int type, int qmode)
-{ long m;
-  for ( m = LOW_INST ; m < z->nm && m < meth_inst_count ; m++ )
-  { struct method_instance *mi = METH_INSTANCE(m);
-    if ( (mi->flags & Q_DELETED) || !(mi->flags & Q_DOTHIS) || mi->type != type
-         || !z->summed[m] ) continue;
-    if ( z->a[m] == 0.0 && z->s[m] == 0.0 ) continue;
-    if ( qmode == METHOD_VALUE )
-    { binary_tree_add(mi->value_addends,z->s[m]);
-      mi->abstotal += z->a[m];
-      if ( z->area[m] != 0.0 ) binary_tree_add(web.total_area_addends,z->area[m]);
-    }
-    else
-    { mi->newvalue += z->s[m];
-      mi->abstotal += z->a[m];
-    }
-  }
 }
 
 /* ---- entry points from calc_quants(), calc_quant_grads(), calc_quant_hess() ---- */
@@ -1318,19 +1058,9 @@ static int quant_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   long n;
   int threads, t, done;
 
-  struct fz_cache *z = NULL;
-
   if ( type == FACET ) list = fl_facet_list(&n);
   else list = fl_element_list(type,&n);
   if ( !list || n == 0 ) return 0;
-  if ( fz_on && web.modeltype == LINEAR && (z = fz_ready(type,list,n)) != NULL )
-  { if ( z->nlive == 0 )          /* (all frozen: the sums alone) */
-    { fz_add(z,type,qmode);
-      return 1;
-    }
-    list = z->live; n = z->nlive;
-    fz_list = list; fz_n = n; fz_type = type;
-  }
   threads = hess_threads();
   /* per-thread work space (Evolver's allocator is not thread-safe) */
   for ( t = 0 ; t < threads ; t++ )
@@ -1347,8 +1077,6 @@ static int quant_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   ctx.meth_offset = get_meth_offset(type);
   ctx.mode = mode;
   done = run_elements(S,rhs,type,fn,&ctx,threads);
-  fz_list = NULL; fz_n = 0; fz_type = -1;
-  if ( done && z ) fz_add(z,type,qmode);
   if ( done ) comp_quant_stamp += (int)n;
   for ( t = 0 ; t < threads ; t++ )
   { if ( qi[t].hess ) { free_matrix4(qi[t].hess); qi[t].hess = NULL; }

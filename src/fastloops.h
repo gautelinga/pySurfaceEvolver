@@ -107,11 +107,6 @@ int fl_set_follow(int on);   /* on (default) or off; returns the previous settin
    corrector's converging steps moved them less than 2 edges; a plain step
    from far off equilibrium can move them many edges of a fine mesh.) */
 #define FL_ERR_WILD_STEP 9005
-/* Frozen elements (fasthess.c): with fl_freeze(1) the quantity loops leave
-   out facets and edges whose vertices are all fixed, adding their values
-   from sums made once (see there); returns the previous setting. */
-int fl_freeze(int on);
-void fl_freeze_counts(long *out);   /* frozen, live facets; frozen, live edges */
 extern REAL fl_step_limit, fl_step_size;
 REAL fl_step_bound(int plain);
 REAL fl_step_largest(REAL *X);

@@ -40,6 +40,7 @@ double pyse_set_step_cap(double frac, double contact_at)
 { double was = cap_frac;
   cap_frac = frac > 0.0 && frac < 1.0 ? frac : 0.0;
   contact_factor = contact_at > 0.0 ? contact_at : 0.0;
+  contact = 0;      /* (a run's contact not left to the next) */
   return was;
 }
 
@@ -242,6 +243,7 @@ struct cap_pairs                /* what the chunks share, read only */
   vertex_id (*FV)[3];
   edge_id *E;
   REAL scale, tiny;
+  REAL cpad;                    /* the contact distance at most (contact_factor edges) */
 };
 
 struct cap_acc { REAL s; int capped, contact; };    /* a chunk's */
@@ -255,6 +257,15 @@ static void vertex_pairs(const struct cap_pairs *pc, vertex_id v_id, long *fstam
   long o = ordinal(v_id), a[3], b[3], i, j, kk;
   REAL lo[3], hi[3], p[3], pad = speed[o]*acc->s/cap_frac;
   int d;
+  /* (and the pairs within the contact distance that could close at the
+     uncapped scale, whatever the scale come to: padded by that alone, a
+     contact was met or not as the pairs before it had capped the step, and
+     the run crawled on past it; padded by the contact distance alone, slow
+     vertices too, the steps cost 10-40% more) */
+  if ( !acc->contact )
+  { REAL c = fmin(pc->cpad,speed[o]*scale/cap_frac);
+    if ( c > pad ) pad = c;
+  }
   for ( d = 0 ; d < 3 ; d++ ) { p[d] = X[o][d]; lo[d] = p[d] - pad; hi[d] = p[d] + pad; }
   box_home(lo,hi);
   cell_range(gf,lo,hi,a,b);
@@ -311,6 +322,10 @@ static void edge_pairs(const struct cap_pairs *pc, long k, long *estamp, long st
   long t = ordinal(et), h = ordinal(eh), a[3], b[3], i, j, kk;
   REAL y[3], lo[3], hi[3], pad = (speed[t] > speed[h] ? speed[t] : speed[h])*acc->s/cap_frac;
   int d;
+  if ( !acc->contact )
+  { REAL c = fmin(pc->cpad,(speed[t] > speed[h] ? speed[t] : speed[h])*scale/cap_frac);
+    if ( c > pad ) pad = c;
+  }
   img(X[t],X[h],y);
   for ( d = 0 ; d < 3 ; d++ )
   { lo[d] = fmin(X[t][d],y[d]) - pad; hi[d] = fmax(X[t][d],y[d]) + pad; }
@@ -369,7 +384,7 @@ REAL pyse_step_cap(REAL scale)
   facet_id *F = NULL;
   edge_id *E = NULL;
   vertex_id (*FV)[3] = NULL;
-  REAL hsum = 0, hbar, vmax = 0, s = scale, tiny;
+  REAL hsum = 0, hbar, hmax = 0, vmax = 0, s = scale, tiny;
   struct cell_grid gf, ge;
   int moved = 0, capped = 0;
 
@@ -401,9 +416,11 @@ REAL pyse_step_cap(REAL scale)
   E = (edge_id*)malloc((ne + 1)*sizeof(edge_id));
   ne = 0;
   FOR_ALL_EDGES(e_id)
-  { REAL y[3], *x = X[ordinal(get_edge_tailv(e_id))];
+  { REAL y[3], len, *x = X[ordinal(get_edge_tailv(e_id))];
     img(x,X[ordinal(get_edge_headv(e_id))],y);
-    hsum += sqrt((y[0]-x[0])*(y[0]-x[0]) + (y[1]-x[1])*(y[1]-x[1]) + (y[2]-x[2])*(y[2]-x[2]));
+    len = sqrt((y[0]-x[0])*(y[0]-x[0]) + (y[1]-x[1])*(y[1]-x[1]) + (y[2]-x[2])*(y[2]-x[2]));
+    hsum += len;
+    if ( len > hmax ) hmax = len;
     E[ne++] = e_id;
   }
   if ( ne == 0 || vmax <= 0 ) goto done;
@@ -475,6 +492,7 @@ REAL pyse_step_cap(REAL scale)
   nvl = 0;
   FOR_ALL_VERTICES(v_id) VID[nvl++] = v_id;
   pc.gf = &gf; pc.ge = &ge; pc.FV = FV; pc.E = E; pc.scale = scale; pc.tiny = tiny;
+  pc.cpad = contact_factor*hmax;
 
   /* vertex against facet */
   smin = s; anycap = 0; anycontact = contact;

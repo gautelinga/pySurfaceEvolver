@@ -292,6 +292,11 @@ class _Relaxing(_Analysis):
         if tidy < 0 or levels < 0 or newton < 0:
             raise ValueError("tidy, levels and newton must be non-negative")
         self._inertia = None                # only this call's Newton steps count
+        # (only this call's capped steps' contacts end its gradient phases: one
+        # left from a descent's run ended every relax() after it at its first
+        # step, a cut's settling and arclength's included, and after the
+        # topology run every relax() in the process)
+        _core.step_cap_contact(True)
         refined = surface.unrelaxed_refines
         if refined >= _UNRELAXED_REFINES:
             warnings.warn(

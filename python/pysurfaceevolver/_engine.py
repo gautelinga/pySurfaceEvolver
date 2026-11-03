@@ -988,14 +988,15 @@ class _Engine:
         if not shapes:
             return
         nums, names = self._constraint_names(guards=True)
-        from ._surgery import ANY_SPHERE, _sphere_centre
+        from ._surgery import ANY_SPHERE, _any_sphere_keys
         for c, name in zip(nums, names):
             if name == ANY_SPHERE and self.periods is not None:
                 # (a slab's guard against every sphere: the least of their
-                # terms, in the order _any_sphere_formula wrote them)
-                spheres = [k for k in shapes if shapes[k][0] == 1 and _sphere_centre(k) is not None
-                           and getattr(surface.walls[k], "contact_angle", None) is not None]
-                _core.native_formula(int(c), 3, [v for k in spheres for v in shapes[k][1]])
+                # terms, the spheres guard() wrote it with, in its order; not
+                # in C where one isn't a plain sphere: the interpreter's then)
+                spheres = _any_sphere_keys()
+                if spheres and all(shapes.get(k, (0,))[0] == 1 for k in spheres):
+                    _core.native_formula(int(c), 3, [v for k in spheres for v in shapes[k][1]])
                 continue
             key = name or int(c)
             if isinstance(key, str) and key.startswith(GUARD_PREFIX):

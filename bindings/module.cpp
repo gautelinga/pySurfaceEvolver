@@ -344,15 +344,6 @@ NB_MODULE(_core, m) {
   "delta, from one factorization; None where a step would move a vertex past the step "
   "bound (set_step_limit; neither made)");
 
-  m.def("freeze", [](bool on) { Lock lock; return bool(pyse_freeze(on)); }, "on"_a,
-        "Leave out of the quantity loops the facets and edges whose vertices are all fixed, "
-        "their values summed once; returns the previous setting.");
-  m.def("freeze_counts", []() {
-    Lock lock;
-    long out[4];
-    pyse_freeze_counts(out);
-    return nb::make_tuple(out[0], out[1], out[2], out[3]);
-  }, "The frozen and live facets and edges the last quantity passes took.");
   m.def("set_step_limits", [](double edges, double size) {
     Lock lock;
     double was[2];

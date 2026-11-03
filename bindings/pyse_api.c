@@ -2302,9 +2302,6 @@ void pyse_set_multipliers(const double *in, long n)
 
 int pyse_set_follow(int on) { return fl_set_follow(on); }
 
-int pyse_freeze(int on) { return fl_freeze(on); }
-void pyse_freeze_counts(long *out) { fl_freeze_counts(out); }
-
 void pyse_set_step_limits(double edges, double size, double *was)
 { was[0] = (double)fl_step_limit; was[1] = (double)fl_step_size;
   fl_step_limit = (REAL)edges; fl_step_size = (REAL)size;

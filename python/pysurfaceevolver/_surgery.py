@@ -226,14 +226,7 @@ def guard(ev) -> None:
     stayed on the solid, and the drops a bridge fell into came out on a
     squashed mesh, 0.9% from exact caps; there a vertex through a solid is
     a failed step, or put back out)."""
-    walls = {}
-    seen = set()
-    for k, w in surface.walls.items():
-        # (one per solid: move_poles' copies of a sphere are one surface)
-        if getattr(w, "contact_angle", None) is not None and getattr(w, "formula", None) \
-                and _base(k) not in seen:
-            walls[k] = w
-            seen.add(_base(k))
+    walls = _guarded_walls()
     if not walls:
         return
     if _slab(ev) is not None:
@@ -248,7 +241,7 @@ def guard(ev) -> None:
         if name not in names:
             ev.command(f"define constraint {name} nonnegative formula: {_guard_formula(ev, key)}")
             defined.append(name)
-    spheres = [k for k in walls if _sphere_centre(k) is not None]
+    spheres = _any_sphere_keys(walls)
     many = _slab(ev) is not None and len(spheres) >= 2
     if many and ANY_SPHERE not in names:
         ev.command(f"define constraint {ANY_SPHERE} nonnegative formula: "
@@ -389,6 +382,26 @@ def _guard_formula(ev, key) -> str:
         return f"({v} - {c!r} - {float(p)!r}*floor(({v} - {c!r})/{float(p)!r} + 0.5))"
     return (f"{image('x', float(centre[0]), L[0])}^2 + {image('y', float(centre[1]), L[1])}^2 "
             f"+ (z - {float(centre[2])!r})^2 = {R*R!r}")
+
+
+def _guarded_walls() -> dict:
+    """The walls guard() guards, by key: those with a contact angle and a
+    formula, one per solid (move_poles' copies of a sphere are one surface)."""
+    walls = {}
+    seen = set()
+    for k, w in surface.walls.items():
+        if getattr(w, "contact_angle", None) is not None and getattr(w, "formula", None) \
+                and _base(k) not in seen:
+            walls[k] = w
+            seen.add(_base(k))
+    return walls
+
+
+def _any_sphere_keys(walls=None) -> list:
+    """The spheres ANY_SPHERE's formula is the least of, in its order (its
+    closed form in C takes the same: _engine)."""
+    return [k for k in (_guarded_walls() if walls is None else walls)
+            if _sphere_centre(k) is not None]
 
 
 def _any_sphere_formula(ev, keys) -> str:
@@ -2865,6 +2878,9 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
             _core.set_fast_steps(fast)
         surface.sizes_held = held
         ev._topology_held = topology
+        # (its runs' crossing places not left to a guard() after it, on
+        # another surface: guard() pushes vertices out beside lines there)
+        _PUSH_AT[:] = []
         _unguard(ev)
 
 
@@ -3610,9 +3626,6 @@ def _try_finish(ev, tol: float) -> Any:
     return None
 
 
-_COUPLING: list = []    # a local descent's (body, p0, V0, dp/dV): its pressure set before each run
-
-
 def _run(ev, tol: float, n: int) -> Any:
     """A descent's relax() run of up to n gradient steps; its Newton steps
     (and relax()'s conjugate-gradient pass) only once the residual is under
@@ -3621,17 +3634,6 @@ def _run(ev, tol: float, n: int) -> Any:
     putting contact lines onto the beads' poles, where the walls' integrals
     are singular: 0.025 radii from one where gradient steps alone left it
     0.14 away, run after run undone, the poles moved 20 times."""
-    if _COUPLING:
-        # (a local descent: the body's pressure as the rest of the surface,
-        # fixed, would have given back the volume the region took, at every
-        # gradient step; see _local)
-        body, p0, v0, stiff = _COUPLING[0]
-
-        def follow(ev_, i) -> None:
-            ev_.command(f"set body[{body}] pressure {p0 - stiff*(ev_.body(body).volume - v0)!r}")
-        follow(ev, 0)
-        return ev.relax(tol, max_iter=n, newton=None if ev.residual() < _NEWTON_NEAR else 0,
-                        callback=follow, every=1)
     return ev.relax(tol, max_iter=n, newton=None if ev.residual() < _NEWTON_NEAR else 0)
 
 
@@ -4114,6 +4116,13 @@ def _collapsed_rings(m, h: float) -> list:
         return []
     lengths = np.asarray(m.edge_lengths(), float)
     n = int(edges.max()) + 1
+    # (both kinds' edges are all under 2 h: the rings among those alone, not
+    # every triangle of the mesh, sorted and matched against its facets at
+    # every tidying of a descent)
+    short = lengths < 2*h
+    edges, lengths = edges[short], lengths[short]
+    if not len(edges):
+        return []
     lo, hi = edges.min(axis=1).astype(np.int64), edges.max(axis=1).astype(np.int64)
     keys = lo*n + hi
     order = np.argsort(keys)
@@ -4987,6 +4996,7 @@ def _push_beside_lines(ev, keys, h: float, at: np.ndarray) -> None:
     opened lifts out in the next run, and held on the sphere instead it was
     taken as resting there, the patch made in four contacts instead of one;
     crossings on a wall are surfaces meeting on it, a contact to make."""
+    from ._edits import wall_side
     nums, _, dist, names = ev._constraint_gaps()
     m = ev.mesh()
     x = ev.vertices
@@ -4999,7 +5009,7 @@ def _push_beside_lines(ev, keys, h: float, at: np.ndarray) -> None:
         on = np.isnan(d)
         if not on.any() or on.all():
             continue
-        side = 1.0 if (d[~on] > 0).sum() >= (d[~on] < 0).sum() else -1.0
+        side = float(wall_side(ev, nums[c], names[c]))
         sd = side*np.nan_to_num(d)
         rows = np.flatnonzero(free & (sd < 0) & (sd > -0.5*h))
         if not len(rows):
@@ -5037,6 +5047,7 @@ def _push_out(ev, through: list, h: float) -> bool:
 
 def _move_out(ev, through: list, h: float) -> None:
     """_push_out's move, unchecked."""
+    from ._edits import wall_side
     nums, _, dist, names = ev._constraint_gaps()
     if _slab(ev) is not None:
         # (in a slab, first at their images by a sphere's centre, where its
@@ -5051,7 +5062,7 @@ def _move_out(ev, through: list, h: float) -> None:
         c = _column(nums, names, e.constraint)
         d = dist[:, c]
         off = ~np.isnan(d)
-        side = 1.0 if (d[off] > 0).sum() >= (d[off] < 0).sum() else -1.0
+        side = float(wall_side(ev, nums[c], names[c]))
         rows = np.asarray(e.vertices, int)
         rows = rows[off[rows] & (side*d[rows] < 0)]
         if not len(rows):

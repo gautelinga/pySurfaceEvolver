@@ -213,8 +213,6 @@ def one(name, n, L, seed, theta, h, ds, out, goal="half", checkpoints=None, resu
         pyse.wet_area = os.environ["PYSE_WET_AREA"]     # (--wet-area)
     if os.environ.get("PYSE_STEP_CAP"):
         recipes.STEP_CAP = float(os.environ["PYSE_STEP_CAP"])     # (0: off)
-    if os.environ.get("PYSE_LOCAL_DESCENTS"):
-        recipes.LOCAL_DESCENTS = True       # (falls by local descents: being validated)
 
     part = os.path.join(out, f"{name}.part")
     prior = json.load(open(part)) if resume and os.path.exists(part) else None

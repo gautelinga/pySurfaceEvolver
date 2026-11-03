@@ -205,11 +205,6 @@ int pyse_newton_pair(int body, double delta, double *x0, double *m0, double *x1,
    PYSE_ERR_WILD_STEP), hessian_seek's line search kept within it. The
    previous two in was. */
 void pyse_set_step_limits(double edges, double size, double *was);
-/* Frozen elements: facets and edges whose vertices are all fixed left out of
-   the quantity loops, their values summed once (fl_freeze); returns the
-   previous setting. */
-int pyse_freeze(int on);
-void pyse_freeze_counts(long *out);   /* frozen, live facets; frozen, live edges */
 const char *pyse_solver(void);
 /* Whether Newton steps carry the mesh along a line they move past the edges
    beside it (on by default); returns the previous setting. */

@@ -1064,7 +1064,12 @@ void project_all(
   { int calc_count;
     /* pySE: the content after the move predicted (pyse_predict_content) */
     int predicted = pyse_predict_content && predict_content();
+    /* (predicted: the prediction's difference, or the tolerance where it is
+       within: the checks below measure the restore against it, and against
+       the prediction's own error, often 0, a restore 1.5 tolerances off was
+       abandoned as 'increased by a factor of inf', not halved -- pySE) */
     REAL orig_diff = predicted ? content_diff() : calc_content(Q_FIXED);
+    if ( predicted && orig_diff < 1.0 ) orig_diff = 1.0;
     REAL old_diff = orig_diff;
     REAL diff=old_diff;  /* total relative constraint diff */
     REAL stepsize = 1.0;
