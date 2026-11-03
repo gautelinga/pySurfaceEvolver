@@ -71,6 +71,13 @@ Later on 2026-11-03:
   packs the jumps are descents after a change, not falls from the mode (1 in 20).
   LOCAL_DESCENTS stays off. Timing on miles is unreliable (another user's jobs: identical
   global replays 46% apart): timings on herbie or munin.
+- Threads a run (late frame s2_t20 635, work a second over 10 min): 1/2/4/8 threads
+  1.00/1.07/1.23/1.46 (munin; herbie 1.00/1.06/1.31/1.48). 3ad4985 puts the step cap's
+  pairs in chunks over threads (identical paths at 1 thread, the scale independent of the
+  threads): no change at 8 (1.46 vs 1.39 serial, munin's noise). The serial rest (events,
+  remeshing, crossings, Python) holds threads back; sets run a thread a run. Kept for
+  when the rest is threaded.
+- Next (not started): a 128-bead set (cell, timeouts ~1 day a run, munin's 72 cores).
 
 **Where the sets stand (herbie, 9 runs, 1 thread each, budget 3e6).**
 - job 100 (f65982d): 3/9 reached in 8 h.
