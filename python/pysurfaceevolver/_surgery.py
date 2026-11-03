@@ -2111,14 +2111,14 @@ def _contact(ev, event, keep=None, grow=()) -> None:
     # pack's patch on a bead in the wedge it makes with another, 0.03 apart,
     # its line through two such facets, the contact refused there time after
     # time)
-    gone = _with_lying(f, gone, on)
+    gone = _patch_with_facets_on_solid(f, gone, on)
     gone = _clear_of_touching(ev, num, f, gone, on, dist, nums, c, float(event.scale))
     if not gone.any():
         raise ValueError("contact(): the place is where two walls touch")
     _dissolve_onto(ev, m, gone, event.constraint)
 
 
-def _with_lying(f, gone, on) -> np.ndarray:
+def _patch_with_facets_on_solid(f, gone, on) -> np.ndarray:
     """The patch's facets (mask over the facets f) and those joined to it
     across edges, facet by facet, that lie on its solid (their corners all
     on it: on, per vertex)."""
