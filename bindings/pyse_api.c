@@ -2628,13 +2628,27 @@ static void restore_slots(struct snapshot *s)
       lookup_global_hash(q->name,i,QUANTITYNAME,HASH_ADD);
     }
   }
-  /* (the quantities' lists without the instances freed) */
+  /* the quantities each instance there belongs to, as then: one kept
+     through the snapshot kept a quantity made since, which the restore
+     freed (a stale slot each time round, until Evolver's 8 a method may
+     belong to: ERROR 1564 in a 64-bead pack, a body's bead content) */
+  for ( i = LOW_INST ; i < meth_inst_count && i < s->inst_count ; i++ )
+  { struct method_instance *mi = METH_INSTANCE(i);
+    if ( alive_at(s,1,i) && !(mi->flags & Q_DELETED) )
+      memcpy(mi->quants,s->insts[i].quants,sizeof(mi->quants));
+  }
+  /* (the quantities' lists without the instances freed, or no longer theirs) */
   for ( i = 0 ; i < gen_quant_count ; i++ )
   { struct gen_quant *q = GEN_QUANT(i);
     if ( q->flags & (Q_DELETED|Q_COMPOUND) ) continue;
     for ( k = j = 0 ; k < q->method_count ; k++ )
-      if ( !(METH_INSTANCE(q->meth_inst[k])->flags & Q_DELETED) )
-        q->meth_inst[j++] = q->meth_inst[k];
+    { struct method_instance *mi = METH_INSTANCE(q->meth_inst[k]);
+      int m, in = 0;
+      if ( mi->flags & Q_DELETED ) continue;
+      for ( m = 0 ; m < MMAXQUANTS ; m++ )
+        if ( mi->quants[m] == i ) in = 1;
+      if ( in ) q->meth_inst[j++] = q->meth_inst[k];
+    }
     q->method_count = j;
   }
 }
