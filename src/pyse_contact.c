@@ -210,9 +210,15 @@ static REAL omega(const REAL *p, const REAL *a, const REAL *b)
   return 2*atan2(det,den);
 }
 
+/* the angle floor's global looked up again only outside the threads (a load's
+   first pass: pc_current() does it before the threads read it; two threads
+   writing it, one read the new load with the old index, a floor of 0) */
 static REAL angle_floor(void)
 { static long load = -2;
   static int k = -1;
+#ifdef _OPENMP
+  if ( !omp_in_parallel() )
+#endif
   if ( load != PC_LOAD() ) { k = lookup_global("pyse_angle_floor"); load = PC_LOAD(); }
   return k >= 0 ? globals(k)->value.real : 0.0;
 }
@@ -527,6 +533,7 @@ static void pc_build(void)
         if ( v < q->B ) lo = mid + 1; else hi = mid - 1;
       }
       if ( q->next < 0 ) G->bad = 1;                        /* an open line */
+      else if ( ent[q->next].prev >= 0 ) G->bad = 1;       /* two into one: a tail */
       else ent[q->next].prev = order[i + a];
     }
     /* loops */
@@ -603,6 +610,7 @@ static int pc_changed(void)
 static void pc_current(void)
 { if ( pc_changed() || pc_stale ) { pc_build(); pc_stale = 0; }
   else if ( !pc_geom_done ) pc_geometry();
+  (void)angle_floor();      /* (its global looked up here, serially) */
 }
 
 void pyse_contact_init(int mode, struct method_instance *mi)

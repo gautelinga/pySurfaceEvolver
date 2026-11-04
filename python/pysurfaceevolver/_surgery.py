@@ -4136,9 +4136,13 @@ def _collapsed_rings(m, h: float) -> list:
     start = np.searchsorted(src, np.arange(n + 1))
     degree = np.diff(start)
     found = []
-    for i in range(int(degree.max(initial=0))):
-        for j in range(i + 1, int(degree.max(initial=0))):
-            at = np.flatnonzero(degree > j)
+    # (the vertices with a j-th neighbour, once a j: not a pass over every
+    # vertex for each pair of slots, 5000 of them round a fan of 100 edges)
+    deg = int(degree.max(initial=0))
+    having = [np.flatnonzero(degree > j) for j in range(deg)]
+    for i in range(deg):
+        for j in range(i + 1, deg):
+            at = having[j]
             if not len(at):
                 break
             p, q = dst[start[at] + i], dst[start[at] + j]

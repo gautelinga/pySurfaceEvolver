@@ -513,7 +513,11 @@ def reconcile(ev) -> None:
     if hollow:
         ev.restore(start)
         _log.debug("clusters: %d pieces holding no liquid kept with their bodies", len(hollow))
-        _reconcile(ev, run, hollow)
+        if _reconcile(ev, run, hollow):
+            # (still a body made holding nothing, all of a body's clusters
+            # hollow: its targets were never set, the bodies as they were)
+            ev.restore(start)
+            _log.debug("clusters: bodies left as they were (a piece holding no liquid)")
 
 
 def _reconcile(ev, run: dict, hollow: frozenset) -> frozenset:

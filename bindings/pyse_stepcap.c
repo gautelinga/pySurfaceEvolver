@@ -52,6 +52,12 @@ int pyse_step_cap_contact(int clear)
   return was;
 }
 
+/* the scale the last gradient step took where the cap cut it (iterate()
+   sets it; the scale Evolver reports is the next search's start), else -1 */
+static REAL taken = -1.0;
+void pyse_step_taken_set(REAL scale) { taken = scale; }
+double pyse_step_taken(void) { return taken; }
+
 /* steps looked at, capped by a pair, capped by the longest move */
 void pyse_step_cap_counts(long *out)
 { out[0] = cap_steps; out[1] = cap_capped; out[2] = cap_moved;

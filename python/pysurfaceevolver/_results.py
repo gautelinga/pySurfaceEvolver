@@ -147,7 +147,9 @@ class _Trace:
         self.output.append(ev.command("g 1"))
         self.energy.append(_core.total_energy())
         self.area.append(_core.total_area())
-        self.scale.append(ev.eval("scale"))
+        # (a capped step's own scale: Evolver's is then the next search's start)
+        taken = _core.step_taken()
+        self.scale.append(taken if taken >= 0 else ev.eval("scale"))
 
     def refresh(self) -> None:
         """The last step's energy and area as they are now (after tidying it,

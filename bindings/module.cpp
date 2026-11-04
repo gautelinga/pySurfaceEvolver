@@ -837,6 +837,9 @@ NB_MODULE(_core, m) {
   m.def("step_cap_contact", [](bool clear) { Lock lock; return bool(pyse_step_cap_contact(clear)); },
         "clear"_a, "Whether a capped step met a pair within the contact distance since last "
         "cleared (clear: clear it).");
+  m.def("step_taken", []() { Lock lock; return pyse_step_taken(); },
+        "The scale the last gradient step took where the step cap cut it, else -1 (Evolver's "
+        "scale is then the next search's start).");
   m.def("step_cap_counts", []() {
     Lock lock;
     long c[3];

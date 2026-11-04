@@ -1455,11 +1455,6 @@ class _Run:
             trace.step(ev)
             if callback is not None and i % every == 0:
                 callback(cast("Evolver", ev), i)
-            if _core.step_cap_contact(False):
-                # (a capped step met two pieces of the surface within an
-                # event's gap: the change there is the caller's to make, and
-                # the steps after only crawl, each halving the gap)
-                break
             if (not np.isfinite(trace.energy[-1])
                     or abs(trace.energy[-1] - previous) > _ENERGY_BLOWUP*scale):
                 # (a finite one too: a step that flung the surface apart, the
@@ -1470,6 +1465,12 @@ class _Run:
                          else "its topology changed during the round, so it stays as it is")
                 raise EvolverError(f"relax(): the energy became {bad:.6g} during gradient steps; "
                                    + where)
+            if _core.step_cap_contact(False):
+                # (a capped step met two pieces of the surface within an
+                # event's gap: the change there is the caller's to make, and
+                # the steps after only crawl, each halving the gap; after the
+                # blow-up check, so a step that flung the surface is undone)
+                break
             if tidy and i == 1 and ev._tidy_kinds()[0] and not average_only:
                 # a coarse start triangulated badly is equiangulated before
                 # it settles into what its mesh allows (no averaging: that

@@ -24,8 +24,10 @@ static int (*pyse_chop_lines)(void) = 0;
    (bindings/pyse_stepcap.c; off unless set) */
 #if defined(__GNUC__)
 extern REAL pyse_step_cap(REAL scale) __attribute__((weak));
+extern void pyse_step_taken_set(REAL scale) __attribute__((weak));
 #else
 static REAL (*pyse_step_cap)(REAL) = 0;
+static void (*pyse_step_taken_set)(REAL) = 0;
 #endif
 /* pySE: a slab periodic in x and y (bindings/pyse_api.c): its volumes are
    z dx dy, exact, never a cell's volume off (as calcforc.c's) */
@@ -495,6 +497,7 @@ have_scale:
   if ( !web.motion_flag )
     if ( web.scale > web.maxscale ) 
       web.scale = web.maxscale; /* max on movement */
+  if ( pyse_step_taken_set ) pyse_step_taken_set(-1.0);  /* pySE: not capped (yet) */
   if ( pyse_step_cap && web.scale > 0.0 && web.scale_scale > 0.0 )
   { /* pySE: no pair of the surface's pieces closing more than a share of
        its gap (pyse_stepcap.c) */
@@ -549,7 +552,9 @@ have_scale:
   { /* go back and use scale1 */
     restore_coords(&saved,SAVE_IN_ATTR);
     web.scale = scale1; /* known to decrease energy */
-    if ( step_cap >= 0.0 && web.scale > step_cap ) web.scale = step_cap;  /* pySE */
+    /* pySE: not past the cap (the capped move, kept though the energy rose:
+       a descent's steps go on to the contact the cap slows them at) */
+    if ( step_cap >= 0.0 && web.scale > step_cap ) web.scale = step_cap;
     move_vertices(ACTUAL_MOVE,web.scale);
     if ( cg_hvector ) /* restart conjugate gradient */
        cg_restart();
@@ -615,6 +620,7 @@ have_scale:
   if ( !quiet_go_flag ) outstring(msg);
   /* pySE: the next step's search from the scale this one's found, not from
      the cap (a pair's capped step would have it doubling up again) */
+  if ( step_cap >= 0.0 && pyse_step_taken_set ) pyse_step_taken_set(web.scale);
   if ( step_cap >= 0.0 && searched > web.scale ) web.scale = searched;
 
   vgrad_end();

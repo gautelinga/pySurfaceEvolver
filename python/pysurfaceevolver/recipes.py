@@ -883,7 +883,7 @@ class _Backups:
         try:
             ev.restore(kept.saved if kept.saved is not None else kept.portable)
         except ValueError:
-            if kept.portable is None:
+            if kept.saved is None or kept.portable is None:
                 return None             # (another surface loaded meanwhile)
             ev.restore(kept.portable)
         if rng is not None:

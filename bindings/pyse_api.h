@@ -184,6 +184,7 @@ double pyse_set_step_cap(double frac, double contact_at);
 int pyse_step_cap_contact(int clear);
 /* steps looked at, capped by a pair, capped by the longest move (3 longs) */
 void pyse_step_cap_counts(long *out);
+double pyse_step_taken(void);   /* the last step's scale where capped, else -1 */
 long pyse_step_cap_last(int keep, double *scale, const double **x, const double **v);
 double pyse_work_count(void);
 /* For each edge and each of the constraints nums, whether the edge is on it
