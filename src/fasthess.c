@@ -879,6 +879,23 @@ static void quant_value_element(struct linsys *S, element_id id, vertex_id *c, i
 static void quant_grad_element(struct linsys *S, element_id id, vertex_id *c, int me,
                                struct hbuf *b, void *ctx);
 
+extern int vgrad_attr;  /* fixvol.c */
+
+/* get_bv_new_vgrad() for a vertex only this thread adds to: the pool's
+   allocation one thread at a time */
+static volgrad *vgrad_at(int fixnum, vertex_id v_id)
+{ volgrad **ptrptr = (volgrad**)VPTR(v_id,vgrad_attr);
+  while ( *ptrptr )
+    if ( (*ptrptr)->fixnum == fixnum ) return *ptrptr;
+    else ptrptr = &(*ptrptr)->chain;
+#ifdef _OPENMP
+  #pragma omp critical(fh_vgrad_pool)
+#endif
+  *ptrptr = new_vgrad();
+  (*ptrptr)->fixnum = fixnum;
+  return *ptrptr;
+}
+
 static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
                         void *ctx, int threads)
 { int direct = (fn == quant_value_element || fn == quant_grad_element); static struct hbuf buf[FH_MAXTHREADS];
@@ -890,7 +907,8 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
   long *fstart;   /* per chunk element: start, end in its thread's buffer */
   int *fthread;
   unsigned char *ftrapped;     /* per chunk element: hit an error */
-  int t, ok = 1, live;
+  int t, ok = 1, live, vg_par;
+  long nvg;
 
   if ( type == FACET )
   { corners = fl_facet_corners();
@@ -967,7 +985,13 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
       if ( buf[t].failed ) ok = 0;
     if ( !ok ) break;   /* out of memory: give up (nothing added this chunk) */
 
-    /* the additions, serially in element order */
+    /* the additions, serially in element order; the bodies' volume
+       gradients by vertex on the threads after (each vertex's in element
+       order, as serially: its sums and its chain the same) */
+    vg_par = threads > 1;
+    for ( k = start ; k < end && vg_par ; k++ )
+      if ( ftrapped[k-start] ) vg_par = 0;
+    nvg = 0;
     for ( k = start ; k < end ; k++ )
     { struct hbuf *b = buf + fthread[k-start];
       long e, e0 = fstart[2*(k-start)], e1 = fstart[2*(k-start)+1];
@@ -985,6 +1009,7 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
       }
       for ( e = e0 ; e < e1 ; e++ )
       { struct hop *op = b->ops + e;
+        if ( vg_par && op->kind == OP_VGRAD ) { nvg++; continue; }
         switch ( op->kind )
         { case OP_ENTRY: sp_hash_search(S,op->r,op->c,op->x[0]); break;
           case OP_PENTRY: pc_A[op->pos] += op->x[0]; break;
@@ -1013,6 +1038,30 @@ static int run_elements(struct linsys *S, REAL *rhs, int type, element_fn fn,
             vgptr->qnum = op->c;
             vector_add_smul(vgptr->grad,op->x,op->s,SDIM);
             break;
+          }
+        }
+      }
+    }
+    if ( nvg )
+    {
+#ifdef _OPENMP
+      #pragma omp parallel num_threads(threads) private(k)
+#endif
+      { int me = 0, nt = 1;
+#ifdef _OPENMP
+        me = omp_get_thread_num(); nt = omp_get_num_threads();
+#endif
+        for ( k = start ; k < end ; k++ )
+        { struct hbuf *b = buf + fthread[k-start];
+          long e, e1 = fstart[2*(k-start)+1];
+          for ( e = fstart[2*(k-start)] ; e < e1 ; e++ )
+          { struct hop *op = b->ops + e;
+            volgrad *vgptr;
+            if ( op->kind != OP_VGRAD || ordinal(op->v) % nt != me ) continue;
+            vgptr = vgrad_at(op->r,op->v);
+            vgptr->bb_id = op->b;
+            vgptr->qnum = op->c;
+            vector_add_smul(vgptr->grad,op->x,op->s,SDIM);
           }
         }
       }
