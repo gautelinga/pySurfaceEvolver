@@ -8,8 +8,9 @@ Parts (all by default):
   drop   the drop draining over a sphere: drainage_drop.mp4 (a minute)
   pore   one pore of a bead pack (four unit beads, contact angle 20):
          drainage_pore.png (the liquid's curvature against its volume, the
-         changes of topology marked), drainage_pore_shapes.png (just before and
-         just after the jump) and drainage_pore.mp4 (a minute)
+         changes of topology marked), drainage_pore_shapes.png (just before the
+         jump, after it and after the fall that follows) and drainage_pore.mp4
+         (a minute)
   ring   two beads stacked, drained through the floor, the ring between them
          cut off: drainage_ring.png, drainage_ring_shapes.png and
          drainage_ring.mp4 (half a minute)
@@ -165,7 +166,7 @@ def pore_trace(steps):
     ax.invert_xaxis()
     ax.set_xlabel("draining liquid's volume (drained to the right)")
     ax.set_ylabel("curvature of the liquid surface")
-    ax.legend(frameon=False, loc="lower right")
+    ax.legend(frameon=False, loc="upper center")
     fig.tight_layout()
     fig.savefig(os.path.join(STATIC, "drainage_pore.png"), dpi=150)
     plt.close(fig)
@@ -183,8 +184,9 @@ def pore_shapes(steps, meshes):
     pv.OFF_SCREEN = True
     k = np.array([-s.pressures[0] for s in steps])
     jump = max((i for i, s in enumerate(steps) if s.fell), key=lambda i: k[i - 1] - k[i])
-    p = pv.Plotter(off_screen=True, shape=(1, 2), window_size=(1400, 700), border=False)
-    for col, i in enumerate((jump - 1, jump)):
+    again = next(i for i in range(jump + 1, len(steps)) if steps[i].fell)
+    p = pv.Plotter(off_screen=True, shape=(1, 3), window_size=(2100, 700), border=False)
+    for col, i in enumerate((jump - 1, jump, again)):
         p.subplot(0, col)
         x, f, body = meshes[i]
         liquid(p, x, f, body)

@@ -111,55 +111,63 @@ for s in recipes.arclength(ev, ev.body(1), -0.01, 150, topology=True):
 k = np.array([-s.pressures[0] for s in steps])
 V = np.array([s.value for s in steps])
 jump = max((i for i, s in enumerate(steps) if s.fell), key=lambda i: k[i - 1] - k[i])
+again = next(i for i in range(jump + 1, len(steps)) if steps[i].fell)
 before = [s for s in steps[:jump] if s.fell]
-dried = sorted({e.constraint for e in steps[jump].changes if e.kind == "solid"})
+dried = lambda i: ", ".join(sorted({e.constraint for e in steps[i].changes if e.kind == "solid"}))
 print(f"full: volume {V[0]:.2f}, curvature {k[0]:.1f}")
 print(f"before the jump: {', '.join(sorted({e.constraint for s in before for e in s.changes}))} "
       f"drying from {before[0].value:.2f}, a patch at a time; curvature up to {k[:jump].max():.1f}")
 print(f"past a fold at {V[:jump].min():.2f} the liquid jumps: curvature from {k[jump - 1]:.1f} "
-      f"to {k[jump]:.1f}, {', '.join(dried)} drying, {steps[jump].trapped:.2f} of it cut off")
-print(f"the rest drains on from {V[jump]:.2f} to {V[-1]:.2f}, curvature {k[-1]:.1f}")
+      f"to {k[jump]:.1f}, {dried(jump)} drying, {steps[jump].trapped:.2f} of it cut off")
+print(f"{again - jump} steps on, at {V[again - 1]:.2f}, it falls again: {dried(again)} drying, "
+      f"{steps[again].trapped:.2f} cut off, curvature {k[again]:.1f}")
+print(f"the rest drains on from {V[again]:.2f} to {V[-1]:.2f}, curvature {k[-1]:.1f}")
 ```
 
 ```text
 full: volume 0.68, curvature 4.6
 before the jump: bead4 drying from 0.54, a patch at a time; curvature up to 4.8
-past a fold at 0.43 the liquid jumps: curvature from 4.4 to 3.1, bead4 drying, 0.07 of it cut off
-the rest drains on from 0.37 to 0.20, curvature 5.1
+past a fold at 0.44 the liquid jumps: curvature from 4.5 to 3.1, bead3 drying, 0.00 of it cut off
+2 steps on, at 0.44, it falls again: bead4 drying, 0.07 cut off, curvature 3.1
+the rest drains on from 0.37 to 0.19, curvature 5.2
 ```
 
 ```{figure} _static/drainage_pore.png
 :alt: The draining liquid's curvature against its volume as the pore drains: a
-  fold at volume 0.43, then a drop to 3.1 at 0.37, where a pocket is cut off.
+  fold at volume 0.44 and a drop there to 3.1, then a second fall to 0.37, where a
+  pocket is cut off.
 
 The curvature of the pore's draining liquid as it drains (right). Each red point is
-an equilibrium reached after a change of topology. At the jump the line runs from
-0.44 to 0.37: the volume is the same, but 0.07 of it is cut off and no longer counts
-as draining. Drawn by
+an equilibrium reached after a change of topology. At the jump the line drops from
+4.5 to 3.1 at a volume of 0.44, then runs on to 0.37 at the second fall: the volume is
+the same, but 0.07 of it is cut off and no longer counts as draining. Drawn by
 `tools/drainage_topology_figure.py`, as is the next picture.
 ```
 
 First the menisci come down onto bead 4, and dry patches open on it one after the
-other while the curvature stays near 4.5. At a volume of 0.43 the branch reaches a
+other while the curvature stays near 4.5. At a volume of 0.44 the branch reaches a
 fold: the last liquid across the pore's middle can no longer hold its place. The run
 falls from one point past the fold, at the same volume. The liquid rearranges at
-once into the wedges between the beads, at a curvature of 3.1, drying bead 4 where
-the strip was, and a pocket of 0.07 is cut off from the rest. It keeps its volume
-from then on (see the next section), and the rest drains on. This is the analogue of
-a Haines jump at a fixed volume: the same rearrangement under a fixed pressure would
-be a sudden loss of liquid. Past it, the curvature rises again as the wedges drain.
+once into the wedges between the beads, at a curvature of 3.1, a dry patch opening
+on bead 3. That state holds for a step only: the run falls again, bead 4 dries where
+the strip was, and a pocket of 0.07 is cut off from the rest. The pocket keeps its
+volume from then on (see the next section), and the rest drains on. The two falls
+together are the analogue of a Haines jump at a fixed volume: the same rearrangement
+under a fixed pressure would be a sudden loss of liquid. Past them, the curvature
+rises again as the wedges drain.
 
 ```{figure} _static/drainage_pore_shapes.png
-:alt: The pore's liquid just before and just after the jump.
+:alt: The pore's liquid just before the jump, just after it, and after the second
+  fall, which cuts off a pocket.
 
-The liquid just before the jump (left) and just after it (right), at the same volume,
-the pocket cut off orange.
+The liquid just before the jump (left) and just after it (middle), at the same volume,
+and after the second fall (right), the pocket cut off orange.
 ```
 
 <video src="_static/drainage_pore.mp4" controls loop muted width="100%" title="The pore's liquid draining, bead 4 drying patch by patch, then the jump"></video>
 
 The whole run, one frame a point: the patches opening on bead 4, the jump into the
-wedges with the pocket cut off, and the wedges draining.
+wedges, the second fall that cuts off the pocket, and the wedges draining.
 
 ## Liquid left behind: a ring cut off
 
