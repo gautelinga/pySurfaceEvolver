@@ -77,6 +77,19 @@ Later on 2026-11-03:
   threads): no change at 8 (1.46 vs 1.39 serial, munin's noise). The serial rest (events,
   remeshing, crossings, Python) holds threads back; sets run a thread a run. Kept for
   when the rest is threaded.
+- Set 531 (b56c9d7, herbie, tag 2026-11-04_periodic-64-b56c9d7-review): 9/9 reached, 0
+  failures, 15.7 h in all against set 158's 26.2 h; per pass 7.4 s a thousand against
+  10.4 (-28%), per change 11.8 s against 15.8. Pc-S curves in set 158's band; films and
+  curves in ~/pyse_scratch/cluster/herbie/<tag>/.
+- The serial rest at 4 threads (late frame s2_t20 635, perf call chains): the main
+  thread 78% outside parallel regions. The contact table was rebuilt ~15 times a second
+  (the line chop in every gradient step), 74% of that the immersed beads' test, every
+  facet walked per body and bead. 5d3789a: one pass over the facets, the beads on the
+  threads; the loops' apexes on the threads. Same paths; herbie, 30000 passes: 4 threads
+  312 -> 284 s (-9%), 1 thread 1194 -> 1145 s (-4%). Dropped: the volume gradients'
+  additions by vertex on the threads (4ff1e07, reverted: same paths, 289 against 284 s).
+  Left serial: Python ~17%, projection through Evolver's interpreter ~5%, remeshing grids,
+  the step cap's set-up, crossings ~2-3% each: no single target; sets run a thread a run.
 - Next (not started): a 128-bead set (cell, timeouts ~1 day a run, munin's 72 cores).
 
 **Where the sets stand (herbie, 9 runs, 1 thread each, budget 3e6).**
