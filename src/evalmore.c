@@ -23,7 +23,9 @@
 #define S_IFIFO 0x100
 #elif !defined(MAC_CW)
 #include <sys/stat.h>
-/* #include <sys/wait.h> */
+#if !defined(__WIN32__) && !defined(_WIN32)
+#include <sys/wait.h>  /* wait() for the subshell; an error without it from GCC 14 */
+#endif
 #ifndef S_IFIFO
 #ifdef __S_IFIFO
 #define S_IFIFO __S_IFIFO
