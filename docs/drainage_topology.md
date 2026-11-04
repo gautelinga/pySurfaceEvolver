@@ -271,6 +271,53 @@ The 18 runs of the wide set (six packings, three contact angles;
 `bench/topology/corpus.py --set wide`): the share of the liquid cut off as each
 drains (left), and where each ends at breakthrough (right). Up to 1% of the liquid
 is trapped by then, in up to 17 clusters, after 44 to 78% of it has drained.
+```
+
+## Sixty-four beads in a periodic cell
+
+Sixty-four unit beads settled on a floor in a cell 6 wide, periodic in x and y
+({doc}`periodic`: no side walls), make a column about six bead diameters deep. They
+drain the same way, the floor the outlet, from full to breakthrough. Three packings
+at contact angles of 15, 20 and 25 degrees, nine runs at one thread each
+(`bench/topology/corpus.py --set periodic-64 --ds-area --frames 5 --budget 3e6`), all
+reached breakthrough: in 31 minutes to 5.9 hours each, 15.7 hours together, through
+286 to 1396 changes of topology.
+
+<video src="_static/drainage_pack64.mp4" controls loop muted width="60%" title="A 64-bead pack in a periodic cell draining to breakthrough, trapped clusters in orange"></video>
+
+One of the runs (seed 0 at 20 degrees: 555 steps, 449 changes, 82 minutes), every
+fifth step as the run kept it (`--frames 5`; drawn by
+`tools/drainage_topology_figure.py pack64 --frames DIR`): the liquid's surface blue,
+each cluster cut off orange, the beads and their images in the cell faint. The packs
+are settled by a short simulation (`settle_periodic` in `bench/topology/pack.py`)
+whose result depends on the machine's arithmetic: these runs were made on one Linux
+node, and the same seeds elsewhere give other packs, and so other runs.
+
+```{figure} _static/drainage_pack64_shapes.png
+:alt: The 64-bead pack full, a third drained and at breakthrough, with the trapped
+  clusters in orange.
+
+Full, 31% drained, and at breakthrough with 61% drained: 8 clusters cut off by then
+(orange), rings where beads nearly touch.
+```
+
+```{figure} _static/drainage_pc64.png
+:alt: For the nine runs, the capillary pressure against the saturation, a panel per
+  contact angle, the three packings overlaid.
+
+The capillary pressure (the gas's over the liquid's, in units of the surface tension
+over the bead radius) against the saturation, the nine runs
+(`tools/drainage_topology_figure.py pc64 --runs DIR`). The saturation is the liquid's
+share of the pore space below a plane a bead diameter beneath the top layer (the 90th
+percentile of the beads' tops), as a sample's inlet face; the liquid above it drains
+first, at saturation 1. A drop at a fixed saturation is a fall (a Haines jump); the
+dots mark breakthrough.
+```
+
+Breakthrough came at saturations of 0.24 to 0.80 and pressures of 4 to 7.2. With
+three packings an angle, the spread between the runs is larger than any trend with
+the contact angle from 15 to 25 degrees. Up to 1.2% of the liquid was trapped by then
+(31 clusters, in the two runs that drained furthest).
 
 ## What it means, and where it stops
 

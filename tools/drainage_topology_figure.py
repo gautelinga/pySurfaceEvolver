@@ -18,6 +18,12 @@ Parts (all by default):
          bench/topology/series.py wrote (--series DIR; made with
          ``series.py --seed 2 --theta 20 --frames 150``, about ten minutes):
          drainage_pack.mp4 and drainage_pack_shapes.png
+  pack64 a run of 64 beads in a periodic cell, from the states it kept
+         (--frames DIR: bench/topology/corpus.py --set periodic-64 --frames 5,
+         OUT/frames/NAME): drainage_pack64.mp4 and drainage_pack64_shapes.png
+  pc64   the capillary pressure against the saturation for that set, from
+         corpus.py's output folder (--runs OUT) into drainage_pc64.npz, or from
+         that file: drainage_pc64.png
   periodic  the two beads in a periodic cell (periodic.md): periodic_ring.mp4,
          periodic_ring_shapes.png (the cell tiled 2 x 2)
   packs  the wide set's runs (bench/topology/corpus.py --set wide), from their
@@ -28,6 +34,7 @@ Everything goes into docs/_static.
 """
 import argparse
 import glob
+import json
 import os
 import re
 import sys
@@ -54,6 +61,7 @@ LIQUID = dict(color="#a6cee3", show_edges=True, edge_color="#7aa9d0", line_width
               smooth_shading=False, ambient=0.25, diffuse=0.75)
 TRAPPED = dict(LIQUID, color="#fdbf6f", edge_color="#e09a3e")
 BEAD = dict(color="sandybrown", opacity=0.25)
+FAINT = dict(color="#c8c0b4", opacity=0.1)     # (the 64 beads, the liquid seen through them)
 WINDOW = (960, 720)
 
 
@@ -75,12 +83,12 @@ def liquid(p, x, f, body=None):
             p.add_mesh(polydata(x, f[keep]), **style)
 
 
-def movie(path, frames, draw, camera, fps=12, hold=24):
+def movie(path, frames, draw, camera, fps=12, hold=24, window=WINDOW):
     """An mp4 of draw(plotter, frame) over the frames, the last held for
     ``hold`` frames."""
     import pyvista as pv
     pv.OFF_SCREEN = True
-    p = pv.Plotter(off_screen=True, window_size=WINDOW)
+    p = pv.Plotter(off_screen=True, window_size=window)
     p.open_movie(path, framerate=fps, quality=7)
     for k, frame in enumerate(frames):
         p.clear()
@@ -360,6 +368,135 @@ def packs(logs):
     print(f"wrote drainage_packs.png ({len(data)} runs)")
 
 
+# ---- 64 beads in a periodic cell ----------------------------------------------
+
+def _state(path):
+    """A state corpus.py kept (--frames): the run's Evolver, the liquid it
+    started with, its step."""
+    sys.path.insert(0, os.path.join(HERE, "..", "bench", "topology"))
+    import corpus
+    return corpus.restore_state(path)
+
+
+def _centres():
+    from pysurfaceevolver._engine import surface
+    return np.array([np.asarray(w.slabflux[0], float) for w in surface.walls.values()
+                     if getattr(w, "slabflux", None)])
+
+
+def cell_scene(p, corners, body, centres, L, top):
+    """One periodic cell: the liquid's facets moved into it (each by its first
+    corner's image), the beads and their images cut at its sides, the floor."""
+    import pyvista as pv
+    c = np.array(corners, float)
+    c[:, :, :2] -= (np.floor(c[:, 0, :2]/L)*L)[:, None, :]
+    x = c.reshape(-1, 3)
+    liquid(p, x, np.arange(len(x)).reshape(-1, 3), body)
+    bounds = (0, L, 0, L, 0, top)
+    for centre in centres:
+        for dx in (-L, 0, L):
+            for dy in (-L, 0, L):
+                cc = centre + (dx, dy, 0)
+                if -1 < cc[0] < L + 1 and -1 < cc[1] < L + 1:
+                    s = pv.Sphere(radius=1.0, center=cc, theta_resolution=24, phi_resolution=24)
+                    s = s.clip_box(bounds, invert=False)
+                    if s.n_points:
+                        p.add_mesh(s, **FAINT)
+    p.add_mesh(pv.Plane(center=(L/2, L/2, 0), direction=(0, 0, 1), i_size=L, j_size=L),
+               color="#dddddd")
+    p.add_mesh(pv.Box(bounds=bounds), style="wireframe", color="#555555")
+
+
+def pack64(frames):
+    import pyvista as pv
+    warnings.simplefilter("ignore")
+    paths = sorted(glob.glob(os.path.join(frames, "step*.fe")))
+    shots = []
+    for path in paths:
+        ev, v0, step = _state(path[:-3])
+        m = ev.mesh()
+        body = np.asarray(m.facet_bodies).max(axis=1)
+        trapped = sorted(set(body[body > 1].tolist()))
+        held = float(ev.body(1).volume) + sum(float(ev.body(b).volume) for b in trapped)
+        shots.append((np.array(m.facet_corners()), body, 1 - held/v0, len(trapped)))
+    centres, L = _centres(), float(ev.periods[0])
+    top = float(centres[:, 2].max()) + 1.0
+    focus = np.array([L/2, L/2, top/2])
+    look = np.array([1.0, -0.75, 0.3])
+    camera = [tuple(focus + 2.4*top*look/np.linalg.norm(look)), tuple(focus), (0, 0, 1)]
+    text = lambda i: (f"drained {shots[i][2]:.0%}"
+                      + (f", {shots[i][3]} trapped" if shots[i][3] else ""))
+
+    def scene(pl, i):
+        cell_scene(pl, *shots[i][:2], centres, L, top)
+        pl.add_text(text(i), font_size=12)
+
+    movie(os.path.join(STATIC, "drainage_pack64.mp4"), range(len(shots)), scene, camera, fps=8,
+          window=(720, 960))
+    pv.OFF_SCREEN = True
+    p = pv.Plotter(off_screen=True, shape=(1, 3), window_size=(1500, 800), border=False)
+    middle = min(range(len(shots)), key=lambda i: abs(shots[i][2] - shots[-1][2]/2))
+    for col, i in enumerate((0, middle, len(shots) - 1)):
+        p.subplot(0, col)
+        scene(p, i)
+        p.camera_position = camera
+    p.screenshot(os.path.join(STATIC, "drainage_pack64_shapes.png"))
+    p.close()
+    print("wrote drainage_pack64_shapes.png")
+
+
+def pores(state):
+    """A periodic pack's inlet plane z_ref (a bead diameter below its top
+    layer, the 90th percentile of the beads' tops) and its pore volume below
+    that plane, from a state the run kept."""
+    ev, _, _ = _state(state)
+    x, L = _centres(), float(ev.periods[0])
+    z = float(np.percentile(x[:, 2] + 1.0, 90)) - 2.0
+    h = np.clip(z - (x[:, 2] - 1.0), 0.0, 2.0)
+    return z, L*L*z - float(np.sum(np.pi*h*h*(3.0 - h)/3.0))
+
+
+def pc64(runs):
+    """The capillary pressure against the saturation for the periodic-64 set:
+    from corpus.py's output folder (--runs DIR: each run's JSON and its
+    first kept state) into drainage_pc64.npz, or from that file."""
+    path = os.path.join(STATIC, "drainage_pc64.npz")
+    if runs:
+        data = {}
+        for f in sorted(glob.glob(os.path.join(runs, "c64_*.json"))):
+            r = json.load(open(f))
+            name = r["name"].split("_h")[0][4:]                     # s0_t15
+            _, P = pores(os.path.join(runs, "frames", r["name"], "step0000"))
+            rows = [(min(V + T, P)/P, -p, fell) for _, V, p, T, _, fell, _ in r["curve"]]
+            data[name] = np.array(rows + [(np.nan, float(r["reached"]), 0)])
+        np.savez_compressed(path, **data)
+    data = dict(np.load(path))
+    colours = ["#2a78d6", "#eb6834", "#1baf7a"]                     # seeds 0, 1, 2
+    fig, axes = plt.subplots(1, 3, figsize=(11, 3.6), sharey=True)
+    for ax, theta in zip(axes, ("15", "20", "25")):
+        for seed, colour in enumerate(colours):
+            rows = data.get(f"s{seed}_t{theta}")
+            if rows is None:
+                continue
+            S, Pc, reached = rows[:-1, 0], rows[:-1, 1], rows[-1, 1]
+            ax.plot(S, Pc, "-", color=colour, lw=1.2, label=f"seed {seed}")
+            if reached:
+                ax.plot(S[-1], Pc[-1], "o", color=colour, ms=5)
+        ax.set_title(f"contact angle {theta} degrees", fontsize=10)
+        ax.set_xlim(1.02, 0.2)
+        ax.set_xlabel("saturation")
+        ax.grid(color="#e4e3de", lw=0.6)
+        ax.set_axisbelow(True)
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+    axes[0].set_ylabel("capillary pressure (tension / bead radius)")
+    axes[0].legend(frameon=False, loc="lower left")
+    fig.tight_layout()
+    fig.savefig(os.path.join(STATIC, "drainage_pc64.png"), dpi=150)
+    plt.close(fig)
+    print(f"wrote drainage_pc64.png ({len(data)} runs)")
+
+
 
 # ---- the two beads in a periodic cell (periodic.md) ---------------------------
 
@@ -422,13 +559,21 @@ if __name__ == "__main__":
     ap.add_argument("parts", nargs="*", default=["drop", "pore", "ring", "pack", "packs"])
     ap.add_argument("--series", help="series.py's output folder (pack)")
     ap.add_argument("--logs", help="corpus.py's output folder of the wide set (packs)")
+    ap.add_argument("--frames", help="the states a periodic-64 run kept (pack64)")
+    ap.add_argument("--runs", help="corpus.py's output folder of the periodic-64 set (pc64)")
     args = ap.parse_args()
     for part in args.parts:
         if part == "pack":
             if not args.series:
                 sys.exit("pack needs --series DIR")
             pack(args.series)
+        elif part == "pack64":
+            if not args.frames:
+                sys.exit("pack64 needs --frames DIR")
+            pack64(args.frames)
         elif part == "packs":
             packs(args.logs)
+        elif part == "pc64":
+            pc64(args.runs)
         else:
             globals()[part]()

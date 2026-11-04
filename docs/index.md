@@ -21,8 +21,9 @@ written out for finite-element meshing.
   long quasi-static run ({doc}`slit_drainage`), following a bridge through its
   instability and fold ({doc}`bridge_rupture`), liquid in throats and pores of a
   sphere packing ({doc}`packing`), and draining through changes of topology: dry
-  patches opening and a pore's liquid jumping ({doc}`drainage_topology`), and the
-  same in a bed that repeats in x and y ({doc}`periodic`).
+  patches opening, a pore's liquid jumping and a 64-bead pack drained to breakthrough
+  ({doc}`drainage_topology`), and the same in a bed that repeats in x and y
+  ({doc}`periodic`).
 * Classic results from the literature, each against an exact reference: the
   stability limits of a bridge between two disks ({doc}`disk_bridge`), the largest
   drop a ring can hold ({doc}`pendant_drop`), drops on one, two and crossed fibres
