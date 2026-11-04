@@ -18,9 +18,9 @@ Parts (all by default):
          bench/topology/series.py wrote (--series DIR; made with
          ``series.py --seed 2 --theta 20 --frames 150``, about ten minutes):
          drainage_pack.mp4 and drainage_pack_shapes.png
-  pack64 a run of 64 beads in a periodic cell, from the states it kept
-         (--frames DIR: bench/topology/corpus.py --set periodic-64 --frames 5,
-         OUT/frames/NAME): drainage_pack64.mp4 and drainage_pack64_shapes.png
+  pack64 a run of 64 beads in a periodic cell to breakthrough, from the
+         snapshots bench/topology/snapshots.py kept of it (--snaps DIR), the
+         cascades too: drainage_pack64.mp4 and drainage_pack64_shapes.png
   pc64   the capillary pressure against the saturation for that set, from
          corpus.py's output folder (--runs OUT) into drainage_pc64.npz, or from
          that file: drainage_pc64.png
@@ -384,15 +384,11 @@ def _centres():
                      if getattr(w, "slabflux", None)])
 
 
-def cell_scene(p, corners, body, centres, L, top):
-    """One periodic cell: the liquid's facets moved into it (each by its first
-    corner's image), the beads and their images cut at its sides, the floor."""
+def cell_beads(centres, L, top):
+    """The beads and their images in the periodic cell, cut at its sides: one
+    mesh."""
     import pyvista as pv
-    c = np.array(corners, float)
-    c[:, :, :2] -= (np.floor(c[:, 0, :2]/L)*L)[:, None, :]
-    x = c.reshape(-1, 3)
-    liquid(p, x, np.arange(len(x)).reshape(-1, 3), body)
-    bounds = (0, L, 0, L, 0, top)
+    bounds, parts = (0, L, 0, L, 0, top), []
     for centre in centres:
         for dx in (-L, 0, L):
             for dy in (-L, 0, L):
@@ -401,44 +397,72 @@ def cell_scene(p, corners, body, centres, L, top):
                     s = pv.Sphere(radius=1.0, center=cc, theta_resolution=24, phi_resolution=24)
                     s = s.clip_box(bounds, invert=False)
                     if s.n_points:
-                        p.add_mesh(s, **FAINT)
+                        parts.append(s)
+    return pv.merge(parts)
+
+
+def cell_scene(p, corners, body, beads, L, top):
+    """One periodic cell: the liquid's facets moved into it (each by its first
+    corner's image), the beads, the floor."""
+    import pyvista as pv
+    c = np.array(corners, float)
+    c[:, :, :2] -= (np.floor(c[:, 0, :2]/L)*L)[:, None, :]
+    x = c.reshape(-1, 3)
+    liquid(p, x, np.arange(len(x)).reshape(-1, 3), body)
+    p.add_mesh(beads, **FAINT)
     p.add_mesh(pv.Plane(center=(L/2, L/2, 0), direction=(0, 0, 1), i_size=L, j_size=L),
                color="#dddddd")
-    p.add_mesh(pv.Box(bounds=bounds), style="wireframe", color="#555555")
+    p.add_mesh(pv.Box(bounds=(0, L, 0, L, 0, top)), style="wireframe", color="#555555")
 
 
-def pack64(frames):
+def pack64(snaps, frames=360):
+    """The film and shapes of a run from bench/topology/snapshots.py's
+    snapshots, at ``frames`` equally spaced volumes of the liquid (the
+    draining body and the trapped ones): each the state the run held at the
+    nearest of its steps' volumes (after the fall, where it fell there: each
+    an equilibrium the run converged to; the last the breakthrough, where the
+    gas reached the floor inside the last fall, not an equilibrium)."""
     import pyvista as pv
-    warnings.simplefilter("ignore")
-    paths = sorted(glob.glob(os.path.join(frames, "step*.fe")))
-    shots = []
-    for path in paths:
-        ev, v0, step = _state(path[:-3])
-        m = ev.mesh()
-        body = np.asarray(m.facet_bodies).max(axis=1)
-        trapped = sorted(set(body[body > 1].tolist()))
-        held = float(ev.body(1).volume) + sum(float(ev.body(b).volume) for b in trapped)
-        shots.append((np.array(m.facet_corners()), body, 1 - held/v0, len(trapped)))
-    centres, L = _centres(), float(ev.periods[0])
+    index = json.load(open(os.path.join(snaps, "index.json")))
+    beads = np.load(os.path.join(snaps, "beads.npz"))
+    centres, L = beads["centres"], float(beads["L"])
     top = float(centres[:, 2].max()) + 1.0
+    held = {}                                   # liquid volume -> the last snapshot there
+    end = index[-1][0] if index[-1][1] == "end" else None
+    for n, kind, step, V, T in index:
+        if kind != "run" and V is not None:
+            held[round(V + T, 9)] = n
+    liquid_at = {n: v for v, n in held.items()}
+    v0 = max(held)
+    volumes = np.array(sorted(held, reverse=True))
+    targets = np.linspace(volumes[0], volumes[-1], frames)
+    chosen = [held[volumes[int(np.argmin(abs(volumes - t)))]] for t in targets]
+
+    def shot(n):
+        z = np.load(os.path.join(snaps, f"s{n:06d}.npz"))
+        body = z["b"].astype(int)
+        return z["c"].astype(float), body, 1 - liquid_at[n]/v0, len(set(body[body > 1].tolist()))
+
+    cell = cell_beads(centres, L, top)
     focus = np.array([L/2, L/2, top/2])
     look = np.array([1.0, -0.75, 0.3])
     camera = [tuple(focus + 2.4*top*look/np.linalg.norm(look)), tuple(focus), (0, 0, 1)]
-    text = lambda i: (f"drained {shots[i][2]:.0%}"
-                      + (f", {shots[i][3]} trapped" if shots[i][3] else ""))
 
-    def scene(pl, i):
-        cell_scene(pl, *shots[i][:2], centres, L, top)
-        pl.add_text(text(i), font_size=12)
+    def scene(pl, n):
+        c, body, drained, trapped = shot(n)
+        cell_scene(pl, c, body, cell, L, top)
+        pl.add_text(f"drained {drained:.0%}" + (f", {trapped} trapped" if trapped else "")
+                    + ("\nbreakthrough (in the fall)" if n == end else ""), font_size=12)
 
-    movie(os.path.join(STATIC, "drainage_pack64.mp4"), range(len(shots)), scene, camera, fps=8,
-          window=(720, 960))
+    movie(os.path.join(STATIC, "drainage_pack64.mp4"), chosen, scene, camera, fps=24,
+          hold=48, window=(540, 720))
     pv.OFF_SCREEN = True
     p = pv.Plotter(off_screen=True, shape=(1, 3), window_size=(1500, 800), border=False)
-    middle = min(range(len(shots)), key=lambda i: abs(shots[i][2] - shots[-1][2]/2))
-    for col, i in enumerate((0, middle, len(shots) - 1)):
+    last = 1 - liquid_at[chosen[-1]]/v0
+    middle = min(chosen, key=lambda n: abs(1 - liquid_at[n]/v0 - last/2))
+    for col, n in enumerate((chosen[0], middle, chosen[-1])):
         p.subplot(0, col)
-        scene(p, i)
+        scene(p, n)
         p.camera_position = camera
     p.screenshot(os.path.join(STATIC, "drainage_pack64_shapes.png"))
     p.close()
@@ -559,7 +583,7 @@ if __name__ == "__main__":
     ap.add_argument("parts", nargs="*", default=["drop", "pore", "ring", "pack", "packs"])
     ap.add_argument("--series", help="series.py's output folder (pack)")
     ap.add_argument("--logs", help="corpus.py's output folder of the wide set (packs)")
-    ap.add_argument("--frames", help="the states a periodic-64 run kept (pack64)")
+    ap.add_argument("--snaps", help="bench/topology/snapshots.py's snapshots of a run (pack64)")
     ap.add_argument("--runs", help="corpus.py's output folder of the periodic-64 set (pc64)")
     args = ap.parse_args()
     for part in args.parts:
@@ -568,9 +592,9 @@ if __name__ == "__main__":
                 sys.exit("pack needs --series DIR")
             pack(args.series)
         elif part == "pack64":
-            if not args.frames:
-                sys.exit("pack64 needs --frames DIR")
-            pack64(args.frames)
+            if not args.snaps:
+                sys.exit("pack64 needs --snaps DIR")
+            pack64(args.snaps)
         elif part == "packs":
             packs(args.logs)
         elif part == "pc64":

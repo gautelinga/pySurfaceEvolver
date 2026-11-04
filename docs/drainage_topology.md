@@ -285,19 +285,24 @@ reached breakthrough: in 31 minutes to 5.9 hours each, 15.7 hours together, thro
 
 <video src="_static/drainage_pack64.mp4" controls loop muted width="60%" title="A 64-bead pack in a periodic cell draining to breakthrough, trapped clusters in orange"></video>
 
-One of the runs (seed 0 at 20 degrees: 555 steps, 449 changes, 82 minutes), every
-fifth step as the run kept it (`--frames 5`; drawn by
-`tools/drainage_topology_figure.py pack64 --frames DIR`): the liquid's surface blue,
-each cluster cut off orange, the beads and their images in the cell faint. The packs
-are settled by a short simulation (`settle_periodic` in `bench/topology/pack.py`)
-whose result depends on the machine's arithmetic: these runs were made on one Linux
-node, and the same seeds elsewhere give other packs, and so other runs.
+One of the runs (seed 0 at 20 degrees: 555 steps, 449 changes, 82 minutes) at 360
+equally spaced volumes of the liquid, each the equilibrium the run converged to at the
+nearest of its steps (within 0.36 of the volume, 0.2% of the liquid; after the fall
+where it fell there): the liquid's surface blue, each cluster cut off orange, the
+beads and their images in the cell faint. The last frame is breakthrough itself, where
+the gas reached the floor partway through the run's last fall, not an equilibrium. The
+run made again with every step kept (`bench/topology/snapshots.py`, the same run to
+the last line of its log; drawn by `tools/drainage_topology_figure.py pack64 --snaps
+DIR`). The packs are settled by a short simulation (`settle_periodic` in
+`bench/topology/pack.py`) whose result depends on the machine's arithmetic: these runs
+were made on one Linux node, and the same seeds elsewhere give other packs, and so
+other runs.
 
 ```{figure} _static/drainage_pack64_shapes.png
 :alt: The 64-bead pack full, a third drained and at breakthrough, with the trapped
   clusters in orange.
 
-Full, 31% drained, and at breakthrough with 61% drained: 8 clusters cut off by then
+Full, 30% drained, and at breakthrough with 61% drained: 8 clusters cut off by then
 (orange), rings where beads nearly touch.
 ```
 
