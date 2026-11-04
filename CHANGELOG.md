@@ -8,6 +8,40 @@
   wetted areas and volumes from their contact lines. On a set of nine 32-bead drainage
   runs (3 seeds x 3 contact angles) it reached breakthrough in 8 where the fields
   reached 3, in about a third of the time. "flux" keeps the fields.
+- Topology runs in a periodic 64-bead slab reach breakthrough: a set of nine drainage
+  runs (3 seeds x 3 contact angles, one thread each) reached it in all nine, in 15.7
+  hours together (1.7 a run), against 26.2 hours for a set two days before (its
+  descents' fixes and speed-ups since) (the same pressure-saturation curves to within the runs' spread). What
+  follows is what got them there.
+- Topology runs cap their gradient steps so the surface doesn't pass through itself
+  (`recipes.STEP_CAP`, 0.5; 0 lifts it): no vertex and facet, or two edges, more than
+  a ring apart close more than that fraction of their gap in a step, and no vertex
+  moves more than a mean edge. A capped step that brings two pieces of the surface
+  within an event's gap ends the gradient run there, for the change to be made. And a
+  descent's run is judged crossed only by crossings away from the tangles the descent
+  began with. From six 64-bead cascade frames, 25 minutes on one core each: the
+  volume drained as far or further at all six, the runs undone 148 to 21 and 417 to
+  32 at two of them, one breakthrough in 156 s against 429.
+- A topology descent that churns at one place stops, and the run backs up to take the
+  step again at half its length, the event coming on more gently: 8 changes made or
+  refused within a few edges of one place, 3 or more of them refused (where three
+  beads touch a fourth, contacts, merges and necks made, put off and refused there one
+  after another until the budget ran out). A fall from a state a failed fall began at
+  is reported failed at once instead of being made again (runs are deterministic:
+  it failed the same way, 500 s).
+- A descent's Newton finish on a plateau is tried every other iteration (100
+  gradient steps) instead of every tenth, and also on high plateaus (a residual under
+  4 after 10 iterations without a change): a 64-bead pack's descents spent most of
+  their runs there, where a finish converges in 5 Newton steps. Five replayed frames
+  all went further; one descent that ran its budget out (100k passes) ended in 210 s.
+- A descent cuts sheets crumpled into threads at a contact line: rings of three edges
+  flattened to a cap (its height under a hundredth of its shortest edge) are cut as a
+  collapsed neck, at the wall where they reach a contact line. Its gradient steps had
+  crawled round such a thread at 1e-4 of their scale, 81% of one slow descent's steps
+  (3% now). Such cuts are tried at most a few times at one place in a descent.
+- A topology run whose first branch takes no step descends from a step on, as from a
+  stalled branch, instead of ending there (a 64-bead pack found no equilibrium a step
+  down from its flat start and drained nothing).
 
 ### Speed
 
@@ -80,6 +114,23 @@
   added in element order, and MUMPS's tree parallelism (whose order of work changes a
   factorization's last bits) is used only from 100k rows, where it pays (a Newton step
   at 98k facets, 4 threads: 0.22 s with it, 0.30 s without; nothing below).
+
+- Gradient steps in a periodic slab with the lines gauge take 29% fewer instructions:
+  the guard against every sphere takes the least of its terms over the spheres a grid
+  cell lists (13% of a step's instructions went to all of them, two floors a sphere;
+  a step 10.2 to 8.2 ms), and the contact lines' integrals take their value and
+  gradient in closed form, not through second-order duals (the same values to the
+  bit; the Hessian keeps the duals).
+- The contact lines' table, rebuilt whenever a gradient step splits long contact
+  edges, tests the beads with no contact line for liquid round them in one pass over
+  the facets, on the threads, instead of every facet per body and bead (74% of the
+  rebuilds): a late 64-bead fall 9% faster on 4 threads, 4% on one. The step cap's
+  pairs go over the threads too, and walk edge rings only for pairs that would count.
+- Edits in a topology run: a refused edit's undo isn't recalculated (the batch
+  recalculates once) and puts back its grids as they were; each two-sided wall's side
+  is voted once, not at every edit; a slab's grid queries skip the nearest-image
+  floor where the centres are within a period. A 64-bead pack's edge keeping 2.2x
+  faster, the same meshes.
 
 ### Fixes
 
@@ -199,6 +250,41 @@
   within three edges are put back on the wall for their guards to hold. With the plateau
   finish, all three runs that were stuck got past their stuck steps.
 
+- A run's events and its branch's points follow the vertices across the run's
+  canonical reloads (every fifth step) and resumes: a reload keeps vertex numbers but
+  not their rows, and the events kept the old rows (a 64-bead pack's contact was made
+  with facets 1.4 from its bead, and the run stuck for hours), the branch's next
+  prediction the surface with its rows shuffled (444,000 crossings; the corrector
+  failed at every halving and the branch went on by relaxing).
+- A gap under a tenth of an edge is an event even where its group is most of its
+  piece (a neck 0.0029 across on edges of 0.2 was dropped as too coarse, left
+  unrefined, and every run across it passed the surface through itself).
+- A topology branch's first relax and a descent's Newton finish are checked: where
+  they pass the surface through itself they are undone. Their crossings had become
+  the baseline the descents after judged from (22 and 65 in 64-bead packs, growing to
+  95-180), every change near them refused; three runs stuck for hours went on, and one that
+  ran away.
+- A refused contact leaves the surface as it was: where `Evolver.contact()`'s retry on a
+  grown patch failed too, it raised without restoring, and the descent went on from
+  the grown patch through itself (one crossing growing to 785, the run stalled for
+  hours).
+- A contact's patch grows over the facets beside it already lying on its solid,
+  which it left out (the patch edit refused, the contact refused time after time where
+  beads nearly touch); its vertices go onto a sphere along its radius, not by the
+  formula's gap (a vertex 0.28 from a bead's centre had been put 0.96 outside it).
+- A snapshot's restore puts back the quantities each method belongs to: a method
+  kept through it kept a slot for each quantity it joined since, up to Evolver's
+  limit of 8 (DATAFILE ERROR 1564 in a 64-bead pack).
+- A gradient step's predicted move restores its volumes against the prediction's
+  difference or the tolerance, not the prediction's own error (often 0: a restore
+  1.5 tolerances off was abandoned as 'a factor of inf', not halved).
+- `relax()` checks a step's energy for a blow-up before anything else ends its round
+  (a step that flung the surface is undone, not returned). The trace's scale is the
+  scale a capped step took.
+- A topology run's reconciling of bodies with the liquid's clusters leaves them as they
+  were where its second pass would still make one holding nothing. The contact lines' table marks a group with two lines into one
+  vertex bad instead of walking it as a loop.
+
 ### API
 
 - `arclength(..., topology=True, resumable=True)`: every fifth step's `Step.state()`
@@ -224,6 +310,8 @@
   the contact lines' geodesic polygons; the linear model and a floor at 90 degrees (or
   none), else the fields. A 64-bead pack's gradient steps 1.7x faster, and 10 minutes
   of its run from step 254 drained 2.8x as far.
+- `recipes.STEP_CAP` (0.5): the fraction of a gap a topology run's gradient step may
+  close (above); 0 lifts the cap.
 
 ## 0.8.1 (2026-10-25)
 
