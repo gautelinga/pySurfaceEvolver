@@ -259,58 +259,103 @@ static unsigned long long mix(unsigned long long h, unsigned long long x)
   return h;
 }
 
-/* whether point p is inside body b (ordinal): a vertical ray's crossings
-   with its facets and the cones over its contact lines */
-static int inside_body(int b, const REAL *p0)
+/* whether a vertical ray up from p crosses triangle T */
+static int pc_cross(REAL T[3][3], const REAL *p)
+{ REAL d0, d1, d2, den, z;
+  REAL ax = T[0][0] - p[0], ay = T[0][1] - p[1], bx = T[1][0] - p[0], by = T[1][1] - p[1],
+       cx = T[2][0] - p[0], cy = T[2][1] - p[1];
+  d0 = ax*by - ay*bx; d1 = bx*cy - by*cx; d2 = cx*ay - cy*ax;
+  if ( !((d0 > 0 && d1 > 0 && d2 > 0) || (d0 < 0 && d1 < 0 && d2 < 0)) ) return 0;
+  den = d0 + d1 + d2;
+  z = (d1*T[0][2] + d2*T[1][2] + d0*T[2][2])/den;
+  return z > p[2];
+}
+
+/* the beads with no line (has[s] 0): each inside the first body (in the
+   bodies' order) a vertical ray from its centre crosses an odd number of
+   times, the body's facets and the cones over its contact lines; the facets'
+   shapes taken once, the beads over the threads */
+struct pc_tri { const REAL *x0; REAL w1[3], w2[3]; int b0, b1; };
+
+static void pc_immersed(int nb, const char *has)
 { facet_id f_id;
-  REAL p[3];
-  int count = 0, i, k;
-  /* (off any vertex or edge's projection: the ray nudged) */
-  p[0] = p0[0] + 1.2345678e-7; p[1] = p0[1] + 2.3456789e-7; p[2] = p0[2];
-#define PC_CROSS(T) \
-  { REAL d0, d1, d2, den, z; \
-    REAL ax = T[0][0] - p[0], ay = T[0][1] - p[1], bx = T[1][0] - p[0], by = T[1][1] - p[1], \
-         cx = T[2][0] - p[0], cy = T[2][1] - p[1]; \
-    d0 = ax*by - ay*bx; d1 = bx*cy - by*cx; d2 = cx*ay - cy*ax; \
-    if ( (d0 > 0 && d1 > 0 && d2 > 0) || (d0 < 0 && d1 < 0 && d2 < 0) ) \
-    { den = d0 + d1 + d2; \
-      z = (d1*T[0][2] + d2*T[1][2] + d0*T[2][2])/den; \
-      if ( z > p[2] ) count++; \
-    } \
-  }
+  struct pc_tri *tri;
+  int *cand;
+  char *odd;
+  int ntri = 0, maxtri = (int)web.skel[FACET].count + 16, ncand = 0, i, s;
+  int threads = fl_threads();
+  (void)threads;
+  tri = (struct pc_tri *)malloc(maxtri*sizeof(*tri));
+  cand = (int*)malloc((nsph ? nsph : 1)*sizeof(int));
+  if ( !tri || !cand ) { free(tri); free(cand); return; }
+  for ( s = 0 ; s < nsph ; s++ ) if ( !has[s] ) cand[ncand++] = s;
+  odd = (char*)calloc((size_t)(ncand ? ncand : 1)*nb,1);
+  if ( !odd ) { free(tri); free(cand); return; }
   FOR_ALL_FACETS(f_id)
   { body_id fb = get_facet_body(f_id), bb = get_facet_body(inverse_id(f_id));
     facetedge_id fe;
-    REAL T[3][3], w[3];
-    REAL *x0;
-    if ( !((valid_id(fb) && ordinal(fb) == b) || (valid_id(bb) && ordinal(bb) == b)) ) continue;
-    fe = get_facet_fe(f_id);
-    x0 = get_coord(get_fe_tailv(fe));
-    pc_delta(p,x0,w);
-    for ( k = 0 ; k < 3 ; k++ ) T[0][k] = p[k] + w[k];
-    for ( i = 1 ; i < 3 ; i++ )
-    { fe = get_next_edge(fe);
-      pc_delta(x0,get_coord(get_fe_tailv(fe)),w);
-      for ( k = 0 ; k < 3 ; k++ ) T[i][k] = T[0][k] + w[k];
+    struct pc_tri *t;
+    int b0 = valid_id(fb) ? ordinal(fb) : -1, b1 = valid_id(bb) ? ordinal(bb) : -1;
+    if ( b0 >= nb ) b0 = -1;
+    if ( b1 >= nb || b1 == b0 ) b1 = -1;
+    if ( b0 < 0 && b1 < 0 ) continue;
+    if ( ntri == maxtri )
+    { struct pc_tri *m = (struct pc_tri *)realloc(tri,2*maxtri*sizeof(*tri));
+      if ( !m ) { free(tri); free(cand); free(odd); return; }
+      tri = m; maxtri *= 2;
     }
-    PC_CROSS(T)
+    t = tri + ntri++;
+    t->b0 = b0; t->b1 = b1;
+    fe = get_facet_fe(f_id);
+    t->x0 = get_coord(get_fe_tailv(fe));
+    fe = get_next_edge(fe);
+    pc_delta(t->x0,get_coord(get_fe_tailv(fe)),t->w1);
+    fe = get_next_edge(fe);
+    pc_delta(t->x0,get_coord(get_fe_tailv(fe)),t->w2);
   }
-  for ( i = 0 ; i < nent ; i++ )
-  { struct pc_entry *q = ent + i;
-    REAL T[3][3], w[3];
-    const REAL *c;
-    if ( q->b != b ) continue;
-    c = sph[q->s].c;
-    pc_delta(p,c,w);
-    for ( k = 0 ; k < 3 ; k++ ) T[0][k] = p[k] + w[k];
-    pc_delta(c,get_coord(q->A),w);
-    for ( k = 0 ; k < 3 ; k++ ) T[1][k] = T[0][k] + w[k];
-    pc_delta(c,get_coord(q->B),w);
-    for ( k = 0 ; k < 3 ; k++ ) T[2][k] = T[0][k] + w[k];
-    PC_CROSS(T)
+#ifdef _OPENMP
+  #pragma omp parallel for schedule(dynamic,1) num_threads(threads) if ( threads > 1 && ncand > 1 )
+#endif
+  for ( i = 0 ; i < ncand ; i++ )
+  { char *o = odd + (size_t)i*nb;
+    const REAL *c0 = sph[cand[i]].c;
+    REAL p[3], T[3][3], w[3];
+    int j, k;
+    /* (off any vertex or edge's projection: the ray nudged) */
+    p[0] = c0[0] + 1.2345678e-7; p[1] = c0[1] + 2.3456789e-7; p[2] = c0[2];
+    for ( j = 0 ; j < ntri ; j++ )
+    { const struct pc_tri *t = tri + j;
+      pc_delta(p,t->x0,w);
+      for ( k = 0 ; k < 3 ; k++ )
+      { T[0][k] = p[k] + w[k]; T[1][k] = T[0][k] + t->w1[k]; T[2][k] = T[0][k] + t->w2[k]; }
+      if ( pc_cross(T,p) )
+      { if ( t->b0 >= 0 ) o[t->b0] ^= 1;
+        if ( t->b1 >= 0 ) o[t->b1] ^= 1;
+      }
+    }
+    for ( j = 0 ; j < nent ; j++ )
+    { const struct pc_entry *q = ent + j;
+      const REAL *c = sph[q->s].c;
+      if ( q->b < 0 || q->b >= nb ) continue;
+      pc_delta(p,c,w);
+      for ( k = 0 ; k < 3 ; k++ ) T[0][k] = p[k] + w[k];
+      pc_delta(c,get_coord(q->A),w);
+      for ( k = 0 ; k < 3 ; k++ ) T[1][k] = T[0][k] + w[k];
+      pc_delta(c,get_coord(q->B),w);
+      for ( k = 0 ; k < 3 ; k++ ) T[2][k] = T[0][k] + w[k];
+      if ( pc_cross(T,p) ) o[q->b] ^= 1;
+    }
   }
-#undef PC_CROSS
-  return count & 1;
+  { body_id b_id;
+    FOR_ALL_BODIES(b_id)
+    { int b = ordinal(b_id);
+      if ( b >= nb ) continue;
+      for ( i = 0 ; i < ncand ; i++ )
+        if ( imm_body[cand[i]] < 0 && odd[(size_t)i*nb + b] )
+        { imm_body[cand[i]] = b; imm_count[b]++; }
+    }
+  }
+  free(tri); free(cand); free(odd);
 }
 
 static int bodies_alloc(int n)
@@ -332,6 +377,8 @@ static int bodies_alloc(int n)
 static REAL *pc_gx = NULL;           /* the entries' A and B as the angles were last taken at */
 static long pc_gx_size = 0;
 static int pc_gx_valid = 0;          /* (0: the table was rebuilt since) */
+static REAL *pc_ax = NULL;           /* per entry: A from the centre, its length, its 1 + P.a/|a| */
+static long pc_ax_size = 0;
 
 static void pc_geometry(void)
 { int i, g, same;
@@ -345,54 +392,81 @@ static void pc_geometry(void)
     else { pc_gx = p; pc_gx_size = 6L*nent + 1024; pc_gx_valid = 0; }
   }
   same = pc_gx_valid && pc_gx;
-  for ( i = 0 ; pc_gx && i < nent ; i++ )
-  { REAL *x = pc_gx + 6L*i;
-    const REAL *a = get_coord(ent[i].A), *b = get_coord(ent[i].B);
-    if ( memcmp(x,a,3*sizeof(REAL)) || memcmp(x + 3,b,3*sizeof(REAL)) )
-    { same = 0;
-      memcpy(x,a,3*sizeof(REAL)); memcpy(x + 3,b,3*sizeof(REAL));
+  if ( pc_gx )
+  { int moved = 0;
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(threads) reduction(|:moved) if ( threads > 1 && nent >= 512 )
+#endif
+    for ( i = 0 ; i < nent ; i++ )
+    { REAL *x = pc_gx + 6L*i;
+      const REAL *a = get_coord(ent[i].A), *b = get_coord(ent[i].B);
+      if ( memcmp(x,a,3*sizeof(REAL)) || memcmp(x + 3,b,3*sizeof(REAL)) )
+      { moved = 1;
+        memcpy(x,a,3*sizeof(REAL)); memcpy(x + 3,b,3*sizeof(REAL));
+      }
     }
+    if ( moved ) same = 0;
   }
   pc_gx_valid = pc_gx != NULL;
   if ( same ) { pc_geom_done = 1; return; }
+  if ( 11L*nent > pc_ax_size )
+  { REAL *p = (REAL*)realloc(pc_ax,(11L*nent + 1024)*sizeof(REAL));
+    if ( p ) { pc_ax = p; pc_ax_size = 11L*nent + 1024; }
+  }
+  if ( 11L*nent > pc_ax_size )   /* (out of memory: the apexes up the z axis) */
+  { int l;
+    for ( l = 0 ; l < nlp ; l++ ) { lp[l].P[0] = lp[l].P[1] = 0.0; lp[l].P[2] = 1.0; }
+  }
+  else
   /* each loop's apex: of the loop's mean direction and the six axes', the
      one whose antipode is furthest from its vertices (the least 1 + P.a/|a|
-     over them greatest) */
+     over them greatest); each entry's a and |a|, then its seven 1 + P.a/|a|,
+     on the threads, the sums and least values per loop in entry order */
   { static const REAL axes[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
     int l, k;
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(threads) if ( threads > 1 && nent >= 512 )
+#endif
+    for ( i = 0 ; i < nent ; i++ )
+    { REAL *a = pc_ax + 11L*i;
+      if ( ent[i].loop < 0 ) continue;
+      pc_delta(sph[ent[i].s].c,get_coord(ent[i].A),a);
+      a[3] = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+    }
     for ( l = 0 ; l < nlp ; l++ )
     { lp[l].P[0] = lp[l].P[1] = lp[l].P[2] = 0.0;
       for ( k = 0 ; k < 7 ; k++ ) lp[l].near[k] = 2.0;
     }
     for ( i = 0 ; i < nent ; i++ )
-    { REAL a[3], la;
-      if ( ent[i].loop < 0 ) continue;
-      pc_delta(sph[ent[i].s].c,get_coord(ent[i].A),a);
-      la = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
-      if ( la <= 0 ) continue;
-      for ( k = 0 ; k < 3 ; k++ ) lp[ent[i].loop].P[k] += a[k]/la;
+    { const REAL *a = pc_ax + 11L*i;
+      if ( ent[i].loop < 0 || a[3] <= 0 ) continue;
+      for ( k = 0 ; k < 3 ; k++ ) lp[ent[i].loop].P[k] += a[k]/a[3];
     }
     for ( l = 0 ; l < nlp ; l++ )
     { REAL m = sqrt(lp[l].P[0]*lp[l].P[0] + lp[l].P[1]*lp[l].P[1] + lp[l].P[2]*lp[l].P[2]);
       if ( m > 0 ) for ( k = 0 ; k < 3 ; k++ ) lp[l].P[k] /= m;
       else lp[l].near[6] = -1.0;            /* (no mean direction: an axis) */
     }
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(threads) private(k) if ( threads > 1 && nent >= 512 )
+#endif
     for ( i = 0 ; i < nent ; i++ )
-    { REAL a[3], la;
-      struct pc_loop *L;
-      if ( ent[i].loop < 0 ) continue;
+    { REAL *a = pc_ax + 11L*i, la = a[3];
+      const struct pc_loop *L;
+      if ( ent[i].loop < 0 || la <= 0 ) continue;
       L = lp + ent[i].loop;
-      pc_delta(sph[ent[i].s].c,get_coord(ent[i].A),a);
-      la = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
-      if ( la <= 0 ) continue;
       for ( k = 0 ; k < 6 ; k++ )
-      { REAL t = 1.0 + (axes[k][0]*a[0] + axes[k][1]*a[1] + axes[k][2]*a[2])/la;
-        if ( t < L->near[k] ) L->near[k] = t;
-      }
+        a[4 + k] = 1.0 + (axes[k][0]*a[0] + axes[k][1]*a[1] + axes[k][2]*a[2])/la;
       if ( L->near[6] >= 0 )
-      { REAL t = 1.0 + (L->P[0]*a[0] + L->P[1]*a[1] + L->P[2]*a[2])/la;
-        if ( t < L->near[6] ) L->near[6] = t;
-      }
+        a[10] = 1.0 + (L->P[0]*a[0] + L->P[1]*a[1] + L->P[2]*a[2])/la;
+    }
+    for ( i = 0 ; i < nent ; i++ )
+    { const REAL *a = pc_ax + 11L*i;
+      struct pc_loop *L;
+      if ( ent[i].loop < 0 || a[3] <= 0 ) continue;
+      L = lp + ent[i].loop;
+      for ( k = 0 ; k < 6 ; k++ ) if ( a[4 + k] < L->near[k] ) L->near[k] = a[4 + k];
+      if ( L->near[6] >= 0 && a[10] < L->near[6] ) L->near[6] = a[10];
     }
     for ( l = 0 ; l < nlp ; l++ )
     { int best = 6;
@@ -577,14 +651,7 @@ static void pc_build(void)
     for ( b = 0 ; b <= nb ; b++ ) imm_count[b] = 0;
     for ( s = 0 ; s < nsph ; s++ ) imm_body[s] = -1;
     for ( i = 0 ; i < nent ; i++ ) has[ent[i].s] = 1;
-    body_id b_id;
-    FOR_ALL_BODIES(b_id)
-    { b = ordinal(b_id);
-      if ( b >= nb ) continue;
-      for ( s = 0 ; s < nsph ; s++ )
-        if ( !has[s] && imm_body[s] < 0 && inside_body(b,sph[s].c) )
-        { imm_body[s] = b; imm_count[b]++; }
-    }
+    pc_immersed(nb,has);
     free(has);
     topo_key = key;
   }
