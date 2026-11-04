@@ -264,11 +264,10 @@ steps = list(recipes.arclength(ev, ev.body(1), -0.0015, 8, topology=True))
 k = [i for i, s in enumerate(steps) if s.fell][0]
 lost, fell = steps[k - 1], steps[k]
 total = fell.volumes.sum()
-print(f"from {steps[0].value:.4f}: unstable at {lost.value:.4f}, where it fell; "
-      f"the neck cut {abs(fell.changes[0].where[2]):.2f} from the mid-plane")
+print(f"from {steps[0].value:.4f}: unstable at {lost.value:.4f}, where it fell, the neck cut")
 for i, (V, p) in enumerate(zip(fell.volumes, fell.pressures)):
     close = abs(p/cap_pressure(V, theta) - 1) < 0.005
-    print(f"drop {i + 1}: {V/total:.1f} of the liquid, pressure {p:.2g}, "
+    print(f"drop {i + 1}: {V/total:.1f} of the liquid, its pressure "
           f"{'within' if close else 'NOT within'} 0.5% of the exact cap's")
 kept = abs(steps[-1].volumes[1]/fell.volumes[1] - 1) < 1e-8
 print(f"together {total:.6f}; then drop 1 drained to {steps[-1].volumes[0]:.2f}, "
@@ -276,9 +275,9 @@ print(f"together {total:.6f}; then drop 1 drained to {steps[-1].volumes[0]:.2f},
 ```
 
 ```text
-from 0.0792: unstable at 0.0777, where it fell; the neck cut 0.32 from the mid-plane
-drop 1: 0.9 of the liquid, pressure 4.1, within 0.5% of the exact cap's
-drop 2: 0.1 of the liquid, pressure 7, within 0.5% of the exact cap's
+from 0.0792: unstable at 0.0777, where it fell, the neck cut
+drop 1: 0.9 of the liquid, its pressure within 0.5% of the exact cap's
+drop 2: 0.1 of the liquid, its pressure within 0.5% of the exact cap's
 together 0.077708; then drop 1 drained to 0.06, drop 2 kept at its volume
 ```
 
