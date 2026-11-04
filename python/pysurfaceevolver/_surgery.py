@@ -2275,7 +2275,7 @@ def _dissolve_onto(ev, m, gone, key) -> None:
     # 0.96 outside the bead, the patch through the surface 37 times)
     centre = _sphere_centre(key)
     shape = getattr(surface.walls.get(key), "shape", None)
-    if centre is not None and len(put):
+    if centre is not None and shape is not None and len(put):
         R = float(shape[2])
         w = _delta(centre, x[put], _slab(ev))
         r = np.linalg.norm(w, axis=1)
