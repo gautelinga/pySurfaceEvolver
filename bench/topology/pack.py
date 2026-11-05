@@ -202,3 +202,71 @@ def load_periodic(x, L, theta=20.0, h=0.2, above=0.005):
     ev.load_arrays(v, f, constraints=cons, bodies=[pyse.Body(volume=None)], periods=(L, L))
     ev.body(1).target = ev.body(1).volume
     return ev, H
+
+
+def contacts_periodic(x, L, reach=0.1):
+    """The pairs (i, j), i < j, of beads in a cell periodic in x and y less
+    than 2 + reach apart (at the nearest copy), and the vector from i to
+    that copy of j."""
+    dx = x[None, :, :] - x[:, None, :]
+    dx[..., :2] -= L*np.round(dx[..., :2]/L)
+    r = np.linalg.norm(dx, axis=2)
+    i, j = np.nonzero(np.triu(r < 2 + reach, 1))
+    return list(zip(i.tolist(), j.tolist())), dx[i, j]
+
+
+def bridges_periodic(x, L, theta=20.0, a=0.25, reach=0.1, nz=2, nt=12):
+    """Pendular bridges at the contacts of beads in a cell periodic in x and
+    y: a tube of radius a about the line of centres of each pair closer
+    than 2 + reach (contacts_periodic; across the cell's sides at the
+    nearest copy), its rims on the two beads, all the tubes one body
+    (several pieces, one pressure). Beads "bead<i>" (flux gauge), the floor
+    z = 0 a wall "bottom" at 90 degrees (the integrals' strings leave
+    through it; lift the beads off it). Returns the Evolver and the pairs."""
+    import pysurfaceevolver as pyse
+    from pysurfaceevolver import constraints as C, shapes
+    pairs, sep = contacts_periodic(x, L, reach)
+    vs, fs, rims, n = [], [], {}, 0
+    for (i, j), d in zip(pairs, sep):
+        D = float(np.linalg.norm(d))
+        zb = D/2 - np.sqrt(1 - a*a)
+        t = shapes.tube(a, -zb, zb, nz=nz, nt=nt)
+        R = _rotation(d/D)
+        vs.append(np.asarray(t.vertices) @ R.T + x[i] + d/2)
+        fs.append(np.asarray(t.faces) + n)
+        rims.setdefault(f"bead{i + 1}", []).extend((np.asarray(t.rims["bottom"]) + n).tolist())
+        rims.setdefault(f"bead{j + 1}", []).extend((np.asarray(t.rims["top"]) + n).tolist())
+        n += len(t.vertices)
+    v = np.concatenate(vs)
+    v[:, :2] %= L
+    cons = {"bottom": C.plane((0, 0, 1), 0.0, contact_angle=90.0)}
+    for k, c in enumerate(x):
+        cons[f"bead{k + 1}"] = C.sphere(tuple(float(s) for s in c), 1.0, contact_angle=theta,
+                                        gauge="flux")
+    ev = pyse.Evolver()
+    ev.load_arrays(v, np.concatenate(fs), constraints=cons,
+                   vertex_constraints={k: np.array(r) for k, r in rims.items()},
+                   bodies=[pyse.Body(volume=None)], periods=(L, L))
+    ev.body(1).target = ev.body(1).volume
+    return ev, pairs
+
+
+def _rotation(u):
+    """A rotation taking z to the unit vector u."""
+    z = np.array([0.0, 0.0, 1.0])
+    v = np.cross(z, u)
+    s, c = np.linalg.norm(v), float(z @ u)
+    if s < 1e-12:
+        return np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
+    k = v/s
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + s*K + (1 - c)*K @ K
+
+
+def pore_volume(x, L):
+    """The space between the beads (unit spheres) of a cell periodic in x and
+    y, between the planes through the lowest and the highest centre."""
+    lo, hi = float(x[:, 2].min()), float(x[:, 2].max())
+    cut = lambda h: np.pi*(np.clip(h, 0, 2)**2)*(3 - np.clip(h, 0, 2))/3   # cap of height h
+    beads = sum(cut(hi - (z - 1)) - cut(lo - (z - 1)) for z in x[:, 2])
+    return L*L*(hi - lo) - beads

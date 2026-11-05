@@ -14,6 +14,8 @@ of radius 1 (surface tension 1, so a pressure is minus a curvature).
   the three lower spheres, and so the bottom throat's width against the others'.
 * ``msp_throat(theta, gap)``: the Mayer-Stowe-Princen estimate of the curvature
   at which gas passes the throat between three spheres.
+* ``bridges(centres, pairs, theta)``: a pendular bridge between each pair of
+  beads, all of them one body (one pressure), for docs/wet_granular.md.
 
 The free surfaces are built from flat patches between the spheres, meeting
 vertex to vertex; each sphere's contact line is where the patches meet it.
@@ -24,7 +26,7 @@ from scipy.optimize import brentq
 from scipy.spatial import Delaunay
 
 import pysurfaceevolver as pyse
-from pysurfaceevolver import constraints as C
+from pysurfaceevolver import constraints as C, shapes
 
 
 # ---- flat patches -------------------------------------------------------------
@@ -455,3 +457,47 @@ def bottom_meniscus(ev):
     x = ev.vertices
     on = (np.abs(x @ WEDGE[0]) < 1e-9) & (np.abs(x @ WEDGE[1]) < 1e-9)
     return float(x[on, 2].min())
+
+
+# ---- bridges at the contacts, one body ------------------------------------------
+
+def _rotation(u):
+    """A rotation taking z to the unit vector u."""
+    z = np.array([0.0, 0.0, 1.0])
+    v = np.cross(z, u)
+    s, c = np.linalg.norm(v), float(z @ u)
+    if s < 1e-12:
+        return np.eye(3) if c > 0 else np.diag([1.0, -1.0, -1.0])
+    k = v/s
+    K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + s*K + (1 - c)*K @ K
+
+
+def bridges(centres, pairs, theta, a=0.3, nz=2, nt=12, floor=-6.0):
+    """A bridge between each pair (i, j) of beads (radius 1, "bead<i+1>"): a
+    tube of radius a about their line of centres, its ends on the two beads,
+    all the tubes one body (several pieces, one pressure), relaxed. The beads
+    take the flux gauge (constraints.sphere(gauge="flux"), no poles to keep
+    dry), whose integrals leave through a plane "bottom" at ``floor``, far
+    below, at 90 degrees."""
+    vs, fs, rims, n = [], [], {}, 0
+    for i, j in pairs:
+        ci, cj = np.asarray(centres[i], float), np.asarray(centres[j], float)
+        D = np.linalg.norm(cj - ci)
+        zb = D/2 - np.sqrt(1 - a*a)
+        t = shapes.tube(a, -zb, zb, nz=nz, nt=nt)
+        vs.append(np.asarray(t.vertices) @ _rotation((cj - ci)/D).T + (ci + cj)/2)
+        fs.append(np.asarray(t.faces) + n)
+        rims.setdefault(f"bead{i + 1}", []).extend(np.asarray(t.rims["bottom"]) + n)
+        rims.setdefault(f"bead{j + 1}", []).extend(np.asarray(t.rims["top"]) + n)
+        n += len(t.vertices)
+    cons = {f"bead{k + 1}": C.sphere(tuple(float(s) for s in c), 1.0, contact_angle=theta,
+                                     gauge="flux") for k, c in enumerate(centres)}
+    cons["bottom"] = C.plane((0, 0, 1), float(floor), contact_angle=90.0)
+    ev = pyse.Evolver()
+    ev.load_arrays(np.concatenate(vs), np.concatenate(fs), constraints=cons,
+                   vertex_constraints={k: np.array(r) for k, r in rims.items()},
+                   bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    ev.relax()
+    return ev
