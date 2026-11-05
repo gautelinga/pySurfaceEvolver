@@ -52,6 +52,7 @@ jobs:
           - docs/packing.md docs/drainage_topology.md docs/periodic.md
           - docs/stress_cases.md docs/bridge_rupture.md docs/several_surfaces.md
           - docs/disk_bridge.md docs/pendant_drop.md docs/fibres.md docs/floating_lens.md
+            docs/wet_granular.md
     steps:
       - uses: actions/checkout@v4
 

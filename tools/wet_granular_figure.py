@@ -6,9 +6,10 @@ PyVista (off-screen rendering) and imageio-ffmpeg (the movie).
 Parts (both by default):
 
   pore   the pore between four beads (contact angle 20, 0.03 apart) wetted from
-         a bridge at each of its six contacts: wet_pore.npz (the run's steps),
-         wet_pore.png (the pressure and each bead's pull into the pore against
-         the volume) and wet_pore_shapes.png (ten minutes)
+         a bridge at each of its six contacts: wet_pore.npz (the run's steps,
+         four of its meshes), wet_pore.png (the pressure and each bead's pull
+         into the pore against the volume) and wet_pore_shapes.png (ten
+         minutes; pore-draw: the pictures again from wet_pore.npz)
   pack   beads in a periodic cell wetted from bridges at their contacts, from
          bench/topology/wet.py's output folders (--runs OUT ..., into
          wet_pack.npz, or from that file): wet_pack.png (the pressure, the
@@ -40,6 +41,7 @@ import drainage_topology_figure as D  # noqa: E402
 STATIC = os.path.join(HERE, "..", "docs", "_static")
 SEEDS = ("#2a78d6", "#eb6834", "#1baf7a")     # (the runs' colours, as drainage_pc64.png's)
 INK, MUTED = "#333333", "#888888"
+PORE_BEAD = dict(color="sandybrown", opacity=0.12)
 
 
 def _axes(ax):
@@ -79,15 +81,34 @@ def pore_run(theta=20.0, ds=0.004, vmax=1.6):
 
 
 def pore():
-    import pyvista as pv
+    """Run the pore (ten minutes) and draw it."""
     rows, meshes = pore_run()
-    np.savez(os.path.join(STATIC, "wet_pore.npz"), rows=rows)
-    V, p, pull, fell = rows[:, 0], rows[:, 1], rows[:, 2], rows[:, 3] > 0
-    # (the steps the run went on from: a back-up's steps replaced by the later ones)
+    V, p, fell = rows[:, 0], rows[:, 1], rows[:, 3] > 0
+    k = np.flatnonzero(_kept(V))
+    jump = max((i for i in k[1:] if fell[i]), key=lambda i: p[i - 1] - p[i])
+    # the shapes: six bridges, just before the pore fills, filled, at the end
+    shown = [k[0], jump - 1, jump, k[-1]]
+    np.savez(os.path.join(STATIC, "wet_pore.npz"), rows=rows, shown=shown,
+             **{f"x{i}": meshes[i][0] for i in shown}, **{f"f{i}": meshes[i][1] for i in shown})
+    pore_draw()
+
+
+def _kept(V):
+    """The steps a run went on from: those a back-up went back past left out."""
     keep = np.ones(len(V), bool)
     for i in range(len(V) - 1, 0, -1):
         if keep[i]:
             keep[:i] &= ~(V[:i] > V[i] + 1e-12)
+    return keep
+
+
+def pore_draw():
+    """wet_pore.png and wet_pore_shapes.png from wet_pore.npz."""
+    import pyvista as pv
+    z = np.load(os.path.join(STATIC, "wet_pore.npz"))
+    rows = z["rows"]
+    V, p, pull, fell = rows[:, 0], rows[:, 1], rows[:, 2], rows[:, 3] > 0
+    keep = _kept(V)
     fig, axs = plt.subplots(1, 2, figsize=(9.5, 3.6), constrained_layout=True)
     for ax, y, label in ((axs[0], p, "pressure"), (axs[1], pull, "pull into the pore, per bead")):
         ax.plot(V[keep], y[keep], color=SEEDS[0], linewidth=2)
@@ -99,22 +120,20 @@ def pore():
     axs[0].legend(frameon=False)
     fig.savefig(os.path.join(STATIC, "wet_pore.png"), dpi=150)
     plt.close(fig)
-    # the shapes: six bridges, just before the pore fills, filled, at the end
-    k = np.flatnonzero(keep)
-    jump = max((i for i in k[1:] if fell[i]), key=lambda i: p[i - 1] - p[i])
     pv.OFF_SCREEN = True
     pl = pv.Plotter(off_screen=True, shape=(1, 4), window_size=(2400, 650), border=False)
-    for col, i in enumerate((k[0], jump - 1, jump, k[-1])):
+    for col, i in enumerate(z["shown"]):
         pl.subplot(0, col)
-        D.liquid(pl, *meshes[i])
+        D.liquid(pl, z[f"x{i}"], z[f"f{i}"])
         for c in pore_centres():
             pl.add_mesh(pv.Sphere(radius=1.0, center=c, theta_resolution=48,
-                                  phi_resolution=48), **D.BEAD)
+                                  phi_resolution=48), **PORE_BEAD)
         pl.add_text(f"volume {V[i]:.2f}, pressure {p[i]:.1f}", font_size=12)
-        pl.camera_position = [(5.0, 4.0, 3.0), (0, 0, 0), (0, 0, 1)]
+        pl.camera_position = [tuple(7.5*np.array([-1.0, -1.0, -1.0])/np.sqrt(3)), (0, 0, 0),
+                              (0, 0, 1)]
     pl.screenshot(os.path.join(STATIC, "wet_pore_shapes.png"))
     pl.close()
-    print("wrote wet_pore.npz, wet_pore.png and wet_pore_shapes.png")
+    print("wrote wet_pore.png and wet_pore_shapes.png")
 
 
 # ---- a periodic pack ----------------------------------------------------------
@@ -143,11 +162,7 @@ def pack(runs, film=None):
     for k, (name, d) in enumerate(sorted(data.items())):
         r = d["rows"]
         S, p, count = r[:, 2], r[:, 3], r[:, 4]
-        # (the steps the run went on from, as in pore())
-        keep = np.ones(len(S), bool)
-        for i in range(len(S) - 1, 0, -1):
-            if keep[i]:
-                keep[:i] &= ~(S[:i] > S[i] + 1e-12)
+        keep = _kept(S)
         m = d["meta"]
         label = f"{m['beads']} beads, seed {m['seed']}"
         colour = SEEDS[k % len(SEEDS)]
@@ -215,6 +230,8 @@ if __name__ == "__main__":
     for part in a.parts:
         if part == "pore":
             pore()
+        elif part == "pore-draw":
+            pore_draw()
         elif part == "pack":
             pack(a.runs, a.film)
         else:

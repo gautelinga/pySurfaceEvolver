@@ -22,8 +22,9 @@ written out for finite-element meshing.
   instability and fold ({doc}`bridge_rupture`), liquid in throats and pores of a
   sphere packing ({doc}`packing`), and draining through changes of topology: dry
   patches opening, a pore's liquid jumping and a 64-bead pack drained to breakthrough
-  ({doc}`drainage_topology`), and the same in a bed that repeats in x and y
-  ({doc}`periodic`).
+  ({doc}`drainage_topology`), the same in a bed that repeats in x and y
+  ({doc}`periodic`), and wet beads, bridges at their contacts growing and merging,
+  with the forces they hold the beads with ({doc}`wet_granular`).
 * Classic results from the literature, each against an exact reference: the
   stability limits of a bridge between two disks ({doc}`disk_bridge`), the largest
   drop a ring can hold ({doc}`pendant_drop`), drops on one, two and crossed fibres
@@ -62,6 +63,7 @@ bridge_rupture
 packing
 drainage_topology
 periodic
+wet_granular
 disk_bridge
 pendant_drop
 fibres
