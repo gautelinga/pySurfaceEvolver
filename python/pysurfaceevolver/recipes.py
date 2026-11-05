@@ -909,7 +909,7 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
               remesh: Union[None, float, dict, Callable[[Any], Any]] = None,
               events: Union[bool, float] = True, topology: bool = False,
               budget: Optional[float] = _RUN_BUDGET,
-              outlet: Union[None, str, Sequence[str]] = None,
+              outlet: Union[None, str, Sequence[str]] = None, trap: bool = True,
               resumable: bool = False, resume: Optional[dict] = None) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
@@ -1005,7 +1005,10 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     them; several clusters there are one body, at one pressure), and
     without one its largest cluster. A trapped cluster that merges with the
     run's body, or comes to reach the outlet, is the run's again, its volume
-    added; a crumb's liquid goes to the nearest body. The run ends, with a
+    added; a crumb's liquid goes to the nearest body. ``trap=False`` traps
+    nothing: every cluster is the run's body, at one pressure, the total
+    stepped (liquid exchanged between the clusters as through films or the
+    vapour: bridges at bead contacts growing together; no ``outlet``). The run ends, with a
     warning, where no liquid reaches the outlet. ``Step.trapped`` is the
     trapped clusters' volume. (A layer of liquid thinner than the grid,
     half the mesh's edge, doesn't join pieces; where the surface touches
@@ -1057,13 +1060,15 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                            halvings=halvings, along=along, remesh=remesh, events=events)
         return
     from ._views import BodyView
+    if outlet is not None and not trap:
+        raise ValueError("arclength(trap=False) has no outlet: all the liquid is the run's")
     outlets = [outlet] if isinstance(outlet, (str, int)) else list(outlet or [])
     for key in outlets:
         ev.on_constraint(key)           # (an unknown name raises here)
     keep = what.number if isinstance(what, BodyView) else None
     previous = ev._liquid
     ev._liquid = (dict(resume["liquid"]) if resume is not None else
-                  dict(keep=keep, outlet=outlets, dry=False,
+                  dict(keep=keep, outlet=outlets, dry=False, trap=bool(trap),
                        original=frozenset(int(i) for i in ev.bodies().ids)))
     resumable = resumable or resume is not None
     from ._analysis import EVENT_FACTOR
@@ -1981,4 +1986,11 @@ def _arc_remesh(ev, put, points: list, remesh_now: Callable[[Callable[[], None]]
         put(v1)
         return points, False
     x = ev.vertices             # (tidying flips edges: the same vertices)
-    return [(v0, x - d), (current(), x)], True
+    v = current()
+    if (v - v0)*(v1 - v0) < 0:
+        # (settled back along the branch past the last point but one: the
+        # secant from there would turn the run round, the step's value part
+        # taken back with the value it settled at; two bridges growing on a
+        # bead slid 0.007 back at steps of 0.002, and the run went on down)
+        v0 = v - (v1 - v0)
+    return [(v0, x - d), (v, x)], True

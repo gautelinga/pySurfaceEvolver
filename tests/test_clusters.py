@@ -98,8 +98,9 @@ def test_two_menisci_of_one_throat_are_one_cluster():
     assert len(c.bodies) == 1 and c.outlet[0]
 
 
-def _run(ev, keep=1, outlet=()):
-    ev._liquid = dict(keep=keep, outlet=list(outlet), original=frozenset({1}), dry=False)
+def _run(ev, keep=1, outlet=(), trap=True):
+    ev._liquid = dict(keep=keep, outlet=list(outlet), original=frozenset({1}), dry=False,
+                      trap=trap)
 
 
 def test_reconcile_gives_each_cluster_a_body_and_the_rest_to_the_largest():
@@ -117,6 +118,24 @@ def test_reconcile_gives_each_cluster_a_body_and_the_rest_to_the_largest():
     K.reconcile(ev)                                     # (nothing to do again)
     assert list(ev.bodies().ids) == [1, 2]
     ev._liquid = None
+
+
+def test_without_trapping_every_cluster_stays_the_runs_body():
+    ev = _load([_ball((0, 0, 0), 1.0), _ball((3, 0, 0), 0.7)])
+    ev.body(1).target = ev.body(1).volume + 0.1
+    _run(ev, trap=False)
+    K.reconcile(ev)
+    assert list(ev.bodies().ids) == [1]
+    assert ev.body(1).target == pytest.approx(ev.body(1).volume + 0.1, rel=1e-12)
+    ev._liquid = None
+
+
+def test_arclength_without_trapping_has_no_outlet():
+    from pysurfaceevolver import recipes
+    ev = _load([_ball((0, 0, 0), 1.0)], floor=True)
+    with pytest.raises(ValueError, match="no outlet"):
+        next(recipes.arclength(ev, ev.body(1), 0.1, 2, topology=True, outlet="bottom",
+                               trap=False))
 
 
 def test_reconcile_makes_no_body_of_a_piece_holding_no_liquid(monkeypatch):

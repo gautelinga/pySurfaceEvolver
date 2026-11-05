@@ -134,6 +134,12 @@
 
 ### Fixes
 
+- `arclength` no longer turns round after remeshing between points where settling
+  the remeshed surface slid it back along the branch past the point before: the
+  secant from there pointed the other way. (Two bridges growing on a bead slid 0.007
+  back at steps of 0.002 and the run went on down its stable branch; in nine 64-bead
+  drainage runs, 3 of 2877 steps went up at all.) Runs that weren't turned round are
+  unchanged.
 - A topology descent no longer puts vertices back out of a solid where that passes
   the surface through itself: the push-outs beside contact lines went unchecked, and
   in a 32-bead pack they took a descent from no crossings to 252. Each later run was
@@ -287,6 +293,9 @@
 
 ### API
 
+- `arclength(..., topology=True, trap=False)`: no liquid is trapped; every cluster is
+  the run's body, at one pressure, its total stepped (bridges at bead contacts growing
+  and merging, liquid exchanged as through films or the vapour). No `outlet` with it.
 - `arclength(..., topology=True, resumable=True)`: every fifth step's `Step.state()`
   gives the run's state there, picklable; `arclength(..., resume=state)`, with the
   surface restored as it was at that step, goes on exactly as the run did (the same

@@ -494,7 +494,8 @@ def reconcile(ev) -> None:
     made to match the liquid's clusters: those reaching the outlet one body,
     the run's (several pieces allowed: one pressure, their total stepped);
     without an outlet, or where none reaches it, the run's body's largest
-    cluster (the run then stops: ``ev._liquid["dry"]``). Every other cluster
+    cluster (the run then stops: ``ev._liquid["dry"]``); with ``trap``
+    False, every cluster. Every other cluster
     its own body, a cluster of two bodies one (the lower number, or the
     run's). Targets: each body split or joined gives each of its pieces what
     it holds, and the rest of its target (what the run has yet to step, a
@@ -575,7 +576,9 @@ def _reconcile(ev, run: dict, hollow: frozenset) -> frozenset:
     # the run's clusters
     drains: set = set()
     if keep in fixed:
-        if outlet:
+        if not run.get("trap", True):
+            drains = set(in_cluster)
+        elif outlet:
             drains = {cl for cl, ps in in_cluster.items() if c.outlet[cl]
                       and any(b == keep or b not in original for b, _ in ps)}
             run["dry"] = not drains
