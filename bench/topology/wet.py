@@ -14,7 +14,7 @@ in OUT/frames/NAME/ for a film.
 
 usage: python bench/topology/wet.py N SEED THETA OUT [--L 6] [--ds 0.05]
                                     [--smax 0.35] [--budget 3e6]
-                                    [--frames]
+                                    [--frames] [--pack NAME_beads.npz]
 """
 import argparse, json, logging, os, sys, time
 
@@ -48,6 +48,8 @@ def main(argv):
     ap.add_argument("--smax", type=float, default=0.35)
     ap.add_argument("--budget", type=float, default=3e6)
     ap.add_argument("--frames", action="store_true")
+    ap.add_argument("--pack", help="the beads from an earlier run's NAME_beads.npz (packs "
+                    "settle differently from machine to machine)")
     a = ap.parse_args(argv)
     import pysurfaceevolver as pyse
     from pysurfaceevolver import _core, recipes
@@ -71,8 +73,11 @@ def main(argv):
     logger = logging.getLogger("pysurfaceevolver.topology")
     logger.addHandler(Handler())
     logger.setLevel(logging.DEBUG)
-    x, gap, _ = settle_periodic(a.n, a.L, seed=a.seed)
-    x[:, 2] += LIFT
+    if a.pack:
+        x = np.load(a.pack)["centres"]
+    else:
+        x, gap, _ = settle_periodic(a.n, a.L, seed=a.seed)
+        x[:, 2] += LIFT
     ev, pairs = bridges_periodic(x, a.L, theta=a.theta)
     pores = pore_volume(x, a.L)
     names = [f"bead{k + 1}" for k in range(a.n)]
@@ -87,14 +92,19 @@ def main(argv):
         for s in recipes.arclength(ev, ev.body(1), a.ds, 100000, topology=True, trap=False,
                                    budget=a.budget):
             at["step"] = int(s.index)
-            F = np.array([ev.wall_force(k) for k in names])
+            F = np.full((len(names), 3), np.nan)
+            for i, k in enumerate(names):
+                try:
+                    F[i] = ev.wall_force(k)
+                except ValueError as e:     # (recorded as unknown, the run goes on)
+                    say(f"no force on {k}: {e}")
             count, share = pieces(ev)
             S = s.value/pores
             rows.append((s.index, s.value, S, s.pressures[0], count, share, bool(s.fell),
                          _core.work()))
             forces.append(F)
             say(f"V {s.value:.4f} S {S:.4f} p {s.pressures[0]:.4f} pieces {count} "
-                f"largest {share:.2f} |F| {np.median(np.linalg.norm(F, axis=1)):.3f} "
+                f"largest {share:.2f} |F| {np.nanmedian(np.linalg.norm(F, axis=1)):.3f} "
                 f"facets {ev.counts['facets']}{' fell' if s.fell else ''}")
             if frames:
                 m = ev.mesh()

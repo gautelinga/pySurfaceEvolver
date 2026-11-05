@@ -58,7 +58,7 @@ def pore_centres(contact=0.03):
 
 def pore_run(theta=20.0, ds=0.004, vmax=1.6):
     """The run's steps (volume, pressure, mean pull into the pore, fell, the
-    changes made) and the mesh at each."""
+    changes made, the forces' sum) and the mesh at each."""
     X = pore_centres()
     pairs = [(i, j) for i in range(4) for j in range(i + 1, 4)]
     ev = bridges(X, pairs, theta)
@@ -66,10 +66,12 @@ def pore_run(theta=20.0, ds=0.004, vmax=1.6):
     rows, meshes = [], []
     for s in recipes.arclength(ev, ev.body(1), ds, 3000, topology=True, trap=False,
                                remesh=0.06):
-        pull = np.mean([ev.wall_force(f"bead{k + 1}") @ (g - X[k])/np.linalg.norm(g - X[k])
-                        for k in range(4)])
+        F = np.array([ev.wall_force(f"bead{k + 1}") for k in range(4)])
+        pull = np.mean([F[k] @ (g - X[k])/np.linalg.norm(g - X[k]) for k in range(4)])
         m = ev.mesh()
-        rows.append((s.value, s.pressures[0], pull, bool(s.fell), len(s.changes or ())))
+        # (and how far the forces are from balancing: no other wall is touched)
+        rows.append((s.value, s.pressures[0], pull, bool(s.fell), len(s.changes or ()),
+                     np.linalg.norm(F.sum(axis=0))))
         meshes.append((np.array(m.vertices), np.array(m.facets)))
         if s.value > vmax:
             break

@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 
 from . import _core
-from ._engine import _Engine, surface
+from ._engine import GUARD_PREFIX, _Engine, surface
 from ._errors import EvolverError, _num
 from ._events import Event, find as _find_events
 from ._geometry import _chains, _crossed, _grow, _self_gap
@@ -452,10 +452,14 @@ class _Analysis(_Engine):
         force came out 2.6% off at 2000 facets that way, 0.06% this way).
         The wetted part's area vector, which is all the pressure's force
         needs, is half the loop integral of x × dl round its contact lines,
-        so the wall's shape doesn't enter. Each contact line must close: in
-        a periodic slab, about a sphere, say, but not round the cell
-        (ValueError); the wetted side is found from the liquid's side of the
-        surface at each edge. In the linear model, through the corner
+        so the wall's shape doesn't enter. A line that leaves the wall is
+        closed along the chord from where it leaves to where it comes back:
+        along another wall (a drop in a corner), where only the line's pull
+        along the wall acts, or across a gap to another wall narrower than
+        the mesh (where liquid wraps the near contact of two beads, an edge
+        from one to the other), as contact line. In a periodic slab a line must close about the
+        wall, not round the cell (ValueError); the wetted side is found from
+        the liquid's side of the surface at each edge. In the linear model, through the corner
         vertices. ``contact_angle`` (degrees): the wall's, where pySE doesn't
         know it (a constraint from a datafile, not
         :mod:`pysurfaceevolver.constraints`)."""
@@ -463,7 +467,7 @@ class _Analysis(_Engine):
         m = self.mesh()
         if m.facets is None or not len(m.facets):
             raise ValueError("wall_force() needs facets (the soapfilm model)")
-        nums, _, _, names = self._constraint_gaps()
+        nums, _, dist, names = self._constraint_gaps()
         if isinstance(constraint, str):
             if constraint not in names:
                 raise KeyError(f"no constraint named {constraint!r}")
@@ -513,6 +517,9 @@ class _Analysis(_Engine):
                   else x[a[0]])
         xa = centre + m.delta(centre, x[a])
         c, s = np.cos(np.radians(theta)), np.sin(np.radians(theta))
+        # vertices on another wall too (guards aside)
+        walls = [i for i, name in enumerate(names) if not str(name).startswith(GUARD_PREFIX)]
+        corner = np.isnan(np.asarray(dist)[:, walls]).sum(axis=1) >= 2
         for side, sign in ((0, 1.0), (1, -1.0)):
             body = bodies[row, side]
             if not (body > 0).any():
@@ -522,14 +529,41 @@ class _Analysis(_Engine):
             wet = np.where(((sign*facet_normal*t).sum(axis=1) < 0)[:, None], t, -t)[k]
             pull = (tension[k]*length[k])[:, None]*(c*wet + s*n_s[k])
             # each edge taken round its wetted part anticlockwise seen from outside
-            dl = d[k]*np.sign((t[k]*wet).sum(axis=1))[:, None]
-            closing = np.abs(dl.sum(axis=0)).max()
-            if closing > 1e-6*length[k].sum():
-                raise ValueError(f"wall_force(): a contact line on {key!r} doesn't close "
-                                 f"(round a periodic cell?): {closing:.3g} open")
+            way = np.sign((t[k]*wet).sum(axis=1))
+            dl = d[k]*way[:, None]
             p = np.array([pressure.get(int(i), 0.0) for i in body[k]])
             area = 0.5*np.cross(xa[k] - centre, dl)
             force += pull.sum(axis=0) - (p[:, None]*area).sum(axis=0)
+            # a line that leaves the wall closed along the chord from where it
+            # leaves to where it comes back, the wetted part's edge there:
+            # its tangential pull (cos theta: the wall's own surface energy
+            # wet against dry) all along it, and where the chord crosses a
+            # gap to another wall narrower than the mesh (one edge from bead
+            # to bead where the liquid wraps a near contact) the meniscus in
+            # the gap pulling off the wall too (sin theta); not where it runs
+            # along another wall (its ends on both: a drop in a corner)
+            start = np.where(way > 0, a[k], b[k])
+            stop = np.where(way > 0, b[k], a[k])
+            ends = np.setdiff1d(stop, start)
+            starts = list(np.setdiff1d(start, stop))
+            if len(ends) != len(starts):
+                raise ValueError(f"wall_force(): the contact lines on {key!r} don't close")
+            for e in ends:
+                gaps = np.linalg.norm(m.delta(np.repeat(x[[e]], len(starts), axis=0),
+                                              x[starts]), axis=1)
+                j = int(np.argmin(gaps))
+                if m.periods is not None and gaps[j] > 0.5*min(m.periods):
+                    raise ValueError(f"wall_force(): a contact line on {key!r} doesn't close "
+                                     f"(round the periodic cell?): {gaps[j]:.3g} open")
+                chord = m.delta(x[e], x[starts[j]])
+                n_c = normal_at[e] + normal_at[starts[j]]
+                n_c /= np.linalg.norm(n_c)
+                into = np.cross(n_c, chord)/max(gaps[j], 1e-300)
+                last = np.flatnonzero(stop == e)[0]
+                lift = 0.0 if corner[e] and corner[starts[j]] else s
+                force += (tension[k][last]*gaps[j]*(c*into + lift*n_c)
+                          - p[last]*0.5*np.cross(m.delta(centre, x[e]), chord))
+                starts.pop(j)
         return force
 
     def contact_angles(self, constraint: Union[int, str], body: Optional[int] = None) -> np.ndarray:

@@ -764,6 +764,28 @@ def test_wall_force_of_a_drop_on_a_plane_is_nothing():
         ev.wall_force("nothing")
 
 
+def test_wall_force_closes_a_line_that_leaves_the_wall():
+    # half a drop, in the corner of the floor and a side wall at 90 degrees:
+    # the floor's line, a half circle, ends on the side wall, and is closed
+    # along it (without the chord its cos(theta) pull came out along x)
+    from pysurfaceevolver import constraints as C
+    whole = _hemisphere_drop()
+    m = whole.mesh()
+    x = np.asarray(m.vertices, float)
+    f = np.asarray(m.facets)
+    f = f[(x[f][:, :, 0] > -1e-9).all(axis=1)]
+    rows = np.unique(f)
+    x, f = x[rows], np.searchsorted(rows, f)
+    ev = pyse.Evolver()
+    ev.load_arrays(x, f, constraints={"bottom": C.plane((0, 0, 1), 0.0, contact_angle=60.0),
+                                      "side": C.plane((1, 0, 0), 0.0, contact_angle=90.0)},
+                   vertex_constraints={"bottom": np.flatnonzero(abs(x[:, 2]) < 1e-9),
+                                       "side": np.flatnonzero(abs(x[:, 0]) < 1e-9)},
+                   bodies=[pyse.Body(volume=np.pi/3)])
+    ev.relax(levels=1)
+    assert np.abs(ev.wall_force("bottom")).max() < 1e-2*np.pi
+
+
 def test_mesh_slice():
     ev = _hemisphere_drop()
     ev.relax(levels=1)

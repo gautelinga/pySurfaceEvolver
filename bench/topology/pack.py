@@ -215,11 +215,14 @@ def contacts_periodic(x, L, reach=0.1):
     return list(zip(i.tolist(), j.tolist())), dx[i, j]
 
 
-def bridges_periodic(x, L, theta=20.0, a=0.25, reach=0.1, nz=2, nt=12):
+def bridges_periodic(x, L, theta=20.0, a=0.25, reach=0.035, nz=2, nt=12):
     """Pendular bridges at the contacts of beads in a cell periodic in x and
     y: a tube of radius a about the line of centres of each pair closer
     than 2 + reach (contacts_periodic; across the cell's sides at the
-    nearest copy), its rims on the two beads, all the tubes one body
+    nearest copy; the settled pack's contacts are 2.03 apart: at the
+    pressure they set, a bridge across a gap of 0.1 drained into them and
+    pinched as the start relaxed, so wider gaps are left to the liquid
+    reaching them), its rims on the two beads, all the tubes one body
     (several pieces, one pressure). Beads "bead<i>" (flux gauge), the floor
     z = 0 a wall "bottom" at 90 degrees (the integrals' strings leave
     through it; lift the beads off it). Returns the Evolver and the pairs."""
