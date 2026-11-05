@@ -45,6 +45,7 @@ ev.quantities()                      # named quantities: value, target, modulus,
 ev.quantity("vol").target = 1.5      # a live handle (target None frees it)
 ev.contact_angles(1)                 # degrees, at each vertex on constraint 1
 ev.contact_lines(1)                  # where the surface meets constraint 1: polylines
+ev.wall_force("bead1")               # the liquid's force on a wall: lines' pull + pressure
 ev.mesh().slice((0, 0, 1))           # cross-section z = 0: ordered polylines
 
 ev.command("g 5; r; u")              # anything else: plain Evolver commands

@@ -293,6 +293,11 @@
 
 ### API
 
+- `Evolver.wall_force(constraint)`: the force the liquid puts on a wall (a bead, say):
+  its surface's pull along the contact lines, in the direction Young's law gives at
+  the wall's contact angle, plus the pressure on the wetted part (its area vector from
+  the contact loops). On a bridge between two spheres it is the force through the
+  neck to 0.03-0.3% at 2000-3000 facets. `contact_angle=` for a datafile's constraint.
 - `arclength(..., topology=True, trap=False)`: no liquid is trapped; every cluster is
   the run's body, at one pressure, its total stepped (bridges at bead contacts growing
   and merging, liquid exchanged as through films or the vapour). No `outlet` with it.

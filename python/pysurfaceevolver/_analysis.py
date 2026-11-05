@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 
 from . import _core
-from ._engine import _Engine
+from ._engine import _Engine, surface
 from ._errors import EvolverError, _num
 from ._events import Event, find as _find_events
 from ._geometry import _chains, _crossed, _grow, _self_gap
@@ -436,6 +436,101 @@ class _Analysis(_Engine):
             from ._periodic import unwrap_loop
             return [unwrap_loop(path, m.vertices, m.periods) for path in _chains(e[mask])]
         return [m.vertices[path] for path in _chains(e[mask])]
+
+    def wall_force(self, constraint: Union[int, str],
+                   contact_angle: Optional[float] = None) -> np.ndarray:
+        """The force the liquid puts on a wall (a constraint, by number or
+        name, such as a sphere of :mod:`pysurfaceevolver.constraints`): the
+        pull of its surface along the contact lines plus its pressure on the
+        wetted part. Pressures are the bodies' (:attr:`Body.pressure`, the
+        gas at 0); a bridge between two beads pulls them together.
+
+        Along each contact edge the surface pulls with its facet's tension
+        in the direction Young's law gives the surface there, at the wall's
+        contact angle into the liquid (exact at equilibrium, where the
+        facet's own direction is off by about an edge's curvature: a bridge's
+        force came out 2.6% off at 2000 facets that way, 0.06% this way).
+        The wetted part's area vector, which is all the pressure's force
+        needs, is half the loop integral of x × dl round its contact lines,
+        so the wall's shape doesn't enter. Each contact line must close: in
+        a periodic slab, about a sphere, say, but not round the cell
+        (ValueError); the wetted side is found from the liquid's side of the
+        surface at each edge. In the linear model, through the corner
+        vertices. ``contact_angle`` (degrees): the wall's, where pySE doesn't
+        know it (a constraint from a datafile, not
+        :mod:`pysurfaceevolver.constraints`)."""
+        from ._events import _contact_angle
+        m = self.mesh()
+        if m.facets is None or not len(m.facets):
+            raise ValueError("wall_force() needs facets (the soapfilm model)")
+        nums, _, _, names = self._constraint_gaps()
+        if isinstance(constraint, str):
+            if constraint not in names:
+                raise KeyError(f"no constraint named {constraint!r}")
+            key: Union[int, str] = constraint
+        else:
+            key = names[[int(c) for c in nums].index(int(constraint))] or int(constraint)
+        number = int(nums[names.index(key)]) if isinstance(key, str) else int(key)
+        theta = (float(contact_angle) if contact_angle is not None
+                 else _contact_angle(self, surface.walls.get(key)))
+        if theta is None:
+            raise ValueError(f"wall_force(): no contact angle known for {key!r}: give "
+                             "contact_angle=")
+        f = np.asarray(m.facets)
+        # each facet's directed edges, the third corner, and which are on the
+        # wall bounding the surface (in one facet only)
+        a = f.ravel()
+        b = f[:, [1, 2, 0]].ravel()
+        third = f[:, [2, 0, 1]].ravel()
+        row = np.repeat(np.arange(len(f)), 3)
+        on = np.asarray(self.on_constraint(key), bool)
+        _, first, count = np.unique(np.sort(np.c_[a, b], axis=1), axis=0, return_inverse=True,
+                                    return_counts=True)
+        sel = (count[first.ravel()] == 1) & on[a] & on[b]
+        force = np.zeros(3)
+        if not sel.any():
+            return force
+        a, b, third, row = a[sel], b[sel], third[sel], row[sel]
+        x = m.vertices[:, :3]
+        d = m.delta(x[a], x[b])
+        length = np.linalg.norm(d, axis=1)
+        rows = np.unique(np.r_[a, b])
+        _, grad = self._call(_core.constraint_normals_at, number,
+                             np.ascontiguousarray(rows, dtype=np.int64))
+        normal_at = np.zeros((len(x), 3))
+        normal_at[rows] = np.asarray(grad.data)
+        n_s = normal_at[a] + normal_at[b]               # out of the solid
+        n_s /= np.linalg.norm(n_s, axis=1, keepdims=True)
+        t = np.cross(n_s, d)/length[:, None]            # along the wall, across the edge
+        facet_normal = np.cross(d, m.delta(x[a], x[third]))
+        tension = self.values("facet", "tension")[row]
+        bodies = m.facet_bodies if m.facet_bodies is not None else np.zeros((len(f), 2), int)
+        pressure = {int(i): float(p) for i, p in zip(self.bodies().ids, self.bodies().pressure)}
+        # a reference point the wetted part's loops are taken about: in a
+        # periodic slab each edge at the image nearest it
+        shape = getattr(surface.walls.get(key), "shape", None)
+        centre = (np.asarray(shape[1], float) if shape is not None and shape[0] == "sphere"
+                  else x[a[0]])
+        xa = centre + m.delta(centre, x[a])
+        c, s = np.cos(np.radians(theta)), np.sin(np.radians(theta))
+        for side, sign in ((0, 1.0), (1, -1.0)):
+            body = bodies[row, side]
+            if not (body > 0).any():
+                continue
+            k = body > 0
+            # into the wetted part: away from the liquid's outward normal
+            wet = np.where(((sign*facet_normal*t).sum(axis=1) < 0)[:, None], t, -t)[k]
+            pull = (tension[k]*length[k])[:, None]*(c*wet + s*n_s[k])
+            # each edge taken round its wetted part anticlockwise seen from outside
+            dl = d[k]*np.sign((t[k]*wet).sum(axis=1))[:, None]
+            closing = np.abs(dl.sum(axis=0)).max()
+            if closing > 1e-6*length[k].sum():
+                raise ValueError(f"wall_force(): a contact line on {key!r} doesn't close "
+                                 f"(round a periodic cell?): {closing:.3g} open")
+            p = np.array([pressure.get(int(i), 0.0) for i in body[k]])
+            area = 0.5*np.cross(xa[k] - centre, dl)
+            force += pull.sum(axis=0) - (p[:, None]*area).sum(axis=0)
+        return force
 
     def contact_angles(self, constraint: Union[int, str], body: Optional[int] = None) -> np.ndarray:
         """The contact angle (degrees, through the liquid) at each vertex where

@@ -730,6 +730,40 @@ def test_contact_angles_approach_the_prescribed_angle():
         ev.contact_angles(7)
 
 
+def test_wall_force_of_a_bridge_is_the_force_through_its_neck():
+    from pysurfaceevolver import constraints as C, shapes
+    c, a = 1.1, 0.35                            # spheres at z = -c and c
+    zb = c - np.sqrt(1 - a*a)
+    tube = shapes.tube(a, -zb, zb, nz=4, nt=16)
+    ev = pyse.Evolver()
+    ev.load_arrays(tube.vertices, tube.faces,
+                   constraints={1: C.sphere((0, 0, -c), 1.0, contact_angle=20.0,
+                                            wet_poles=("north",)),
+                                2: C.sphere((0, 0, c), 1.0, contact_angle=20.0,
+                                            wet_poles=("south",))},
+                   vertex_constraints={1: tube.rims["bottom"], 2: tube.rims["top"]},
+                   bodies=[pyse.Body(volume=0.3)])
+    ev.relax(levels=3)
+    ring = ev.mesh().slice((0, 0, 1))[0][:-1]
+    r = float(np.hypot(ring[:, 0], ring[:, 1]).mean())
+    neck = 2*np.pi*r - np.pi*r*r*ev.body(1).pressure     # tension and pressure across it
+    lower, upper = ev.wall_force(1), ev.wall_force(2)
+    assert lower[2] == pytest.approx(neck, rel=2e-3)     # pulled up, toward the other
+    assert np.allclose(lower + upper, 0, atol=1e-6) and np.allclose(lower[:2], 0, atol=1e-6)
+
+
+def test_wall_force_of_a_drop_on_a_plane_is_nothing():
+    # (the line's pull off the plane against the pressure on the wetted disk)
+    ev = _hemisphere_drop()
+    ev.parameters["theta"] = 60.0
+    ev.relax(levels=1)
+    with pytest.raises(ValueError, match="contact_angle="):
+        ev.wall_force(1)                        # (a datafile's constraint: angle unknown)
+    assert np.abs(ev.wall_force(1, contact_angle=60.0)).max() < 1e-2*2*np.pi
+    with pytest.raises(KeyError):
+        ev.wall_force("nothing")
+
+
 def test_mesh_slice():
     ev = _hemisphere_drop()
     ev.relax(levels=1)
