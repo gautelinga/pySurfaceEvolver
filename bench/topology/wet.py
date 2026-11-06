@@ -6,14 +6,16 @@ the liquid one body at one pressure (arclength's trap=False: bridges
 exchange liquid as through films or the vapour). Liquid is added by
 arclength(topology=True) until it fills SMAX of the pore space
 (pack.pore_volume, between the lowest and highest centres), the budget runs
-out or the liquid reaches the floor. Per step: the volume, the saturation,
+out or the liquid reaches the floor, its edges held near REMESH (the
+starting bridges' 48 facets are 6-10% off a bridge's pressure; at 0.06,
+1-3%). Per step: the volume, the saturation,
 the pressure, the surface's pieces and each bead's force
 (Evolver.wall_force), in OUT/NAME.npz; the log in OUT/NAME.log, a summary in
 OUT/NAME.json, and with --frames each step's liquid (facet corners, float16)
 in OUT/frames/NAME/ for a film.
 
 usage: python bench/topology/wet.py N SEED THETA OUT [--L 6] [--ds 0.05]
-                                    [--smax 0.35] [--budget 3e6]
+                                    [--smax 0.35] [--budget 3e6] [--remesh 0.06]
                                     [--frames] [--pack NAME_beads.npz]
 """
 import argparse, json, logging, os, sys, time
@@ -47,6 +49,7 @@ def main(argv):
     ap.add_argument("--ds", type=float, default=0.05)
     ap.add_argument("--smax", type=float, default=0.35)
     ap.add_argument("--budget", type=float, default=3e6)
+    ap.add_argument("--remesh", type=float, default=0.06, help="arclength's edge length")
     ap.add_argument("--frames", action="store_true")
     ap.add_argument("--pack", help="the beads from an earlier run's NAME_beads.npz (packs "
                     "settle differently from machine to machine)")
@@ -90,7 +93,7 @@ def main(argv):
     with_floor = ev.on_constraint("bottom")
     try:
         for s in recipes.arclength(ev, ev.body(1), a.ds, 100000, topology=True, trap=False,
-                                   budget=a.budget):
+                                   remesh=a.remesh, budget=a.budget):
             at["step"] = int(s.index)
             F = np.full((len(names), 3), np.nan)
             for i, k in enumerate(names):
@@ -116,20 +119,18 @@ def main(argv):
             if S >= a.smax:
                 stop = f"saturation {a.smax}"
                 break
-        else:
-            stop = "steps"
     except Exception as e:      # (a run's crash ends that run, recorded)
         stop = f"{type(e).__name__}: {e}"
         say(f"stopped: {stop}")
     if not stop:
-        stop = "the run ended (budget or a failure; see the log)"
+        stop = "the run ended (steps, budget, or arclength gave up; see the log)"
     secs = time.time() - t0
     say(f"end: {stop}")
     np.savez(os.path.join(a.out, f"{name}.npz"), rows=np.array(rows, float),
              forces=np.array(forces))
     last = rows[-1] if rows else (0, 0.0, 0.0, 0.0, 0, 0.0, False, 0)
     json.dump(dict(name=name, beads=a.n, box=a.L, seed=a.seed, theta=a.theta, ds=a.ds,
-                   contacts=len(pairs), pores=pores, steps=len(rows), V=last[1], S=last[2],
+                   remesh=a.remesh, contacts=len(pairs), pores=pores, steps=len(rows), V=last[1], S=last[2],
                    p=last[3], pieces=last[4], stop=stop, seconds=secs,
                    pyse=os.path.dirname(pyse.__file__)),
               open(os.path.join(a.out, f"{name}.json"), "w"), indent=1)
