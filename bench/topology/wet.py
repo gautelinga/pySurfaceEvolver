@@ -12,11 +12,15 @@ starting bridges' 48 facets are 6-10% off a bridge's pressure; at 0.06,
 the pressure, the surface's pieces and each bead's force
 (Evolver.wall_force), in OUT/NAME.npz; the log in OUT/NAME.log, a summary in
 OUT/NAME.json, and with --frames each step's liquid (facet corners, float16)
-in OUT/frames/NAME/ for a film.
+in OUT/frames/NAME/ for a film. With --checkpoints the last KEEP steps'
+states (corpus.save_state, the run's own state with them) in
+OUT/checkpoints/NAME/, each one to go on from exactly (--resume, with the
+run's --pack and its other options; a new OUT).
 
 usage: python bench/topology/wet.py N SEED THETA OUT [--L 6] [--ds 0.05]
                                     [--smax 0.35] [--budget 3e6] [--remesh 0.06]
                                     [--frames] [--pack NAME_beads.npz]
+                                    [--checkpoints] [--resume OUT/checkpoints/NAME/stepNNNN]
 """
 import argparse, json, logging, os, sys, time
 
@@ -25,6 +29,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from pack import bridges_periodic, pore_volume, settle_periodic  # noqa: E402
+from corpus import KEEP, restore_state, run_state, save_state  # noqa: E402
 
 LIFT = 0.5          # the beads' lowest points this far over the floor
 
@@ -53,6 +58,10 @@ def main(argv):
     ap.add_argument("--frames", action="store_true")
     ap.add_argument("--pack", help="the beads from an earlier run's NAME_beads.npz (packs "
                     "settle differently from machine to machine)")
+    ap.add_argument("--checkpoints", action="store_true",
+                    help="the last KEEP steps' states kept, to resume exactly from")
+    ap.add_argument("--resume", help="a checkpoint (its path without the extension; with "
+                    "the run's --pack)")
     a = ap.parse_args(argv)
     import pysurfaceevolver as pyse
     from pysurfaceevolver import _core, recipes
@@ -61,6 +70,9 @@ def main(argv):
     frames = os.path.join(a.out, "frames", name) if a.frames else None
     if frames:
         os.makedirs(frames, exist_ok=True)
+    checkpoints = os.path.join(a.out, "checkpoints", name) if a.checkpoints else None
+    if checkpoints:
+        os.makedirs(checkpoints, exist_ok=True)
     log = open(os.path.join(a.out, f"{name}.log"), "w")
     t0 = time.time()
     at = {"step": -1}
@@ -76,12 +88,22 @@ def main(argv):
     logger = logging.getLogger("pysurfaceevolver.topology")
     logger.addHandler(Handler())
     logger.setLevel(logging.DEBUG)
+    if a.resume and not a.pack:
+        raise SystemExit("--resume needs the run's --pack")
     if a.pack:
         x = np.load(a.pack)["centres"]
     else:
         x, gap, _ = settle_periodic(a.n, a.L, seed=a.seed)
         x[:, 2] += LIFT
-    ev, pairs = bridges_periodic(x, a.L, theta=a.theta)
+    run = None
+    if a.resume:
+        ev, _, first = restore_state(a.resume)
+        run = run_state(a.resume)
+        pairs = [tuple(int(i) for i in p) for p in np.load(a.pack)["pairs"]]
+        say(f"resumed from {a.resume} (step {first}"
+            f"{'' if run else ': no run state there, the run afresh from the surface'})")
+    else:
+        ev, pairs = bridges_periodic(x, a.L, theta=a.theta)
     pores = pore_volume(x, a.L)
     names = [f"bead{k + 1}" for k in range(a.n)]
     np.savez(os.path.join(a.out, f"{name}_beads.npz"), centres=x, L=a.L, pairs=np.array(pairs),
@@ -93,8 +115,18 @@ def main(argv):
     with_floor = ev.on_constraint("bottom")
     try:
         for s in recipes.arclength(ev, ev.body(1), a.ds, 100000, topology=True, trap=False,
-                                   remesh=a.remesh, budget=a.budget):
+                                   remesh=a.remesh, budget=a.budget,
+                                   resumable=bool(a.checkpoints or a.resume),
+                                   resume=run["state"] if run else None):
             at["step"] = int(s.index)
+            if checkpoints:
+                own = s.state() if s.state else None
+                save_state(ev, os.path.join(checkpoints, f"step{s.index:04d}"), 0.0, s.index,
+                           run=None if own is None else {"state": own})
+                stale = os.path.join(checkpoints, f"step{s.index - KEEP:04d}")
+                for ext in (".fe", ".pkl"):
+                    if os.path.exists(stale + ext):
+                        os.remove(stale + ext)
             F = np.full((len(names), 3), np.nan)
             for i, k in enumerate(names):
                 try:
@@ -130,7 +162,8 @@ def main(argv):
              forces=np.array(forces))
     last = rows[-1] if rows else (0, 0.0, 0.0, 0.0, 0, 0.0, False, 0)
     json.dump(dict(name=name, beads=a.n, box=a.L, seed=a.seed, theta=a.theta, ds=a.ds,
-                   remesh=a.remesh, contacts=len(pairs), pores=pores, steps=len(rows), V=last[1], S=last[2],
+                   remesh=a.remesh, contacts=len(pairs), pores=pores, steps=len(rows),
+                   V=last[1], S=last[2],
                    p=last[3], pieces=last[4], stop=stop, seconds=secs,
                    pyse=os.path.dirname(pyse.__file__)),
               open(os.path.join(a.out, f"{name}.json"), "w"), indent=1)
