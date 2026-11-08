@@ -962,6 +962,15 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     back as it was and the run goes on. Without it the vertices stay the same
     (refine before). Next to a contact line that shrinks, let it merge
     contact-line edges too (``remesh=dict(target=h, keep_boundary=False)``).
+    With ``topology=True`` it takes the place of the run's own remeshing
+    (below), which is finer near gaps and walls: where liquid joins across
+    gaps narrower than the edges (beads 0.03 apart in a pack wetted from its
+    contacts, edges 0.06), leave it out and refine the starting surface
+    instead (the run's own acts from the first change on; a plain remesh at
+    0.06 there joined contact lines badly, the descents running away, and the
+    runs ran out of back-ups); where a meniscus folds into a wider gap (a
+    trimer's throat) the plain remesh goes through, and the run's own one
+    there turned back and fell round in loops.
 
     Stops after ``steps`` points, at the first point outside ``bounds``
     (``(low, high)`` on the value; the surface is put back at the last one
