@@ -6,9 +6,11 @@ the liquid one body at one pressure (arclength's trap=False: bridges
 exchange liquid as through films or the vapour). Liquid is added by
 arclength(topology=True) until it fills SMAX of the pore space
 (pack.pore_volume, between the lowest and highest centres), the budget runs
-out or the liquid reaches the floor, its edges held near REMESH (the
-starting bridges' 48 facets are 6-10% off a bridge's pressure; at 0.06,
-1-3%). Per step: the volume, the saturation,
+out or the liquid reaches the floor. The starting bridges refined REFINE
+times (their 48 facets are 6-10% off a bridge's pressure, refined once
+1-3%; the run's own remeshing, finer near gaps, takes its edge length from
+them; --remesh H instead holds every edge near H, and the run then joined
+contact lines across the beads' 0.03 gaps badly). Per step: the volume, the saturation,
 the pressure, the surface's pieces and each bead's force
 (Evolver.wall_force), in OUT/NAME.npz; the log in OUT/NAME.log, a summary in
 OUT/NAME.json, and with --frames each step's liquid (facet corners, float16)
@@ -18,7 +20,8 @@ OUT/checkpoints/NAME/, each one to go on from exactly (--resume, with the
 run's --pack and its other options; a new OUT).
 
 usage: python bench/topology/wet.py N SEED THETA OUT [--L 6] [--ds 0.05]
-                                    [--smax 0.35] [--budget 3e6] [--remesh 0.06]
+                                    [--smax 0.35] [--budget 3e6] [--refine 1]
+                                    [--remesh H]
                                     [--frames] [--pack NAME_beads.npz]
                                     [--checkpoints] [--resume OUT/checkpoints/NAME/stepNNNN]
 """
@@ -54,7 +57,8 @@ def main(argv):
     ap.add_argument("--ds", type=float, default=0.05)
     ap.add_argument("--smax", type=float, default=0.35)
     ap.add_argument("--budget", type=float, default=3e6)
-    ap.add_argument("--remesh", type=float, default=0.06, help="arclength's edge length")
+    ap.add_argument("--refine", type=int, default=1, help="the starting bridges refined so often")
+    ap.add_argument("--remesh", type=float, help="arclength's remesh= (every edge near it)")
     ap.add_argument("--frames", action="store_true")
     ap.add_argument("--pack", help="the beads from an earlier run's NAME_beads.npz (packs "
                     "settle differently from machine to machine)")
@@ -104,6 +108,9 @@ def main(argv):
             f"{'' if run else ': no run state there, the run afresh from the surface'})")
     else:
         ev, pairs = bridges_periodic(x, a.L, theta=a.theta)
+        for _ in range(a.refine):
+            ev.refine()
+        ev.relax(levels=0)
     pores = pore_volume(x, a.L)
     names = [f"bead{k + 1}" for k in range(a.n)]
     np.savez(os.path.join(a.out, f"{name}_beads.npz"), centres=x, L=a.L, pairs=np.array(pairs),
@@ -162,7 +169,7 @@ def main(argv):
              forces=np.array(forces))
     last = rows[-1] if rows else (0, 0.0, 0.0, 0.0, 0, 0.0, False, 0)
     json.dump(dict(name=name, beads=a.n, box=a.L, seed=a.seed, theta=a.theta, ds=a.ds,
-                   remesh=a.remesh, contacts=len(pairs), pores=pores, steps=len(rows),
+                   refine=a.refine, remesh=a.remesh, contacts=len(pairs), pores=pores, steps=len(rows),
                    V=last[1], S=last[2],
                    p=last[3], pieces=last[4], stop=stop, seconds=secs,
                    pyse=os.path.dirname(pyse.__file__)),
