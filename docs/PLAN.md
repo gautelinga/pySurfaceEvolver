@@ -155,7 +155,21 @@ made again, ~27 runs undone a descent), plateaus and crawls (10%, now fixed), ch
 - Neck loops: a neck "made" by drying a footprint (sheet against a wall, neck against
   two solids) comes back at the same place, put off, made again.
 - Evolver's limit of 8 quantities a method instance (DATAFILE ERROR 1564, body_8's
-  wetting method on a bead) hit once (job 104 s2_t15 step 303), backed up past.
+  wetting method on a bead) hit once (job 104 s2_t15 step 303), backed up past. Fixed
+  by 7251f3d (a restore leaked a stale slot each time round; see above), not by
+  raising the limit: checked 2026-11-09, each body has its own volume method, so
+  the limit binds only on a method shared by more than 8 quantities.
+- Projection failures (WARNING 1792, "doesn't converge to constraint"), 2026-11-09:
+  15-17k a 32-bead wet run, all in cascades of joins: a contact line's vertex on
+  one bead, on the guards of two others 0.03 away, stepped into one; Evolver then
+  holds the guard as an equality, the two beads have no point in common, and its
+  projection leaves the vertex where its 10th try took it (up to 10 off; put back
+  by the next relax: 1088 of 1089 on their bead after). Tried and dropped: no
+  guard against a wall the vertex's own never enters (_apart). The cascade it
+  came from (w32_s0 from step 633) went no faster (the old build 4600 CPU s and
+  backed up; the new one longer, still in it), and 4 replay-suite frames drained
+  less at equal work (summed V 441.5 against 436.8). The failures come with the
+  slow cascades; they don't make them slow.
 - 128 beads: not started.
 
 ## Resume here (2026-10-26): periodic packs of 32 and 64 beads, pressure curves
