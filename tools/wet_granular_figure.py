@@ -13,7 +13,8 @@ Parts (both by default):
   pack   beads in a periodic cell wetted from bridges at their contacts, from
          bench/topology/wet.py's output folders (--runs OUT ..., into
          wet_pack.npz, or from that file): wet_pack.png (the pressure, the
-         liquid's pieces and the beads' forces against the saturation); with
+         liquid's pieces, the largest one's share of its surface and the beads' forces
+         against the saturation); with
          --film NAME (a run in the first folder, kept with --frames) also
          wet_pack.mp4 and wet_pack_shapes.png
 
@@ -150,30 +151,33 @@ def pack_data(runs):
             name = os.path.basename(meta)[:-5]
             z = np.load(os.path.join(out, f"{name}.npz"))
             rows, F = z["rows"], z["forces"]
-            data[name] = dict(rows=rows, force=np.median(np.linalg.norm(F, axis=2), axis=1),
-                              meta=json.load(open(meta)))
+            data[name] = dict(rows=rows, force=np.nanmedian(np.linalg.norm(F, axis=2), axis=1),
+                              meta={k: v for k, v in json.load(open(meta)).items()
+                                    if k != "pyse"})     # (not the machine's paths)
     np.savez(path, data=np.array(data, dtype=object))
     return data
 
 
 def pack(runs, film=None):
     data = pack_data(runs)
-    fig, axs = plt.subplots(1, 3, figsize=(12, 3.6), constrained_layout=True)
+    fig, axs = plt.subplots(2, 2, figsize=(9.5, 6.4), constrained_layout=True, sharex=True)
+    axs = axs.ravel()
     for k, (name, d) in enumerate(sorted(data.items())):
         r = d["rows"]
-        S, p, count = r[:, 2], r[:, 3], r[:, 4]
+        S, p, count, share = r[:, 2], r[:, 3], r[:, 4], r[:, 5]
         keep = _kept(S)
         m = d["meta"]
         label = f"{m['beads']} beads, seed {m['seed']}"
         colour = SEEDS[k % len(SEEDS)]
-        axs[0].plot(S[keep], p[keep], color=colour, linewidth=1.8, label=label)
-        axs[1].plot(S[keep], count[keep], color=colour, linewidth=1.8)
-        axs[2].plot(S[keep], d["force"][keep], color=colour, linewidth=1.8)
-    for ax, label in zip(axs, ("pressure", "pieces of liquid", "force on a bead (median)")):
-        ax.set_xlabel("saturation", color=INK)
+        for ax, y in zip(axs, (p, count, share, d["force"])):
+            ax.plot(S[keep], y[keep], color=colour, linewidth=1.8, label=label)
+    for k, (ax, label) in enumerate(zip(axs, ("pressure", "pieces of liquid",
+                                              "the largest piece's share of the surface",
+                                              "force on a bead (median)"))):
+        if k >= 2:
+            ax.set_xlabel("saturation", color=INK)
         ax.set_ylabel(label, color=INK)
         _axes(ax)
-    axs[1].set_yscale("log")
     axs[0].legend(frameon=False)
     fig.savefig(os.path.join(STATIC, "wet_pack.png"), dpi=150)
     plt.close(fig)
@@ -209,7 +213,7 @@ def pack_film(out, name, frames=240):
         pl.add_text(f"saturation {at[st]:.2f}", font_size=12)
 
     D.movie(os.path.join(STATIC, "wet_pack.mp4"), chosen, scene, camera, fps=24, hold=48,
-            window=(720, 720))
+            window=(720, 720), quality=5)
     pv.OFF_SCREEN = True
     pl = pv.Plotter(off_screen=True, shape=(1, 3), window_size=(1800, 650), border=False)
     for col, st in enumerate((chosen[0], chosen[len(chosen)//2], chosen[-1])):

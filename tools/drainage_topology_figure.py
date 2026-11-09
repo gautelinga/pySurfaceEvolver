@@ -83,13 +83,13 @@ def liquid(p, x, f, body=None):
             p.add_mesh(polydata(x, f[keep]), **style)
 
 
-def movie(path, frames, draw, camera, fps=12, hold=24, window=WINDOW):
+def movie(path, frames, draw, camera, fps=12, hold=24, window=WINDOW, quality=7):
     """An mp4 of draw(plotter, frame) over the frames, the last held for
-    ``hold`` frames."""
+    ``hold`` frames (``quality`` 0-10, imageio's)."""
     import pyvista as pv
     pv.OFF_SCREEN = True
     p = pv.Plotter(off_screen=True, window_size=window)
-    p.open_movie(path, framerate=fps, quality=7)
+    p.open_movie(path, framerate=fps, quality=quality)
     for k, frame in enumerate(frames):
         p.clear()
         draw(p, frame)

@@ -150,6 +150,53 @@ are those of the pore the [packing page](packing.md) fills directly (`filled_por
 The four beads' forces sum to under 0.6% of one bead's throughout: nothing else holds
 the liquid.
 
+## Thirty-two beads in a periodic cell
+
+Thirty-two unit beads settled on a bottom wall in a cell 6 wide, periodic in x and y
+(as on the {doc}`drainage_topology` page), touch at 88 to 98 contacts, about
+0.03 apart at each: five or six per bead. With a bridge at each, all one body, the
+liquid grows from 1.5% of the pore space to 35% (`bench/topology/wet.py 32 SEED 20
+OUT`, steps of 0.05 in the volume). The pore space is counted between the lowest and
+the highest centres. Three packings, one run each at one thread, all reached 35%:
+
+```{figure} _static/wet_pack.png
+:alt: Four panels against the saturation, from 0 to 0.35, three runs each. The pressure rises from -12.4 to -2.7 at a saturation of 0.1, then zigzags between -3.5 and -2.6. The pieces of liquid stay at 88, 92 and 98 until 0.1 to 0.12, then fall in steps to 31 to 41. The largest piece's share of the surface rises from 0.01 at 0.1 in steps to 0.5 to 0.57. The median force on a bead rises from 5.6 to 6.4 by 0.1, then in jumps to between 7.6 and 9.8.
+
+The pressure, the number of separate pieces of liquid, the largest piece's share of
+the liquid's surface and the median of the net force on each bead, against the
+saturation (the liquid's share of the pore space).
+```
+
+Up to a saturation of about 0.1 the bridges stay apart and grow at one pressure, which
+rises from -12.4 to -2.7, and the median force on a bead from 5.6 to 6.4. That is the
+net force from five or six bridges pulling in different directions, so it comes out
+near what one bridge between touching beads pulls with (2π cos 20° = 5.9). At 0.10 to
+0.12 the first contact lines meet, and from there the liquid joins up fall by fall:
+the pieces go from about 90 to 31 to 41, and the largest grows to half the liquid's
+surface. The pressure stops rising and zigzags about -2.9, between -3.5 and -2.6, each
+join dropping it as on the trimer and the pore and the next stretch of growth raising
+it again. That plateau is what Scheel et al. found in their packs: over a wide range of
+liquid content the liquid's pressure, and so the pack's strength, barely changes. The
+force on a bead grows in jumps as the clusters around it form, to a median of 7.6 to
+9.8 at 35%, as the trimer and the filled pore pulled harder than their bridges did.
+The 32 beads' forces sum to under 0.3 throughout.
+
+<video src="_static/wet_pack.mp4" controls loop muted width="60%" title="Bridges at the contacts of a 32-bead pack growing and joining into clusters"></video>
+
+```{figure} _static/wet_pack_shapes.png
+:alt: Three views of the 32-bead cell. First, small rings at all the contacts. Second, the rings grown, many joined into sheets and clusters spanning several beads. Third, the clusters larger and more joined, the liquid reaching through much of the cell.
+
+Saturation 0.02, 0.18 and 0.35: the beads faint, the liquid's surface blue.
+```
+
+The film follows seed 2 at 240 equally spaced saturations, each the nearest step
+(`--frames`, drawn by `tools/wet_granular_figure.py pack --film`). This run is the same
+packing and setting as the figure's seed 2 but was made on another machine: it takes
+the same path through the first joins and then a slightly different one, with 43
+pieces at the end instead of 41. It took 467 steps and 8 hours, on 16000 to 32000
+facets. As on the drainage page, the packs depend on the machine that settled them;
+these were settled on one Linux node and passed to the runs with `--pack`.
+
 ## Notes and limits
 
 * **One pressure.** `trap=False` keeps every piece of the liquid in the run's body,
@@ -167,6 +214,13 @@ the liquid.
   In a pack, start them only at the pack's contacts: at the low pressure small bridges
   have, one across a wider gap holds next to nothing, and it pinched off as the start
   relaxed. Wider gaps fill when the liquid reaches them.
+* **The mesh in a pack.** `remesh=` takes the place of the run's own remeshing, which
+  makes edges finer near gaps and walls. In a pack the liquid joins across gaps
+  narrower than the edges, so leave `remesh=` out there and refine the starting
+  bridges instead (`wet.py --refine 1`, the default). A plain remesh at 0.06 joined
+  the contact lines badly, its descents ran away, and all three runs gave up between
+  saturations of 0.13 and 0.18. The trimer and the pore above use `remesh=0.06`, which
+  goes through where a meniscus folds into a wider gap.
 * **Forces.** `wall_force` is the force on a wall from its contact lines and the
   pressure on its wetted part, the gas at pressure 0. It takes the surface's direction
   at the line from Young's law, so it holds at equilibrium; off it (in a fall), use the
