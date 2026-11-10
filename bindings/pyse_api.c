@@ -2804,6 +2804,39 @@ double pyse_work_count(void)
 }
 
 extern int pyse_fast_steps;   /* src/iterate.c */
+extern int pyse_chord_keep;   /* src/hessian.c */
+extern int pyse_chord_step(void);
+extern void pyse_chord_forget(void);
+
+int pyse_set_chord_keep(int on)
+{ int was = pyse_chord_keep;
+  pyse_chord_keep = on != 0;
+  if ( !on ) pyse_chord_forget();   /* (its matrix and factors let go) */
+  return was;
+}
+
+struct chord_args { int made; };
+
+static void chord_body(void *arg)
+{ ((struct chord_args *)arg)->made = pyse_chord_step();
+}
+
+/* the negative eigenvalues the last factoring counted (Evolver's eigen_neg),
+   read without running a command: one between Newton steps (an eval) frees
+   the temporary memory a kept chord system lives in */
+int pyse_eigen_neg(void)
+{ return eigen_neg;
+}
+
+int pyse_chord(int *made)
+{ struct chord_args a;
+  int status;
+  a.made = 0;
+  status = surface_call(chord_body,&a);
+  surface_version++;   /* (after a failed one too: it may have moved things) */
+  *made = a.made;
+  return status;
+}
 
 int pyse_set_fast_steps(int on)
 { int was = pyse_fast_steps;

@@ -2197,6 +2197,51 @@ def test_fast_gradient_steps_reach_the_stock_searchs_equilibrium():
     assert found[1][2] < max(2*found[0][2], 1e-3)
 
 
+
+def test_chord_newton_steps_reach_the_same_equilibrium_for_less_work(monkeypatch):
+    # (after a step that cut the residual threefold, the next tried with its
+    # factors and the right side where the surface is now: Newton converges
+    # only linearly on a mesh with tangential forces, so as far for less)
+    from pysurfaceevolver import _core, _relax
+    found = []
+    for chord in (False, True):
+        monkeypatch.setattr(_relax, "_CHORD", chord)
+        ev = _drop_under_a_sphere()
+        ev.relax(tol=1e-9)
+        ev.body(1).target = 1.05*ev.body(1).target
+        work = _core.work()
+        r = ev.newton(20, tol=1e-11)
+        found.append((r.converged, ev.energy, ev.body(1).volume, _core.work() - work))
+    assert found[0][0] and found[1][0]
+    assert found[1][1] == pytest.approx(found[0][1], rel=1e-11)
+    assert found[1][2] == pytest.approx(found[0][2], rel=1e-11)
+    assert found[1][3] < found[0][3]
+
+
+def test_a_chord_step_wants_its_factors_as_they_were():
+    # (none from factors another factoring took, nor from a kept system an
+    # eval's command freed with the temporary memory; one right after)
+    from pysurfaceevolver import _core
+    ev = _drop_under_a_sphere()
+    ev.relax(tol=1e-9)
+    ev.body(1).target = 1.05*ev.body(1).target
+    was = _core.set_chord_keep(True)
+    try:
+        ev.command("hessian")
+        _, made = ev._call(_core.chord_step)
+        assert made.data
+        ev.command("hessian")
+        ev.eval("eigen_neg")
+        _, made = ev._call(_core.chord_step)
+        assert not made.data
+        ev.command("hessian")
+        ev.eigen_counts(0.0)
+        _, made = ev._call(_core.chord_step)
+        assert not made.data
+    finally:
+        _core.set_chord_keep(was)
+
+
 def _two_drops_on_ball_flux():
     """Two drops on a flux-gauge sphere, at its poles: two bodies, each its own
     copy of the volume method."""

@@ -282,6 +282,13 @@ void mumps_new_surface(void)
 
 int fl_have_mumps(void) { return 1; }
 
+/* pySE (hessian.c's chord steps): whether the current factors are S's, and
+   S's handed to T, a copy of it that outlives it */
+int mumps_owns(struct linsys *S) { return shared && shared->owner == S; }
+void mumps_reown(struct linsys *from, struct linsys *to)
+{ if ( shared && shared->owner == from ) shared->owner = to;
+}
+
 #else  /* no MUMPS in this build */
 
 void mumps_factor(struct linsys *S, int mtype)
@@ -299,5 +306,7 @@ void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype
 void mumps_free_system(struct linsys *S) { (void)S; }
 void mumps_new_surface(void) { }
 int fl_have_mumps(void) { return 0; }
+int mumps_owns(struct linsys *S) { (void)S; return 0; }
+void mumps_reown(struct linsys *from, struct linsys *to) { (void)from; (void)to; }
 
 #endif

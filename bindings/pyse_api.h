@@ -176,6 +176,16 @@ int pyse_native_formula_register_many(int con, const double *p, int np);  /* kin
    can be, each move's content predicted for its restoring motion; off by
    default); returns the previous setting. */
 int pyse_set_fast_steps(int on);
+/* Chord steps (src/hessian.c): with keep on, each Newton step ("hessian")
+   keeps its factored system; pyse_chord() then makes a Newton step with
+   those factors and the right side where the surface is now (*made 1; 0
+   where no kept factors hold: the topology, the freedoms or the factors
+   changed). Returns the previous setting / a call's status. */
+int pyse_set_chord_keep(int on);
+int pyse_chord(int *made);
+/* Evolver's eigen_neg (the last factoring's negative eigenvalues), read
+   without running a command. */
+int pyse_eigen_neg(void);
 /* Gradient steps capped so the surface doesn't pass through itself: no pair
    of a vertex and a facet, or of two edges, more than a ring apart closing
    more than frac of its gap in a step, no vertex moving more than a mean

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 import sys
 import warnings
@@ -37,6 +38,17 @@ _COLLAPSE_STEPS = 300          # relax(): untidied gradient steps of the last re
 _NEWTON_MAX_RISE = 0.1         # a Newton step raising the energy more (relative) is undone
 _NEWTON_RESIDUAL_RISE = 1.1    # ... and one raising both the energy and the residual by this factor
 _NEWTON_PROGRESS = 0.9         # Newton goes on while each step cuts the residual below this factor
+# After a Newton step that cut the residual below this factor, the next is
+# tried as a chord step (_core.chord_step: the last step's factors, the right
+# side where the surface is now; kept if it cuts the residual as much, else
+# undone for a full step). Newton converges only linearly on a mesh with
+# tangential forces (0.003-0.017 a step on bead packs), so the later steps
+# of a correction gain about as much with the first step's factors (chord
+# steps there 0.005-0.014); far from the solution they gain less (a cube's
+# volume doubled: a third a step, its ten steps spent short of it).
+# PYSE_CHORD=0: off.
+_CHORD_RATE = 0.1
+_CHORD = os.environ.get("PYSE_CHORD", "1") != "0"
 _TARGET_HALFWAY = 0.5          # ... or brings an unmet target this much closer
 _UNRELAXED_REFINES = 4         # relax() warns from this many refinements since it last converged
 _NO_FREEDOM = (3004, 3005)      # Evolver: fewer degrees of freedom than constraints
@@ -669,7 +681,6 @@ class _Relaxing(_Analysis):
                 output: List[str], grace: bool = False) -> "tuple[int, float]":
         """Safeguarded Newton steps; see newton(). Returns the steps kept and
         the residual of the surface as it is left."""
-        kept = 0
         res0 = self.residual()
         # the residual doesn't see an unmet volume or quantity target (a new
         # one): restoring it is progress, and its cost an allowed energy rise
@@ -679,10 +690,50 @@ class _Relaxing(_Analysis):
         kinds = ["hessian_seek"] if seek is True else ["hessian"] if seek is False \
             else ["hessian", "hessian_seek"]
         self._no_hessian = False
+        chord = _CHORD and kinds[0] == "hessian" and hasattr(_core, "chord_step")
+        keep = _core.set_chord_keep(True) if chord else None
+        try:
+            return self._newton_steps(steps, kinds, chord, tol, undo_if, output, grace,
+                                      res0, gap0, cost)
+        finally:
+            if keep is not None:
+                _core.set_chord_keep(keep)
+
+    def _newton_steps(self, steps: int, kinds: List[str], chord: bool, tol: Optional[float],
+                      undo_if: Optional[Callable[["Evolver"], bool]], output: List[str],
+                      grace: bool, res0: float, gap0: float, cost: float) -> "tuple[int, float]":
+        """_newton()'s steps, from residual res0 and target gap gap0 (cost:
+        what meeting the targets may cost in energy)."""
+        kept = 0
+        rate = 1.0          # the last step's residual over the one before
         for step in range(steps):
             accepted = False
             failed = 0
-            for kind in kinds:
+            if chord and rate < _CHORD_RATE:
+                # a chord step first (see _CHORD_RATE), judged as the others
+                snapshot = self._coords()
+                e0 = _core.total_energy()
+                try:
+                    _, made = self._call(_core.chord_step)
+                    made = bool(made.data)
+                except EvolverError:
+                    self._put_back(snapshot)
+                    made = False
+                if made:
+                    e1 = _core.total_energy()
+                    res1 = self.residual()
+                    gap1, _ = self._target_gap()
+                    closer = gap0 > _TARGET_LOST and gap1 < _TARGET_HALFWAY*gap0
+                    bad = (not np.isfinite(e1) or not np.isfinite(res1)
+                           or not (res1 < _CHORD_RATE*res0 or closer)
+                           or e1 > e0 + _NEWTON_MAX_RISE*abs(e0) + cost
+                           or (undo_if is not None and undo_if(cast("Evolver", self))))
+                    if bad:
+                        self._put_back(snapshot)
+                    else:
+                        accepted = True
+                        self._inertia = None    # (no factoring here)
+            for kind in ([] if accepted else kinds):
                 # a Newton step moves vertices only: their coordinates undo it
                 # (a dump would cost several Newton steps on a large surface)
                 snapshot = self._coords()
@@ -714,7 +765,9 @@ class _Relaxing(_Analysis):
                     continue
                 accepted = True
                 # (both kinds factor the Hessian where the step begins)
-                self._inertia = (self._coords(), int(self.eval("eigen_neg"))) \
+                # (read natively: an eval between steps would free the
+                # temporary memory the kept chord system lives in)
+                self._inertia = (self._coords(), int(_core.eigen_neg())) \
                     if res0 < _INERTIA_NEAR else None
                 break
             if not accepted:
@@ -724,6 +777,7 @@ class _Relaxing(_Analysis):
                 break
             kept += 1
             progress = res1 < _NEWTON_PROGRESS*res0 or closer
+            rate = res1/res0 if res0 > 0 else 1.0
             res0 = res1
             gap0, cost = self._target_gap()
             if tol is not None and res1 < tol and gap0 <= _TARGET_LOST:

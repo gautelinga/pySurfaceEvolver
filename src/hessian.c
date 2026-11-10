@@ -318,8 +318,92 @@ void hess_hash_end()
 *
 */
 
+/* pySE: chord steps. Newton steps with hessian_normal converge only
+   linearly on a mesh with tangential forces (the normals turning with the
+   step make a term the normal Hessian leaves out: 0.003-0.017 a step on
+   wet and drained bead packs), so a correction's steps after the first
+   gain about as much each with the first step's factors as with their own.
+   With pyse_chord_keep set, hessian_auto() keeps its factored system, and
+   pyse_chord_step() makes a step from it: the right side (forces and
+   constraint gaps) at the surface as it is now, solved with the kept
+   factors, without the Hessian's fill and factoring. The kept system
+   holds while the topology, the temporary memory and MUMPS's factors
+   (any other factoring takes them) are as they were. */
+int pyse_chord_keep = 0;
+static struct linsys pyse_kept;
+static int pyse_kept_ok = 0;
+static long pyse_kept_top = -1, pyse_kept_epoch = -1;
+extern long pyse_temp_epoch;     /* utility.c: temp_free_all()s */
+
+static int pyse_kept_valid(void)
+{ return pyse_kept_ok && pyse_kept_epoch == pyse_temp_epoch && pyse_kept_top == top_timestamp
+         && (!pyse_kept.mumps || mumps_owns(&pyse_kept));
+}
+
+void pyse_chord_forget(void)
+{ if ( pyse_kept_ok && pyse_kept_epoch == pyse_temp_epoch ) free_system(&pyse_kept);
+  pyse_kept_ok = 0;
+}
+
+static void pyse_chord_hold(struct linsys *S, long top)
+{ pyse_chord_forget();
+  if ( top != top_timestamp ) { free_system(S); return; }   /* (lines followed) */
+  pyse_kept = *S;
+  if ( S->mumps ) mumps_reown(S,&pyse_kept);
+  pyse_kept_ok = 1;
+  pyse_kept_top = top;
+  pyse_kept_epoch = pyse_temp_epoch;
+}
+
+/* A chord step; 1 if made, 0 where there are no kept factors for it. */
+int pyse_chord_step(void)
+{ struct linsys S;
+  REAL *rhs = NULL, *X = NULL;
+
+  if ( !pyse_kept_valid() ) { pyse_chord_forget(); return 0; }
+  hmode = hessian_normal_flag;
+  hessian_cleanup();
+  hessian_init(&S,&rhs);
+  if ( S.total_rows != pyse_kept.total_rows || S.A_rows != pyse_kept.A_rows )
+  { /* (the freedoms changed: a vertex onto or off a constraint) */
+    if ( S.hashtable ) { temp_free((char*)S.hashtable); S.hashtable = NULL; }
+    hessian_exit(NULL);
+    free_system(&S);
+    temp_free((char*)rhs);
+    pyse_chord_forget();
+    return 0;
+  }
+  hess_flag = 0; rhs_flag = 1;
+  hessian_fill(&S,&rhs);
+  hess_flag = 1;
+  if ( S.hashtable ) { temp_free((char*)S.hashtable); S.hashtable = NULL; }
+  X = (REAL*)temp_calloc(pyse_kept.N,sizeof(REAL));
+  sp_hessian_solve(&pyse_kept,rhs,X,SET_PRESSURE);
+  fl_hessian_deflate(&pyse_kept,X);
+  { REAL bound = fl_step_bound(1);
+    if ( bound > 0.0 && fl_step_largest(X) > bound )
+    { hessian_exit(NULL);
+      free_system(&S);
+      temp_free((char*)rhs);
+      temp_free((char*)X);
+      kb_error(FL_ERR_WILD_STEP,"Newton step would move a vertex farther than the step "
+               "bound; not made.\n",RECOVERABLE);
+    }
+  }
+  hessian_iterate_flag = 1;
+  hessian_move((REAL)1.0,ACTUAL_MOVE,X);
+  hessian_iterate_flag = 0;
+  hessian_exit(X);
+  free_system(&S);
+  temp_free((char*)rhs);
+  temp_free((char*)X);
+  if ( top_timestamp != pyse_kept_top ) pyse_chord_forget();   /* (lines followed) */
+  return 1;
+}
+
 void hessian_auto() /* automatic hessian */
 { REAL old_energy = web.total_energy;
+  long top = top_timestamp;   /* pySE: for chord steps */
   REAL *rhs = NULL;
   REAL *X = NULL;
   struct linsys S;
@@ -355,7 +439,8 @@ void hessian_auto() /* automatic hessian */
     restore_coords(&saved,SAVE_IN_ATTR);
   }
   hessian_exit(X);
-  free_system(&S);
+  if ( pyse_chord_keep ) pyse_chord_hold(&S,top);   /* pySE: for chord steps */
+  else free_system(&S);
   temp_free((char*)rhs);
   temp_free((char*)X);
 
@@ -2181,7 +2266,8 @@ void hessian_fill(
   }
   #endif
  
-  pyse_work += PYSE_HESS_WORK*PYSE_WORK_ELEMENTS;
+  /* (a right side alone, pyse_chord_step(): a pass like a gradient's) */
+  pyse_work += (hess_flag ? PYSE_HESS_WORK : 1.0)*PYSE_WORK_ELEMENTS;
   /* clear entries */
   if ( rhs_flag ) memset((char*)rhs,0,S->total_rows*sizeof(REAL));
 

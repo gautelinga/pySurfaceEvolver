@@ -4,6 +4,14 @@
 
 ### Changed
 
+- Newton steps (`Evolver.newton`, and so relax()'s finish and the topology
+  descents' settles) converge faster where they converge only linearly: after a step
+  that cut the residual tenfold, the next is tried with that step's factorization and
+  the right side where the surface is now (a chord step), and kept if it cuts the
+  residual as much. With hessian_normal, a mesh's tangential forces make Newton
+  linear (0.003-0.017 a step on 32- and 64-bead packs), so such steps gain about as
+  much as full ones at a fraction of their cost: Newton to 1e-10 on those packs took
+  30-40% less CPU for the same equilibrium. `PYSE_CHORD=0` turns them off.
 - `pyse.wet_area` defaults to "lines": a periodic slab's flux spheres take their
   wetted areas and volumes from their contact lines. On a set of nine 32-bead drainage
   runs (3 seeds x 3 contact angles) it reached breakthrough in 8 where the fields

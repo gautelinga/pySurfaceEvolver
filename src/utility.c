@@ -938,9 +938,13 @@ void temp_free(char *ptr)
 *
 */
 
+long pyse_temp_epoch = 0;   /* pySE: temp_free_all()s so far (hessian.c's kept system) */
+
 void temp_free_all()
 {
   int blocktype = 0;
+
+  pyse_temp_epoch++;
 
   #ifdef _DEBUGXX
   int oldmemdebug = memdebug;

@@ -826,6 +826,21 @@ NB_MODULE(_core, m) {
   m.def("set_fast_steps", [](bool on) { Lock lock; return bool(pyse_set_fast_steps(on)); },
         "on"_a, "Gradient steps with fewer energy evaluations (off by default); returns the "
         "previous setting.");
+  m.def("set_chord_keep", [](bool on) { Lock lock; return bool(pyse_set_chord_keep(on)); },
+        "on"_a, "Newton steps keep their factored system for chord_step() (off by default); "
+        "returns the previous setting.");
+  m.def("eigen_neg", []() { Lock lock; return pyse_eigen_neg(); },
+        "The negative eigenvalues the last Hessian factoring counted (Evolver's eigen_neg), "
+        "read without running a command.");
+  m.def("chord_step", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    int made = 0;
+    CallResult r = run_guarded([&] { return pyse_chord(&made); });
+    if (r.status == PYSE_OK) r.data = nb::cast(bool(made));
+    return r;
+  }, CALLBACK_NAMES, "A Newton step with the last kept factors (set_chord_keep) and the "
+     "right side where the surface is now; data: whether one was made (none where the "
+     "topology, the freedoms or the factors changed since).");
   m.def("set_step_cap", [](double frac, double contact) {
     Lock lock; return pyse_set_step_cap(frac, contact); },
         "frac"_a, "contact"_a = 0.0,

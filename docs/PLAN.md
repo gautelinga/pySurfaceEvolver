@@ -170,6 +170,24 @@ made again, ~27 runs undone a descent), plateaus and crawls (10%, now fixed), ch
   backed up; the new one longer, still in it), and 4 replay-suite frames drained
   less at equal work (summed V 441.5 against 436.8). The failures come with the
   slow cascades; they don't make them slow.
+- 2026-11-10, the user's "do 2-4" (cascades, Newton's linear rate, flux scaling):
+  - Measured on a 64-bead cascade frame (s0t25_410, cProfile, 380 s): gradient steps
+    49%, _keep_edges 10.5%, Newton (plain: finishes, settles) 9.5%, the arclength
+    corrector 1.2%. A fast gradient step (callgrind, 64 beads): the volume pass after
+    each trial move 50%, the gradient 35%, the flux gauge 8%; 2.75 moves a step.
+  - Item 2, tried and dropped: a step's first move made for good at the scale of the
+    step before last (descent zigzags: the best scale alternates, 0.29, 0.56, 0.28,
+    0.53, ...), kept where the energy's parabola agreed within half: moves a step
+    -22%, but over the 14 replay frames 0.2% further drained and CPU -3% (noise), and
+    a test drop's fast relax ended at a worse-meshed equilibrium (pressure error
+    3.5e-3 against 3.0e-3).
+  - Item 3, kept: chord steps (CHANGELOG). Newton's linear rate is the normals turning
+    with the step times the mesh's tangential forces, a term the normal Hessian leaves
+    out and that isn't symmetric. Replays: same outcome (summed V 1368.66 against
+    1368.73), CPU -7% (near the machine's noise).
+  - Item 4, measured only: the slab's fast sum makes the flux gauge's cost per point
+    constant; 8% of a 64-bead gradient step, 3% of a Newton step. Worth work only
+    from about 256 beads (the direct sums' cost growing with them).
 - 128 beads: not started.
 
 ## Resume here (2026-10-26): periodic packs of 32 and 64 beads, pressure curves

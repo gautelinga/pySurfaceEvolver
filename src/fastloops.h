@@ -71,6 +71,8 @@ void mumps_solve(struct linsys *S, REAL *b, REAL *x, int mtype);
 void mumps_solve_multi(struct linsys *S, REAL **b, REAL **x, int nrhs, int mtype);
 void mumps_free_system(struct linsys *S);
 void mumps_new_surface(void);
+int mumps_owns(struct linsys *S);
+void mumps_reown(struct linsys *from, struct linsys *to);
 int fl_have_mumps(void);   /* nonzero if this build has MUMPS */
 
 /* The Newton-step matrix pattern kept across steps (fasthess.c):
