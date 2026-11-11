@@ -658,3 +658,356 @@ def test_sphere_axis_integrands_in_c_match_evolvers_expressions():
     ev._register_native()
     ev.command("recalc")
     assert ev.energy == pytest.approx(out[0][0], rel=1e-12)
+
+
+# ---- heightfield: a wall z = b(x, y) by tables --------------------------------
+
+def _sheet(ceiling, top=None, nx=11, nz=6, header=""):
+    """A vertical sheet of liquid at y = 0.5 between the plane z = 0 (60 deg)
+    and a ceiling z = top(x, y), mirrors x = 0 and x = 2, the liquid on the
+    side y < 0.5 down to y = -1 (where the plates' integrals start)."""
+    xs, zs = np.linspace(0, 2, nx), np.linspace(0, 1, nz)
+    top = top or (lambda x, y: 1.0 + 0*x)
+    V = np.array([[x, 0.5, z*top(x, 0.5)] for x in xs for z in zs])
+    F = []
+    for i in range(nx - 1):
+        for j in range(nz - 1):
+            a, b, c, d = i*nz + j, (i + 1)*nz + j, (i + 1)*nz + j + 1, i*nz + j + 1
+            F += [(a, c, d), (a, b, c)]
+    F = np.array(F)
+    if np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])[:, 1].mean() < 0:
+        F = F[:, ::-1]
+    ev = pyse.Evolver()
+    ev.load_arrays(V, F, header=header,
+                   constraints={"bottom": C.plane((0, 0, 1), 0.0, contact_angle=60.0,
+                                                  origin=(0, -1, 0)),
+                                "ceiling": ceiling, "left": C.mirror("x", 0.0),
+                                "right": C.mirror("x", 2.0)},
+                   vertex_constraints={"bottom": np.flatnonzero(np.isclose(V[:, 2], 0)),
+                                       "ceiling": np.arange(nz - 1, len(V), nz),
+                                       "left": np.flatnonzero(np.isclose(V[:, 0], 0)),
+                                       "right": np.flatnonzero(np.isclose(V[:, 0], 2))},
+                   bodies=[pyse.Body(volume=None)])
+    return ev
+
+
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
+@pytest.mark.parametrize("height, normal, origin", [
+    ("1 + 0*x", (0, 0, -1), (0, -1, 1)),
+    ("1 + 0.2*y", (0, 0.2, -1), (0, -1, 0.8))])
+def test_a_flat_heightfield_is_the_plane(height, normal, origin):
+    # (the same equilibrium: its tables' splines are exact for polynomials up
+    # to cubic, and their integrals measured from the same row)
+    found = []
+    for ceiling in (C.plane(normal, -1.0, contact_angle=60.0, origin=origin),
+                    C.heightfield(height, (-0.5, 2.5), (-1, 2), 60.0, spacing=0.05)):
+        ev = _sheet(ceiling, top=lambda x, y: C._height_values(height, x, y))
+        ev.body(1).target = ev.body(1).volume + 0.3
+        r = ev.relax(levels=1)
+        assert r.converged
+        found.append((ev.body(1).volume, ev.body(1).pressure, ev.total_energy))
+    assert found[1] == pytest.approx(found[0], rel=1e-9, abs=1e-12)
+
+
+CURVED = "1 + 0.3*tanh(2*(x - 1))*exp(-(y - 0.2)^2)"
+
+
+def _curved_integrals(f):
+    """The integral over x 0..2, y -1..0.5 of f(b, b_x, b_y, y)."""
+    xs, ys = np.linspace(0, 2, 1001), np.linspace(-1, 0.5, 751)
+    X, Y = np.meshgrid(xs, ys, indexing="ij")
+    d = 1e-5
+    b = C._height_values(CURVED, X, Y)
+    bx = (C._height_values(CURVED, X + d, Y) - C._height_values(CURVED, X - d, Y))/(2*d)
+    by = (C._height_values(CURVED, X, Y + d) - C._height_values(CURVED, X, Y - d))/(2*d)
+    return np.trapz(np.trapz(f(b, bx, by, Y), ys, axis=1), xs)
+
+
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
+def test_a_curved_heightfields_wetted_area_volume_and_weight():
+    # (the sheet as made, nothing moved: its energy and volume against the
+    # wetted ceiling's area, volume and weight by quadrature)
+    top = lambda x, y: C._height_values(CURVED, x, y)  # noqa: E731
+    gy, gz = 0.7, -0.4
+    weight = ("quantity pyse_weight energy method facet_vector_integral global\n"
+              f"vector_integrand:\nq1: 0\nq2: 0\nq3: {gy}*y*z + {gz}*z^2/2\n")
+    ev = _sheet(C.heightfield(CURVED, (-0.5, 2.5), (-1, 2), 60.0, spacing=0.02),
+                top=top, nx=41, nz=21)
+    plain, volume = ev.total_energy, ev.body(1).volume
+    m = ev.mesh()
+    V, F = np.asarray(m.vertices), np.asarray(m.facets)
+    sheet = 0.5*np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]),
+                               axis=1).sum()
+    k = np.cos(np.radians(60.0))
+    wet = _curved_integrals(lambda b, bx, by, y: np.sqrt(1 + bx**2 + by**2))
+    assert plain == pytest.approx(sheet - k*3.0 - k*wet, abs=1e-6)
+    assert volume == pytest.approx(_curved_integrals(lambda b, bx, by, y: b), abs=1e-6)
+    ev = _sheet(C.heightfield(CURVED, (-0.5, 2.5), (-1, 2), 60.0, spacing=0.02,
+                              gravity=(gy, gz)), top=top, nx=41, nz=21, header=weight)
+    assert ev.total_energy - plain == pytest.approx(
+        _curved_integrals(lambda b, bx, by, y: gy*y*b + gz*b*b/2), abs=1e-6)
+
+
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
+def test_a_sheet_under_a_curved_heightfield_relaxes():
+    # (the tables' derivatives: gradient steps and Newton's converge)
+    ev = _sheet(C.heightfield(CURVED, (-0.5, 2.5), (-1, 2), 60.0, spacing=0.05),
+                top=lambda x, y: C._height_values(CURVED, x, y), nx=21, nz=11)
+    ev.body(1).target = ev.body(1).volume + 0.3
+    r = ev.relax(levels=1)
+    assert r.converged and r.stable and ev.residual() < 1e-8
+
+
+def test_a_heightfield_wants_a_numeric_angle_and_known_names():
+    with pytest.raises(ValueError):
+        C.heightfield("1 + 0*x", (0, 1), (0, 1), "theta")
+    with pytest.raises(ValueError):
+        C.heightfield("1 + a*x", (0, 1), (0, 1), 60.0)
+
+
+# ---- plate: a plate with sharp-edged blocks, a constraint per face -------------
+
+STEP = "1 - 0.5*(1 - exp(-2*y))"          # a block's top: 45 degrees at its foot
+
+
+def _plate_sheet(cons, block_x, y0, s=0.0, nx=9, nz=7):
+    """A sheet y = y0 + s x between the plane z = 0 and a plate z = 1 with a
+    block (STEP from y = 0 to 2, over block_x), mirrors x = 0 and x = 2; its
+    vertices on the faces they lie on (a side face's column of its own)."""
+    x0, x1 = block_x
+    ys = lambda x: y0 + s*x                                            # noqa: E731
+    top = lambda x: (float(C._height_values(STEP, 0.0, ys(x))) if x0 <= x <= x1  # noqa: E731
+                     and 0 < ys(x) < 2 else 1.0)
+    stops = sorted({0.0, 2.0, *[x for x in block_x if 0 < x < 2]})
+    cols = []
+    for a, b in zip(stops, stops[1:]):
+        cols += list(np.linspace(a, b, nx)[(1 if cols else 0):])
+    V, idx = [], []
+    for x in cols:
+        inside = x0 + 1e-9 < x < x1 - 1e-9
+        te = top(x) if inside else top(min(max(x, x0), x1))
+        zs = np.linspace(0, te, nz)
+        if not inside and te < 1 and any(0 < xe < 2 for xe in block_x):
+            zs = np.concatenate([zs, np.linspace(te, 1, 4)[1:]])   # (the side face's nodes)
+        idx.append(list(range(len(V), len(V) + len(zs))))
+        V += [(x, ys(x), z) for z in zs]
+    V = np.array(V)
+    F = []
+    for c0, c1 in zip(idx, idx[1:]):
+        for j in range(min(len(c0), len(c1)) - 1):
+            F += [(c0[j], c1[j], c1[j + 1]), (c0[j], c1[j + 1], c0[j + 1])]
+    F = np.array(F)
+    flip = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]) @ np.array([-s, 1, 0]) < 0
+    F[flip] = F[flip][:, ::-1]
+    x, z = V[:, 0], V[:, 2]
+    tops = np.array([top(xx) for xx in x])
+    edge = np.isclose(x, x0) | np.isclose(x, x1)
+    foot = (x > x0 + 1e-9) & (x < x1 - 1e-9)
+    vc = {"bottom": np.flatnonzero(np.isclose(z, 0)),
+          "left": np.flatnonzero(np.isclose(x, 0)), "right": np.flatnonzero(np.isclose(x, 2)),
+          "plate_open": np.flatnonzero(np.isclose(z, 1))}     # (the side's corner too)
+    if "plate_top1" in cons:
+        vc["plate_top1"] = np.flatnonzero((foot | edge) & np.isclose(z, tops) & (z < 1 - 1e-12))
+    for face, xe in (("plate_left1", x0), ("plate_right1", x1)):
+        if face in cons:
+            vc[face] = np.flatnonzero(np.isclose(x, xe) & (z >= tops - 1e-12) & (tops < 1))
+    vc = {k: v for k, v in vc.items() if len(v)}
+    ev = pyse.Evolver()
+    ev.load_arrays(V, F, constraints={**cons, "bottom": C.plane((0, 0, 1), 0.0),
+                                      "left": C.mirror("x", 0.0), "right": C.mirror("x", 2.0)},
+                   vertex_constraints=vc, bodies=[pyse.Body(volume=None)])
+    return ev, V, F
+
+
+def _plate_integrals(block_x, y0, s, gy, gz, n=2001):
+    """The oil's volume, the plate's wetted area and the weight under the
+    plate up to the line y = y0 + s x, by quadrature."""
+    x0, x1 = max(block_x[0], 0.0), min(block_x[1], 2.0)
+    vol = area = weight = 0.0
+    for a, b in ((0.0, x0), (x0, x1), (x1, 2.0)):
+        if b <= a:
+            continue
+        xs = np.linspace(a, b, 201)
+        rows = []
+        for x in xs:
+            Y = y0 + s*x
+            y = np.linspace(-1, Y, n)
+            if a == x0 and b == x1:     # (the plate, then the top, then past its end)
+                parts = [np.linspace(-1, min(Y, 0), n)]
+                if Y > 0:
+                    parts.append(np.linspace(0, min(Y, 2), n))
+                if Y > 2:
+                    parts.append(np.linspace(2, Y, n))
+                v = ar = w = 0.0
+                for k, y in enumerate(parts):
+                    g = C._height_values(STEP, 0.0, y) if k == 1 else 1.0 + 0*y
+                    sl = np.gradient(g, y)
+                    v += np.trapz(g, y)
+                    ar += np.trapz(np.sqrt(1 + sl*sl), y)
+                    w += np.trapz(gy*y*g + gz*g*g/2, y)
+                if Y > 2:
+                    ar += 1 - C._height_values(STEP, 0.0, 2.0)
+            else:
+                v, ar, w = Y + 1, Y + 1, np.trapz(gy*y + gz/2 + 0*y, y)
+            rows.append((v, ar, w))
+        rows = np.array(rows)
+        vol += np.trapz(rows[:, 0], xs)
+        area += np.trapz(rows[:, 1], xs)
+        weight += np.trapz(rows[:, 2], xs)
+    for xe in block_x:                  # (the sides, as far as the line reaches)
+        if 0 < xe < 2:
+            y = np.linspace(0, min(max(y0 + s*xe, 0), 2), n)
+            area += np.trapz(1 - C._height_values(STEP, 0.0, y), y)
+    return vol, area, weight
+
+
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
+@pytest.mark.parametrize("block_x, y0, s", [
+    ((0.5, 1.5), -0.5, 0.0), ((0.5, 1.5), 1.0, 0.0), ((0.5, 1.5), 2.5, 0.0),
+    ((-1.0, 1.0), -0.5, 0.0), ((-1.0, 1.0), 1.0, 0.0), ((-1.0, 1.0), 2.5, 0.0),
+    ((0.5, 1.5), -0.2, 0.6), ((0.5, 1.5), 0.9, 0.6),
+    ((-1.0, 1.0), 0.4, -0.3), ((-1.0, 1.0), 0.3, 1.0)])
+def test_a_plates_faces_add_up(block_x, y0, s):
+    # (a sheet as made, nothing moved, its contact line across the plate, a
+    # block's sides and its top, before the block, along it and past its end;
+    # slanted, on the top along the block and on the plate beside it across
+    # y = 0 or 2: the energy and volume against the wetted area, volume and
+    # weight by quadrature)
+    gy, gz = 0.7, -0.4
+    k = np.cos(np.radians(60.0))
+    cons = C.plate(1.0, [C.Block(block_x, (0.0, 2.0), STEP)], 60.0, x_range=(0, 2),
+                   y_from=-1.0, gravity=(gy, gz), spacing=0.005)
+    ev, V, F = _plate_sheet(cons, block_x, y0, s, nx=17 if s else 9)
+    sheet = 0.5*np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]),
+                               axis=1).sum()
+    vol, area, weight = _plate_integrals(block_x, y0, s, gy, gz)
+    # (flat: exact up to the quadratures; slanted, the contact line on the
+    # curved top is a chord's length from it)
+    tol = 1e-6 if s == 0 else 2e-4
+    assert ev.body(1).volume == pytest.approx(vol, abs=tol)
+    assert ev.total_energy == pytest.approx(sheet - k*area + weight, abs=tol)
+
+
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
+def test_a_sheet_on_a_blocks_top_relaxes_as_under_the_heightfield():
+    # (the C forms' derivatives: a block filling the channel, the sheet on its
+    # top, the same equilibrium as under the same wall as a heightfield, flat
+    # before the block, the same refinement)
+    found = []
+    flat_then_step = STEP.replace("*y)", "*maximum(y, 0))")
+    for ceiling in (C.plate(1.0, [C.Block((-2.0, 2.0), (0.0, 2.0), STEP)], 60.0,
+                            x_range=(0, 2), y_from=-1.0, spacing=0.005),
+                    {"plate_top1": C.heightfield(flat_then_step, (-0.5, 2.5), (-1, 3), 60.0,
+                                                 spacing=0.005)}):
+        ev, _, _ = _plate_sheet(ceiling, (-2.0, 2.0), 1.0, nx=11)
+        ev.body(1).target = ev.body(1).volume + 0.2
+        r = ev.relax(levels=1)
+        assert r.converged and r.stable and ev.residual() < 1e-8
+        found.append((ev.body(1).pressure, float(np.median(
+            ev.vertices[np.asarray(ev.on_constraint("plate_top1"), bool), 1]))))
+    assert found[0] == pytest.approx(found[1], abs=1e-6)
+
+
+def test_a_plate_checks_its_blocks():
+    block = C.Block((0.5, 1.5), (0.0, 2.0), STEP)
+    with pytest.raises(ValueError, match="number"):
+        C.plate(1.0, [block], "theta", x_range=(0, 2), y_from=-1)
+    with pytest.raises(ValueError, match="overlap"):
+        C.plate(1.0, [block, C.Block((1.0, 1.8), (0.0, 2.0), STEP)], x_range=(0, 2), y_from=-1)
+    with pytest.raises(ValueError, match="symmetric"):
+        C.plate(1.0, [C.Block((-0.5, 1.5), (0.0, 2.0), STEP)], x_range=(0, 2), y_from=-1)
+    with pytest.raises(ValueError, match="start at the plate"):
+        C.plate(1.0, [C.Block((0.5, 1.5), (0.0, 2.0), "0.8 + 0*y")], x_range=(0, 2), y_from=-1)
+    faces = C.plate(1.0, [block], 60.0, x_range=(0, 2), y_from=-1)
+    assert set(faces) == {"plate_open", "plate_top1", "plate_end1", "plate_left1",
+                          "plate_right1"}
+    edges = faces["plate_open"].plate.edges
+    assert ("plate_top1".split("_")[1], "end1", True) in edges     # (convex: Gibbs)
+    assert ("open", "top1", False) in edges                         # (the foot: concave)
+
+
+# ---- a plate's edges: contact lines pinned at them, let go by Gibbs ----------
+
+PLATEAU = "1 + 2*exp(-5*(y + 20))"      # a block's top, flat at z = 1 well before its end y = 0
+
+
+def _arc(phi1, H, theta=20.0, n=4001):
+    """2D, no gravity: the arc from the floor z = 0 (angle theta) to the point
+    (0, H), arriving there at angle phi1 (degrees, from +y); its pressure and
+    the area between it and the line y = 0 (positive beyond it)."""
+    p0, p1 = np.radians(180 - theta), np.radians(phi1)
+    k = -(np.cos(p1) - np.cos(p0))/H
+    ph = np.linspace(p0, p1, n)
+    y = (np.sin(ph) - np.sin(p1))/k
+    z = -(np.cos(ph) - np.cos(p0))/k
+    return k, np.trapz(y, z)
+
+
+def _step_cell():
+    """A sheet across a channel (mirrors x = 0, 1) between the floor z = 0
+    and a plate z = 3 with a block filling the channel, its top at z = 1 up
+    to its end face y = 0: the gap steps from 1 to 3 there."""
+    nx, nz = 3, 5
+    xs, zs = np.linspace(0, 1, nx), np.linspace(0, 1, nz)
+    V = np.array([[x, -0.3, z] for x in xs for z in zs])
+    F = []
+    for i in range(nx - 1):
+        for j in range(nz - 1):
+            a, b, c, d = i*nz + j, (i + 1)*nz + j, (i + 1)*nz + j + 1, i*nz + j + 1
+            F += [(a, c, d), (a, b, c)]
+    F = np.array(F)
+    if np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])[:, 1].mean() < 0:
+        F = F[:, ::-1]
+    cons = C.plate(3.0, [C.Block((-1.0, 1.0), (-20.0, 0.0), PLATEAU)], 20.0, x_range=(0, 1),
+                   y_from=-25.0)
+    cons.update({"bottom": C.plane((0, 0, 1), 0.0, contact_angle=20.0, origin=(0, -25.0, 0)),
+                 "left": C.mirror("x", 0.0), "right": C.mirror("x", 1.0)})
+    ev = pyse.Evolver()
+    ev.load_arrays(V, F, constraints=cons,
+                   vertex_constraints={"bottom": np.flatnonzero(np.isclose(V[:, 2], 0)),
+                                       "plate_top1": np.arange(nz - 1, len(V), nz),
+                                       "left": np.flatnonzero(np.isclose(V[:, 0], 0)),
+                                       "right": np.flatnonzero(np.isclose(V[:, 0], 1))},
+                   bodies=[pyse.Body(volume=None)])
+    ev.body(1).target = ev.body(1).volume
+    return ev
+
+
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.UnstableEquilibriumWarning")
+def test_a_contact_line_pins_at_a_convex_edge_and_climbs_past_it():
+    # (oil filling a gap of 1 that steps up to 3: the line on the top reaches
+    # its edge and stays there while the meniscus turns through the edge's
+    # 90 degrees (Gibbs), then climbs the end face at the contact angle, and
+    # comes back down it: against the exact arcs, the volume given the
+    # pressure where pinned, the pressure and volume given the line's height
+    # where climbing)
+    full = 3*5 + 20 + 0.4                 # the oil up to y = 0 under the plate
+    pinned = np.array([_arc(f, 1.0) for f in np.linspace(20, 110, 901)])
+    zs = np.linspace(1, 3, 801)
+    climbing = np.array([_arc(110.0, z) for z in zs])
+    ev = _step_cell()
+    ev.relax(levels=2)
+    seen = []
+    for dv in [0.1]*12 + [-0.1]*5:
+        ev.body(1).target += dv
+        assert ev.relax().converged
+        top = np.asarray(ev.on_constraint("plate_top1"), bool)
+        end = np.asarray(ev.on_constraint("plate_end1"), bool)
+        p, volume = ev.body(1).pressure, ev.body(1).volume
+        if (top & end).sum() >= 3 and not (end & ~top).any():
+            seen.append("pinned")
+            assert full + np.interp(p, pinned[:, 0], pinned[:, 1]) == pytest.approx(volume,
+                                                                                   abs=2e-3)
+        elif (end & ~top).any():
+            seen.append("climbing")
+            zc = ev.vertices[end & ~top, 2].mean()
+            assert p == pytest.approx(np.interp(zc, zs, climbing[:, 0]), abs=3e-3)
+            assert full + np.interp(zc, zs, climbing[:, 1]) == pytest.approx(volume, abs=3e-3)
+        else:
+            seen.append("top")
+            assert not end.any()
+    # (in order: on the top, pinned, climbing up and back down)
+    assert seen.index("pinned") < seen.index("climbing")
+    assert seen.count("pinned") >= 4 and seen.count("climbing") >= 8
+    assert seen[-1] == "climbing" and "top" not in seen[seen.index("pinned"):]

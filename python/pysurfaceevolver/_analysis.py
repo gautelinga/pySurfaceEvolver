@@ -182,7 +182,11 @@ class _Analysis(_Engine):
         def placement(c: int) -> bool:
             on = np.isnan(dist[:, c]) & used
             return bool(not attrs[c] & 3 and on.any() and not (on & moving).any())
-        active = np.array([not placement(c) for c in range(len(nums))], dtype=bool)
+        # (a plate's faces: each formula holds past the face, through the
+        # liquid beside it, so neither gaps nor sides say anything there)
+        faces = {k for k, w in surface.walls.items() if getattr(w, "plate", None) is not None}
+        active = np.array([not placement(c) and (nm or int(nums[c])) not in faces
+                           for c, nm in enumerate(names)], dtype=bool)
         for c in np.flatnonzero(active).tolist():
             d = dist[:, c]
             on = np.isnan(d) & used

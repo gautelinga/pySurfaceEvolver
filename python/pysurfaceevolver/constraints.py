@@ -54,7 +54,9 @@ from typing import Any, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
-__all__ = ["Constraint", "Boundary", "plane", "mirror", "sphere", "cylinder", "circle", "curve"]
+__all__ = ["Constraint", "Boundary", "plane", "mirror", "sphere", "cylinder", "heightfield",
+           "Block", "Plate", "plate",
+           "circle", "curve"]
 
 
 def _n(x: float) -> str:
@@ -96,7 +98,8 @@ class Constraint:
     # that they are declared)
     parameters: Tuple[str, ...] = field(default=(), compare=False, repr=False)
     # the wall's geometry, for drawing: ("plane", normal, offset),
-    # ("sphere", center, radius) or ("cylinder", point, direction, radius)
+    # ("sphere", center, radius), ("cylinder", point, direction, radius),
+    # ("heightfield", formula, x range, y range) or ("plate", face)
     shape: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
     # the contact angle as given (degrees or a datafile expression)
     contact_angle: Any = field(default=None, compare=False, repr=False)
@@ -126,6 +129,13 @@ class Constraint:
     # a sphere(gauge="flux")'s (centre, radius, angle, tension) in a periodic
     # slab, whose integrands C evaluates (pyse_slabflux.c)
     slabflux: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
+    # a heightfield()'s integrands as B-spline tables for C (pyse_native.c):
+    # (x0, y0, hx, hy, content's coefficients, energy's or None)
+    table: Optional[Tuple[Any, ...]] = field(default=None, compare=False, repr=False)
+    # a plate()'s face: the plate (its faces share its integrands, which C
+    # evaluates) and the face's name in it
+    plate: Optional["Plate"] = field(default=None, compare=False, repr=False)
+    face: Optional[str] = field(default=None, compare=False, repr=False)
 
     @property
     def floored(self) -> bool:
@@ -175,6 +185,14 @@ class Constraint:
             center = np.asarray(p, float) + np.dot(middle - p, d)*d
             return pv.Cylinder(center=center, direction=d, radius=r, height=size,
                                resolution=resolution, capping=False)
+        if kind == "plate":
+            return None
+        if kind == "heightfield":
+            _, height, (xa, xb), (ya, yb) = self.shape
+            x, y = np.meshgrid(np.linspace(max(xa, lo[0]), min(xb, hi[0]), resolution),
+                               np.linspace(max(ya, lo[1]), min(yb, hi[1]), resolution),
+                               indexing="ij")
+            return pv.StructuredGrid(x, y, _height_values(height, x, y))
         _, n, offset = self.shape
         n = np.asarray(n, float)
         center = middle - (np.dot(middle, n) - offset)*n
@@ -547,6 +565,445 @@ def cylinder(point, direction, radius: float, contact_angle: Optional[float] = N
     return Constraint(formula, energy, content, 0.0, 0.0, nonnegative,
                       shape=("cylinder", tuple(p), tuple(d), R), parameters=k.names,
                       contact_angle=contact_angle)
+
+
+# ---- a wall z = b(x, y) -------------------------------------------------------
+
+# the functions a heightfield's formula may use, as numpy's
+_HEIGHT_NAMES = {"sqrt": np.sqrt, "exp": np.exp, "log": np.log, "tanh": np.tanh,
+                 "sinh": np.sinh, "cosh": np.cosh, "sin": np.sin, "cos": np.cos,
+                 "atan": np.arctan, "abs": np.abs, "maximum": np.maximum,
+                 "minimum": np.minimum, "pi": np.pi}
+
+
+def _height_values(height: str, x, y) -> np.ndarray:
+    """A heightfield's formula (Evolver's syntax, in x and y) at the points."""
+    names = set(_identifiers(height)) - set(_HEIGHT_NAMES) - {"x", "y"}
+    if names:
+        raise ValueError(f"heightfield: the formula may use x, y and "
+                         f"{', '.join(sorted(_HEIGHT_NAMES))}, not {', '.join(sorted(names))}")
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    out = eval(height.replace("^", "**"), {"__builtins__": {}}, {**_HEIGHT_NAMES, "x": x, "y": y})
+    return np.broadcast_to(np.asarray(out, dtype=float), np.broadcast(x, y).shape).copy()
+
+
+def _spline_coefficients(f: np.ndarray) -> np.ndarray:
+    """Cubic B-spline coefficients interpolating f (n, ...) at unit-spaced
+    nodes along its first axis, natural at both ends: (n + 2, ...)."""
+    n = f.shape[0]
+    c = np.empty((n + 2,) + f.shape[1:])
+    c[1], c[n] = f[0], f[n - 1]
+    m = n - 2                                   # c[2] .. c[n - 1]: tridiagonal
+    if m > 0:
+        rhs = 6.0*f[1:n - 1].astype(float)
+        rhs[0] -= c[1]
+        rhs[-1] -= c[n]
+        diag = np.full(m, 4.0)
+        for i in range(1, m):                   # (Thomas: off-diagonals 1)
+            w = 1.0/diag[i - 1]
+            diag[i] -= w
+            rhs[i] -= w*rhs[i - 1]
+        sol = np.empty_like(rhs)
+        sol[-1] = rhs[-1]/diag[-1]
+        for i in range(m - 2, -1, -1):
+            sol[i] = (rhs[i] - sol[i + 1])/diag[i]
+        c[2:n] = sol
+    c[0] = 2*c[1] - c[2]
+    c[n + 1] = 2*c[n] - c[n - 1]
+    return c
+
+
+def heightfield(height: str, x_range, y_range, contact_angle: Optional[float] = None, *,
+                below: bool = True, tension: float = 1.0, spacing: float = 0.05,
+                gravity: Tuple[float, float] = (0.0, 0.0), refine: int = 8) -> Constraint:
+    """The wall ``z = height(x, y)``, the liquid below it (``below=True``, a
+    ceiling) or above it (a floor). ``height`` is a formula in x and y in
+    Evolver's syntax (``^``, ``tanh``, ``exp``, ``log``, ``sqrt``, ``abs``,
+    ``maximum``, ``minimum``, ...); Evolver projects onto it as written.
+
+    Its wetted area (``-tension*cos(contact_angle)`` per area), its part of
+    the volume and, with ``gravity``, of a weight have no closed form as line
+    integrals, so they are tabulated over the rectangle ``x_range`` x
+    ``y_range`` at ``spacing`` (integrated along y on a ``refine`` times finer
+    grid) and evaluated in C as cubic splines. They are ``P(x, y) dx`` forms
+    measured from the rectangle's first row y = ``y_range[0]``: they vanish
+    along mirror planes x = const and along that row, so put the wetted
+    region's far edge there. Past the rectangle they extend linearly; keep
+    the contact line inside it, and the spacing well under the formula's
+    smallest feature.
+
+    ``gravity = (gy, gz)``: a weight per volume of ``gy`` along -y and ``gz``
+    along -z (the energy ``gy*y + gz*z`` per volume): this adds the wetted
+    part's share; the liquid surface's share is a facet integral of
+    ``(0, 0, gy*y*z + gz*z^2/2)``.
+
+    The contact angle must be a number (not a parameter).
+    """
+    if isinstance(contact_angle, str):
+        raise ValueError("heightfield: the contact angle must be a number")
+    k = 0.0 if contact_angle is None else \
+        float(tension)*float(np.cos(np.radians(float(contact_angle))))
+    (xa, xb), (ya, yb) = map(float, x_range), map(float, y_range)
+    if not (xb > xa and yb > ya and spacing > 0):
+        raise ValueError("heightfield: x_range and y_range need a < b, spacing > 0")
+    nx = int(np.ceil((xb - xa)/spacing)) + 1
+    ny = int(np.ceil((yb - ya)/spacing)) + 1
+    hx, hy = (xb - xa)/(nx - 1), (yb - ya)/(ny - 1)
+    xs = xa + hx*np.arange(nx)
+    # along y on a finer grid (Simpson's rule pairwise), the integrands
+    # sqrt(1 + |grad b|^2), b, y b, b^2/2; the slopes by fourth-order differences
+    r = 2*max(1, int(refine)//2)
+    yf = ya + (hy/r)*np.arange((ny - 1)*r + 1)
+    X, Y = np.meshgrid(xs, yf, indexing="ij")
+    b = _height_values(height, X, Y)
+    d = 1e-3*min(hx, hy)
+
+    def slope(dx, dy):
+        f = [_height_values(height, X + j*dx, Y + j*dy) for j in (-2, -1, 1, 2)]
+        return (f[0] - 8*f[1] + 8*f[2] - f[3])/(12*d)
+    area = np.sqrt(1 + slope(d, 0)**2 + slope(0, d)**2)
+    gy, gz = map(float, gravity)
+
+    def primitive(g):
+        """The integral from ya of g along y, at the coarse rows."""
+        h = hy/r
+        pair = (g[:, 0:-2:2] + 4*g[:, 1:-1:2] + g[:, 2::2])*h/3
+        cum = np.concatenate([np.zeros((nx, 1)), np.cumsum(pair, axis=1)], axis=1)
+        return cum[:, ::r//2]
+    content = primitive(b)
+    energy = (-k if below else k)*primitive(area)
+    if gy or gz:
+        energy = energy + primitive(gy*Y*b + gz*b*b/2)
+    has_energy = bool(k) or bool(gy) or bool(gz)
+
+    def coefficients(f):
+        return np.ascontiguousarray(_spline_coefficients(
+            _spline_coefficients(f).swapaxes(0, 1)).swapaxes(0, 1))
+    # (the integrands' datafile text: placeholders, C evaluates them; not
+    # zero, which Evolver makes no integral of. The formula positive on the
+    # liquid's side, as the other walls': guards, one-sided copies, keep it so)
+    formula = f"({height}) - z = 0" if below else f"z - ({height}) = 0"
+    return Constraint(formula, ["x", "0", "0"] if has_energy else None,
+                      ["x", "0", "0"],
+                      shape=("heightfield", height, (xa, xb), (ya, yb)),
+                      contact_angle=contact_angle,
+                      table=(xa, ya, hx, hy, coefficients(content),
+                             coefficients(energy) if has_energy else None))
+
+
+# ---- a plate with sharp-edged blocks ----------------------------------------
+
+@dataclass(frozen=True)
+class Block:
+    """A block on a :func:`plate`: over the footprint ``x[0] <= x <= x[1]``,
+    ``y[0] <= y <= y[1]``, its top ``z = height(y)`` (a formula in y in
+    Evolver's syntax, smooth on the footprint and a little past it, equal to
+    the plate's ``base`` at ``y[0]``), its end face ``y = y[1]`` and its
+    sides ``x = x[0]``, ``x = x[1]``."""
+
+    x: Tuple[float, float]
+    y: Tuple[float, float]
+    height: str
+
+
+@dataclass(frozen=True, eq=False)
+class Plate:
+    """What a :func:`plate`'s faces share: its geometry, which face is which
+    (``faces``: name -> (kind, block index or -1); kinds ``open``, ``top``,
+    ``end``, ``left``, ``right``) and its edges (``edges``: (face, face,
+    convex)), and the data its integrands are evaluated from in C
+    (``native``: scalars, blocks, spline coefficients, stretches)."""
+
+    base: float
+    blocks: Tuple[Block, ...]
+    x_range: Tuple[float, float]
+    y_from: float
+    faces: Any
+    edges: Tuple[Tuple[str, str, bool], ...]
+    native: Tuple[Any, ...]
+
+    def _terms(self):
+        """Per block, its bounds that are not mirror planes: (x0 or None, x1
+        or None, y0, y1, height)."""
+        xa, xb = self.x_range
+        for b in self.blocks:
+            x0, x1 = map(float, b.x)
+            yield (x0 if x0 > xa else None, x1 if x1 < xb else None,
+                   float(b.y[0]), float(b.y[1]), b.height)
+
+    def solid_formula(self) -> str:
+        """A formula positive where the liquid may be, negative in the solid
+        (the plate and its blocks): the least of base - z and, per block, the
+        most of its bounds' distances past them (x0 - x, x - x1, y0 - y,
+        y - y1, height(y) - z, height at y held to the footprint's range).
+        For guards (descents keep free vertices out of the solids with it)."""
+        import re
+        out = f"({float(self.base)!r} - z)"
+        for x0, x1, y0, y1, height in self._terms():
+            # (the top at y held to the footprint's range: a formula that is
+            # a top only there can blow up past it, 2/(p0 + Pi y) at y =
+            # -p0/Pi, 1.85 before a Hele-Shaw defect, and the guard's gradient
+            # with it)
+            top = re.sub(r"(?<![\w.])y(?![\w])", f"minimum(maximum(y, {y0!r}), {y1!r})", height)
+            parts = [f"({y0!r} - y)", f"(y - {y1!r})", f"(({top}) - z)"]
+            if x0 is not None:
+                parts.append(f"({x0!r} - x)")
+            if x1 is not None:
+                parts.append(f"(x - {x1!r})")
+            term = parts[-1]
+            for t in reversed(parts[:-1]):
+                term = f"maximum({t}, {term})"
+            out = f"minimum({out}, {term})"
+        return out
+
+    def base_edges(self) -> np.ndarray:
+        """The blocks' concave edges with the plate where its sides and end
+        meet it (z = base), as segments (n, 2, 3): where a contact line can
+        grow a filament along the corner (Concus-Finn, at angles under 45
+        degrees)."""
+        out = []
+        for x0, x1, y0, y1, height in self._terms():
+            xa, xb = self.x_range
+            lo = x0 if x0 is not None else xa
+            hi = x1 if x1 is not None else xb
+            out.append(((lo, y1, self.base), (hi, y1, self.base)))
+            for xe in (x0, x1):
+                if xe is not None:
+                    out.append(((xe, y0, self.base), (xe, y1, self.base)))
+        return np.array(out, dtype=float).reshape(-1, 2, 3)
+
+    def corners(self) -> np.ndarray:
+        """The points where three of its faces meet: per block with sides,
+        at each side its foot (the side's height 0 there: plate, top and
+        side), and at its end the top's and the plate's (n, 3)."""
+        out = []
+        for x0, x1, y0, y1, height in self._terms():
+            d1 = float(_height_values(height, 0.0, y1))
+            for xe in (x0, x1):
+                if xe is not None:
+                    out += [(xe, y0, self.base), (xe, y1, self.base), (xe, y1, d1)]
+        return np.array(out, dtype=float).reshape(-1, 3)
+
+    def face_distances(self, point) -> "dict[str, float]":
+        """Per face (by its name in the plate), the distance from point to
+        it: to its plane, and past its bounds to its edge (its formula holds
+        past it)."""
+        x, y, z = map(float, point)
+        out: "dict[str, float]" = {}
+        xa, xb = self.x_range
+        inside = 0.0
+        for b in self.blocks:
+            x0, x1 = map(float, b.x)
+            y0, y1 = map(float, b.y)
+            ina = x >= x0 if x0 <= xa else x > x0
+            inb = x <= x1 if x1 >= xb else x < x1
+            if ina and inb and y0 < y < y1:
+                inside = max(inside, min(y - y0, y1 - y, *([x - x0] if x0 > xa else []),
+                                         *([x1 - x] if x1 < xb else [])))
+        out["open"] = float(np.hypot(self.base - z, inside))
+        for i, b in enumerate(self.blocks):
+            x0, x1 = map(float, b.x)
+            y0, y1 = map(float, b.y)
+            past_x = max(x0 - x if x0 > xa else 0.0, x - x1 if x1 < xb else 0.0, 0.0)
+            past_y = max(y0 - y, y - y1, 0.0)
+            yc = min(max(y, y0), y1)
+            d = float(_height_values(b.height, 0.0, yc))
+            d1 = float(_height_values(b.height, 0.0, y1))
+            out[f"top{i + 1}"] = float(np.sqrt((d - z)**2 + past_x**2 + past_y**2))
+            past_z = max(d1 - z, z - self.base, 0.0)
+            out[f"end{i + 1}"] = float(np.sqrt((y - y1)**2 + past_x**2 + past_z**2))
+            past_zs = max(d - z, z - self.base, 0.0)
+            for side, xe in (("left", x0), ("right", x1)):
+                if f"{side}{i + 1}" in self.faces:
+                    out[f"{side}{i + 1}"] = float(np.sqrt((x - xe)**2 + past_y**2 + past_zs**2))
+        return out
+
+    def solid(self, xyz) -> np.ndarray:
+        """solid_formula() at the points (n, 3)."""
+        x, y, z = np.asarray(xyz, dtype=float).T
+        out = self.base - z
+        for x0, x1, y0, y1, height in self._terms():
+            term = np.maximum.reduce([y0 - y, y - y1,
+                                      _height_values(height, 0.0, np.clip(y, y0, y1)) - z]
+                                     + ([x0 - x] if x0 is not None else [])
+                                     + ([x - x1] if x1 is not None else []))
+            out = np.minimum(out, term)
+        return out
+
+
+def _smootherstep(t):
+    t = np.clip(t, 0.0, 1.0)
+    return t*t*t*(10 - 15*t + 6*t*t)
+
+
+def plate(base: float, blocks: "Sequence[Block]", contact_angle: Optional[float] = None, *,
+          x_range, y_from: float, tension: float = 1.0, gravity: Tuple[float, float] = (0.0, 0.0),
+          spacing: float = 0.01, name: str = "plate") -> "dict[str, Constraint]":
+    """The plate ``z = base`` with sharp-edged blocks on it (:class:`Block`),
+    the liquid below it: a constraint for each face, named
+    ``{name}_open`` (the plate around the blocks) and, for block i (from 1),
+    ``{name}_top{i}``, ``{name}_end{i}``, ``{name}_left{i}``,
+    ``{name}_right{i}``. A vertex on an edge is on both its faces'
+    constraints.
+
+    All the faces share one energy integrand (``-tension*cos(contact_angle)``
+    per wetted area and, with ``gravity = (gy, gz)``, the wetted part's share
+    of a weight, as in :func:`heightfield`) and one content integrand, valid
+    across every edge, so a contact line adds up whichever faces it crosses
+    and whichever of them its edges are on. They are measured from the
+    plate's row ``y = y_from``, vanish along mirror planes x = const at
+    ``x_range``'s ends, and are evaluated in C (the arclength along a top's
+    profile has no closed form), from cubic splines over each footprint at
+    ``spacing``.
+
+    On a footprint, the dx parts are those of the block's profile in y (its
+    arclength, the volume and weight under it), a dy part linear across the
+    footprint, ``-k (2 (x - xc)/w)(base - z)``, makes the sides' wetted
+    area (0 on a mirror plane at the footprint's middle or edge), and the
+    top's dx part takes back what that dy part adds there.
+    Beside the blocks, the plate's own forms get terms that change no area
+    on it but join them continuously to the footprint's across its edges
+    where the plate crosses them, before a block and past its end. (Along
+    a block, no face crosses its footprint's edge: there the joins are a
+    smooth step from one to the other, and the sides' edge with the plate
+    sees none of them.)
+
+    A block may cross an end of ``x_range`` (a mirror plane) only if its
+    footprint is symmetric about it; one that ends there goes on as its
+    mirror image (no side face there). The blocks' footprints mustn't
+    overlap.
+    """
+    if isinstance(contact_angle, str):
+        raise ValueError("plate: the contact angle must be a number")
+    k = 0.0 if contact_angle is None else \
+        float(tension)*float(np.cos(np.radians(float(contact_angle))))
+    base, ylo = float(base), float(y_from)
+    xa, xb = map(float, x_range)
+    gy, gz = map(float, gravity)
+    blocks = tuple(blocks)
+    if not xb > xa or spacing <= 0:
+        raise ValueError("plate: x_range needs a < b, spacing > 0")
+    feet = sorted(range(len(blocks)), key=lambda i: blocks[i].x[0])
+    for i in range(len(blocks)):
+        (x0, x1), (y0, y1) = map(float, blocks[i].x), map(float, blocks[i].y)
+        if not (x1 > x0 and y1 > y0 and y0 > ylo):
+            raise ValueError(f"plate: block {i + 1} needs x0 < x1 and y_from < y0 < y1")
+        for end in (xa, xb):
+            if x0 < end < x1 and not np.isclose(x0 + x1, 2*end):
+                raise ValueError(f"plate: block {i + 1} crosses the mirror plane x = {end:g}: "
+                                 "its footprint must be symmetric about it")
+        if x1 <= xa or x0 >= xb:
+            raise ValueError(f"plate: block {i + 1} lies outside x_range")
+        if abs(_height_values(blocks[i].height, 0.0, y0) - base) > 1e-9*max(1.0, abs(base)):
+            raise ValueError(f"plate: block {i + 1}'s top must start at the plate (height(y0) "
+                             "= base)")
+    for i, j in zip(feet, feet[1:]):
+        if blocks[j].x[0] < blocks[i].x[1]:
+            raise ValueError(f"plate: blocks {i + 1} and {j + 1} overlap")
+
+    def weight(y, z):
+        return gy*y*z + gz*z*z/2
+
+    def weight_open(y):        # int from ylo of G(y, base)
+        return gy*base*(y*y - ylo*ylo)/2 + gz*base*base/2*(y - ylo)
+
+    # per block: S, dd, Psi, Dc, Gam, mu (the energy's join), nu (the content's)
+    rows, coef = [], []
+    for i, blk in enumerate(blocks):
+        (x0, x1), (y0, y1) = map(float, blk.x), map(float, blk.y)
+        n = int(np.ceil((y1 - y0)/spacing)) + 1
+        h = (y1 - y0)/(n - 1)
+        r = 8
+        yf = y0 + (h/r)*np.arange((n - 1)*r + 1)
+        d = _height_values(blk.height, 0.0, yf)
+        e = 1e-3*h
+        f = [_height_values(blk.height, 0.0, yf + j*e) for j in (-2, -1, 1, 2)]
+        slope = (f[0] - 8*f[1] + 8*f[2] - f[3])/(12*e)
+        if np.any(d[1:] >= base) or not np.all(np.isfinite(d)):
+            raise ValueError(f"plate: block {i + 1}'s top must lie below the plate past y0")
+
+        def primitive(g):
+            pair = (g[0:-2:2] + 4*g[1:-1:2] + g[2::2])*(h/r)/3
+            return np.concatenate([[0.0], np.cumsum(pair)])[::r//2]
+        y = yf[::r]
+        dd = d[::r]
+        S = (y0 - ylo) + primitive(np.sqrt(1 + slope*slope))
+        Psi = primitive(base - d)
+        Dc = base*(y0 - ylo) + primitive(d)
+        Gam = weight_open(y0) + primitive(weight(yf, d))
+        # the sides' dy part, kappa (x - xc)(base - z): +-(base - z) on a side,
+        # 0 on a mirror plane at or through the footprint (the block goes on
+        # as its mirror image there, no side)
+        at_a, at_b = x0 <= xa + 1e-12, x1 >= xb - 1e-12
+        if at_a and at_b:
+            xc, kappa = (x0 + x1)/2, 0.0
+        elif at_a:
+            xc, kappa = xa, 1/(x1 - xa)
+        elif at_b:
+            xc, kappa = xb, 1/(xb - x0)
+        else:
+            xc, kappa = (x0 + x1)/2, 2/(x1 - x0)
+        # the jumps of the dx parts across the footprint's edge on the plate:
+        # 0 before the block, constant past it, a smooth step between
+        step = _smootherstep((y - y0)/(y1 - y0))
+        mu = (-k*(S[-1] - (y1 - ylo) + base - dd[-1] + kappa*Psi[-1]) + Gam[-1]
+              - weight_open(y1))*step
+        nu = (Dc[-1] - base*(y1 - ylo))*step
+        rows += [x0, x1, y0, y1, n, xc, kappa]
+        coef.append(np.concatenate([_spline_coefficients(np.asarray(g, float))
+                                    for g in (S, dd, Psi, Dc, Gam, mu, nu)]))
+    # the stretches of x beside the footprints, between them and the mirrors
+    edges_x = []
+    for i in feet:
+        x0, x1 = map(float, blocks[i].x)
+        edges_x.append((max(x0, xa), i if x0 > xa else -1, min(x1, xb), i if x1 < xb else -1))
+    stretches, at, left = [], xa, -1
+    for x0, i0, x1, i1 in edges_x:
+        if x0 > at:
+            sa = 1.0 if left >= 0 else (-1.0 if i0 >= 0 else 0.0)
+            sb = -1.0 if i0 >= 0 else sa
+            stretches += [at, x0, sa, sb, left, i0]
+        at, left = x1, i1
+    if xb > at:
+        sa = 1.0 if left >= 0 else 0.0
+        stretches += [at, xb, sa, sa, left, -1]
+    if not stretches:                         # (a block across the whole width)
+        stretches = [xb, xb + 1.0, 0.0, 0.0, -1, -1]
+    # the faces and edges
+    faces = {"open": ("open", -1)}
+    edges: "list[Tuple[str, str, bool]]" = []
+    for i, blk in enumerate(blocks):
+        x0, x1 = map(float, blk.x)
+        top, front = f"top{i + 1}", f"end{i + 1}"
+        faces[top], faces[front] = ("top", i), ("end", i)
+        edges += [("open", top, False), (top, front, True), (front, "open", False)]
+        for side, inside in (("left", x0 > xa), ("right", x1 < xb)):
+            if inside:
+                face = f"{side}{i + 1}"
+                faces[face] = (side, i)
+                edges += [(top, face, True), (face, "open", False), (face, front, True)]
+    native = ((base, ylo, k, gy, gz), tuple(rows),
+              np.concatenate(coef) if coef else np.zeros(0), tuple(stretches))
+    P = Plate(base, blocks, (xa, xb), ylo, faces, tuple(edges), native)
+    has_energy = bool(k) or bool(gy) or bool(gz)
+    out = {}
+    for face, (kind, i) in faces.items():
+        if kind == "open":
+            formula = f"{base!r} - z = 0"
+        elif kind == "top":
+            formula = f"({blocks[i].height}) - z = 0"
+        elif kind == "end":
+            formula = f"y - {float(blocks[i].y[1])!r} = 0"
+        elif kind == "left":
+            formula = f"{float(blocks[i].x[0])!r} - x = 0"
+        else:
+            formula = f"x - {float(blocks[i].x[1])!r} = 0"
+        # (placeholders: C evaluates the integrands; the formula positive on
+        # the liquid's side, as the other walls')
+        out[f"{name}_{face}"] = Constraint(formula, ["x", "0", "0"] if has_energy else None,
+                                           ["x", "0", "0"], shape=("plate", face),
+                                           contact_angle=contact_angle, plate=P, face=face)
+    return out
 
 
 @dataclass(frozen=True)

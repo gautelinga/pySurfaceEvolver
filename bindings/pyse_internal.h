@@ -29,6 +29,13 @@ long pyse_native_serial(void);
 int pyse_native_formula_slot(struct expnode *ex);
 void pyse_native_formula_at(int slot, const REAL *x, REAL *f, REAL *grad);
 
+/* a plate's face's gap at x from its formula's (pyse_native.c): in the
+   plate's solid, how deep; else the distance to the face; 0 if con is none */
+int pyse_plate_gap(int con, const REAL *x, double *gap);
+/* a plate's contact lines onto its faces and edges after edges were split
+   (pyse_native.c); the vertices moved */
+int pyse_plate_after_split(void);
+
 /* geometry (pyse_check.c) */
 REAL pyse_det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d);
 int pyse_crosses(const REAL *p, const REAL *q, const REAL *a, const REAL *b, const REAL *c,

@@ -17,6 +17,7 @@ NECK = 4.0      # a neck counts within this many times the gap two sheets do
 SHEET = 0.25    # a neck whose waist normals' second moment is under this of the first: a sheet
 COARSE = 0.1    # a gap under this many edges is an event even where its group is most of its piece
 WEDGE = 0.7     # next to a contact line: closer than this share of its wedge's height
+PLATE_NEAR = 8.0  # a plate: within this many edges of its own contact line, no approach is one
 
 
 @dataclass(frozen=True)
@@ -144,7 +145,11 @@ def _vertex_max(n: int, f: np.ndarray, values: np.ndarray) -> np.ndarray:
 
 def _base(key) -> str:
     """The solid a wall is a copy of (_surgery.move_poles' copies of a
-    sphere differ only in their poles: <base>_pole<n>)."""
+    sphere differ only in their poles: <base>_pole<n>; a plate's faces are
+    of one solid, the plate and its blocks)."""
+    plate = _plate_of(key)
+    if plate is not None:
+        return f"plate{id(plate)}"
     return str(key).split("_pole")[0] if isinstance(key, str) else f"c{key}"
 
 
@@ -163,21 +168,39 @@ def _one_per_solid(nums, attrs, dist, names):
     merged = dist[:, first].copy()
     for j, g in enumerate(groups.values()):
         if len(g) > 1:
+            if _plate_of(keys[g[0]]) is not None:
+                # (a plate's faces: the gap to the nearest; each counts only
+                # where its face is, or into the solid)
+                with np.errstate(invalid="ignore"):
+                    merged[:, j] = np.nanmin(np.where(np.isnan(dist[:, g]), np.inf, dist[:, g]),
+                                             axis=1)
             merged[np.isnan(dist[:, g]).any(axis=1), j] = np.nan
     copies = {keys[g[0]]: [keys[c] for c in g] for g in groups.values() if len(g) > 1}
     return (np.asarray(nums)[first], np.asarray(attrs)[first], merged,
             [names[c] for c in first], copies)
 
 
+def _plate_of(key):
+    """The constraints.Plate wall key is a face of, or None."""
+    from ._engine import surface
+    return getattr(surface.walls.get(key), "plate", None)
+
+
 def _on_copy(event: Event, copies: dict, periods=None) -> Event:
     """An event on a solid with copies named by the copy whose pole is
     farthest from it (a contact made there leaves its new line clear of
-    the integrals' singular pole)."""
+    the integrals' singular pole); on a plate, by its face nearest."""
     from ._engine import surface
     from ._periodic import delta
     keys = copies.get(event.constraint)
     if not keys:
         return event
+    plate = _plate_of(keys[0])
+    if plate is not None:
+        near = plate.face_distances(event.where)
+        def distance(key):
+            return near.get(getattr(surface.walls.get(key), "face", None), np.inf)
+        return replace(event, constraint=min(keys, key=distance))
     def clearance(key):
         wall = surface.walls.get(key)
         shape, pole = getattr(wall, "shape", None), getattr(wall, "pole_axis", None)
@@ -366,6 +389,12 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
             wedge = np.full(len(near), float(angle)) if outside is None else \
                 np.where(outside[near], 180.0 - angle, float(angle))
             flag[near] = g[near] < WEDGE*s_*np.sin(np.radians(wedge))
+            if _plate_of(key) is not None:
+                # (a plate: next to its contact line the surface comes close
+                # to the face beyond an edge the line is about to pass, and a
+                # hair through at a small angle; the line moves there itself,
+                # in the steps (concave edges) or at equilibrium (convex))
+                flag[near] &= s_ > PLATE_NEAR*h[near]
         flag &= band
         for _, members in _groups(flag, e):
             k = members[np.argmin(g[members])]
@@ -418,12 +447,20 @@ def _contact_lines(m, x, e, h, used, factor, nums, dist, names) -> List[Event]:
         links = np.r_[edges[mask], np.c_[line_vertices[i], line_vertices[j]]]
         label = _labels(flagged, links)
         nearest = _first_least(label[line_vertices[i]], d)
+        key: Union[int, str] = names[c] or int(nums[c])
+        plate = _plate_of(key)
+        corners = plate.corners() if plate is not None else np.zeros((0, 3))
         for group, members in _split(label):
             k = nearest[group]
-            key: Union[int, str] = names[c] or int(nums[c])
             # (in a slab the middle at the first's image)
             mid = (pts[i[k]] + pts[j[k]])/2 if m.periods is None else \
                 pts[i[k]] + m.delta(pts[i[k]], pts[j[k]])/2
+            if len(corners) and np.linalg.norm(corners - mid, axis=1).min() \
+                    < PLATE_NEAR*float(scale[k]):
+                # (a plate's line rounding a block's corner, where three of
+                # its faces meet: one line, its pieces on the faces there a
+                # hair apart; as the walls meeting at a box's corner)
+                continue
             events.append(Event("contact lines", float(d[k]), float(scale[k]), mid,
                                 np.asarray(members), key))
     return events

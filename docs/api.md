@@ -65,7 +65,8 @@ handle to it.
 
 ```{eval-rst}
 .. automodule:: pysurfaceevolver.constraints
-   :members: plane, mirror, sphere, cylinder, Constraint, circle, curve, Boundary
+   :members: plane, mirror, sphere, cylinder, heightfield, plate, Block, Plate, Constraint, circle,
+             curve, Boundary
 .. currentmodule:: pysurfaceevolver
 ```
 

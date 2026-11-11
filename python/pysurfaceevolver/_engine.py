@@ -884,6 +884,56 @@ class _Engine:
         if hasattr(_core, "native_flux"):
             self._register_native_flux()
         self._register_native_formulas()
+        tables = {k: getattr(w, "table") for k, w in surface.walls.items()
+                  if getattr(w, "table", None)}
+        if tables:
+            # (constraints.heightfield: its integrands exist only as tables, the
+            # datafile's are placeholders)
+            if not hasattr(_core, "native_table"):
+                raise RuntimeError("a heightfield wall needs pySE's native tables "
+                                   "(this build's _core has none)")
+            # (C evaluates integrands only as quantities' methods: Evolver's own
+            # constraint integrals, before its first Hessian converts them, would
+            # take the placeholders)
+            if not _core.everything_quantities():
+                self.command("convert_to_quantities")
+            nums, names = self._constraint_names()
+            for c, name in zip(nums, names):
+                data = tables.get(name or int(c))
+                if data is not None:
+                    x0, y0, hx, hy, content, energy = data
+                    if not _core.native_table(int(c), x0, y0, hx, hy, content, energy):
+                        raise RuntimeError(f"constraint {name or int(c)}: its tables "
+                                           "couldn't be registered")
+            self.command("recalc")      # (the load's values were the placeholders')
+        plates = {k: getattr(w, "plate") for k, w in surface.walls.items()
+                  if getattr(w, "plate", None)}
+        if plates:
+            # (constraints.plate: its faces share integrands that exist only in
+            # C, the datafile's are placeholders)
+            if not hasattr(_core, "native_plate"):
+                raise RuntimeError("a plate wall needs pySE's native plates "
+                                   "(this build's _core has none)")
+            if not _core.everything_quantities():
+                self.command("convert_to_quantities")
+            nums, names = self._constraint_names()
+            kinds = {"open": 0, "top": 1, "end": 2, "left": 3, "right": 4}
+            faces: "dict[int, list[tuple[int, int, int]]]" = {}
+            shared = {}
+            for c, name in zip(nums, names):
+                key = name or int(c)
+                p = plates.get(key)
+                if p is not None:
+                    kind, block = p.faces[getattr(surface.walls[key], "face")]
+                    faces.setdefault(id(p), []).append((int(c), kinds[kind], int(block)))
+                    shared[id(p)] = p
+            for key, rows in faces.items():
+                (scalars, blocks, coef, stretches) = shared[key].native
+                cons, ks, of = (list(r) for r in zip(*rows))
+                if not _core.native_plate(cons, ks, of, list(scalars), list(map(float, blocks)),
+                                          list(map(float, coef)), list(map(float, stretches))):
+                    raise RuntimeError("a plate's integrands couldn't be registered")
+            self.command("recalc")
         native = {k: getattr(w, "native", None) for k, w in surface.walls.items()}
         native = {k: n for k, n in native.items() if n is not None}
         if not native or not hasattr(_core, "native_sphere"):

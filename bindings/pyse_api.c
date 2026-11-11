@@ -966,6 +966,49 @@ int pyse_residual(double *out, long n, int full)
   }
 }
 
+/* Per vertex (x, y, z): the force on it before any constraint takes its
+   share, the bodies' pressures included (minus the energy's gradient plus
+   each fixed quantity's multiplier times its gradient, as
+   local_lagrange_adjust() makes it): what a wall's constraint at a vertex
+   holds, for deciding which wall a contact line at an edge between two
+   moves onto. */
+struct vforce_args { double *out; long n; };
+int pyse_fixcount(void);  /* src/fixvol.c */
+
+static void vforce_body(void *arg)
+{ struct vforce_args *a = (struct vforce_args *)arg;
+  vertex_id v_id;
+  long row = 0;
+  int k;
+  find_fixed();
+  calc_volgrads(DO_OPTS);
+  calc_force();
+  pressure_forces();
+  FOR_ALL_VERTICES(v_id)
+  { REAL *f = get_force(v_id);
+    volgrad *vg;
+    if ( row >= a->n ) inconsistent("too many vertices");
+    for ( k = 0 ; k < 3 ; k++ ) a->out[3*row + k] = k < SDIM ? f[k] : 0.0;
+    for ( vg = get_vertex_vgrad(v_id) ; vg ; vg = vg->chain )
+      if ( vg->fixnum >= 0 && vg->fixnum < pyse_fixcount() && vpressures )
+        for ( k = 0 ; k < SDIM && k < 3 ; k++ )
+          a->out[3*row + k] -= vpressures[vg->fixnum]*vg->grad[k];
+    row++;
+  }
+  expect_rows(row,a->n);
+}
+
+int pyse_vertex_forces(double *out, long n)
+{ struct vforce_args a;
+  if ( in_protected ) return PYSE_BUSY;
+  if ( !initialized || !surface_valid ) return invalid_surface();
+  if ( n != web.skel[VERTEX].count )
+    return glue_error(PYSE_ERROR,PYSE_ERR_BAD_ARGUMENT,
+                      "Output array does not match the vertex count.");
+  a.out = out; a.n = n;
+  return surface_call(vforce_body,&a);
+}
+
 /* Per vertex: 1 if it is fixed, on a constraint or on a boundary. */
 struct attached_args { unsigned char *out; long n; };
 
@@ -1183,6 +1226,8 @@ static void gaps_body(void *arg)
         formula_at(a->nums[k],slot[k],x,v_id,&f,grad);
         for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
         *o = g > 0.0 ? (double)(f/sqrt(g)) : NAN;
+        /* (a plate's face: to the face, or into its solid; see pyse_wall_gap) */
+        if ( SDIM == 3 && *o == *o ) pyse_plate_gap(a->nums[k],x,o);
       }
     }
   }

@@ -142,6 +142,11 @@
 
 ### Fixes
 
+- A topology run's check that a gradient run put liquid through a wall counted mirror
+  planes as walls, the liquid on the side their formula calls outside. A mirror at
+  x = X with the liquid at x < X had every vertex through it, and every run that
+  added vertices was undone. It counts only walls with a contact angle now (and
+  heightfields).
 - `arclength` no longer turns round after remeshing between points where settling
   the remeshed surface slid it back along the branch past the point before: the
   secant from there pointed the other way. (Two bridges growing on a bead slid 0.007
@@ -300,6 +305,43 @@
   vertex bad instead of walking it as a loop.
 
 ### API
+
+- `constraints.heightfield(height, x_range, y_range, contact_angle)`: a curved wall
+  z = b(x, y) given by a formula, the liquid below it (a ceiling) or above it. Its
+  wetted area, its share of the volume and, with `gravity=(gy, gz)`, of a weight have
+  no closed form as line integrals, so they are tabulated over the rectangle and
+  evaluated in C as cubic splines, with exact derivatives for Newton. A meniscus
+  between a plate and a heightfield 0.56 apart (at the end of a ramp from 3.6) has
+  the exact pressure to 1e-4 and the exact volume to 1e-7. See the
+  {doc}`hele_shaw_defects` page.
+- `constraints.plate(base, blocks, contact_angle, x_range=, y_from=)`: a plate with
+  sharp-edged blocks on it (`constraints.Block`: a footprint, a top z = height(y)
+  starting flush with the plate, an end face and two sides), a constraint for each
+  face. All the faces share one energy and one content integrand, valid across every
+  edge, so a contact line adds up whichever faces it crosses: a sheet across a block's
+  sides, top and end face has the exact wetted area, volume and weight to 1e-6. The
+  integrands are evaluated in C (the arclength along a top has no closed form). A
+  vertex on an edge is on both its faces' constraints. Contact lines move over the
+  edges by themselves: a vertex that a gradient or Newton step carries past its
+  face's edge is put on the edge (on a corner, past an edge's end), and at an
+  equilibrium (relax(), each arclength point) a vertex on an edge leaves it onto a
+  face where the force on it points into that face and the meniscus lies on the
+  face's liquid side. So a line stays pinned at a convex edge while the meniscus turns
+  through the edge's angle (Gibbs) and passes a concave one at once (a vertex where the
+  line crosses a concave edge stays on it): a step's meniscus pinned, climbing its end
+  face and passing the corner onto the open plate matches the exact 2D arcs to 2e-3,
+  in relax() and in arclength() with topology=True. A filament in a block's base
+  corner relaxes to the exact arc. The topology runs take the plate as one solid: one
+  guard for it (`Plate.solid_formula`), gaps to a face counting only where the face is
+  (negative only in the solid), events of its own contact line near its blocks'
+  corners left alone, remeshing finer toward its corners and base edges, a vertex an
+  edit or a step puts in its solid put back on its surface.
+
+  Limit: a block's concave base corners (90 degrees at its sides and end, its foot's
+  angle at the foot) are Concus-Finn corners below 45 degrees (or 90 minus half the
+  foot's angle): a contact line reaching one starts a filament along it from zero
+  width, which the descents don't follow (in a 3D Hele-Shaw cell at 20 degrees they
+  churned there). Fine above those angles, or where no line reaches a concave corner.
 
 - `Evolver.wall_force(constraint)`: the force the liquid puts on a wall (a bead, say):
   its surface's pull along the contact lines, in the direction Young's law gives at

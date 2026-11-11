@@ -142,6 +142,26 @@ int pyse_set_solver(const char *name);
 int pyse_native_sphere(int con, const double *c, double R, const double *e1,
                        const double *e2, const double *e3, double k);
 void pyse_native_enable(int on);
+/* A wall z = b(x, y)'s contact-line integrands by tables
+   (constraints.heightfield): constraint con's energy's (E, or NULL) and
+   content's x components as cubic B-spline coefficients, (nx + 2)(ny + 2)
+   each, x-major, over the grid x0 + i hx, y0 + j hy; 0 if it can't be. */
+int pyse_native_table(int con, int nx, int ny, double x0, double y0, double hx, double hy,
+                      const double *E, const double *C);
+/* A flat plate with blocks on it (constraints.plate): its faces, the
+   constraints cons, share one energy and one content integrand; scalars
+   base, ylo, k, gy, gz (the faces' kinds and blocks: kinds, of); per
+   block x0, x1, y0, y1, its nodes n and its
+   sides' xc, kappa (7 each) with its 7 x (n + 2) spline coefficients in
+   coef; per stretch of x
+   beside the blocks a, b, sa, sb, ea, eb (6 each). 0 if it can't be. */
+int pyse_native_plate(const int *cons, const int *kinds, const int *of, int ncons,
+                      const double *scalars, const double *blocks, int nblocks,
+                      const double *coef, long ncoef, const double *stretches, int nstretches);
+/* A plate's contact lines onto its edges where they have gone past them,
+   and (release) off them where the forces say (Gibbs); the vertices
+   changed, -1 on an error. Run at the end of each gradient step too. */
+int pyse_plate_settle(int release);
 /* the flux gauge's integrands in C (constraints.sphere(gauge="flux")): a
    method instance's facet integrand (method) or constraint con's energy
    (which 0) or content (1) line integrand; base 0 none, 1 (0,0,z), 2 a
@@ -279,6 +299,7 @@ double pyse_total_energy(void);
 /* full: all directions instead (for energies with in-plane forces, such
    as elastic membranes) */
 int pyse_residual(double *out, long n, int full);   /* n: vertices + optimizing parameters */
+int pyse_vertex_forces(double *out, long n);       /* n: vertices; out n x 3 */
 int pyse_optparam_count(void);
 /* per vertex, 1 if fixed, on a constraint or on a boundary */
 int pyse_vertex_attached(unsigned char *out, long n);

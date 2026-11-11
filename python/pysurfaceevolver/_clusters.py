@@ -99,10 +99,13 @@ def pieces(f: np.ndarray, fb: np.ndarray) -> np.ndarray:
 def _solids(ev) -> "tuple[list, list]":
     """The walls' solids as (key, kind, data) (kind "plane": normal, offset,
     the solid where normal . x < offset; "sphere": centre, radius;
-    "cylinder": point, unit direction, radius; one per solid, not its pole
-    copies), and the constraints the surface touches that aren't such walls."""
+    "cylinder": point, unit direction, radius; "plate": a constraints.Plate,
+    the plate and its blocks, by its open face, its other faces part of it;
+    one per solid, not its pole copies), and the constraints the surface
+    touches that aren't such walls."""
     from ._surgery import _base
-    solids, seen = [], set()
+    solids: list = []
+    seen: set = set()
     for key, w in surface.walls.items():
         shape = getattr(w, "shape", None)
         if shape is None:
@@ -116,6 +119,10 @@ def _solids(ev) -> "tuple[list, list]":
             elif shape[0] == "cylinder":
                 d = np.asarray(shape[2], float)
                 data = (np.asarray(shape[1], float), d/np.linalg.norm(d), float(shape[3]))
+            elif shape[0] == "plate":
+                if getattr(w, "face", None) == "open":
+                    solids.append((key, "plate", (getattr(w, "plate"),)))
+                continue
             else:
                 continue
         except (TypeError, ValueError):
@@ -125,6 +132,8 @@ def _solids(ev) -> "tuple[list, list]":
             seen.add(base)
             solids.append((key, shape[0], data))
     known = {_base(k) for k, _, _ in solids}
+    known |= {_base(k) for k, w in surface.walls.items()
+              if getattr(w, "plate", None) is not None}      # (a plate's faces: its solid)
     nums, _, dist, names = ev._constraint_gaps()
     dist = np.asarray(dist)
     other: list = []
@@ -153,6 +162,8 @@ def _gap(kind: str, data, p: np.ndarray, periods=None) -> np.ndarray:
     in a periodic slab from its nearest image)."""
     if kind == "plane":
         return p @ data[0] - data[1]
+    if kind == "plate":
+        return data[0].solid(p)
     q = p - data[0] if periods is None else _periodic.delta(data[0], p, periods)
     if kind == "cylinder":
         q = q - np.outer(q @ data[1], data[1])

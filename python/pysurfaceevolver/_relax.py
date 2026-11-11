@@ -255,10 +255,21 @@ class _Relaxing(_Analysis):
         try:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                return self._relax(tol=tol, max_iter=max_iter, levels=levels, newton=newton,
-                                   stability=stability, adapt=adapt, tidy=tidy, seek=seek,
-                                   undo_if=undo_if, callback=callback, every=every,
-                                   threads=threads)
+                result = self._relax(tol=tol, max_iter=max_iter, levels=levels, newton=newton,
+                                     stability=stability, adapt=adapt, tidy=tidy, seek=seek,
+                                     undo_if=undo_if, callback=callback, every=every,
+                                     threads=threads)
+                # a plate's contact lines on its edges: off them where the
+                # forces at equilibrium say (the gradient steps judged with
+                # theirs), and relaxed again, until none moves
+                for _ in range(_PLATE_ROUNDS if _plates() else 0):
+                    if not _core.plate_settle(True):
+                        break
+                    result = self._relax(tol=tol, max_iter=max_iter, levels=0, newton=newton,
+                                         stability=stability, adapt=False, tidy=tidy,
+                                         seek=seek, undo_if=undo_if, callback=callback,
+                                         every=every, threads=threads)
+                return result
         finally:                    # (after the block: inside it they'd be recorded again)
             if sys.exc_info()[0] is None:
                 _reemit(caught)
@@ -764,6 +775,9 @@ class _Relaxing(_Analysis):
                     self._put_back(snapshot)
                     continue
                 accepted = True
+                if _plates():
+                    # (a plate's contact lines past its edges: onto them)
+                    _core.plate_settle(False)
                 # (both kinds factor the Hessian where the step begins)
                 # (read natively: an eval between steps would free the
                 # temporary memory the kept chord system lives in)
@@ -863,8 +877,10 @@ class _Relaxing(_Analysis):
                 p, d = np.asarray(shape[1], float), np.asarray(shape[2], float)
                 r = x[free] - p
                 depth = shape[3] - np.linalg.norm(r - np.outer(r @ d, d), axis=1)
-            else:
+            elif kind == "plane":
                 depth = shape[2] - x[free] @ np.asarray(shape[1], float)
+            else:
+                continue
             if (depth > _SINK*h).any():
                 return True
         return False
@@ -1119,6 +1135,31 @@ class _Relaxing(_Analysis):
         if merged and not split and self._tidy_kinds()[0]:
             self.command("u")
         return merged + split
+
+
+_PLATE_ROUNDS = 20         # relax()'s rounds of a plate's contact lines off its edges
+
+
+def _plates() -> bool:
+    """Whether the surface has a constraints.plate wall."""
+    return any(getattr(w, "plate", None) is not None for w in surface.walls.values())
+
+
+def _plate_resettle(ev, tol: float) -> bool:
+    """After a plate's contact lines moved onto or off its edges: back to an
+    equilibrium on the same mesh (arclength needs its vertices), gradient
+    steps (each puts the lines onto the edges they pass) then Newton, and
+    off the edges again while the forces there say so. Whether it converged."""
+    converged = False
+    for _ in range(_PLATE_ROUNDS):
+        for steps in (20, 200):
+            ev.iterate(steps)
+            converged = ev.newton(20, tol=tol).converged
+            if converged:
+                break
+        if not converged or not _core.plate_settle(True):
+            break
+    return converged
 
 
 def _reemit(caught) -> None:

@@ -136,10 +136,16 @@ void pyse_facet_normal(facet_id f_id, REAL *n, REAL *area)
 
 double pyse_wall_gap(int c, REAL *x)
 { REAL f = 0.0, grad[MAXCOORD], g = 0.0;
+  double gap;
   int i;
   eval_all(get_constraint(c)->formula,x,SDIM,&f,grad,NULLID);
   for ( i = 0 ; i < SDIM ; i++ ) g += grad[i]*grad[i];
-  return g > 0.0 ? (double)(f/sqrt(g)) : 0.0;
+  gap = g > 0.0 ? (double)(f/sqrt(g)) : 0.0;
+  /* a plate's face (constraints.plate): its formula holds past the face,
+     through the liquid beside and behind it; the gap is to the face, or into
+     the plate's solid */
+  if ( SDIM == 3 ) pyse_plate_gap(c,x,&gap);
+  return gap;
 }
 
 REAL pyse_det3(const REAL *a, const REAL *b, const REAL *c, const REAL *d)

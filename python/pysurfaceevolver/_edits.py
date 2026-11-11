@@ -112,7 +112,15 @@ def edit(ev, op: str, ids: Iterable, sizes=None, **params) -> np.ndarray:
         table[numbers - 1] = sizes
         by_number = table.tolist()
     _, result = ev._call(_core.edit, OPS[op], rows, values, w, sides, manifold, by_number)
-    return np.asarray(result.data, dtype=int)
+    done = np.asarray(result.data, dtype=int)
+    if done.any() and hasattr(_core, "plate_settle"):
+        from ._relax import _plates
+        if _plates():
+            # (a plate: the edited vertices onto its faces and edges, the
+            # others out of its solid, as after a step: a remeshing's smoothing
+            # slid vertices into a block past its side)
+            _core.plate_settle(False)
+    return done
 
 
 def crossings(ev, far: bool = False) -> int:

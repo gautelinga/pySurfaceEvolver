@@ -141,6 +141,472 @@ int pyse_slabflux_active(void);
 /* the integrand vector of the wall whose integrand key is (its first
    node), at x: values, and with order 1 or 2 their first (and second)
    derivatives; 0 where key isn't a registered wall's */
+/* ---- walls z = b(x, y) by tables (constraints.heightfield) ---------------
+ *
+ * A curved wall's contact-line integrands have no closed form (its wetted
+ * area is the integral of sqrt(1 + |grad b|^2)), so Python tabulates them:
+ * the energy's and the content's x components (the integrands are P(x, y) dx
+ * forms, zero along lines x = const and along the table's first row y = y0),
+ * as tensor-product cubic B-splines over a uniform grid, natural at its
+ * edges (constraints._spline_coefficients); past the grid each extends
+ * linearly. Evaluated here always: the integrands in the datafile are
+ * placeholders (pyse_native_enable(0) leaves these on). */
+
+#define TABLE_MAX 64
+
+struct native_table
+{ struct expnode *energy, *content;   /* the constraint's integrands' first nodes */
+  int nx, ny;                         /* grid nodes; (nx + 2)(ny + 2) coefficients */
+  REAL x0, y0, hx, hy;
+  REAL *e, *c;                        /* coefficients, x-major (NULL: no energy) */
+};
+
+static struct native_table tables[TABLE_MAX];
+static int table_count = 0;
+static long table_load = -1;
+
+static void table_free(struct native_table *t)
+{ free(t->e); free(t->c);
+  t->e = t->c = NULL;
+}
+
+/* register constraint con's integrands as tables (E may be NULL); 0 if it
+   can't be (no integrands, too many) */
+int pyse_native_table(int con, int nx, int ny, double x0, double y0, double hx, double hy,
+                      const double *E, const double *C)
+{ struct constraint *cn;
+  struct native_table *t;
+  long n = (long)(nx + 2)*(ny + 2);
+  int i;
+  native_serial++;
+  if ( table_load != pyse_load_serial() )
+  { for ( i = 0 ; i < table_count ; i++ ) table_free(tables + i);
+    table_count = 0;
+    table_load = pyse_load_serial();
+  }
+  if ( con < 0 || con >= web.maxcon || nx < 2 || ny < 2 || hx <= 0 || hy <= 0 ) return 0;
+  cn = get_constraint(con);
+  if ( !cn || !cn->convect[0] || (E && !cn->envect[0]) ) return 0;
+  for ( i = 0, t = NULL ; i < table_count ; i++ )
+    if ( tables[i].content == cn->convect[0] ) { t = tables + i; table_free(t); }
+  if ( !t )
+  { if ( table_count >= TABLE_MAX ) return 0;
+    t = tables + table_count++;
+  }
+  t->energy = E ? cn->envect[0] : NULL;
+  t->content = cn->convect[0];
+  t->nx = nx; t->ny = ny;
+  t->x0 = x0; t->y0 = y0; t->hx = hx; t->hy = hy;
+  t->c = (REAL*)malloc(n*sizeof(REAL));
+  t->e = E ? (REAL*)malloc(n*sizeof(REAL)) : NULL;
+  if ( !t->c || (E && !t->e) ) { table_free(t); table_count--; return 0; }
+  for ( i = 0 ; i < n ; i++ ) t->c[i] = C[i];
+  if ( E ) for ( i = 0 ; i < n ; i++ ) t->e[i] = E[i];
+  return 1;
+}
+
+/* the cubic B-spline's four weights at t in [0, 1] and their first and
+   second derivatives in t */
+static void bspline_weights(REAL t, REAL *w, REAL *w1, REAL *w2)
+{ REAL u = 1.0 - t, t2 = t*t, t3 = t2*t;
+  w[0] = u*u*u/6.0;
+  w[1] = (3.0*t3 - 6.0*t2 + 4.0)/6.0;
+  w[2] = (-3.0*t3 + 3.0*t2 + 3.0*t + 1.0)/6.0;
+  w[3] = t3/6.0;
+  w1[0] = -u*u/2.0;
+  w1[1] = (3.0*t2 - 4.0*t)/2.0;
+  w1[2] = (-3.0*t2 + 2.0*t + 1.0)/2.0;
+  w1[3] = t2/2.0;
+  w2[0] = u;
+  w2[1] = 3.0*t - 2.0;
+  w2[2] = 1.0 - 3.0*t;
+  w2[3] = t;
+}
+
+/* the cell and the place in it of u (grid units) among n nodes; *out the
+   distance past the grid (0 inside) */
+static int table_cell(REAL u, int n, REAL *t, REAL *out)
+{ int i;
+  *out = 0.0;
+  /* (a NaN coordinate gives a NaN value, not a cell far off the table) */
+  if ( u != u ) { *out = u; u = 0.0; }
+  else if ( u < 0.0 ) { *out = u; u = 0.0; }
+  else if ( u > n - 1 ) { *out = u - (n - 1); u = n - 1; }
+  i = (int)floor(u);
+  if ( i > n - 2 ) i = n - 2;
+  *t = u - i;
+  return i;
+}
+
+/* the table's value at x, y with its gradient and Hessian in x, y (past the
+   grid: the edge's value and slope carried on linearly) */
+static void table_value(const struct native_table *T, const REAL *coef, REAL x, REAL y,
+                        REAL *f, REAL *fx, REAL *fy, REAL *fxx, REAL *fxy, REAL *fyy)
+{ REAL tx, ty, ox, oy, wx[4], wx1[4], wx2[4], wy[4], wy1[4], wy2[4];
+  int i = table_cell((x - T->x0)/T->hx,T->nx,&tx,&ox);
+  int j = table_cell((y - T->y0)/T->hy,T->ny,&ty,&oy);
+  int a, b, stride = T->ny + 2;
+  REAL v = 0, vx = 0, vy = 0, vxx = 0, vxy = 0, vyy = 0;
+  bspline_weights(tx,wx,wx1,wx2);
+  bspline_weights(ty,wy,wy1,wy2);
+  for ( a = 0 ; a < 4 ; a++ )
+  { const REAL *row = coef + (long)(i + a)*stride + j;
+    REAL r = 0, r1 = 0, r2 = 0;
+    for ( b = 0 ; b < 4 ; b++ )
+    { r += row[b]*wy[b]; r1 += row[b]*wy1[b]; r2 += row[b]*wy2[b]; }
+    v += wx[a]*r; vx += wx1[a]*r; vy += wx[a]*r1;
+    vxx += wx2[a]*r; vxy += wx1[a]*r1; vyy += wx[a]*r2;
+  }
+  /* (grid units to lengths; past the grid, linear in the distance) */
+  vx /= T->hx; vy /= T->hy;
+  vxx /= T->hx*T->hx; vxy /= T->hx*T->hy; vyy /= T->hy*T->hy;
+  if ( ox != 0.0 ) { v += vx*ox*T->hx; vy += vxy*ox*T->hx; vxx = vxy = 0.0; }
+  if ( oy != 0.0 ) { v += vy*oy*T->hy; vx += vxy*oy*T->hy; vyy = vxy = 0.0; }
+  *f = v; *fx = vx; *fy = vy; *fxx = vxx; *fxy = vxy; *fyy = vyy;
+}
+
+static int table_eval(struct expnode *key, REAL *x, int order, REAL *val,
+                      REAL (*d)[MAXCOORD], REAL ***s)
+{ const struct native_table *T = NULL;
+  const REAL *coef = NULL;
+  REAL f, fx, fy, fxx, fxy, fyy;
+  int i, j, m;
+  if ( table_load != pyse_load_serial() ) return 0;
+  for ( i = 0 ; i < table_count ; i++ )
+  { if ( tables[i].energy == key ) { T = tables + i; coef = T->e; break; }
+    if ( tables[i].content == key ) { T = tables + i; coef = T->c; break; }
+  }
+  if ( !T ) return 0;
+  table_value(T,coef,x[0],x[1],&f,&fx,&fy,&fxx,&fxy,&fyy);
+  for ( m = 0 ; m < 3 ; m++ )
+  { val[m] = m == 0 ? f : 0.0;
+    if ( order >= 1 )
+      for ( i = 0 ; i < 3 ; i++ ) d[m][i] = (m == 0 && i < 2) ? (i == 0 ? fx : fy) : 0.0;
+    if ( order >= 2 )
+      for ( i = 0 ; i < 3 ; i++ )
+        for ( j = 0 ; j < 3 ; j++ )
+          s[m][i][j] = (m == 0 && i < 2 && j < 2)
+                       ? (i == 0 ? (j == 0 ? fxx : fxy) : (j == 0 ? fxy : fyy)) : 0.0;
+  }
+  return 1;
+}
+
+/* ---- a flat plate with blocks on it (constraints.plate) -----------------
+ *
+ * The plate z = base, the liquid below it, carries blocks, each over the
+ * footprint x0 <= x <= x1, y0 <= y <= y1: its top z = d(y) (d(y0) = base),
+ * its end face y = y1, its sides x = x0, x1. Each face is a constraint of
+ * its own; all share one energy and one content integrand, valid across
+ * every edge, so a contact line adds up whichever faces it crosses
+ * (constraints.plate gives the derivation). Per block, on its footprint
+ * (A), with S the arclength along the profile from the plate's first row
+ * y = ylo, dd the profile extended flat (base before y0, d(y1) after y1),
+ * Psi = int (base - dd) dy, Dc = int dd dy, Gam = int G(y, dd) dy and
+ * G = gy y z + gz z^2/2 the weight:
+ *   energy  = (-k (S + z - dd + kappa Psi) + Gam + [y > y1] W(y, z),
+ *              -k kappa (x - xc)(base - z), 0)
+ *   content = (Dc + [y > y1] (y - y1)(z - d1), 0, 0)
+ * with kappa = 2/(x1 - x0), xc the middle, W the weight's part past the end
+ * face. Beside the blocks (B), in each stretch [a, b] of x between
+ * footprints or mirror planes:
+ *   energy  = (-k (y - ylo + z - base) + Gam_open + sum_e H_e'(x) mu_e(y),
+ *              -k s(x)(base - z) + sum_e H_e(x) mu_e'(y), 0)
+ *   content = (base (y - ylo) + sum_e H_e'(x) nu_e(y), sum_e H_e(x) nu_e'(y), 0)
+ * the sum over the stretch's footprint edges e, H_e the cubic with
+ * H(x_e) = 0, H'(x_e) = 1 and H = H' = 0 at the stretch's other end, mu_e
+ * and nu_e the jumps of the footprint's dx parts across its edge on the
+ * plate (a smooth step along the block, where no face crosses the edge),
+ * s(x) the sides' orientation (-1 at a left edge, +1 at a right one); past
+ * a block's end, its edges' terms carry on its dx parts' z dependence too
+ * (which vanishes on the plate), so the forms join across the edge at any
+ * z. The functions of y are cubic B-splines over each footprint's y range,
+ * carried on in closed form outside it. */
+
+#define PLATE_MAX 16
+#define PLATE_KEYS 256
+#define PLATE_FUNCS 7      /* S, dd, Psi, Dc, Gam, mu, nu */
+#define PLATE_EPS 1e-9     /* a point this near a footprint is on it (its sides) */
+
+struct plate_block
+{ REAL x0, x1, y0, y1, xc, kappa;   /* the sides' dy part kappa (x - xc)(base - z) */
+  int n;                   /* nodes over [y0, y1] */
+  REAL h;
+  REAL *coef;              /* PLATE_FUNCS x (n + 2) */
+  REAL end[PLATE_FUNCS];   /* the functions at y1 */
+};
+
+struct plate_stretch { REAL a, b, sa, sb; int ea, eb; };   /* ea, eb: blocks or -1 */
+
+struct plate
+{ REAL base, ylo, k, gy, gz;
+  int nblocks, nstretches;
+  struct plate_block *blocks;
+  struct plate_stretch *stretches;
+};
+
+static struct plate plates[PLATE_MAX];
+static int plate_count = 0;
+static long plate_load = -1;
+static struct { struct expnode *key; int plate, content; } plate_keys[PLATE_KEYS];
+static int plate_nkeys = 0;
+/* the faces: constraint, plate, kind (FACE_OPEN ... below), block */
+static struct { int con, plate, kind, block; } plate_faces[PLATE_KEYS];
+static int plate_nfaces = 0;
+
+static void plate_free(struct plate *P)
+{ int i;
+  for ( i = 0 ; i < P->nblocks ; i++ ) free(P->blocks[i].coef);
+  free(P->blocks); free(P->stretches);
+  P->blocks = NULL; P->stretches = NULL; P->nblocks = P->nstretches = 0;
+}
+
+/* function f of block B at y in [y0, y1]: value and three derivatives */
+static void plate_spline(const struct plate_block *B, int f, REAL y, REAL *out)
+{ REAL tt, o, w[4], w1[4], w2[4], w3[4] = {-1.0, 3.0, -3.0, 1.0};
+  int i = table_cell((y - B->y0)/B->h,B->n,&tt,&o), a;
+  const REAL *c = B->coef + (long)f*(B->n + 2) + i;
+  bspline_weights(tt,w,w1,w2);
+  out[0] = out[1] = out[2] = out[3] = 0.0;
+  for ( a = 0 ; a < 4 ; a++ )
+  { out[0] += c[a]*w[a]; out[1] += c[a]*w1[a]; out[2] += c[a]*w2[a]; out[3] += c[a]*w3[a]; }
+  out[1] /= B->h; out[2] /= B->h*B->h; out[3] /= B->h*B->h*B->h;
+}
+
+/* register a plate: the constraints (its faces) cons[0..ncons-1], their
+   kinds (0 the plate, 1 a top, 2 an end, 3 a left side, 4 a right one) and
+   blocks (of), whose integrands are evaluated as the plate's;
+   scalars base, ylo, k, gy, gz; per block x0, x1, y0, y1, n, xc, kappa
+   (blocks, 7 each) and its PLATE_FUNCS x (n + 2) coefficients (in order,
+   coef); per
+   stretch a, b, sa, sb, ea, eb (6 each). 0 if it can't be. */
+int pyse_native_plate(const int *cons, const int *kinds, const int *of, int ncons,
+                      const double *scalars, const double *blocks, int nblocks,
+                      const double *coef, long ncoef, const double *stretches, int nstretches)
+{ struct plate *P;
+  long used = 0;
+  int i, j, nkeys = 0;
+  native_serial++;
+  if ( plate_load != pyse_load_serial() )
+  { for ( i = 0 ; i < plate_count ; i++ ) plate_free(plates + i);
+    plate_count = plate_nkeys = plate_nfaces = 0;
+    plate_load = pyse_load_serial();
+  }
+  if ( plate_count >= PLATE_MAX || nblocks < 0 || nstretches < 1 ) return 0;
+  for ( i = 0 ; i < ncons ; i++ )
+  { struct constraint *cn;
+    if ( cons[i] < 0 || cons[i] >= web.maxcon ) return 0;
+    cn = get_constraint(cons[i]);
+    if ( !cn || !cn->convect[0] ) return 0;
+    nkeys += cn->envect[0] ? 2 : 1;
+  }
+  if ( plate_nkeys + nkeys > PLATE_KEYS || plate_nfaces + ncons > PLATE_KEYS ) return 0;
+  P = plates + plate_count;
+  P->base = scalars[0]; P->ylo = scalars[1]; P->k = scalars[2];
+  P->gy = scalars[3]; P->gz = scalars[4];
+  P->blocks = (struct plate_block*)calloc(nblocks > 0 ? nblocks : 1,sizeof(struct plate_block));
+  P->stretches = (struct plate_stretch*)calloc(nstretches,sizeof(struct plate_stretch));
+  P->nblocks = nblocks; P->nstretches = nstretches;
+  if ( !P->blocks || !P->stretches ) { plate_free(P); return 0; }
+  for ( i = 0 ; i < nblocks ; i++ )
+  { struct plate_block *B = P->blocks + i;
+    long size;
+    B->x0 = blocks[7*i]; B->x1 = blocks[7*i + 1];
+    B->y0 = blocks[7*i + 2]; B->y1 = blocks[7*i + 3];
+    B->n = (int)blocks[7*i + 4];
+    B->xc = blocks[7*i + 5]; B->kappa = blocks[7*i + 6];
+    if ( B->n < 2 || !(B->y1 > B->y0) || !(B->x1 > B->x0) ) { plate_free(P); return 0; }
+    B->h = (B->y1 - B->y0)/(B->n - 1);
+    size = (long)PLATE_FUNCS*(B->n + 2);
+    if ( used + size > ncoef ) { plate_free(P); return 0; }
+    B->coef = (REAL*)malloc(size*sizeof(REAL));
+    if ( !B->coef ) { plate_free(P); return 0; }
+    for ( j = 0 ; j < size ; j++ ) B->coef[j] = coef[used + j];
+    used += size;
+    for ( j = 0 ; j < PLATE_FUNCS ; j++ )
+    { REAL v[4];
+      plate_spline(B,j,B->y1,v);
+      B->end[j] = v[0];
+    }
+  }
+  for ( i = 0 ; i < nstretches ; i++ )
+  { struct plate_stretch *s = P->stretches + i;
+    const double *r = stretches + 6*i;
+    s->a = r[0]; s->b = r[1]; s->sa = r[2]; s->sb = r[3];
+    s->ea = (int)r[4]; s->eb = (int)r[5];
+    if ( !(s->b > s->a) || s->ea >= nblocks || s->eb >= nblocks ) { plate_free(P); return 0; }
+  }
+  for ( i = 0 ; i < ncons ; i++ )
+  { struct constraint *cn = get_constraint(cons[i]);
+    plate_faces[plate_nfaces].con = cons[i];
+    plate_faces[plate_nfaces].plate = plate_count;
+    plate_faces[plate_nfaces].kind = kinds[i];
+    plate_faces[plate_nfaces++].block = of[i];
+    plate_keys[plate_nkeys].key = cn->convect[0];
+    plate_keys[plate_nkeys].plate = plate_count;
+    plate_keys[plate_nkeys++].content = 1;
+    if ( cn->envect[0] )
+    { plate_keys[plate_nkeys].key = cn->envect[0];
+      plate_keys[plate_nkeys].plate = plate_count;
+      plate_keys[plate_nkeys++].content = 0;
+    }
+  }
+  plate_count++;
+  return 1;
+}
+
+/* a function of y alone as a dual (value, d/dy, d2/dy2) */
+static dual d_of_y(REAL v, REAL v1, REAL v2)
+{ dual r = d_const(v);
+  r.g[1] = v1;
+  r.h[1][1] = v2;
+  return r;
+}
+
+/* block B's function f at y as a dual (and, with deriv, its derivative's),
+   carried on outside [y0, y1] as the plate's integrands need (see above) */
+static dual plate_fn(const struct plate *P, const struct plate_block *B, int f, REAL y,
+                     int deriv)
+{ REAL v[4], d1 = B->end[1];
+  if ( y >= B->y0 && y <= B->y1 )
+  { plate_spline(B,f,y,v);
+    return deriv ? d_of_y(v[1],v[2],v[3]) : d_of_y(v[0],v[1],v[2]);
+  }
+  if ( y < B->y0 )
+    switch ( f )
+    { case 0: v[0] = y - P->ylo; v[1] = 1.0; v[2] = 0.0; break;            /* S */
+      case 1: v[0] = P->base; v[1] = v[2] = 0.0; break;                    /* dd */
+      case 3: v[0] = P->base*(y - P->ylo); v[1] = P->base; v[2] = 0.0; break;
+      case 4:                                                               /* Gam_open */
+        v[0] = P->gy*P->base*(y*y - P->ylo*P->ylo)/2 + P->gz*P->base*P->base/2*(y - P->ylo);
+        v[1] = P->gy*P->base*y + P->gz*P->base*P->base/2;
+        v[2] = P->gy*P->base;
+        break;
+      default: v[0] = v[1] = v[2] = 0.0;                                   /* Psi, mu, nu */
+    }
+  else
+  { REAL t = y - B->y1;
+    switch ( f )
+    { case 0: v[0] = B->end[0] + t; v[1] = 1.0; v[2] = 0.0; break;
+      case 1: v[0] = d1; v[1] = v[2] = 0.0; break;
+      case 3: v[0] = B->end[3] + d1*t; v[1] = d1; v[2] = 0.0; break;
+      case 4:
+        v[0] = B->end[4] + P->gy*d1*(y*y - B->y1*B->y1)/2 + P->gz*d1*d1/2*t;
+        v[1] = P->gy*d1*y + P->gz*d1*d1/2;
+        v[2] = P->gy*d1;
+        break;
+      default: v[0] = B->end[f]; v[1] = v[2] = 0.0;
+    }
+  }
+  if ( deriv ) return d_of_y(v[1],v[2],0.0);
+  return d_of_y(v[0],v[1],v[2]);
+}
+
+static int plate_eval(struct expnode *key, REAL *x, int order, REAL *val,
+                      REAL (*d)[MAXCOORD], REAL ***s)
+{ const struct plate *P = NULL;
+  const struct plate_block *B = NULL;
+  REAL ex[3] = {1,0,0}, ey[3] = {0,1,0}, ez[3] = {0,0,1};
+  dual X, Y, Z, out[3];
+  int i, j, m, content = 0;
+  if ( plate_load != pyse_load_serial() ) return 0;
+  for ( i = 0 ; i < plate_nkeys ; i++ )
+    if ( plate_keys[i].key == key )
+    { P = plates + plate_keys[i].plate; content = plate_keys[i].content; break; }
+  if ( !P ) return 0;
+  X = d_lin(ex,0.0,x); Y = d_lin(ey,0.0,x); Z = d_lin(ez,0.0,x);
+  out[2] = d_const(0.0);
+  for ( i = 0 ; i < P->nblocks ; i++ )
+    if ( x[0] >= P->blocks[i].x0 - PLATE_EPS && x[0] <= P->blocks[i].x1 + PLATE_EPS )
+    { B = P->blocks + i; break; }
+  if ( B )
+  { REAL kappa = B->kappa, xc = B->xc, d1 = B->end[1];
+    int past = x[1] > B->y1;
+    if ( content )
+    { out[0] = plate_fn(P,B,3,x[1],0);
+      if ( past )
+        out[0] = d_add(out[0],d_mul(d_add(Y,d_const(-B->y1)),d_add(Z,d_const(-d1))));
+      out[1] = d_const(0.0);
+    }
+    else
+    { /* -k (S + z - dd + kappa Psi) + Gam + [past] W */
+      dual a = d_add(d_add(plate_fn(P,B,0,x[1],0),Z),
+                     d_add(d_scale(plate_fn(P,B,1,x[1],0),-1.0),
+                           d_scale(plate_fn(P,B,2,x[1],0),kappa)));
+      out[0] = d_add(d_scale(a,-P->k),plate_fn(P,B,4,x[1],0));
+      if ( past )
+      { /* gy (y^2 - y1^2)/2 (z - d1) + gz (y - y1)(z^2 - d1^2)/2 */
+        dual w = d_mul(d_scale(d_add(d_mul(Y,Y),d_const(-B->y1*B->y1)),P->gy/2),
+                       d_add(Z,d_const(-d1)));
+        w = d_add(w,d_mul(d_scale(d_add(Y,d_const(-B->y1)),P->gz/2),
+                          d_add(d_mul(Z,Z),d_const(-d1*d1))));
+        out[0] = d_add(out[0],w);
+      }
+      out[1] = d_scale(d_mul(d_add(X,d_const(-xc)),d_add(d_const(P->base),d_scale(Z,-1.0))),
+                       -P->k*kappa);
+    }
+  }
+  else
+  { const struct plate_stretch *st = NULL;
+    for ( i = 0 ; i < P->nstretches ; i++ )
+      if ( x[0] >= P->stretches[i].a - PLATE_EPS && x[0] <= P->stretches[i].b + PLATE_EPS )
+      { st = P->stretches + i; break; }
+    if ( !st ) st = P->stretches + (x[0] < P->stretches[0].a ? 0 : P->nstretches - 1);
+    if ( content )
+    { out[0] = d_scale(d_add(Y,d_const(-P->ylo)),P->base);
+      out[1] = d_const(0.0);
+    }
+    else
+    { REAL L = st->b - st->a;
+      dual sx = d_add(d_const(st->sa),d_scale(d_add(X,d_const(-st->a)),(st->sb - st->sa)/L));
+      out[0] = d_add(d_scale(d_add(d_add(Y,d_const(-P->ylo)),d_add(Z,d_const(-P->base))),-P->k),
+                     d_of_y(P->gy*P->base*(x[1]*x[1] - P->ylo*P->ylo)/2
+                              + P->gz*P->base*P->base/2*(x[1] - P->ylo),
+                            P->gy*P->base*x[1] + P->gz*P->base*P->base/2, P->gy*P->base));
+      out[1] = d_scale(d_mul(sx,d_add(d_const(P->base),d_scale(Z,-1.0))),-P->k);
+    }
+    for ( j = 0 ; j < 2 ; j++ )
+    { int e = j ? st->eb : st->ea;
+      REAL xe = j ? st->b : st->a, L = st->b - st->a;
+      dual t, one_t, H, H1, f, f1;
+      if ( e < 0 ) continue;
+      /* t from the edge into the stretch; H = (x - xe)(1 - t)^2,
+         H' = (1 - t)(1 - 3t) (d/dx, either side) */
+      t = d_scale(d_add(X,d_const(-xe)),j ? -1.0/L : 1.0/L);
+      one_t = d_add(d_const(1.0),d_scale(t,-1.0));
+      H = d_mul(d_add(X,d_const(-xe)),d_mul(one_t,one_t));
+      H1 = d_mul(one_t,d_add(d_const(1.0),d_scale(t,-3.0)));
+      f = plate_fn(P,P->blocks + e,content ? 6 : 5,x[1],0);
+      f1 = plate_fn(P,P->blocks + e,content ? 6 : 5,x[1],1);
+      if ( x[1] > P->blocks[e].y1 )
+      { /* past the end: the footprint's z terms less theirs on the plate,
+           (y - y1)(z - base) for the content, the weight's W(y, z) - W(y, base),
+           with their y derivatives */
+        REAL y1 = P->blocks[e].y1;
+        dual zb = d_add(Z,d_const(-P->base));
+        if ( content )
+        { f = d_add(f,d_mul(d_add(Y,d_const(-y1)),zb));
+          f1 = d_add(f1,zb);
+        }
+        else
+        { dual zz = d_add(d_mul(Z,Z),d_const(-P->base*P->base));
+          f = d_add(f,d_add(d_mul(d_scale(d_add(d_mul(Y,Y),d_const(-y1*y1)),P->gy/2),zb),
+                            d_mul(d_scale(d_add(Y,d_const(-y1)),P->gz/2),zz)));
+          f1 = d_add(f1,d_add(d_scale(d_mul(Y,zb),P->gy),d_scale(zz,P->gz/2)));
+        }
+      }
+      out[0] = d_add(out[0],d_mul(H1,f));
+      out[1] = d_add(out[1],d_mul(H,f1));
+    }
+  }
+  for ( m = 0 ; m < 3 ; m++ )
+  { val[m] = out[m].v;
+    if ( order >= 1 ) for ( i = 0 ; i < 3 ; i++ ) d[m][i] = out[m].g[i];
+    if ( order >= 2 )
+      for ( i = 0 ; i < 3 ; i++ ) for ( j = 0 ; j < 3 ; j++ ) s[m][i][j] = out[m].h[i][j];
+  }
+  return 1;
+}
+
 int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
                      REAL (*d)[MAXCOORD], REAL ***s)
 { struct native *n = NULL;
@@ -149,6 +615,10 @@ int pyse_native_eval(struct expnode *key, REAL *x, int order, REAL *val,
   REAL off;
   if ( key && SDIM == 3 && pyse_slabflux_active() && pyse_slabflux_eval(key,x,order,val,d,s) )
     return 1;
+  if ( key && SDIM == 3 && table_count && table_eval(key,x,order,val,d,s) )
+    return 1;   /* (whether native_on or not: the datafile's are placeholders) */
+  if ( key && SDIM == 3 && plate_count && plate_eval(key,x,order,val,d,s) )
+    return 1;   /* (the same) */
   if ( !native_on || !key || SDIM != 3 ) return 0;
   if ( native_load == pyse_load_serial() )
     for ( i = 0 ; i < native_count ; i++ )
@@ -1596,5 +2066,529 @@ static int formula_register(int con, int kind, const double *p, int np)
   }
   formulas[i] = n;
   ex->flag |= PYSE_NATIVE_FORMULA;
+  return 1;
+}
+
+int pyse_fixcount(void);  /* src/fixvol.c */
+
+/* ---- a plate's contact lines over its edges (constraints.plate) --------
+ *
+ * A vertex on one face that has gone past one of its bounds (the top past
+ * its foot, its end or a side; the plate into a footprint; ...) is put on
+ * the edge there: on the face beyond as well, which projects it onto the
+ * edge line; past an end of an edge line, onto the corner (three faces). A
+ * vertex on an edge leaves it onto one of its faces where the force on it
+ * points into that face, away from the edge, and the meniscus leaves the
+ * edge on that face's liquid side (Gibbs at a convex edge: the meniscus
+ * turns through the edge's angle before the line moves on; a concave edge
+ * passes it on at once); from a corner, likewise along one of its edges.
+ * The forms are the same on every face, so a contact-line edge integrates
+ * them once whichever face it is on: each keeps one, one both its ends are
+ * on where there is one. Onto edges at the end of each gradient step
+ * (iterate.c) and after Newton's, off concave ones there too; off convex
+ * ones from an equilibrium (pyse_plate_settle, the forces there: relax()
+ * relaxes again after). */
+
+#define PLATE_TOL 1e-9            /* past a bound by more than this: crossed */
+enum { FACE_OPEN, FACE_TOP, FACE_END, FACE_LEFT, FACE_RIGHT };
+
+
+static int plate_face_of_con(int con)
+{ int i;
+  for ( i = 0 ; i < plate_nfaces ; i++ ) if ( plate_faces[i].con == con ) return i;
+  return -1;
+}
+
+static int plate_face_find(int plate, int kind, int block)
+{ int i;
+  for ( i = 0 ; i < plate_nfaces ; i++ )
+    if ( plate_faces[i].plate == plate && plate_faces[i].kind == kind
+         && (kind == FACE_OPEN || plate_faces[i].block == block) ) return i;
+  return -1;
+}
+
+/* a bound of a face: slack >= 0 on the face, its gradient, the face beyond */
+struct plate_bound { REAL slack, grad[3]; int beyond; };
+
+/* the profile of block B at y: d and d' */
+static void plate_profile(const struct plate_block *B, REAL y, REAL *d, REAL *d1)
+{ REAL v[4];
+  if ( y < B->y0 ) y = B->y0;
+  if ( y > B->y1 ) y = B->y1;
+  plate_spline(B,1,y,v);
+  *d = v[0]; *d1 = v[1];
+}
+
+static int plate_bound_add(struct plate_bound *b, int n, REAL slack, REAL gx, REAL gy, REAL gz,
+                           int beyond)
+{ if ( beyond < 0 ) return n;
+  b[n].slack = slack; b[n].grad[0] = gx; b[n].grad[1] = gy; b[n].grad[2] = gz;
+  b[n].beyond = beyond;
+  return n + 1;
+}
+
+/* face i's bounds at x (up to 4; the plate's: the one it is least far
+   past, in a footprint it is in) */
+static int plate_bounds(int i, const REAL *x, struct plate_bound *b)
+{ int p = plate_faces[i].plate, k = plate_faces[i].kind, bi = plate_faces[i].block, n = 0;
+  const struct plate *P = plates + p;
+  int left, right, top, end, open = plate_face_find(p,FACE_OPEN,0);
+  const struct plate_block *B;
+  REAL d, d1;
+  if ( k == FACE_OPEN )
+  { int j;
+    for ( j = 0 ; j < P->nblocks ; j++ )
+    { REAL s[4];
+      int beyond[4], m, best = -1;
+      B = P->blocks + j;
+      beyond[0] = plate_face_find(p,FACE_TOP,j);
+      beyond[1] = plate_face_find(p,FACE_END,j);
+      beyond[2] = plate_face_find(p,FACE_LEFT,j);
+      beyond[3] = plate_face_find(p,FACE_RIGHT,j);
+      /* (in the footprint: an edge without a side, on a mirror plane, is
+         no end of it, the block goes on as its image) */
+      if ( !(x[1] > B->y0 && x[1] < B->y1
+             && (beyond[2] >= 0 ? x[0] > B->x0 : x[0] >= B->x0 - PLATE_TOL)
+             && (beyond[3] >= 0 ? x[0] < B->x1 : x[0] <= B->x1 + PLATE_TOL)) ) continue;
+      s[0] = x[1] - B->y0;
+      s[1] = B->y1 - x[1];
+      s[2] = x[0] - B->x0;
+      s[3] = B->x1 - x[0];
+      for ( m = 0 ; m < 4 ; m++ )
+        if ( beyond[m] >= 0 && (best < 0 || s[m] < s[best]) ) best = m;
+      if ( best < 0 ) continue;
+      n = plate_bound_add(b,n,-s[best],best == 2 ? -1.0 : best == 3 ? 1.0 : 0.0,
+                          best == 0 ? -1.0 : best == 1 ? 1.0 : 0.0,0.0,beyond[best]);
+    }
+    return n;
+  }
+  B = P->blocks + bi;
+  top = plate_face_find(p,FACE_TOP,bi); end = plate_face_find(p,FACE_END,bi);
+  left = plate_face_find(p,FACE_LEFT,bi); right = plate_face_find(p,FACE_RIGHT,bi);
+  switch ( k )
+  { case FACE_TOP:
+      n = plate_bound_add(b,n,x[1] - B->y0,0,1,0,open);
+      n = plate_bound_add(b,n,B->y1 - x[1],0,-1,0,end);
+      n = plate_bound_add(b,n,x[0] - B->x0,1,0,0,left);
+      n = plate_bound_add(b,n,B->x1 - x[0],-1,0,0,right);
+      break;
+    case FACE_END:
+      n = plate_bound_add(b,n,x[2] - B->end[1],0,0,1,top);
+      n = plate_bound_add(b,n,P->base - x[2],0,0,-1,open);
+      n = plate_bound_add(b,n,x[0] - B->x0,1,0,0,left);
+      n = plate_bound_add(b,n,B->x1 - x[0],-1,0,0,right);
+      break;
+    default:                      /* a side */
+      plate_profile(B,x[1],&d,&d1);
+      n = plate_bound_add(b,n,x[2] - d,0,-d1,1,top);
+      n = plate_bound_add(b,n,P->base - x[2],0,0,-1,open);
+      n = plate_bound_add(b,n,B->y1 - x[1],0,-1,0,end);
+      /* (and its foot, where it has no height: the plate before it; without
+         it, a contact line on the plate before the block was near the side
+         along its plane) */
+      n = plate_bound_add(b,n,x[1] - B->y0,0,1,0,open);
+  }
+  return n;
+}
+
+/* face i's normal into the liquid at x (its formula's gradient) */
+static void plate_normal(int i, const REAL *x, REAL *nrm)
+{ const struct plate *P = plates + plate_faces[i].plate;
+  REAL d, d1, len;
+  nrm[0] = nrm[1] = nrm[2] = 0.0;
+  switch ( plate_faces[i].kind )
+  { case FACE_OPEN: nrm[2] = -1.0; break;
+    case FACE_END: nrm[1] = 1.0; break;
+    case FACE_LEFT: nrm[0] = -1.0; break;
+    case FACE_RIGHT: nrm[0] = 1.0; break;
+    default:
+      plate_profile(P->blocks + plate_faces[i].block,x[1],&d,&d1);
+      nrm[1] = d1; nrm[2] = -1.0;
+  }
+  len = sqrt(nrm[0]*nrm[0] + nrm[1]*nrm[1] + nrm[2]*nrm[2]);
+  nrm[0] /= len; nrm[1] /= len; nrm[2] /= len;
+}
+
+/* the plate faces vertex v is on (indices into plate_faces), all of one plate */
+static int plate_faces_at(vertex_id v, int *out)
+{ conmap_t *map;
+  unsigned int m;
+  int n = 0, i;
+  if ( !(get_vattr(v) & CONSTRAINT) ) return 0;
+  map = get_v_constraint_map(v);
+  for ( m = 1 ; m <= map[0] ; m++ )
+    if ( (i = plate_face_of_con((int)(map[m] & CONMASK))) >= 0 && n < 3 ) out[n++] = i;
+  return n;
+}
+
+static int plate_has(const int *s, int n, int i)
+{ int j;
+  for ( j = 0 ; j < n ; j++ ) if ( s[j] == i ) return 1;
+  return 0;
+}
+
+static int plate_valence(edge_id e)
+{ facetedge_id fe0 = get_edge_fe(e), fe = fe0;
+  int n = 0;
+  if ( !valid_id(fe0) ) return 0;
+  do { n++; fe = get_next_facet(fe); } while ( valid_id(fe) && !equal_id(fe,fe0) && n < 1000 );
+  return n;
+}
+
+#define PLATE_EDGES_AT(v,e,e0,guard) \
+  for ( e0 = get_vertex_edge(v), e = e0, guard = 0 ; valid_id(e) && guard < 100000 ; \
+        e = get_next_tail_edge(e), guard = equal_id(e,e0) ? 100000 : guard + 1 )
+
+/* v's contact-line edges on the plate: on one face, one both ends are on
+   where there is one */
+static void plate_fix_edges(vertex_id v)
+{ edge_id e, e0;
+  int guard;
+  PLATE_EDGES_AT(v,e,e0,guard)
+  { int on[8], n = 0, a[3], na, b[3], nb, keep = -1, j;
+    conmap_t *map;
+    unsigned int m;
+    if ( !(get_eattr(e) & CONSTRAINT) || plate_valence(e) != 1 ) continue;
+    map = get_e_constraint_map(e);
+    for ( m = 1 ; m <= map[0] && n < 8 ; m++ )
+    { int i = plate_face_of_con((int)(map[m] & CONMASK));
+      if ( i >= 0 ) on[n++] = i;
+    }
+    if ( !n ) continue;
+    na = plate_faces_at(get_edge_tailv(e),a);
+    nb = plate_faces_at(get_edge_headv(e),b);
+    for ( j = 0 ; j < na && keep < 0 ; j++ ) if ( plate_has(b,nb,a[j]) ) keep = a[j];
+    if ( keep < 0 ) keep = on[0];
+    for ( j = 0 ; j < n ; j++ )
+      if ( on[j] != keep ) unset_e_constraint_map(e,plate_faces[on[j]].con);
+    if ( !plate_has(on,n,keep) ) set_e_constraint_map(e,plate_faces[keep].con);
+  }
+}
+
+/* whether the contact line crosses the edge between faces i and j at v:
+   its neighbours along the line on the plate, one on i (not j) and one on j
+   (not i) */
+static int plate_crossing(vertex_id v, int i, int j)
+{ edge_id e, e0;
+  int guard, on_i = 0, on_j = 0;
+  PLATE_EDGES_AT(v,e,e0,guard)
+  { vertex_id w = get_edge_headv(e);
+    int s[3], n;
+    if ( plate_valence(e) != 1 ) continue;
+    n = plate_faces_at(w,s);
+    if ( plate_has(s,n,i) && !plate_has(s,n,j) ) on_i = 1;
+    if ( plate_has(s,n,j) && !plate_has(s,n,i) ) on_j = 1;
+  }
+  return on_i && on_j;
+}
+
+/* the meniscus's direction from v: to its neighbours off the plate */
+static int plate_departure(vertex_id v, REAL *m)
+{ edge_id e, e0;
+  int guard, n = 0, s[3];
+  REAL *x = get_coord(v);
+  m[0] = m[1] = m[2] = 0.0;
+  PLATE_EDGES_AT(v,e,e0,guard)
+  { vertex_id w = get_edge_headv(e);
+    REAL *y = get_coord(w);
+    int k;
+    if ( plate_faces_at(w,s) ) continue;
+    for ( k = 0 ; k < 3 ; k++ ) m[k] += y[k] - x[k];
+    n++;
+  }
+  return n;
+}
+
+/* the net force on v (with the volumes' pressures): the step's, or anew */
+static void plate_force(vertex_id v, REAL *f)
+{ REAL *g = get_force(v);
+  volgrad *vg;
+  int k;
+  for ( k = 0 ; k < 3 ; k++ ) f[k] = g[k];
+  for ( vg = get_vertex_vgrad(v) ; vg ; vg = vg->chain )
+    if ( vg->fixnum >= 0 && vg->fixnum < pyse_fixcount() && vpressures )
+      for ( k = 0 ; k < 3 ; k++ ) f[k] -= vpressures[vg->fixnum]*vg->grad[k];
+}
+
+static REAL dot3(const REAL *a, const REAL *b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+
+static void cross3(const REAL *a, const REAL *b, REAL *c)
+{ c[0] = a[1]*b[2] - a[2]*b[1];
+  c[1] = a[2]*b[0] - a[0]*b[2];
+  c[2] = a[0]*b[1] - a[1]*b[0];
+}
+
+/* whether the edge between faces i and j is concave (the liquid's side
+   under 180 degrees): the plate with a block's top (its foot: the top goes
+   down into the liquid from the plate), end or sides; the others (the top
+   with the end and sides, a side with the end) are convex */
+static int plate_concave(int i, int j)
+{ int a = plate_faces[i].kind, b = plate_faces[j].kind;
+  return (a == FACE_OPEN) != (b == FACE_OPEN);
+}
+
+#define PLATE_PROBE 1e-5          /* a short step off an edge, to see which way a face lies */
+
+/* whether a short step from x along unit dir stays within the faces k */
+static int plate_within(const int *k, int nk, const REAL *x, const REAL *dir)
+{ REAL y[3];
+  int j, q;
+  for ( j = 0 ; j < 3 ; j++ ) y[j] = x[j] + PLATE_PROBE*dir[j];
+  for ( j = 0 ; j < nk ; j++ )
+  { struct plate_bound b[8];
+    int nb = plate_bounds(k[j],y,b);
+    for ( q = 0 ; q < nb ; q++ ) if ( b[q].slack < -PLATE_PROBE/2 ) return 0;
+  }
+  return 1;
+}
+
+/* a vertex not on the plate that a step took into its solid (the plate,
+   a block) put back on its surface, across the bound nearest it: the plate
+   is a one-sided wall to every vertex, at every step (only the descents
+   guard against the walls; a meniscus that a line's jump up a block's ramp
+   pushed through it went on through, weight toward the plate lowering the
+   energy without end). Its other constraints after (a mirror's, which no
+   block's bound across it moves). 1 if moved. */
+static double plate_solid(int p, const REAL *x);
+
+static int plate_push_out(vertex_id v)
+{ int p, k, moved = 0;
+  REAL *x = get_coord(v);
+  for ( p = 0 ; p < plate_count ; p++ )
+    for ( k = 0 ; k < 3 && plate_solid(p,x) < -PLATE_TOL ; k++ )
+    { const struct plate *P = plates + p;
+      double best = P->base - x[2];
+      int which = -1, axis = 2, j;
+      REAL to = P->base;
+      for ( j = 0 ; j < P->nblocks ; j++ )
+      { const struct plate_block *B = P->blocks + j;
+        REAL d, d1, bound[5], at[5];
+        int ax[5], nb = 0, m, top = -1;
+        double most = -1e300;
+        plate_profile(B,x[1],&d,&d1);
+        bound[nb] = B->y0 - x[1]; ax[nb] = 1; at[nb++] = B->y0;
+        bound[nb] = x[1] - B->y1; ax[nb] = 1; at[nb++] = B->y1;
+        bound[nb] = d - x[2]; ax[nb] = 2; at[nb] = d; top = nb++;
+        if ( plate_face_find(p,FACE_LEFT,j) >= 0 ) { bound[nb] = B->x0 - x[0]; ax[nb] = 0; at[nb++] = B->x0; }
+        if ( plate_face_find(p,FACE_RIGHT,j) >= 0 ) { bound[nb] = x[0] - B->x1; ax[nb] = 0; at[nb++] = B->x1; }
+        for ( m = 0 ; m < nb ; m++ ) if ( bound[m] > most ) { most = bound[m]; which = m; }
+        if ( most < best )
+        { best = most; axis = ax[which]; to = at[which];
+          (void)top;
+        }
+      }
+      x[axis] = to;
+      moved = 1;
+    }
+  if ( moved && (get_vattr(v) & CONSTRAINT) )
+    project_v_constr(v,ACTUAL_MOVE,RESET_ONESIDEDNESS);
+  return moved;
+}
+
+/* onto edges and corners, off them: release, off any from an equilibrium
+   (the forces where the surface is now); concave, off concave edges with
+   the forces at hand (a gradient step's); returns the vertices changed */
+static int plate_pass(int release, int concave)
+{ vertex_id v;
+  int changed = 0;
+  if ( plate_load != pyse_load_serial() || !plate_nfaces ) return 0;
+  FOR_ALL_VERTICES(v)
+  { int s[3], n = plate_faces_at(v,s), j, q, add[3], nadd = 0, total;
+    REAL *x = get_coord(v);
+    if ( !n )
+    { /* (not on the plate: out of its solid, if a step took it in) */
+      changed += plate_push_out(v);
+      continue;
+    }
+    /* past a bound of a face it is on (to a face it isn't on): across a
+       convex edge onto that face too (the edge, where the line can pin);
+       across a concave one off the face and onto that one (a concave edge
+       holds no line along it: a vertex left on a block's foot while the
+       line beside it went up the ramp folded the line there, and the
+       descents churned), unless the line crosses the edge at the vertex */
+    total = (int)get_v_constraint_map(v)[0];
+    { int drop[3], ndrop = 0;
+      for ( j = 0 ; j < n ; j++ )
+      { struct plate_bound b[8];
+        int nb = plate_bounds(s[j],x,b);
+        for ( q = 0 ; q < nb ; q++ )
+          if ( b[q].slack < -PLATE_TOL && !plate_has(s,n,b[q].beyond)
+               && !plate_has(add,nadd,b[q].beyond) && nadd < 3 )
+          { add[nadd++] = b[q].beyond;
+            if ( plate_concave(s[j],b[q].beyond) && !plate_has(drop,ndrop,s[j])
+                 && !plate_crossing(v,s[j],b[q].beyond) )
+              drop[ndrop++] = s[j];
+          }
+      }
+      while ( nadd && total - ndrop + nadd > 3 ) nadd--;   /* (a mirror's corner: the first) */
+      if ( nadd )
+      { /* onto the edge (both faces: a short move back to where it crossed),
+           then off the face it left, not projected again: the edge's point
+           is on the face beyond (projected onto it from where the step left
+           it, past a block's 63 degree foot, a vertex dropped 0.36 on edges
+           of 0.12 and the mesh folded through itself) */
+        for ( j = 0 ; j < nadd ; j++ ) set_v_constraint_map(v,plate_faces[add[j]].con);
+        project_v_constr(v,ACTUAL_MOVE,RESET_ONESIDEDNESS);
+        for ( j = 0 ; j < ndrop ; j++ ) unset_v_constraint_map(v,plate_faces[drop[j]].con);
+        plate_fix_edges(v);
+        changed++;
+        continue;                   /* (its force was for where it was) */
+      }
+    }
+    /* (off a convex edge only from an equilibrium, release; a concave one
+       holds no line, Gibbs's range there empty: off it at every step, or
+       the meniscus behind a line held at a block's foot went on up the ramp,
+       through it) */
+    if ( n < 2 || (!release && (!concave || n != 2)) ) continue;
+    /* (where the line crosses the edge here, from one face to the other,
+       the vertex is the crossing: kept, a filament's tip or a line rounding
+       a block, whose vertices hopped face to face and folded the mesh) */
+    if ( n == 2 && plate_crossing(v,s[0],s[1]) ) continue;
+    { REAL f[3], m[3], best = 0.0, dir[3];
+      int drop = -1, o;
+      plate_force(v,f);
+      if ( !plate_departure(v,m) ) continue;
+      for ( o = 0 ; o < n ; o++ )
+      { /* leaving face s[o]: into what is left (a face, or along an edge
+           line), the way a short step stays within it */
+        int keep[2], nk = 0, ok = 1;
+        REAL g[3], nrm[3][3], len;
+        for ( j = 0 ; j < n ; j++ ) if ( j != o ) keep[nk++] = s[j];
+        for ( j = 0 ; j < nk ; j++ ) plate_normal(keep[j],x,nrm[j]);
+        plate_normal(s[o],x,nrm[2]);
+        if ( nk == 1 )
+        { /* in the face, across the edge line it shares with s[o] */
+          REAL line[3];
+          cross3(nrm[0],nrm[2],line);
+          cross3(line,nrm[0],g);
+          /* the meniscus on that face's liquid side, across the edge line */
+          { REAL mm[3], t2 = dot3(m,line)/dot3(line,line);
+            for ( j = 0 ; j < 3 ; j++ ) mm[j] = m[j] - t2*line[j];
+            if ( dot3(mm,nrm[0]) <= 0 ) ok = 0;
+          }
+        }
+        else cross3(nrm[0],nrm[1],g);       /* along the edge line */
+        len = sqrt(dot3(g,g));
+        if ( !ok || len < 1e-12 ) continue;
+        for ( j = 0 ; j < 3 ; j++ ) g[j] /= len;
+        if ( !plate_within(keep,nk,x,g) )
+        { for ( j = 0 ; j < 3 ; j++ ) g[j] = -g[j];
+          if ( !plate_within(keep,nk,x,g) ) continue;
+        }
+        /* (a concave edge: the face left lies on the liquid's side of the one
+           kept, into which the step goes) */
+        if ( !release && dot3(g,nrm[2]) <= 0 ) continue;
+        if ( dot3(f,g) > best ) { best = dot3(f,g); drop = o; for ( j = 0 ; j < 3 ; j++ ) dir[j] = g[j]; }
+      }
+      if ( drop < 0 ) continue;
+      unset_v_constraint_map(v,plate_faces[s[drop]].con);
+      project_v_constr(v,ACTUAL_MOVE,RESET_ONESIDEDNESS);
+      plate_fix_edges(v);
+      changed++;
+      (void)dir;
+    }
+  }
+  if ( changed )
+  { if ( count_fixed_vol() || web.pressure_flag ) calc_content(Q_FIXED);
+    calc_pressure();
+    calc_energy();
+  }
+  return changed;
+}
+
+/* after Evolver's projection onto the constraints (project_all, at every
+   trial of a line search and Newton's moves): the vertices not on a plate
+   out of its solid (plate_push_out); the vertices moved */
+int pyse_plate_project(void)
+{ vertex_id v;
+  int s[3], moved = 0;
+  if ( plate_load != pyse_load_serial() || !plate_nfaces ) return 0;
+  FOR_ALL_VERTICES(v)
+    if ( !plate_faces_at(v,s) ) moved += plate_push_out(v);
+  return moved;
+}
+
+/* after pyse_chop_lines split contact-line edges (pyse_edit.c): their
+   midpoints, on the edge's one face, onto edges and faces as the pass puts
+   them (a midpoint of an edge on the plate whose other end had gone onto a
+   block's side lay on the plate inside the block, and a descent's run was
+   judged through a wall); no release, the step's forces gone */
+int pyse_plate_after_split(void)
+{ return plate_pass(0,0);
+}
+
+/* at the end of a gradient step: onto edges only. (Off them only from an
+   equilibrium, pyse_plate_settle: with a step's forces, short of one, a
+   vertex pinned at an edge let go of it and was put back, step after step,
+   and the relaxing never converged.) */
+int pyse_plate_step(void)
+{ return plate_pass(0,1);
+}
+
+/* after Newton or anywhere: onto edges, and (release) off them by the
+   forces where the surface is now */
+static void plate_settle_body(void *arg)
+{ int *a = (int *)arg;
+  if ( a[0] )
+  { find_fixed();
+    calc_volgrads(DO_OPTS);
+    calc_force();
+    pressure_forces();
+  }
+  a[1] = plate_pass(a[0],a[0]);
+  if ( a[0] ) vgrad_end();
+}
+
+int pyse_plate_settle(int release)
+{ int a[2];
+  int r;
+  a[0] = release; a[1] = 0;
+  if ( plate_load != pyse_load_serial() || !plate_nfaces ) return 0;
+  r = pyse_surface_call(plate_settle_body,a);
+  if ( r ) return -1;
+  if ( a[1] ) pyse_surface_changed();
+  return a[1];
+}
+
+/* plate p's solid at x: positive where the liquid may be, negative in the
+   solid (the plate and its blocks), as constraints.Plate.solid: the least
+   of base - z and per block the most of its bounds' distances past them,
+   its top at y held to its range */
+static double plate_solid(int p, const REAL *x)
+{ const struct plate *P = plates + p;
+  double out = P->base - x[2];
+  int j;
+  for ( j = 0 ; j < P->nblocks ; j++ )
+  { const struct plate_block *B = P->blocks + j;
+    REAL d, d1;
+    double t = B->y0 - x[1];
+    if ( x[1] - B->y1 > t ) t = x[1] - B->y1;
+    plate_profile(B,x[1],&d,&d1);
+    if ( d - x[2] > t ) t = d - x[2];
+    if ( plate_face_find(p,FACE_LEFT,j) >= 0 && B->x0 - x[0] > t ) t = B->x0 - x[0];
+    if ( plate_face_find(p,FACE_RIGHT,j) >= 0 && x[0] - B->x1 > t ) t = x[0] - B->x1;
+    if ( t < out ) out = t;
+  }
+  return out;
+}
+
+/* a plate's face con: its gap at x, from its formula's (gap, the formula
+   over its gradient's length): the distance to the face, past its bounds
+   too (its formula holds past the face, through the liquid beside it and
+   behind it); negative only in the plate's solid (deeper than PLATE_TOL: a
+   vertex on another face is on its surface) and for the faces nearest
+   there, which the point went through (each face of a block reporting the
+   depth, a change would be tried on the plate where it isn't). 0 if con
+   is no plate's face (gap as it was). */
+int pyse_plate_gap(int con, const REAL *x, double *gap)
+{ struct plate_bound b[8];
+  int i, n, q;
+  double out = 0.0, depth, d;
+  if ( plate_load != pyse_load_serial() || (i = plate_face_of_con(con)) < 0 ) return 0;
+  n = plate_bounds(i,x,b);
+  for ( q = 0 ; q < n ; q++ ) if ( b[q].slack < 0 ) out += b[q].slack*b[q].slack;
+  d = sqrt((*gap)*(*gap) + out);
+  depth = -plate_solid(plate_faces[i].plate,x);
+  *gap = depth > PLATE_TOL && d <= depth*(1 + 1e-6) + PLATE_TOL ? -d : d;
   return 1;
 }

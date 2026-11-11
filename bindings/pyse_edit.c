@@ -3546,6 +3546,7 @@ int pyse_chop_lines(void)
     }
   }
   if ( long_.a ) temp_free((char *)long_.a);
+  if ( total ) pyse_plate_after_split();   /* (a plate's: its midpoints onto its faces) */
   if ( total )
   { if ( count_fixed_vol() || web.pressure_flag ) calc_content(Q_FIXED);
     calc_pressure();

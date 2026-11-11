@@ -19,6 +19,15 @@ extern int pyse_chop_lines(void) __attribute__((weak));
 #else
 static int (*pyse_chop_lines)(void) = 0;
 #endif
+/* pySE: a plate's contact lines onto its edges where they have gone past
+   them (bindings/pyse_native.c; absent from the stock program) */
+#if defined(__GNUC__)
+extern int pyse_plate_step(void) __attribute__((weak));
+extern int pyse_plate_project(void) __attribute__((weak));
+#else
+static int (*pyse_plate_step)(void) = 0;
+static int (*pyse_plate_project)(void) = 0;
+#endif
 #include "fastloops.h"
 /* pySE: a gradient step capped so the surface doesn't pass through itself
    (bindings/pyse_stepcap.c; off unless set) */
@@ -287,6 +296,7 @@ void iterate()
   REAL old_energy = web.total_energy; /* for estimate */
   REAL step_cap = -1.0;  /* pySE: the scale pyse_step_cap left (< 0: none) */
   REAL searched = 0.0;   /* pySE: the line search's, before it */
+  int plated = 0;        /* pySE: vertices a plate's edges took or let go */
 
 #ifndef MPI_EVOLVER
   if ( web.skel[VERTEX].count == 0 )
@@ -623,6 +633,8 @@ have_scale:
   if ( step_cap >= 0.0 && pyse_step_taken_set ) pyse_step_taken_set(web.scale);
   if ( step_cap >= 0.0 && searched > web.scale ) web.scale = searched;
 
+  /* pySE: a plate's contact lines onto its edges where they went past */
+  plated = pyse_plate_step ? pyse_plate_step() : 0;
   vgrad_end();
   unsave_coords(&saved,SAVE_IN_ATTR);
   { /* pySE: contact-line edges kept short (bindings/pyse_edit.c); then
@@ -631,7 +643,7 @@ have_scale:
        anything, which changes the volumes a little */
     int chopped = pyse_chop_lines ? pyse_chop_lines() : 0;
     update_display();
-    pyse_settled_stamp = chopped ? -1 : global_timestamp;
+    pyse_settled_stamp = (chopped || plated) ? -1 : global_timestamp;
   }
   iterate_flag = old_flag; /* for interrupt handler */
   pyse_predict_content = 0;
@@ -1064,6 +1076,10 @@ void project_all(
 
   /* TESTING new feature */
   detect_bdry_hits();
+
+  /* pySE: a plate's solid one-sided to every vertex (bindings/pyse_native.c):
+     out of it before the volumes are restored, at each trial of a line search */
+  if ( pyse_plate_project ) pyse_plate_project();
  
   /* enforce volume constraints also; keep conjugate gradient under control */
   if ( mode && fixed_constraint_flag ) 

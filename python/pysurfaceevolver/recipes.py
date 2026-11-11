@@ -577,6 +577,17 @@ def _arc_settle(ev, put, value: float, tol: float, tidy: bool,
             ok, residual = _arc_back(ev, put, value, tol, tangent, reach)
     else:
         ok, residual = _arc_back(ev, put, value, tol, tangent, reach)
+    # a plate's contact lines: onto its edges where the corrector carried
+    # them past (it moves the vertices as predicted, along a face's formula
+    # past the face), off them where the forces at this equilibrium say;
+    # then back to an equilibrium at the same value on the same mesh
+    # (constraints.plate). (A kink in the branch: Newton alone from there,
+    # the line put back from past the edge, missed; relax() splits edges.)
+    from ._relax import _plate_resettle, _plates
+    if ok and _plates() and _core.plate_settle(True):
+        put(value)
+        ok = _plate_resettle(ev, tol)
+        residual = ev.residual()
     # counted with the constraints held (a Newton step's own count,
     # eigen_neg, isn't: it counts as if the volume were free)
     return ok, (ev.eigen_counts(0.0).negative if ok else 0), residual

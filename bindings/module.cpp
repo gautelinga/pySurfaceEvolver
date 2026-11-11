@@ -367,6 +367,20 @@ NB_MODULE(_core, m) {
     return r;
   }, "full"_a, CALLBACK_NAMES);
 
+  m.def("vertex_forces", [](CALLBACK_ARGS) {
+    CALL_SCOPE;
+    long n = pyse_count(PYSE_VERTEX);
+    std::vector<double> v(n > 0 ? size_t(3*n) : 0);
+    CallResult r = run_guarded([&] { return pyse_vertex_forces(v.data(), n); });
+    if (r.status == PYSE_OK) {
+      double *buf = new double[v.size() ? v.size() : 1];
+      std::copy(v.begin(), v.end(), buf);
+      nb::capsule owner(buf, [](void *p) noexcept { delete[] (double *)p; });
+      r.data = nb::cast(nb::ndarray<nb::numpy, double, nb::ndim<2>>(buf, {size_t(n), 3}, owner));
+    }
+    return r;
+  }, CALLBACK_NAMES);
+
   m.def("vertex_attached", [](CALLBACK_ARGS) {
     CALL_SCOPE;
     long n = pyse_count(PYSE_VERTEX);
@@ -729,6 +743,44 @@ NB_MODULE(_core, m) {
   }, "con"_a, "centre"_a, "radius"_a, "e1"_a, "e2"_a, "e3"_a, "k"_a,
      "a sphere wall's contact-line integrands evaluated in C (constraints.sphere(axis=))");
   m.def("native_enable", [](bool on) { Lock lock; pyse_native_enable(on); }, "on"_a);
+  m.def("native_table", [](int con, double x0, double y0, double hx, double hy,
+                           nb::ndarray<const double, nb::ndim<2>, nb::c_contig, nb::device::cpu> c,
+                           std::optional<nb::ndarray<const double, nb::ndim<2>, nb::c_contig,
+                                                     nb::device::cpu>> e) {
+    if ( c.shape(0) < 4 || c.shape(1) < 4 )
+      throw std::invalid_argument("native_table(): at least 2 x 2 nodes");
+    if ( e && (e->shape(0) != c.shape(0) || e->shape(1) != c.shape(1)) )
+      throw std::invalid_argument("native_table(): the energy's and content's tables differ in shape");
+    Lock lock;
+    return bool(pyse_native_table(con, int(c.shape(0)) - 2, int(c.shape(1)) - 2, x0, y0, hx, hy,
+                                  e ? e->data() : nullptr, c.data()));
+  }, "con"_a, "x0"_a, "y0"_a, "hx"_a, "hy"_a, "content"_a, "energy"_a = nb::none(),
+     "a wall z = b(x, y)'s contact-line integrands by B-spline tables (constraints.heightfield): "
+     "the content's and energy's x components' coefficients, (nx + 2, ny + 2) each");
+  m.def("native_plate", [](std::vector<int> cons, std::vector<int> kinds, std::vector<int> of,
+                           std::vector<double> scalars, std::vector<double> blocks,
+                           std::vector<double> coef, std::vector<double> stretches) {
+    if ( scalars.size() != 5 || blocks.size() % 7 || stretches.size() % 6 || stretches.empty()
+         || kinds.size() != cons.size() || of.size() != cons.size() )
+      throw std::invalid_argument("native_plate(): 5 scalars, 7 numbers a block, 6 a stretch, "
+                                  "a kind and a block a face");
+    Lock lock;
+    return bool(pyse_native_plate(cons.data(), kinds.data(), of.data(), int(cons.size()),
+                                  scalars.data(), blocks.data(), int(blocks.size()/7),
+                                  coef.data(), long(coef.size()), stretches.data(),
+                                  int(stretches.size()/6)));
+  }, "cons"_a, "kinds"_a, "of"_a, "scalars"_a, "blocks"_a, "coef"_a, "stretches"_a,
+  "A plate with blocks' contact-line integrands in C (constraints.plate): its faces' "
+  "constraints, its scalars, blocks, spline coefficients and stretches.");
+  m.def("plate_settle", [](bool release) {
+    Lock lock;
+    int r = pyse_plate_settle(release ? 1 : 0);
+    if ( r < 0 ) throw std::runtime_error("plate_settle(): the surface call failed");
+    return r;
+  }, "release"_a = true,
+  "A plate's contact lines onto its edges where they have gone past them, and (release) "
+  "off them where the forces point into a face (constraints.plate); returns the vertices "
+  "changed.");
   m.def("native_simd", [](bool on) { Lock lock; return bool(pyse_native_simd(on)); }, "on"_a,
         "The flux gauge's sums with AVX2 where available (True) or scalar, the same to the "
         "bit; returns the previous setting.");

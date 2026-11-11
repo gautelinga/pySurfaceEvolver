@@ -234,6 +234,7 @@ def guard(ev) -> None:
     if _PUSH_AT:
         _push_beside_lines(ev, list(walls), _edge_scale(ev), np.asarray(_PUSH_AT))
     nums, _, dist, names = ev._constraint_gaps(guards=True)
+    dist = _plate_gaps(nums, names, dist)
     names = [str(n) for n in names]
     defined = []
     for key, wall in walls.items():
@@ -250,6 +251,7 @@ def guard(ev) -> None:
     if defined:
         ev._register_native_formulas()      # (theirs in closed form too)
         nums, _, dist, names = ev._constraint_gaps(guards=True)
+        dist = _plate_gaps(nums, names, dist)
         names = [str(n) for n in names]
     m = ev.mesh()
     real = [i for i, n in enumerate(names) if not n.startswith(GUARD_PREFIX)]
@@ -374,6 +376,10 @@ def _guard_formula(ev, key) -> str:
     a quarter of the late runs undone so; Evolver's formulas take floor);
     else the wall's own."""
     wall = surface.walls[key]
+    if getattr(wall, "plate", None) is not None:
+        # (a plate's: one guard for its solid, the plate and its blocks; a
+        # face's formula holds past the face, through the liquid beside it)
+        return f"{getattr(wall, 'plate').solid_formula()} = 0"
     centre, L = _sphere_centre(key), _slab(ev)
     if centre is None or L is None:
         return getattr(wall, "formula")
@@ -390,11 +396,42 @@ def _guarded_walls() -> dict:
     walls = {}
     seen = set()
     for k, w in surface.walls.items():
+        if getattr(w, "plate", None) is not None and getattr(w, "face", None) != "open":
+            continue        # (a plate: one guard, its open face's, for its solid)
         if getattr(w, "contact_angle", None) is not None and getattr(w, "formula", None) \
                 and _base(k) not in seen:
             walls[k] = w
             seen.add(_base(k))
     return walls
+
+
+def _plate_gaps(nums, names, dist: np.ndarray) -> np.ndarray:
+    """dist (per vertex, per constraint) with each plate's open face's column
+    the gap to its solid: the least of its faces' (each counts only where
+    its face is), NaN where on any of them."""
+    names = [str(n or int(c)) for c, n in zip(nums, names)]
+    groups: dict = {}
+    for i, name in enumerate(names):
+        w = surface.walls.get(name)
+        if w is None and name.isdigit():
+            w = surface.walls.get(int(name))
+        p = getattr(w, "plate", None)
+        if p is not None:
+            groups.setdefault(id(p), []).append(i)
+    if not groups:
+        return dist
+    dist = np.array(dist, copy=True)
+    for cols in groups.values():
+        rep = next((i for i in cols if getattr(surface.walls.get(names[i]), "face", None)
+                    == "open"), None)
+        if rep is None:
+            continue
+        block = dist[:, cols]
+        with np.errstate(invalid="ignore"):
+            least = np.nanmin(np.where(np.isnan(block), np.inf, block), axis=1)
+        least[np.isnan(block).any(axis=1)] = np.nan
+        dist[:, rep] = least
+    return dist
 
 
 def _any_sphere_keys(walls=None) -> list:
@@ -730,7 +767,11 @@ def _pole_copy(ev, key, wall, centre, R, axis) -> str:
 
 
 def _base(key) -> str:
-    """The solid a wall is a copy of (copies differ only in their poles)."""
+    """The solid a wall is a copy of (copies differ only in their poles; a
+    plate's faces are of one solid, the plate and its blocks)."""
+    plate = getattr(surface.walls.get(key), "plate", None)
+    if plate is not None:
+        return f"plate{id(plate)}"
     return str(key).split("_pole")[0] if isinstance(key, str) else f"c{key}"
 
 
@@ -2773,6 +2814,7 @@ _LINE_CHOP = 4/3        # in a descent: contact-line edges split past this many 
 _SHORTER = (12, 3, 1)   # a run that crossed twice: again in runs of these many steps
 _FINE = 0.25            # _sizes: the finest target edge, in h0
 _GRADE = 0.5            # _sizes: how fast the targets grow away from a gap (per length)
+_FILAMENT = 0.1         # _sizes: the finest target along a plate's base edges, in h0
 _COARSEN = 1.5          # _sizes: a vertex's target grows at most this much a remeshing
 _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
 _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
@@ -2846,6 +2888,13 @@ def descend(ev, factor: float, tol: float = 1e-8, *, falling: bool = True, keep=
     # (no slivers to start from: storms of runs through the surface began there)
     _STUBBORN.clear()
     _even_slivers(ev, h0)
+    # (a plate: its corners and base edges resolved before the first runs, as
+    # _sizes wants them there: a filament's start along a block's base edge,
+    # its legs 0.02 apart on edges of 0.1, folded the mesh in the descent's
+    # first runs, before any change had it remeshed)
+    from ._relax import _plates
+    if _plates():
+        _remesh_now(ev, h0)
     held, surface.sizes_held = surface.sizes_held, True
     # (and its runs make no changes of their own: relax()'s last resort,
     # Evolver's 't' on edges shrunk to a 20th of the median, pinched a
@@ -3745,12 +3794,19 @@ def _outside(ev) -> int:
     away out there; one inside a bead takes a flux-gauged sphere's wetted
     area and the liquid's volume wrong by the bead's, and the descent ran
     away from that)."""
+    # (not mirrors, no contact angle: the liquid may lie on either side of
+    # one, and its formula's sign says nothing; a cell's far mirror x = X
+    # counted every free vertex as through it, and every run that added
+    # vertices was undone)
+    # (a plate: its solid's, the plate and its blocks, by its open face)
     walls = [k for k, w in surface.walls.items()
-             if getattr(w, "shape", (None,))[0] in ("plane", "sphere", "cylinder")
-             and getattr(w, "formula", None)]
+             if (getattr(w, "shape", (None,))[0] in ("plane", "sphere", "cylinder", "heightfield")
+                 or getattr(w, "face", None) == "open")
+             and getattr(w, "formula", None) and getattr(w, "contact_angle", None) is not None]
     if not walls:
         return 0
     nums, _, dist, names = ev._constraint_gaps()
+    dist = _plate_gaps(nums, names, dist)
     cols = []
     for k in walls:
         try:
@@ -4904,6 +4960,17 @@ def _sizes(ev, h0: float) -> np.ndarray:
                                       axis=1) < h0
                 rows = rows[near]
             size[rows] = np.minimum(size[rows], abs(float(e.gap)))
+    # a plate's blocks' corners: no coarser than the distance to them (a side
+    # face is as tall there as it is far from its foot's corner: the line
+    # rounding a block's front corner on edges of 0.12 over a side 0.2 tall
+    # tangled, and the descent churned on the necks it made)
+    plates = {id(p): p for p in (getattr(w, "plate", None) for w in surface.walls.values())
+              if p is not None}
+    for plate in plates.values():
+        corners = plate.corners()
+        if len(corners):
+            near = np.min(np.linalg.norm(x[:, None, :] - corners[None, :, :], axis=2), axis=1)
+            size = np.minimum(size, np.maximum(near, _FINE*h0))
     # (coarsened back at most _COARSEN times a remeshing: a gap the finer mesh
     # resolved, its event found at a slightly different place or not at all,
     # coarsened, refined at the next: a pack's remeshings split and collapsed
@@ -4919,6 +4986,32 @@ def _sizes(ev, h0: float) -> np.ndarray:
     grow = np.where(size >= h0, _COARSEN, 1.0 if surface.sizes_held else _COARSEN)
     size = np.minimum(size, grow*before)
     size = np.clip(size, _FINE*h0, h0)
+    # a plate's base edges, where its line is near them: down to _FILAMENT h0,
+    # to the distance from them (a filament's legs along the corner of a
+    # block's side and the plate, at 20 degrees, began 0.01-0.05 apart on
+    # edges no finer than 0.04, and folded the mesh)
+    for plate in plates.values():
+        segs = plate.base_edges()
+        if not len(segs):
+            continue
+        a_, b_ = segs[:, 0], segs[:, 1]
+        ab = b_ - a_
+        t = np.clip(np.einsum("vsk,sk->vs", x[:, None, :] - a_[None], ab)
+                    / np.maximum(np.einsum("sk,sk->s", ab, ab), 1e-300), 0.0, 1.0)
+        far = np.linalg.norm(x[:, None, :] - (a_[None] + t[..., None]*ab[None]), axis=2).min(axis=1)
+        on_wall = np.zeros(len(x), dtype=bool)
+        for key, w in surface.walls.items():
+            if getattr(w, "plate", None) is plate:
+                on_wall |= np.asarray(ev.on_constraint(key), bool)
+        lines = on_wall[edges[:, 0]] & on_wall[edges[:, 1]]
+        line_vertices = np.unique(edges[lines].ravel()) if lines.any() else np.zeros(0, int)
+        near_line = np.zeros(len(x), dtype=bool)
+        if len(line_vertices):
+            near_line[line_vertices] = far[line_vertices] < h0
+        # (and their neighbours: the facets between the legs)
+        hit = near_line[edges[:, 0]] | near_line[edges[:, 1]]
+        near_line[edges[hit].ravel()] = True
+        size = np.where(near_line & (far < h0), np.minimum(size, np.maximum(far, _FILAMENT*h0)), size)
     # (each vertex's neighbours' targets plus _GRADE of the edge, the least
     # of them, by the edges' ends sorted once: np.minimum.at, unbuffered,
     # took 3 ms a round at 30k facets)
