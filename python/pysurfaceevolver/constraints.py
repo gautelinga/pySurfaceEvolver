@@ -606,19 +606,6 @@ def _height_curvature(height: str, x, y, d: float) -> np.ndarray:
     return np.abs(H) + np.sqrt(np.maximum(H*H - K, 0.0))
 
 
-def _height_curvature_near(height: str, x, y, r, d: float) -> np.ndarray:
-    """The largest of _height_curvature within r of each point (r one per
-    point), across, sampled at the point and on circles of r/2 and r about
-    it, eight points each."""
-    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
-    r = np.broadcast_to(np.asarray(r, dtype=float), x.shape)
-    angles = np.linspace(0.0, 2*np.pi, 8, endpoint=False)
-    ox = np.r_[0.0, 0.5*np.cos(angles), np.cos(angles)]
-    oy = np.r_[0.0, 0.5*np.sin(angles), np.sin(angles)]
-    k = _height_curvature(height, x[:, None] + r[:, None]*ox, y[:, None] + r[:, None]*oy, d)
-    return k.max(axis=1)
-
-
 def _height_bend(height: str, x, y, d: float) -> np.ndarray:
     """The signed mean curvature of z = height(x, y) at the points, by
     central differences of step d: positive where it bends toward +z (as
