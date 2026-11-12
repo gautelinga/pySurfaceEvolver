@@ -52,14 +52,50 @@ def _axes(ax):
 
 # ---- a run ----------------------------------------------------------------------
 
+def _save_state(ev, path, saved):
+    """The surface (path.fe) and what pySE and the run remember of it
+    (path.pkl), to go on from with run(resume=path)."""
+    import pickle
+    from pysurfaceevolver._engine import surface
+    ev.dump(path + ".fe")
+    with open(path + ".pkl", "wb") as f:
+        pickle.dump(dict(saved, walls=dict(surface.walls), retired=set(surface.retired),
+                         energy_shift=list(surface.energy_shift),
+                         edge_scale=surface.edge_scale, sizes=dict(surface.sizes)), f)
+
+
+def _restore_state(path):
+    """A state _save_state wrote: the surface loaded, pySE's memory of it put
+    back; and the run's own part."""
+    import pickle
+    import pysurfaceevolver as pyse
+    from pysurfaceevolver._engine import surface
+    ev = pyse.Evolver()
+    ev.load(path + ".fe")
+    with open(path + ".pkl", "rb") as f:
+        saved = pickle.load(f)
+    surface.walls.clear()
+    surface.walls.update(saved.pop("walls"))
+    surface.retired |= saved.pop("retired")
+    surface.energy_shift[:] = saved.pop("energy_shift")
+    surface.edge_scale = saved.pop("edge_scale")
+    surface.sizes = dict(saved.pop("sizes"))
+    ev._register_native()
+    return ev, saved
+
+
 def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H.S,
-        halvings=6, width=H.X):
+        halvings=6, width=H.X, states=0, resume=None):
     """Imbibition from a flat meniscus at y = -4 until the meniscus far from
     the defects is at y = hmax, then drainage back to the start; rows
     (imbibing, volume added, pressure, contact line far from the defects,
-    along the first defect's middle, fell, changes, facets)."""
+    along the first defect's middle, fell, changes, facets). ``states``: keep
+    the last so many states (every fifth step has one) in
+    OUT/states/NAME/stepNNNN.{fe,pkl}; ``resume``: such a state (without the
+    extension), the run going on from it exactly (its rows up to there kept;
+    ds, halvings and width as it had them)."""
     os.makedirs(out, exist_ok=True)
-    log = open(os.path.join(out, f"{name}.log"), "w")
+    log = open(os.path.join(out, f"{name}.log"), "a" if resume else "w")
     t0 = time.time()
 
     def say(s):
@@ -72,12 +108,25 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
 
     logging.getLogger("pysurfaceevolver.topology").addHandler(Handler())
     logging.getLogger("pysurfaceevolver.topology").setLevel(logging.DEBUG)
-    # (the start's vertices as far apart across as at the full width)
-    ev = H.cell(centres, sharp=sharp, rounding=rounding, width=width,
-                nx=int(round(40*width/H.X)) + 1)
-    say(f"start: {ev.relax(levels=levels)}")
-    V0 = ev.body(1).volume
-    rows, frames = [], {}
+    if resume:
+        ev, saved = _restore_state(resume)
+        V0, legs, carry = saved["V0"], saved["legs"], saved["run"]
+        ds, halvings, width = saved["ds"], saved["halvings"], saved["width"]
+        # (the run's first point is this one again)
+        rows = saved["rows"][:-1]
+        say(f"resumed from {resume}: step {len(rows)}, {legs[0][0]}")
+    else:
+        # (the start's vertices as far apart across as at the full width)
+        ev = H.cell(centres, sharp=sharp, rounding=rounding, width=width,
+                    nx=int(round(40*width/H.X)) + 1)
+        say(f"start: {ev.relax(levels=levels)}")
+        V0 = ev.body(1).volume
+        rows, carry = [], None
+        legs = (("imbibition", 1), ("drainage", -1))
+    frames = {}
+    kept, held = os.path.join(out, "states", name), []
+    if states:
+        os.makedirs(kept, exist_ok=True)
 
     def save():
         np.savez(os.path.join(out, f"{name}.npz"), rows=np.array(rows, float),
@@ -86,11 +135,12 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                  **{f"x{k}": v[0] for k, v in frames.items()},
                  **{f"f{k}": v[1] for k, v in frames.items()})
 
-    for leg, sign in (("imbibition", 1), ("drainage", -1)):
+    for k, (leg, sign) in enumerate(legs):
         for attempt in range(4):
             finished = False
             for s in recipes.arclength(ev, ev.body(1), sign*ds, 100000, topology=True,
-                                       trap=False, halvings=halvings):
+                                       trap=False, halvings=halvings, resumable=bool(states),
+                                       resume=carry):
                 rows.append((sign > 0, s.value - V0, s.pressures[0],
                              H.contact_line(ev, width), H.contact_line(ev, centres[0]),
                              bool(s.fell), len(s.changes or ()), ev.counts["facets"]))
@@ -101,9 +151,21 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                 frames[len(rows) - 1] = (np.asarray(m.vertices, np.float32), np.asarray(m.facets))
                 if len(rows) % 10 == 0:
                     save()
+                own = s.state() if states and s.state else None
+                if own is not None:
+                    # (every fifth step carries the run's state)
+                    path = os.path.join(kept, f"step{len(rows) - 1:04d}")
+                    _save_state(ev, path, dict(V0=V0, rows=list(rows), legs=legs[k:], run=own,
+                                                    ds=ds, halvings=halvings, width=width))
+                    held.append(path)
+                    while len(held) > states:
+                        stale = held.pop(0)
+                        for ext in (".fe", ".pkl"):
+                            os.remove(stale + ext)
                 finished = (rows[-1][3] > hmax) if sign > 0 else (s.value - V0 < 0)
                 if finished:
                     break
+            carry = None
             if finished:
                 break
             # (the branch ended short: relax where it is and go on)
@@ -280,11 +342,15 @@ if __name__ == "__main__":
                     help="the cell's half-width modelled, mirror planes x = 0 and x = width (run)")
     ap.add_argument("--halvings", type=int, default=6,
                     help="the arclength step's halvings at the most (run)")
+    ap.add_argument("--states", type=int, default=0,
+                    help="keep the last so many states (every fifth step's), OUT/states/NAME (run)")
+    ap.add_argument("--resume",
+                    help="go on from such a state, its path without .fe/.pkl (run)")
     a = ap.parse_args()
     if a.part == "run":
         run(a.args[0], tuple(float(c) for c in a.args[1:]), a.out, sharp=a.sharp,
             rounding=a.rounding, levels=a.levels, ds=a.ds, halvings=a.halvings,
-            width=a.width)
+            width=a.width, states=a.states, resume=a.resume)
     elif a.part == "film":
         for name in a.args:
             film(a.out, name)
