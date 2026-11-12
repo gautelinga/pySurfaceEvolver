@@ -2815,6 +2815,7 @@ _SHORTER = (12, 3, 1)   # a run that crossed twice: again in runs of these many 
 _FINE = 0.25            # _sizes: the finest target edge, in h0
 _GRADE = 0.5            # _sizes: how fast the targets grow away from a gap (per length)
 _FILAMENT = 0.1         # _sizes: the finest target along a plate's base edges, in h0
+_CURVED = 1/6           # _sizes: near a heightfield, targets this times its radius
 _COARSEN = 1.5          # _sizes: a vertex's target grows at most this much a remeshing
 _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
 _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
@@ -4919,6 +4920,7 @@ def _sizes(ev, h0: float) -> np.ndarray:
     # (events() measures in local edges, the finest _FINE h0: so out to h0;
     # the surface close to itself within an edge, necks NECK times that)
     from ._events import find, _base as base_of
+    from .constraints import _height_curvature as height_curvature
     nums, _, dist, names = ev._constraint_gaps()
     keys = [str(n or int(k)) for k, n in zip(nums, names)]
     for e in find(ev, 1/_FINE, self_factor=1.0):
@@ -5012,6 +5014,25 @@ def _sizes(ev, h0: float) -> np.ndarray:
         hit = near_line[edges[:, 0]] | near_line[edges[:, 1]]
         near_line[edges[hit].ravel()] = True
         size = np.where(near_line & (far < h0), np.minimum(size, np.maximum(far, _FILAMENT*h0)), size)
+    # a heightfield's tight bends, where the surface is on it or within h0:
+    # targets no coarser than _CURVED of its least radius of curvature there
+    # (the edges are kept within twice their targets), down to _FILAMENT h0
+    # (a Hele-Shaw defect's edges rounded over 0.1, radii 0.13, on edges of
+    # 0.1-0.13: chords cut through the shoulder, and the oil filament along
+    # the step's foot, two edges across, had its legs met over and over;
+    # targets of a third of the radius left edges of 0.1 there)
+    for c, key in enumerate(keys):
+        w = surface.walls.get(names[c] or int(nums[c]))
+        shape = getattr(w, "shape", None)
+        if shape is None or shape[0] != "heightfield":
+            continue
+        g = dist[:, c]
+        rows = np.flatnonzero(np.isnan(g) | (np.abs(np.nan_to_num(g, nan=0.0)) < h0))
+        if not len(rows):
+            continue
+        k = height_curvature(shape[1], x[rows, 0], x[rows, 1], 1e-2*h0)
+        size[rows] = np.minimum(size[rows], np.maximum(
+            _CURVED/np.maximum(k, 1e-300), _FILAMENT*h0))
     # (each vertex's neighbours' targets plus _GRADE of the edge, the least
     # of them, by the edges' ends sorted once: np.minimum.at, unbuffered,
     # took 3 ms a round at 30k facets)

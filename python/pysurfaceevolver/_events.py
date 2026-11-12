@@ -395,6 +395,21 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
                 # hair through at a small angle; the line moves there itself,
                 # in the steps (concave edges) or at equilibrium (convex))
                 flag[near] &= s_ > PLATE_NEAR*h[near]
+            else:
+                shape = getattr(surface.walls.get(key), "shape", None)
+                if shape is not None and shape[0] == "heightfield":
+                    # (a heightfield where it bends within PLATE_NEAR edges,
+                    # as a plate: the wedge above isn't straight there. Oil
+                    # in a Hele-Shaw defect's foot, rounded over 0.1 at 20
+                    # degrees, wall and meniscus curving toward each other,
+                    # lay under 0.7 of it 0.03 from its line at
+                    # equilibrium, and was dried and wetted over and over.
+                    # Through it is still one, by more than round-off: on it
+                    # (guarded there) it was 2e-16 through)
+                    from .constraints import _height_curvature
+                    bent = _height_curvature(shape[1], x[near, 0], x[near, 1],
+                                             1e-2*float(np.median(h[near])))*PLATE_NEAR*h[near] > 1
+                    flag[near] &= ~bent | (s_ > PLATE_NEAR*h[near]) | (g[near] < -1e-6*h[near])
         flag &= band
         for _, members in _groups(flag, e):
             k = members[np.argmin(g[members])]

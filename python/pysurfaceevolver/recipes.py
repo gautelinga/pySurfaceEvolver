@@ -523,6 +523,12 @@ def _arc_correct(ev, put, x_pred: np.ndarray, v_pred: float, tx: np.ndarray, tv:
         slope = float((tx*dn).sum())/n + tv
         dv = -gap/slope
         x_new = n0 + dv*dn
+        if not (np.isfinite(dv) and np.isfinite(x_new).all()):
+            # (a failed correction, the step halved: the Newton targets not
+            # numbers, or no slope; a NaN volume target stopped the step and
+            # backed the run up, three times in a night of Hele-Shaw runs,
+            # each at the step after a fall)
+            return False, it
         value += dv
         put(value)
         ev.vertices = x_new
