@@ -175,9 +175,8 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
         ev, saved = _restore_state(resume)
         V0, legs, carry = saved["V0"], saved["legs"], saved["run"]
         ds, halvings, width = saved["ds"], saved["halvings"], saved["width"]
-        # (the run's first point is this one again)
-        rows = saved["rows"][:-1]
-        say(f"resumed from {resume}: step {len(rows)}, {legs[0][0]}")
+        rows = saved["rows"]
+        say(f"resumed from {resume}: step {len(rows) - 1}, {legs[0][0]}")
     else:
         # (the start's vertices as far apart across as at the full width)
         ev = H.cell(centres, sharp=sharp, rounding=rounding, width=width,
