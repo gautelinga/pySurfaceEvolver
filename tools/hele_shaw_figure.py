@@ -84,8 +84,54 @@ def _restore_state(path):
     return ev, saved
 
 
+def _trace_solid(box, say):
+    """Log each solid event found with its middle in box (x0, x1, y0, y1):
+    its gap, the edge length h there, the distance s from its closest vertex
+    to the nearest vertex on that wall (a contact line), the gap over the
+    straight wedge's s sin(angle), and the wall's curvatures there times h
+    (a heightfield: the larger principal one, and the signed mean)."""
+    from pysurfaceevolver import _events as E
+    from pysurfaceevolver import constraints as C
+    from pysurfaceevolver._engine import surface
+    inner = E._solid
+    x0, x1, y0, y1 = box
+
+    def traced(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
+               nums, attrs, dist, names):
+        found = inner(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
+                      nums, attrs, dist, names)
+        for event in found:
+            w = event.where
+            if not (x0 <= w[0] <= x1 and y0 <= w[1] <= y1):
+                continue
+            c = [i for i in range(len(nums)) if (names[i] or int(nums[i])) == event.constraint]
+            if not c:
+                continue
+            col = dist[:, c[0]]
+            members = np.asarray(event.vertices)
+            k = members[np.argmin(np.where(np.isnan(col[members]), np.inf, np.abs(col[members])))]
+            on = np.flatnonzero(np.isnan(col))
+            s = float(np.min(np.linalg.norm(x[on] - x[k], axis=1))) if len(on) else np.inf
+            wall = surface.walls.get(event.constraint)
+            angle = E._contact_angle(ev, wall)
+            wedge = s*np.sin(np.radians(angle if event.between != "outside" else 180 - angle)) \
+                if angle is not None else np.nan
+            shape = getattr(wall, "shape", None)
+            kap = bend = np.nan
+            if shape is not None and shape[0] == "heightfield":
+                d = 1e-2*float(h[k])
+                kap = float(C._height_curvature(shape[1], x[k:k + 1, 0], x[k:k + 1, 1], d)[0])
+                bend = float(C._height_bend(shape[1], x[k:k + 1, 0], x[k:k + 1, 1], d)[0])
+            say(f"  solid-trace gap {event.gap:.3g} h {h[k]:.3g} s/h {s/h[k]:.2f} "
+                f"gap/wedge {event.gap/wedge if wedge else np.nan:.3g} kappa*h {kap*h[k]:.3g} "
+                f"bend*h {bend*h[k]:.3g} n {len(members)} {event.between} "
+                f"at ({w[0]:.4f}, {w[1]:.4f}, {w[2]:.4f})")
+        return found
+    E._solid = traced
+
+
 def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H.S,
-        halvings=6, width=H.X, states=0, resume=None):
+        halvings=6, width=H.X, states=0, resume=None, trace=None, dumps=0):
     """Imbibition from a flat meniscus at y = -4 until the meniscus far from
     the defects is at y = hmax, then drainage back to the start; rows
     (imbibing, volume added, pressure, contact line far from the defects,
@@ -93,7 +139,10 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     the last so many states (every fifth step has one) in
     OUT/states/NAME/stepNNNN.{fe,pkl}; ``resume``: such a state (without the
     extension), the run going on from it exactly (its rows up to there kept;
-    ds, halvings and width as it had them)."""
+    ds, halvings and width as it had them). ``trace``: (x0, x1, y0, y1), the
+    solid events there logged (_trace_solid), and the surface just after
+    each of the first ``dumps`` changes made there dumped to
+    OUT/changes/NAME-NNN.fe."""
     os.makedirs(out, exist_ok=True)
     log = open(os.path.join(out, f"{name}.log"), "a" if resume else "w")
     t0 = time.time()
@@ -102,9 +151,23 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
         log.write(f"{time.time() - t0:8.1f}s {s}\n")
         log.flush()
 
+    live, dumped = [], [0]
+
     class Handler(logging.Handler):
         def emit(self, record):
-            say("  . " + record.getMessage())
+            text = record.getMessage()
+            say("  . " + text)
+            if trace and dumps and live and dumped[0] < dumps and text.startswith("change made"):
+                import re
+                at = re.search(r" at \(([-\d.e]+), ([-\d.e]+), ([-\d.e]+)\)", text)
+                if at and trace[0] <= float(at[1]) <= trace[1] \
+                        and trace[2] <= float(at[2]) <= trace[3]:
+                    folder = os.path.join(out, "changes")
+                    os.makedirs(folder, exist_ok=True)
+                    path = os.path.join(folder, f"{name}-{dumped[0]:03d}.fe")
+                    live[0].dump(path)
+                    say(f"  dumped {path}")
+                    dumped[0] += 1
 
     logging.getLogger("pysurfaceevolver.topology").addHandler(Handler())
     logging.getLogger("pysurfaceevolver.topology").setLevel(logging.DEBUG)
@@ -123,6 +186,9 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
         V0 = ev.body(1).volume
         rows, carry = [], None
         legs = (("imbibition", 1), ("drainage", -1))
+    live.append(ev)
+    if trace:
+        _trace_solid(trace, say)
     frames = {}
     kept, held = os.path.join(out, "states", name), []
     if states:
@@ -346,11 +412,17 @@ if __name__ == "__main__":
                     help="keep the last so many states (every fifth step's), OUT/states/NAME (run)")
     ap.add_argument("--resume",
                     help="go on from such a state, its path without .fe/.pkl (run)")
+    ap.add_argument("--trace", help="x0,x1,y0,y1: the solid events there logged (run)")
+    ap.add_argument("--dumps", type=int, default=0,
+                    help="with --trace: the surface after the first so many changes "
+                         "there dumped, OUT/changes (run)")
     a = ap.parse_args()
     if a.part == "run":
         run(a.args[0], tuple(float(c) for c in a.args[1:]), a.out, sharp=a.sharp,
             rounding=a.rounding, levels=a.levels, ds=a.ds, halvings=a.halvings,
-            width=a.width, states=a.states, resume=a.resume)
+            width=a.width, states=a.states, resume=a.resume,
+            trace=tuple(float(v) for v in a.trace.split(",")) if a.trace else None,
+            dumps=a.dumps)
     elif a.part == "film":
         for name in a.args:
             film(a.out, name)
