@@ -2804,6 +2804,7 @@ _HIGH_PLATEAU = 4.0     # ... and below this residual too, after _HIGH_AFTER ite
 _HIGH_AFTER = 10        # without a change
 _FLAT = 0.05            # a facet crushed flat: its area under this many h^2 (h the mean edge)
 _AGAIN = 3              # a change made this often at one place in a descent: not again there
+_SWING_REACH = 4.0      # a line swinging (_note_swing): its edges finer within this many of them
 _FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
 _REMESH = (0.4, 2.0)    # after a change: edges kept within these many times their targets (_sizes)
 _ON_THE_WAY = 4/3       # ... and between a run's points, edges split past this many times theirs
@@ -3047,6 +3048,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         nonlocal way, before, tried, since, stuck, falling, remeshing, stalled
         _checked(ev, f"the change: {e}")
         made_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
+        _note_swing(ev, e, made_at)
         note(e, "made")
         undo[:] = [(pre.pop(), e)] if pre else []
         pre.clear()
@@ -3536,6 +3538,39 @@ def _again(ev, e, made_at: list, refused_at: list, undone_at: list) -> bool:
         and _beside_line(ev, e, h)
     return (not growing and count(made_at) >= _AGAIN) or count(refused_at) >= _AGAIN \
         or count(undone_at) > 0
+
+
+def _note_swing(ev, e, made_at: list) -> None:
+    """A heightfield's surface resting beside its line dried (a "solid"
+    change, the liquid between) the _AGAIN-th time within one of its edges
+    in this descent: the line swinging there, each change an edge's worth.
+    Its place's targets (_sizes) halved, within _SWING_REACH of those edges,
+    for the rest of the run (Evolver._swung), again at each swing there
+    after. At the end of a Hele-Shaw pair's 1 mm groove, the defect's
+    rounded corner, a spot was dried, wetted back by the line sliding,
+    pressed onto the wall and dried again, 52 times on edges of 0.03, and
+    the run never passed it; bounding the swings there (not making them
+    after three) stalled the descent as long."""
+    if e.kind != "solid" or getattr(e, "between", None) != "body" \
+            or not 0 <= e.gap < _TOUCH*float(e.scale):
+        return
+    shape = getattr(surface.walls.get(e.constraint), "shape", None)
+    if shape is None or shape[0] != "heightfield":
+        return
+    where, r = np.asarray(e.where, float), float(e.scale)
+    near = sum(k == e.kind and c == str(e.constraint)
+               and float(np.linalg.norm(_delta(w, where, _slab(ev)))) < r
+               for k, c, w in made_at)
+    if near < _AGAIN or not _beside_line(ev, e, _edge_scale(ev)):
+        return
+    swung = list(getattr(ev, "_swung", ()))
+    here = [s for s in swung if float(np.linalg.norm(_delta(s[0], where, _slab(ev)))) < s[1]]
+    target = 0.5*min([r] + [s[2] for s in here])
+    swung = [s for s in swung if not any(s is t for t in here)]
+    swung.append((where, max([_SWING_REACH*r] + [s[1] for s in here]), target))
+    ev._swung = swung
+    _log.debug("line swinging at (%s): edges there toward %.3g",
+               ", ".join(f"{v:.4g}" for v in where), target)
 
 
 def _common(a, b) -> float:
@@ -5033,6 +5068,10 @@ def _sizes(ev, h0: float) -> np.ndarray:
         k = height_curvature(shape[1], x[rows, 0], x[rows, 1], 1e-2*h0)
         size[rows] = np.minimum(size[rows], np.maximum(
             _CURVED/np.maximum(k, 1e-300), _FILAMENT*h0))
+    # where a line swung (_note_swing), its targets there, for the run
+    for where, reach, target in getattr(ev, "_swung", ()):
+        near = np.linalg.norm(_delta(where, x, _slab(ev)), axis=1) < reach
+        size[near] = np.minimum(size[near], max(target, _FILAMENT*h0))
     # (each vertex's neighbours' targets plus _GRADE of the edge, the least
     # of them, by the edges' ends sorted once: np.minimum.at, unbuffered,
     # took 3 ms a round at 30k facets)
