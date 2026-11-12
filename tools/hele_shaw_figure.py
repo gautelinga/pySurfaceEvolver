@@ -53,7 +53,7 @@ def _axes(ax):
 # ---- a run ----------------------------------------------------------------------
 
 def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H.S,
-        halvings=6):
+        halvings=6, width=H.X):
     """Imbibition from a flat meniscus at y = -4 until the meniscus far from
     the defects is at y = hmax, then drainage back to the start; rows
     (imbibing, volume added, pressure, contact line far from the defects,
@@ -72,7 +72,9 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
 
     logging.getLogger("pysurfaceevolver.topology").addHandler(Handler())
     logging.getLogger("pysurfaceevolver.topology").setLevel(logging.DEBUG)
-    ev = H.cell(centres, sharp=sharp, rounding=rounding)
+    # (the start's vertices as far apart across as at the full width)
+    ev = H.cell(centres, sharp=sharp, rounding=rounding, width=width,
+                nx=int(round(40*width/H.X)) + 1)
     say(f"start: {ev.relax(levels=levels)}")
     V0 = ev.body(1).volume
     rows, frames = [], {}
@@ -80,7 +82,7 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     def save():
         np.savez(os.path.join(out, f"{name}.npz"), rows=np.array(rows, float),
                  centres=np.array(centres),
-                 rounding=np.array(rounding),
+                 rounding=np.array(rounding), width=np.array(width),
                  **{f"x{k}": v[0] for k, v in frames.items()},
                  **{f"f{k}": v[1] for k, v in frames.items()})
 
@@ -90,7 +92,7 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
             for s in recipes.arclength(ev, ev.body(1), sign*ds, 100000, topology=True,
                                        trap=False, halvings=halvings):
                 rows.append((sign > 0, s.value - V0, s.pressures[0],
-                             H.contact_line(ev, H.X), H.contact_line(ev, centres[0]),
+                             H.contact_line(ev, width), H.contact_line(ev, centres[0]),
                              bool(s.fell), len(s.changes or ()), ev.counts["facets"]))
                 say(f"{leg} V {s.value - V0:9.3f} p {s.pressures[0]:.5f} far {rows[-1][3]:.3f} "
                     f"mid {rows[-1][4]:.3f} facets {ev.counts['facets']}"
@@ -274,12 +276,15 @@ if __name__ == "__main__":
     ap.add_argument("--levels", type=int, default=2,
                     help="refinement levels of the start (run)")
     ap.add_argument("--ds", type=float, default=6.0, help="the arclength step (run)")
+    ap.add_argument("--width", type=float, default=H.X,
+                    help="the cell's half-width modelled, mirror planes x = 0 and x = width (run)")
     ap.add_argument("--halvings", type=int, default=6,
                     help="the arclength step's halvings at the most (run)")
     a = ap.parse_args()
     if a.part == "run":
         run(a.args[0], tuple(float(c) for c in a.args[1:]), a.out, sharp=a.sharp,
-            rounding=a.rounding, levels=a.levels, ds=a.ds, halvings=a.halvings)
+            rounding=a.rounding, levels=a.levels, ds=a.ds, halvings=a.halvings,
+            width=a.width)
     elif a.part == "film":
         for name in a.args:
             film(a.out, name)
