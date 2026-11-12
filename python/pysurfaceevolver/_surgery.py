@@ -2116,6 +2116,9 @@ def _contact(ev, event, keep=None, grow=()) -> None:
     # where the gas reaches the floor along a side wall)
     held = ((np.isnan(dist) & ~on[:, None]).sum(axis=1) >= 2) | m.fixed
     core = core[~held[core]]
+    if kind == "solid" and len(core) and getattr(event, "between", None) == "body":
+        core = _recede_wide(x, edges, core, on, held | np.isnan(dist).any(axis=1),
+                            dist[:, c], float(event.scale), event.constraint, L)
     if flat is None and not len(core) and kind == "contact lines":
         # (the strip between two lines wet but with no free vertex over it,
         # its facets' corners all on the lines: as across dry ground, the
@@ -2170,6 +2173,36 @@ def _contact(ev, event, keep=None, grow=()) -> None:
     if not gone.any():
         raise ValueError("contact(): the place is where two walls touch")
     _dissolve_onto(ev, m, gone, event.constraint)
+
+
+def _recede_wide(x, edges, core, on, fixed, gap, h: float, key, periods=None) -> np.ndarray:
+    """A dry patch's vertices (core, rows of x) beside its own contact line on
+    a heightfield wall key, and with them their free neighbours (not on a
+    constraint: fixed) beside the line too (within 1.5 h of a vertex on the
+    wall: on) and within half an edge of it (gap): the line receding a band
+    an edge wide, not a point. At 20 degrees a receding line goes back only
+    by these changes, a vertex or two pressed onto the wall a descent: the
+    end of a Hele-Shaw pair's 1 mm groove, its wall curved, made 929 of them
+    in 2.6 h and never passed. Too far back, the line comes forward again by
+    itself in the descent. Other walls: core as it was."""
+    shape = getattr(surface.walls.get(key), "shape", None)
+    if shape is None or shape[0] != "heightfield" or not on.any():
+        return core
+    line = x[on]
+
+    def beside(rows):
+        d = _delta(x[rows][:, None, :], line[None, :, :], periods)
+        return np.linalg.norm(d, axis=2).min(axis=1) < 1.5*h
+
+    if not beside(core).any():
+        return core
+    inner = np.isin(edges, core)
+    nb = np.unique(np.where(inner[:, 0], edges[:, 1], edges[:, 0])[inner.any(axis=1)])
+    nb = nb[~np.isin(nb, core) & ~on[nb] & ~fixed[nb]]
+    nb = nb[np.abs(np.nan_to_num(gap[nb], nan=np.inf)) < 0.5*h]
+    if len(nb):
+        nb = nb[beside(nb)]
+    return np.union1d(core, nb)
 
 
 def _patch_with_facets_on_solid(f, gone, on) -> np.ndarray:
