@@ -3534,8 +3534,29 @@ def _again(ev, e, made_at: list, refused_at: list, undone_at: list) -> bool:
                    for k, c, w in at)
     growing = e.kind == "solid" and 0 <= e.gap < _TOUCH*float(e.scale) \
         and _beside_line(ev, e, h)
+    if growing and _swinging(ev, e, made_at):
+        return True
     return (not growing and count(made_at) >= _AGAIN) or count(refused_at) >= _AGAIN \
         or count(undone_at) > 0
+
+
+def _swinging(ev, e, made_at: list) -> bool:
+    """Whether a heightfield's surface resting beside its line (a "solid"
+    event _again lets grow) was made a change _AGAIN times already within
+    one of its own edges in this descent: the line swinging there, not a
+    patch growing (that moves on an edge a change: a pair13 cell's 124
+    changes drying one patch had none within an edge of two others). At
+    the end of a Hele-Shaw pair's 1 mm groove a spot was dried, wetted back
+    by the line sliding, pressed onto the wall and dried again, 52 times;
+    the descent ran away there and the run never passed it. Left, the
+    guard holds the surface on the wall there."""
+    shape = getattr(surface.walls.get(e.constraint), "shape", None)
+    if shape is None or shape[0] != "heightfield":
+        return False
+    where, r = np.asarray(e.where, float), float(e.scale)
+    return sum(k == e.kind and c == str(e.constraint)
+               and float(np.linalg.norm(_delta(w, where, _slab(ev)))) < r
+               for k, c, w in made_at) >= _AGAIN
 
 
 def _common(a, b) -> float:
