@@ -398,23 +398,20 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
             else:
                 shape = getattr(surface.walls.get(key), "shape", None)
                 if shape is not None and shape[0] == "heightfield":
-                    # (a heightfield where it bends within PLATE_NEAR edges,
-                    # as a plate: the wedge above isn't straight there. Oil
-                    # in a Hele-Shaw defect's foot, rounded over 0.1 at 20
-                    # degrees, wall and meniscus curving toward each other,
-                    # lay under 0.7 of it 0.03 from its line at
-                    # equilibrium, and was dried and wetted over and over.
-                    # Through it is still one, by more than round-off: on it
-                    # (guarded there) it was 2e-16 through. The bend within
-                    # those edges, not at the vertex alone: rounded over
-                    # 0.25, the vertices beside the line on a groove's steep
-                    # side, 0.2 below its shoulder, bent a third as much,
-                    # and were made changes 40 times a step, 500-1200 s)
-                    from .constraints import _height_curvature_near
-                    bent = _height_curvature_near(
-                        shape[1], x[near, 0], x[near, 1], PLATE_NEAR*h[near],
-                        1e-2*float(np.median(h[near])))*PLATE_NEAR*h[near] > 1
-                    flag[near] &= ~bent | (s_ > PLATE_NEAR*h[near]) | (g[near] < -1e-6*h[near])
+                    # (a heightfield as a plate: within PLATE_NEAR edges of
+                    # its own contact line no approach is one, the line
+                    # moving there itself; through it still is, by more
+                    # than round-off: on it (guarded there) it was 2e-16
+                    # through. Oil in a Hele-Shaw defect's foot, rounded
+                    # over 0.1 at 20 degrees, lay under 0.7 of the
+                    # straight wedge 0.03 from its line at equilibrium,
+                    # and was dried and wetted over and over; rounded over
+                    # 0.25, the vertices beside the line on a groove's
+                    # steep side, pressed onto it by the descent where the
+                    # line advanced, were made changes 40 times a step,
+                    # 500-1200 s a step, the wall bent a third of what the
+                    # rule that measured its bend asked)
+                    flag[near] &= (s_ > PLATE_NEAR*h[near]) | (g[near] < -1e-6*h[near])
         flag &= band
         for _, members in _groups(flag, e):
             k = members[np.argmin(g[members])]
