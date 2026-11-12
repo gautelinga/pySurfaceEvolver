@@ -3561,7 +3561,15 @@ def _note_swing(ev, e, made_at: list) -> None:
     near = sum(k == e.kind and c == str(e.constraint)
                and float(np.linalg.norm(_delta(w, where, _slab(ev)))) < r
                for k, c, w in made_at)
-    if near < _AGAIN or not _beside_line(ev, e, _edge_scale(ev)):
+    if near < _AGAIN:
+        return
+    # (beside its line: within an edge and a half of a vertex on the wall,
+    # from its place, as the change left the mesh; its rows were the mesh's
+    # before it)
+    nums, _, dist, names = ev._constraint_gaps()
+    on = np.isnan(dist[:, _column(nums, names, e.constraint)])
+    if not on.any() or float(np.linalg.norm(
+            _delta(where, ev.vertices[on], _slab(ev)), axis=1).min()) >= 1.5*r:
         return
     swung = list(getattr(ev, "_swung", ()))
     here = [s for s in swung if float(np.linalg.norm(_delta(s[0], where, _slab(ev)))) < s[1]]
