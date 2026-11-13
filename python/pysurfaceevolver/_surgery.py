@@ -3155,8 +3155,14 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                     ev.restore(start)
                     _remesh_now(ev, h0, near=_CROSSED_AT[0] if _CROSSED_AT and len(_CROSSED_AT[0])
                                 else None)
-                    chunk, start, energy = _away_from_poles(ev, lambda n: _run(ev, tol, n),
-                                                        _CHUNK)
+                    # (gradient steps only from here: Newton steps converge
+                    # to the same point however long the run before them, and
+                    # in a Hele-Shaw cell on a finer mesh that was a shattered
+                    # surface along the oil's line on the lower plate, the
+                    # same to the last digit after runs of 50, 12, 3 and 1
+                    # steps, and the descent ran away)
+                    chunk, start, energy = _away_from_poles(
+                        ev, lambda n: _run(ev, tol, n, newton=False), _CHUNK)
                     # (then in shorter runs, the way down followed finely: in
                     # steps of 50 a pack's surface was taken past where it
                     # came close, run after run, and the changes made there
@@ -3167,7 +3173,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                             break
                         ev.restore(start)
                         chunk, start, energy = _away_from_poles(
-                            ev, lambda k: _run(ev, tol, k), n)
+                            ev, lambda k: _run(ev, tol, k, newton=False), n)
                     if _implausible(ev, energy, getattr(chunk, "energy", None)) == "crossings":
                         ev.restore(start)
                         _unguard(ev)
@@ -3177,7 +3183,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
                             continue
                         guard(ev)
                         chunk, start, energy = _away_from_poles(
-                            ev, lambda n: _run(ev, tol, n), _CHUNK)
+                            ev, lambda n: _run(ev, tol, n, newton=False), _CHUNK)
                 if not _plausible(ev, energy, getattr(chunk, "energy", None)):
                     _log.debug("run undone: implausible (volumes, energy, poles or crossings)")
                     ev.restore(start)
@@ -3719,15 +3725,16 @@ def _try_finish(ev, tol: float) -> Any:
     return None
 
 
-def _run(ev, tol: float, n: int) -> Any:
+def _run(ev, tol: float, n: int, newton: bool = True) -> Any:
     """A descent's relax() run of up to n gradient steps; its Newton steps
     (and relax()'s conjugate-gradient pass) only once the residual is under
-    _NEWTON_NEAR. Far from an equilibrium they took a 16-bead pack's falling
+    _NEWTON_NEAR (never without ``newton``). Far from an equilibrium they took a 16-bead pack's falling
     surface 10 lower in energy in four steps, its residual 14 to 34, by
     putting contact lines onto the beads' poles, where the walls' integrals
     are singular: 0.025 radii from one where gradient steps alone left it
     0.14 away, run after run undone, the poles moved 20 times."""
-    return ev.relax(tol, max_iter=n, newton=None if ev.residual() < _NEWTON_NEAR else 0)
+    near = newton and ev.residual() < _NEWTON_NEAR
+    return ev.relax(tol, max_iter=n, newton=None if near else 0)
 
 
 def _checked_relax(ev, tol: float) -> Any:
