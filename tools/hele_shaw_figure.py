@@ -146,7 +146,8 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     OUT/changes/NAME-NNN.fe. ``fine``: the start's vertices that many times as
     close, across the cell and the gap (the run's edges follow the start's).
     ``crossed``: the surface of the first so many runs judged to have passed
-    it through itself dumped as it was then, OUT/crossed/NAME-NNN.fe."""
+    it through itself dumped as it was then, OUT/crossed/NAME-NNN.fe, and as
+    the last remeshing or coarsening before left it, NAME-NNN-before.fe."""
     os.makedirs(out, exist_ok=True)
     log = open(os.path.join(out, f"{name}.log"), "a" if resume else "w")
     t0 = time.time()
@@ -161,11 +162,18 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
         def emit(self, record):
             text = record.getMessage()
             say("  . " + text)
+            folder = os.path.join(out, "crossed")
+            if live and crossings[0] < crossed and text.startswith(("remeshed", "coarsened")):
+                # (the surface the next run starts from, kept till a run is judged crossed)
+                os.makedirs(folder, exist_ok=True)
+                live[0].dump(os.path.join(folder, f"{name}-last.fe"))
             if live and crossings[0] < crossed and text.startswith("implausible run: crossings"):
-                folder = os.path.join(out, "crossed")
                 os.makedirs(folder, exist_ok=True)
                 path = os.path.join(folder, f"{name}-{crossings[0]:03d}.fe")
                 live[0].dump(path)
+                last = os.path.join(folder, f"{name}-last.fe")
+                if os.path.exists(last):
+                    os.replace(last, os.path.join(folder, f"{name}-{crossings[0]:03d}-before.fe"))
                 say(f"  dumped {path}")
                 crossings[0] += 1
             if trace and dumps and live and dumped[0] < dumps and text.startswith("change made"):
