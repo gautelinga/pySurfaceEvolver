@@ -18,6 +18,10 @@ pressure of 1 is 20 Pa.
   gap b apart and the area per width it leaves dry between them.
 * ``envelope(V, P, up)``: pressure control along a traced P(V) curve, its
   jumps and the energy each dissipates.
+* ``half_gap(points, x, centres)``: where a meniscus crosses half the gap near
+  x, which is what a camera looking through the plates sees of it.
+* ``line_model(centres, width, slope)``: the paper's model, the meniscus as a
+  line in the plane of the cell, through the same cycle.
 """
 
 import numpy as np
@@ -172,3 +176,64 @@ def envelope(V, P, up=True):
         jumps.append((a, b, env[a], V[a], V[b], area))
         k = j
     return env, jumps
+
+
+def half_gap(points, x, centres=None, rounding=S, band=0.3):
+    """Where the meniscus (its vertices, ``points``) crosses half the gap within
+    band of x: the median y of the vertices there between 0.38 and 0.62 of the
+    local gap. Outside the defects gravity across the gap makes the meniscus
+    lean, its line on the printed plate ahead of the rest; this is the meniscus
+    as seen through the plates. NaN where there are none."""
+    p = np.asarray(points, float)
+    p = p[np.abs(p[:, 0] - x) < band]
+    if not len(p):
+        return float("nan")
+    ys = np.linspace(p[:, 1].min() - 1, p[:, 1].max() + 1, 2001)
+    s = p[:, 2]/np.interp(p[:, 1], ys, gap(ys, x, centres, rounding))
+    on = np.abs(s - 0.5) < 0.12
+    return float(np.median(p[on, 1])) if on.any() else float("nan")
+
+
+def line_model(centres=None, width=X, slope=PI*np.cos(np.radians(THETA)), *,
+               lo=-3.0, hi=16.0, dh=0.02, dx=0.1, rounding=S):
+    """Holtzman et al.'s model: the meniscus a line y = h(x) in the plane of the
+    cell, its energy (per gamma) the integral of h'^2/2 + (h - h0)^2/(2 lc^2) less
+    the capillary pressure's work, slope*y along a defect's ramp (y 0 to LS) and
+    slope*LS on its plateau (to LS + LP), the defects' edges rounded over
+    ``rounding`` as here. lc^2 = gamma/(rho g sin TILT). Mirror planes x = 0 and
+    width, defects 10 wide at x = centres (None: one at x = 0). The undisturbed
+    line h0 goes from lo up to hi and back in steps dh, each state relaxed from
+    the last (so a jump happens where the state it was on stops being a minimum).
+    ``slope``: per mm^2 in gamma; the default, the design's 6 kPa/m times
+    cos(THETA). Returns rows (imbibition, h_f, eta_m): h_f where the line meets
+    the far mirror plane, eta_m the line at the first defect's middle less h_f."""
+    from scipy.optimize import minimize
+    centres = (0.0,) if centres is None else tuple(centres)
+    inv_lc2 = RHO_G*np.sin(np.radians(TILT))
+    xs = np.arange(0, width + dx/2, dx)
+    sp = lambda z: np.logaddexp(0, z)  # noqa: E731
+    inside = np.minimum(1, sum(0.5*(np.tanh((xs - c + W/2)/rounding) - np.tanh((xs - c - W/2)/rounding))
+                               for c0 in centres for c in {c0, -c0}))
+    yt = np.linspace(lo - 3, hi + 15, 20001)
+    qt = slope*rounding*(sp(yt/rounding) - sp((yt - LS)/rounding))*0.5*(1 - np.tanh((yt - LS - LP)/rounding))
+    Qt = np.concatenate([[0.0], np.cumsum(0.5*(qt[1:] + qt[:-1])*np.diff(yt))])
+    Qt -= np.interp(0.0, yt, Qt)
+    wts = np.full(len(xs), dx)
+    wts[[0, -1]] = dx/2
+
+    def energy(h, h0):
+        d = np.diff(h)/dx
+        e = 0.5*np.sum(d*d)*dx + np.sum(wts*(0.5*inv_lc2*(h - h0)**2 - inside*np.interp(h, yt, Qt)))
+        g = wts*(inv_lc2*(h - h0) - inside*np.interp(h, yt, qt))
+        g[:-1] -= d
+        g[1:] += d
+        return e, g
+
+    h, rows = np.full(len(xs), lo), []
+    mid = int(np.argmin(np.abs(xs - centres[0])))
+    for up, h0s in ((True, np.arange(lo, hi + 1e-9, dh)), (False, np.arange(hi, lo - 1e-9, -dh))):
+        for h0 in h0s:
+            h = minimize(energy, h, args=(h0,), jac=True, method="L-BFGS-B",
+                         options=dict(maxiter=50000, gtol=1e-11, ftol=1e-15, maxcor=30)).x
+            rows.append((up, h[-1], h[mid] - h[-1]))
+    return np.array(rows, float)
