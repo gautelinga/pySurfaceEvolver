@@ -2810,9 +2810,6 @@ _REMESH = (0.4, 2.0)    # after a change: edges kept within these many times the
 _ON_THE_WAY = 4/3       # ... and between a run's points, edges split past this many times theirs
                         # (twice: a pack's surface, stretching as it drained, went on with
                         # edges of 0.39 for 0.2, angles of 8 degrees)
-_APPROACH = 0.25        # a descent's start: a body's target approached in steps moving it this many edges (_approach)
-_APPROACH_STEPS = 5     # ... with this many gradient steps after each
-_APPROACH_MOST = 40     # ... in this many steps at most
 _CHUNK = 50             # after a change: relax() runs of this many gradient steps at most
 _LINE_CHOP = 4/3        # in a descent: contact-line edges split past this many h0 each step
 _SHORTER = (12, 3, 1)   # a run that crossed twice: again in runs of these many steps
@@ -2959,7 +2956,6 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
     L = _slab(ev)
     if not falling:
         guard(ev)
-        _approach(ev, tol)
     since, stuck = 0, False
     work = _core.work()                 # (where the budget began)
     closing, fresh = True, None         # whether the tidying closes patches; the iteration's start
@@ -3723,44 +3719,7 @@ def _try_finish(ev, tol: float) -> Any:
     return None
 
 
-def _approach(ev, tol: float) -> None:
-    """The bodies' volumes taken to their targets in steps, where the first
-    gradient step would take them there at once and move the surface by more
-    than _APPROACH of a median edge (the gap over the body's area): each
-    step the targets moved on by that much at most, then _APPROACH_STEPS
-    gradient steps. A Hele-Shaw cell's descent from a branch that took no
-    step began 12 mm^3 off its target (the target a step on, as arclength
-    sets it there); the first step moved all of the meniscus 0.36 at once,
-    on edges of 0.08, and shattered it along its lines on both plates: run
-    after run crossed, the same to the last digit whatever its length, and
-    the descent ran away."""
-    b = ev.bodies()
-    if not len(b.ids) or not b.fixed.any():
-        return
-    m = ev.mesh()
-    if m.facet_bodies is None or not len(m.facets):
-        return
-    areas = m.facet_areas()
-    h = float(np.median(m.edge_lengths()))
-    ids, start, end = b.ids[b.fixed], b.volume[b.fixed], b.target[b.fixed]
-    n = 1
-    for i, v0, v1 in zip(ids, start, end):
-        mine = (m.facet_bodies == i).any(axis=1)
-        area = float(areas[mine].sum())
-        if area > 0:
-            n = max(n, int(np.ceil(abs(v1 - v0)/(area*_APPROACH*h))))
-    if n <= 1:
-        return
-    n = min(n, _APPROACH_MOST)
-    _log.debug("volumes approached in %d steps (%s off)", n,
-               ", ".join(f"{v1 - v0:.3g}" for v0, v1 in zip(start, end)))
-    for k in range(1, n + 1):
-        for i, v0, v1 in zip(ids, start, end):
-            ev.body(int(i)).target = v0 + (v1 - v0)*k/n
-        _run(ev, tol, _APPROACH_STEPS, newton=False)
-
-
-def _run(ev, tol: float, n: int, newton: bool = True) -> Any:
+def _run(ev, tol: float, n: int) -> Any:
     """A descent's relax() run of up to n gradient steps; its Newton steps
     (and relax()'s conjugate-gradient pass) only once the residual is under
     _NEWTON_NEAR. Far from an equilibrium they took a 16-bead pack's falling
@@ -3768,8 +3727,7 @@ def _run(ev, tol: float, n: int, newton: bool = True) -> Any:
     putting contact lines onto the beads' poles, where the walls' integrals
     are singular: 0.025 radii from one where gradient steps alone left it
     0.14 away, run after run undone, the poles moved 20 times."""
-    near = newton and ev.residual() < _NEWTON_NEAR
-    return ev.relax(tol, max_iter=n, newton=None if near else 0)
+    return ev.relax(tol, max_iter=n, newton=None if ev.residual() < _NEWTON_NEAR else 0)
 
 
 def _checked_relax(ev, tol: float) -> Any:
