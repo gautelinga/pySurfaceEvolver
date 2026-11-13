@@ -139,6 +139,14 @@
   is voted once, not at every edit; a slab's grid queries skip the nearest-image
   floor where the centres are within a period. A 64-bead pack's edge keeping 2.2x
   faster, the same meshes.
+- A topology run's contact line that swings on a heightfield gets finer edges there:
+  where the surface resting beside its line on one is dried a third time within an
+  edge in one descent, the remeshing's targets within four edges of the spot are
+  halved for the rest of the run, and halved again at each swing there after. At the
+  end of a 1 mm groove between two Hele-Shaw defects (a defect's rounded corner) the
+  oil's line was dried a patch at a time, slid back and was dried again, 52 times at
+  one spot, and the run never got past it; with the finer edges it went through
+  (the {doc}`hele_shaw_defects` page's pair 11 mm apart).
 
 ### Fixes
 
