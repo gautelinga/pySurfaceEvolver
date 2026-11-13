@@ -131,7 +131,7 @@ def _trace_solid(box, say):
 
 
 def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H.S,
-        halvings=6, width=H.X, states=0, resume=None, trace=None, dumps=0):
+        halvings=6, width=H.X, states=0, resume=None, trace=None, dumps=0, fine=1.0):
     """Imbibition from a flat meniscus at y = -4 until the meniscus far from
     the defects is at y = hmax, then drainage back to the start; rows
     (imbibing, volume added, pressure, contact line far from the defects,
@@ -142,7 +142,8 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     ds, halvings and width as it had them). ``trace``: (x0, x1, y0, y1), the
     solid events there logged (_trace_solid), and the surface just after
     each of the first ``dumps`` changes made there dumped to
-    OUT/changes/NAME-NNN.fe."""
+    OUT/changes/NAME-NNN.fe. ``fine``: the start's vertices that many times as
+    close, across the cell and the gap (the run's edges follow the start's)."""
     os.makedirs(out, exist_ok=True)
     log = open(os.path.join(out, f"{name}.log"), "a" if resume else "w")
     t0 = time.time()
@@ -180,7 +181,7 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     else:
         # (the start's vertices as far apart across as at the full width)
         ev = H.cell(centres, sharp=sharp, rounding=rounding, width=width,
-                    nx=int(round(40*width/H.X)) + 1)
+                    nx=int(round(40*fine*width/H.X)) + 1, nz=int(round(6*fine)) + 1)
         say(f"start: {ev.relax(levels=levels)}")
         V0 = ev.body(1).volume
         rows, carry = [], None
@@ -290,15 +291,16 @@ PLATE = dict(color="#b0b0b0", opacity=0.22, ambient=0.4, diffuse=0.6)
 CAMERA = [(-26.0, -40.0, 34.0), (0.0, 6.0, 1.0), (0, 0, 1)]
 
 
-def scene(pl, x, f, centres, label="", rounding=H.S):
-    """The meniscus and its mirror image across x = 0, under the upper plate."""
+def scene(pl, x, f, centres, label="", rounding=H.S, width=H.X):
+    """The meniscus and its mirror image across x = 0, under the upper plate
+    (out to the run's mirror planes, x = -width and width)."""
     import pyvista as pv
     x = np.asarray(x, float)
     tri = np.hstack([np.full((len(f), 1), 3), f]).ravel()
     for s in (1, -1):
         m = pv.PolyData(x*np.array([s, 1, 1]), tri)
         pl.add_mesh(m, **LIQUID)
-    xs, ys = np.linspace(-H.X, H.X, 161), np.linspace(-6, 22, 113)
+    xs, ys = np.linspace(-width, width, int(round(8*width)) + 1), np.linspace(-6, 22, 113)
     gx, gy = np.meshgrid(xs, ys, indexing="ij")
     gz = np.asarray(__import__("pysurfaceevolver").constraints._height_values(
         H.height(centres, rounding), gx.ravel(), gy.ravel()))
@@ -309,12 +311,17 @@ def scene(pl, x, f, centres, label="", rounding=H.S):
 
 def frame(out, name, i):
     z = np.load(os.path.join(out, f"{name}.npz"))
-    return z[f"x{i}"], z[f"f{i}"], tuple(z["centres"]), _rounding(z)
+    return z[f"x{i}"], z[f"f{i}"], tuple(z["centres"]), _rounding(z), _width(z)
 
 
 def _rounding(z):
     """The run's plate rounding (runs before --rounding: the default)."""
     return float(z["rounding"]) if "rounding" in z.files else H.S
+
+
+def _width(z):
+    """The run's half-width (runs before --width: the default)."""
+    return float(z["width"]) if "width" in z.files else H.X
 
 
 def film(out, name, path=None, frames=240):
@@ -340,7 +347,7 @@ def film(out, name, path=None, frames=240):
         leg = "imbibition" if rows[i, 0] > 0 else "drainage"
         scene(pl, z[f"x{i}"], z[f"f{i}"], centres,
               f"{title}: {leg}, oil added {rows[i, 1]:.0f} mm^3, "
-              f"pressure {20*rows[i, 2]:.1f} Pa", _rounding(z))
+              f"pressure {20*rows[i, 2]:.1f} Pa", _rounding(z), _width(z))
 
     D.movie(path or os.path.join(STATIC, f"hele_shaw_{name}.mp4"), order, draw, CAMERA,
             fps=24, hold=24, window=(960, 640), quality=5)
@@ -405,6 +412,8 @@ if __name__ == "__main__":
     ap.add_argument("--ds", type=float, default=6.0, help="the arclength step (run)")
     ap.add_argument("--width", type=float, default=H.X,
                     help="the cell's half-width modelled, mirror planes x = 0 and x = width (run)")
+    ap.add_argument("--fine", type=float, default=1.0,
+                    help="the start's vertices this many times as close (run)")
     ap.add_argument("--halvings", type=int, default=6,
                     help="the arclength step's halvings at the most (run)")
     ap.add_argument("--states", type=int, default=0,
@@ -421,7 +430,7 @@ if __name__ == "__main__":
             rounding=a.rounding, levels=a.levels, ds=a.ds, halvings=a.halvings,
             width=a.width, states=a.states, resume=a.resume,
             trace=tuple(float(v) for v in a.trace.split(",")) if a.trace else None,
-            dumps=a.dumps)
+            dumps=a.dumps, fine=a.fine)
     elif a.part == "film":
         for name in a.args:
             film(a.out, name)
