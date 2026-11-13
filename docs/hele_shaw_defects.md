@@ -78,12 +78,14 @@ then it is drawn back out to the start. The runs control the volume, not the
 pressure: `recipes.arclength` steps the oil's volume by 12 mm³, halved at most twice
 where a step finds no equilibrium, and makes the changes of topology on the way
 (contact lines meeting, dry patches opening on the plate). Mirror planes bound each
-cell, at x = 0 and at x = 10 for one defect, x = 14 for the pairs. The three runs:
+cell, at x = 0 and at x = 10 for one defect, x = 14 for the pairs. The runs start from
+a mesh 1.5 times finer than the tool's default (`--fine 1.5`); why is below. The three
+runs:
 
 ```text
-OMP_NUM_THREADS=3 python tools/hele_shaw_figure.py run single 0   --rounding 0.25 --ds 12 --halvings 2 --width 10
-OMP_NUM_THREADS=3 python tools/hele_shaw_figure.py run pair13 6.5 --rounding 0.25 --ds 12 --halvings 2 --width 14
-OMP_NUM_THREADS=3 python tools/hele_shaw_figure.py run pair11 5.5 --rounding 0.25 --ds 12 --halvings 2 --width 14
+OMP_NUM_THREADS=4 python tools/hele_shaw_figure.py run single 0   --rounding 0.25 --ds 12 --halvings 2 --width 10 --fine 1.5 --states 6
+OMP_NUM_THREADS=4 python tools/hele_shaw_figure.py run pair13 6.5 --rounding 0.25 --ds 12 --halvings 2 --width 14 --fine 1.5
+OMP_NUM_THREADS=4 python tools/hele_shaw_figure.py run pair11 5.5 --rounding 0.25 --ds 12 --halvings 2 --width 14 --fine 1.5 --states 6
 python tools/hele_shaw_figure.py draw
 ```
 
@@ -97,39 +99,90 @@ volume fitted while the defects are still far (the first 100 mm³), which takes 
 gravity's steady rise. Under volume control the path is continuous. The experiment
 controls the pressure, and there the interface jumps wherever the pressure would have
 to fall: the dashed segments. Each jump dissipates the area it cuts off under the
-pressure curve:
+pressure curve. Over the cycle, and in imbibition's jumps on the ramp (those that
+start before h<sub>f</sub> reaches 4.6 mm, the top of the steep climb):
 
-| cell | jumps (imbibition + drainage) | dissipated over the cycle |
-|---|---|---|
-| one defect | 18 + 12 | 0.33 γ mm² (6.6 nJ) |
-| two, 13 mm apart | 29 + 12 | 0.41 γ mm² (8.2 nJ) |
-| two, 11 mm apart | 43 + 13 | 0.43 γ mm² (8.6 nJ) |
+| cell | jumps (imbibition + drainage) | dissipated over the cycle | of it, imbibition on the ramp |
+|---|---|---|---|
+| one defect | 24 + 30 | 0.16 γ mm² (3.2 nJ) | 0.05 γ mm² |
+| two, 13 mm apart | 22 + 36 | 0.35 γ mm² (6.9 nJ) | 0.10 γ mm² |
+| two, 11 mm apart | 30 + 38 | 0.42 γ mm² (8.3 nJ) | 0.15 γ mm² |
 
 All three cells share the main shape. The bulge jumps to about 1 mm as the meniscus
 reaches the defect's foot (h<sub>f</sub> ≈ −1). It climbs steeply as the meniscus
-rises up the ramp (h<sub>f</sub> 3 to 5). It sits at 5.5–6.5 mm while the meniscus
-crosses the plateau, and it relaxes once the far meniscus passes the defect's end.
-Drainage runs above imbibition across the plateau, which is the loop. The dissipation
-grows from one defect to the pair 13 mm apart to the pair 11 mm apart, as in the
-experiment. The pairs' loops are not much wider than the single defect's, though, and
-the single defect is not reversible here: most of its jumps come on the ramp, where
-the bulge grows fastest.
+rises up the ramp (h<sub>f</sub> 3.5 to 4.5), sits at 5.5–6.5 mm while the meniscus
+crosses the plateau, and relaxes once the far meniscus passes the defect's end. As in
+the experiment, the dissipation grows from one defect to the pair 13 mm apart to the
+pair 11 mm apart, and the drainage curve parts from imbibition's where the bulge
+climbs.
 
-Run times on 3 threads of a cluster node: 39 minutes for one defect and 88 for the pair
-13 mm apart (63 in an earlier run of the same cell). The pair 11 mm apart took 3 h 50
-min in two jobs: the run was resumed from a saved state (`--states`, `--resume`)
-when the first job's 3 h ran out late in drainage.
+How much of this is the cell's and how much the mesh's shows when the mesh changes.
+On the default mesh (`--fine 1`) the same runs gave 0.33, 0.41 and 0.43 γ mm² over
+the cycle, most of it a sawtooth of small jumps: on the plateau, and for one defect
+on the ramp (0.21 γ mm² there). Each of those jumps comes where the meniscus has
+stalled and a remesh lets it go on: the contact lines hold on the mesh. On the
+finer mesh one defect's jumps on the ramp fell to a quarter, while the pair 11 mm
+apart's stayed (0.14 on the default mesh, 0.15 on the finer): that part is the
+cell's. The finer mesh doesn't settle everything, though. A second run of the pair 13
+mm apart, the same but for steps of 6 mm³ (`--ds 6`), dissipated 0.23 γ mm² over the
+cycle and 0.05 on the ramp, so the numbers here carry about ±0.05 γ mm² from the
+path a run happens to take: the pair 11 mm apart stands clear of one defect, the pair
+13 mm apart less so. And drainage's bulge stays 0.1 mm above imbibition's across the
+whole plateau in all three cells (0.12 mm on the default mesh), where the
+experiment's curves lie on each other; that offset is likely the mesh's too.
+
+### Against the paper's theory
+
+The model of Holtzman et al. treats the meniscus as a line with a capillary length
+ℓ<sub>c</sub> = √(γ/ρg<sub>e</sub>), here 1.9 mm (ρ = 930 kg/m³, γ = 20 mN/m,
+g<sub>e</sub> = g sin 38°). A defect 10 mm wide is wide on that scale
+(w/ℓ<sub>c</sub> ≈ 5), and a wide defect turns strong when its slope Π of capillary
+pressure passes about ρg<sub>e</sub> = 5620 Pa/m. The defects were designed for
+Π = 6000 Pa/m with oil that wets perfectly; at the 20° contact angle used here the
+slope is 6000 cos 20° ≈ 5640 Pa/m. One defect sits on the threshold, then
+(Π/ρg<sub>e</sub> ≈ 1.00, with the threshold a little higher for a finite width), and
+the pair's threshold is only a little lower for defects this wide. Two things follow.
+The bulge's climb on the ramp is as steep as it is because the response to the
+ramp grows without bound at the threshold. And whether one defect alone jumps turns
+on small things: the experiment's was reversible, and here it keeps a small loop
+where the bulge climbs.
+
+The pair's interaction falls off as exp(−gap/ℓ<sub>c</sub>) with the gap between the
+defects' edges: 0.20 for the pair 13 mm apart (a gap of 3 mm) and 0.59 for the pair
+11 mm apart (1 mm). The mirror images are far by comparison: one defect's next image
+is 10 mm away edge to edge (0.005), the pairs' 5 and 7 mm (0.07 and 0.02).
+
+Two things differ from the experiment. The bulge over the plateau is 5.5–6.5 mm here,
+against 8.5–9 mm in the experiment and about 9–10 mm from the line model
+(Πℓ<sub>s</sub>/ρg<sub>e</sub> · (1 − e<sup>−w/2ℓ<sub>c</sub></sup>)), and the bulge
+climbs at h<sub>f</sub> 3.5–4.5 mm here against 1–1.8 mm in the experiment. The paper
+notes that 3D effects of the meniscus spanning the gap rule out a quantitative
+comparison with its line model, and those effects are in this model; this page
+leaves the difference open. Where the cells here put the "far" meniscus, only 2.5 to
+5 mm beyond the defects' edges, may be part of it.
+
+Run times on 4 threads of a cluster node: 1 h 43 min for one defect, 1 h 36 min for
+the pair 13 mm apart and 3 h 0 min for the pair 11 mm apart. On the default mesh they
+were 39 minutes, 88 minutes and 3 h 50 min on 3 threads.
 
 ## Notes and limits
 
+* **The finer mesh's runs stall in places.** Some descents on the finer mesh run away
+  (the surface passes through itself beside a defect's rounded side edge) and the run
+  backs up and tries again; once in a while it runs out of tries. One defect without
+  `--states` stopped at V ≈ 256 mm³; the pair 13 mm apart with `--states` ended its
+  imbibition short at V ≈ 370 mm³ and went on from a broken surface, the same way
+  each time (a run resumed from its states goes on to the bit as it would have). Keeping
+  states changes a run's path, and the runs above are the ones that went through.
 * **Rounded edges.** The printed edges are rounded over 0.25 mm. A printed part has
   no sharp edges, and edges rounded over 0.1 mm made the runs churn for 20 minutes
   and more at each defect's side edges, where the oil wicks along the step's concave
   foot. With 0.25 mm rounding, the 1 mm channel between the defects 11 mm apart is a
   rounded groove whose roof is 3.5 mm, not 3.6.
 * **Narrow cells.** Mirror planes 10 and 14 mm from the middle leave the "far"
-  meniscus only 2.5 to 5 mm beyond the defects. A cell 20 mm wide gave four times the
-  facets, and an estimated 2 h a cycle for one defect.
+  meniscus only 2.5 to 5 mm beyond the defects. One defect in a cell 20 mm wide (on
+  the default mesh) took 2 h 25 min, and its plateau's offset between drainage and
+  imbibition halved.
 * **No contact-angle hysteresis.** The contact angle is 20° on both plates,
   advancing or receding. All the dissipation here comes from the meniscus's jumps.
 * **The groove's end.** Where the 1 mm channel opens past the defects' rounded
@@ -140,7 +193,8 @@ when the first job's 3 h ran out late in drainage.
   and the run goes through.
 * **A remaining slow spot.** Where the meniscus first enters the 1 mm channel between
   the defects 11 mm apart (V ≈ 80 mm³), the surface crowds the mirror plane at the
-  channel's middle. It takes about 13 minutes there in imbibition and 30 in drainage.
+  channel's middle. It took about 13 minutes there in imbibition and 30 in drainage
+  on the default mesh.
 
 ## References
 
