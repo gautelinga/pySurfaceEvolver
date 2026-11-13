@@ -2804,6 +2804,7 @@ _HIGH_PLATEAU = 4.0     # ... and below this residual too, after _HIGH_AFTER ite
 _HIGH_AFTER = 10        # without a change
 _FLAT = 0.05            # a facet crushed flat: its area under this many h^2 (h the mean edge)
 _AGAIN = 3              # a change made this often at one place in a descent: not again there
+_SWING_REACH = 4.0      # a line swinging (_note_swing): its edges finer within this many of them
 _FALL_CLEAR = 0.1       # the gradient steps' cosine with the mode that sets the way
 _REMESH = (0.4, 2.0)    # after a change: edges kept within these many times their targets (_sizes)
 _ON_THE_WAY = 4/3       # ... and between a run's points, edges split past this many times theirs
@@ -2815,6 +2816,7 @@ _SHORTER = (12, 3, 1)   # a run that crossed twice: again in runs of these many 
 _FINE = 0.25            # _sizes: the finest target edge, in h0
 _GRADE = 0.5            # _sizes: how fast the targets grow away from a gap (per length)
 _FILAMENT = 0.1         # _sizes: the finest target along a plate's base edges, in h0
+_CURVED = 1/6           # _sizes: near a heightfield, targets this times its radius
 _COARSEN = 1.5          # _sizes: a vertex's target grows at most this much a remeshing
 _LOCAL = 4.0            # after a change: remeshed within this many h0 of it
 _HOLE_TRIES = 8         # a sheet's hole: this many facet pairs tried, nearest its thinnest point first
@@ -3046,6 +3048,7 @@ def _descend(ev, factor: float, tol: float, *, falling: bool, keep, h0,
         nonlocal way, before, tried, since, stuck, falling, remeshing, stalled
         _checked(ev, f"the change: {e}")
         made_at.append((e.kind, str(e.constraint), np.asarray(e.where, float)))
+        _note_swing(ev, e, made_at)
         note(e, "made")
         undo[:] = [(pre.pop(), e)] if pre else []
         pre.clear()
@@ -3537,6 +3540,47 @@ def _again(ev, e, made_at: list, refused_at: list, undone_at: list) -> bool:
         or count(undone_at) > 0
 
 
+def _note_swing(ev, e, made_at: list) -> None:
+    """A heightfield's surface resting beside its line dried (a "solid"
+    change, the liquid between) the _AGAIN-th time within one of its edges
+    in this descent: the line swinging there, each change an edge's worth.
+    Its place's targets (_sizes) halved, within _SWING_REACH of those edges,
+    for the rest of the run (Evolver._swung), again at each swing there
+    after. At the end of a Hele-Shaw pair's 1 mm groove, the defect's
+    rounded corner, a spot was dried, wetted back by the line sliding,
+    pressed onto the wall and dried again, 52 times on edges of 0.03, and
+    the run never passed it; bounding the swings there (not making them
+    after three) stalled the descent as long."""
+    if e.kind != "solid" or getattr(e, "between", None) != "body" \
+            or not 0 <= e.gap < _TOUCH*float(e.scale):
+        return
+    shape = getattr(surface.walls.get(e.constraint), "shape", None)
+    if shape is None or shape[0] != "heightfield":
+        return
+    where, r = np.asarray(e.where, float), float(e.scale)
+    near = sum(k == e.kind and c == str(e.constraint)
+               and float(np.linalg.norm(_delta(w, where, _slab(ev)))) < r
+               for k, c, w in made_at)
+    if near < _AGAIN:
+        return
+    # (beside its line: within an edge and a half of a vertex on the wall,
+    # from its place, as the change left the mesh; its rows were the mesh's
+    # before it)
+    nums, _, dist, names = ev._constraint_gaps()
+    on = np.isnan(dist[:, _column(nums, names, e.constraint)])
+    if not on.any() or float(np.linalg.norm(
+            _delta(where, ev.vertices[on], _slab(ev)), axis=1).min()) >= 1.5*r:
+        return
+    swung = list(getattr(ev, "_swung", ()))
+    here = [s for s in swung if float(np.linalg.norm(_delta(s[0], where, _slab(ev)))) < s[1]]
+    target = 0.5*min([r] + [s[2] for s in here])
+    swung = [s for s in swung if not any(s is t for t in here)]
+    swung.append((where, max([_SWING_REACH*r] + [s[1] for s in here]), target))
+    ev._swung = swung
+    _log.debug("line swinging at (%s): edges there toward %.3g",
+               ", ".join(f"{v:.4g}" for v in where), target)
+
+
 def _common(a, b) -> float:
     """The dot product of two per-vertex arrays over the rows both have."""
     n = min(len(a), len(b))
@@ -3777,12 +3821,17 @@ def _implausible(ev, before: tuple, trace=None) -> str:
            "energy" if jumped else
            "crossings" if _more_crossings(ev, crossed, before[4] if len(before) > 4 else None) else
            "through a wall" if _outside(ev) > out else "")
-    if why:
-        _log.debug("implausible run: %s", why)
-        _LAST_WRONG[:] = [why]
     if why == "crossings":
         _note_crossed(ev)
+        # (where, in the log: the first three places)
+        places = "; ".join("(" + ", ".join(f"{v:.4g}" for v in w) + ")"
+                           for w in _CROSSED_AT[0][:3])
+        _log.debug("implausible run: crossings at %s", places)
+        _LAST_WRONG[:] = [why]
         _PUSH_AT.extend(_off_walls(ev, _CROSSED_AT[0]))
+    elif why:
+        _log.debug("implausible run: %s", why)
+        _LAST_WRONG[:] = [why]
     return why
 
 
@@ -4919,6 +4968,7 @@ def _sizes(ev, h0: float) -> np.ndarray:
     # (events() measures in local edges, the finest _FINE h0: so out to h0;
     # the surface close to itself within an edge, necks NECK times that)
     from ._events import find, _base as base_of
+    from .constraints import _height_curvature as height_curvature
     nums, _, dist, names = ev._constraint_gaps()
     keys = [str(n or int(k)) for k, n in zip(nums, names)]
     for e in find(ev, 1/_FINE, self_factor=1.0):
@@ -5012,6 +5062,29 @@ def _sizes(ev, h0: float) -> np.ndarray:
         hit = near_line[edges[:, 0]] | near_line[edges[:, 1]]
         near_line[edges[hit].ravel()] = True
         size = np.where(near_line & (far < h0), np.minimum(size, np.maximum(far, _FILAMENT*h0)), size)
+    # a heightfield's tight bends, where the surface is on it or within h0:
+    # targets no coarser than _CURVED of its least radius of curvature there
+    # (the edges are kept within twice their targets), down to _FILAMENT h0
+    # (a Hele-Shaw defect's edges rounded over 0.1, radii 0.13, on edges of
+    # 0.1-0.13: chords cut through the shoulder, and the oil filament along
+    # the step's foot, two edges across, had its legs met over and over;
+    # targets of a third of the radius left edges of 0.1 there)
+    for c, key in enumerate(keys):
+        w = surface.walls.get(names[c] or int(nums[c]))
+        shape = getattr(w, "shape", None)
+        if shape is None or shape[0] != "heightfield":
+            continue
+        g = dist[:, c]
+        rows = np.flatnonzero(np.isnan(g) | (np.abs(np.nan_to_num(g, nan=0.0)) < h0))
+        if not len(rows):
+            continue
+        k = height_curvature(shape[1], x[rows, 0], x[rows, 1], 1e-2*h0)
+        size[rows] = np.minimum(size[rows], np.maximum(
+            _CURVED/np.maximum(k, 1e-300), _FILAMENT*h0))
+    # where a line swung (_note_swing), its targets there, for the run
+    for where, reach, target in getattr(ev, "_swung", ()):
+        near = np.linalg.norm(_delta(where, x, _slab(ev)), axis=1) < reach
+        size[near] = np.minimum(size[near], max(target, _FILAMENT*h0))
     # (each vertex's neighbours' targets plus _GRADE of the edge, the least
     # of them, by the edges' ends sorted once: np.minimum.at, unbuffered,
     # took 3 ms a round at 30k facets)

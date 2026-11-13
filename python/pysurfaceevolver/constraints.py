@@ -587,6 +587,60 @@ def _height_values(height: str, x, y) -> np.ndarray:
     return np.broadcast_to(np.asarray(out, dtype=float), np.broadcast(x, y).shape).copy()
 
 
+def _height_curvature(height: str, x, y, d: float) -> np.ndarray:
+    """The larger principal curvature (in size) of the surface z =
+    height(x, y) at the points, by central differences of step d."""
+    f = _height_values
+    z = f(height, x, y)
+    zx = (f(height, x + d, y) - f(height, x - d, y))/(2*d)
+    zy = (f(height, x, y + d) - f(height, x, y - d))/(2*d)
+    zxx = (f(height, x + d, y) - 2*z + f(height, x - d, y))/(d*d)
+    zyy = (f(height, x, y + d) - 2*z + f(height, x, y - d))/(d*d)
+    zxy = (f(height, x + d, y + d) - f(height, x + d, y - d)
+           - f(height, x - d, y + d) + f(height, x - d, y - d))/(4*d*d)
+    # (the shape operator I^-1 II of a graph; its eigenvalues by the trace
+    # and determinant: H = mean curvature, K = Gauss)
+    w = 1 + zx*zx + zy*zy
+    K = (zxx*zyy - zxy*zxy)/(w*w)
+    H = ((1 + zy*zy)*zxx - 2*zx*zy*zxy + (1 + zx*zx)*zyy)/(2*w**1.5)
+    return np.abs(H) + np.sqrt(np.maximum(H*H - K, 0.0))
+
+
+def _height_bend(height: str, x, y, d: float) -> np.ndarray:
+    """The signed mean curvature of z = height(x, y) at the points, by
+    central differences of step d: positive where it bends toward +z (as
+    z = x^2 does)."""
+    f = _height_values
+    z = f(height, x, y)
+    zx = (f(height, x + d, y) - f(height, x - d, y))/(2*d)
+    zy = (f(height, x, y + d) - f(height, x, y - d))/(2*d)
+    zxx = (f(height, x + d, y) - 2*z + f(height, x - d, y))/(d*d)
+    zyy = (f(height, x, y + d) - 2*z + f(height, x, y - d))/(d*d)
+    zxy = (f(height, x + d, y + d) - f(height, x + d, y - d)
+           - f(height, x - d, y + d) + f(height, x - d, y - d))/(4*d*d)
+    w = 1 + zx*zx + zy*zy
+    return ((1 + zy*zy)*zxx - 2*zx*zy*zxy + (1 + zx*zx)*zyy)/(2*w**1.5)
+
+
+_LEAST_RADIUS: dict = {}
+
+
+def _least_radius(height: str, x_range, y_range, spacing: float) -> float:
+    """A heightfield's least radius of curvature over its rectangle, on a
+    grid of the given spacing (kept: the formula over the grid is a second
+    or so)."""
+    key = (height, tuple(map(float, x_range)), tuple(map(float, y_range)), float(spacing))
+    if key not in _LEAST_RADIUS:
+        (xa, xb), (ya, yb) = key[1], key[2]
+        xs = np.arange(xa, xb + spacing/2, spacing)
+        least = np.inf
+        for y in np.arange(ya, yb + spacing/2, spacing):
+            k = _height_curvature(height, xs, np.full_like(xs, y), 1e-2*spacing)
+            least = min(least, 1/max(float(k.max()), 1e-300))
+        _LEAST_RADIUS[key] = least
+    return _LEAST_RADIUS[key]
+
+
 def _spline_coefficients(f: np.ndarray) -> np.ndarray:
     """Cubic B-spline coefficients interpolating f (n, ...) at unit-spaced
     nodes along its first axis, natural at both ends: (n + 2, ...)."""

@@ -758,6 +758,42 @@ def test_a_sheet_under_a_curved_heightfield_relaxes():
     assert r.converged and r.stable and ev.residual() < 1e-8
 
 
+@pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
+def test_a_line_swinging_on_a_heightfield_gets_finer_edges_there():
+    # (_note_swing: the surface beside its line on a heightfield dried the
+    # third time within an edge in a descent halves the targets round there,
+    # for the run, and again at the next swing; not on a plane, nor before
+    # the third time, nor where the surface isn't resting on the wall)
+    from types import SimpleNamespace
+    from pysurfaceevolver import _surgery
+    ev = _sheet(C.heightfield(CURVED, (-0.5, 2.5), (-1, 2), 60.0, spacing=0.05),
+                top=lambda x, y: C._height_values(CURVED, x, y), nx=21, nz=11)
+    h = float(np.median(ev.mesh().edge_lengths()))
+    line = np.flatnonzero(np.asarray(ev.on_constraint("ceiling"), bool))
+    where = np.asarray(ev.vertices[line[len(line)//2]], float)
+    before = _surgery._sizes(ev, h)
+
+    def swing(wall="ceiling", times=3, gap=0.0):
+        e = SimpleNamespace(kind="solid", between="body", gap=gap, scale=h,
+                            constraint=wall, where=where + [0.1*h, 0, 0])
+        made_at = [("solid", wall, where + [0.1*h*k, 0, 0]) for k in range(times)]
+        _surgery._note_swing(ev, e, made_at)
+        return list(getattr(ev, "_swung", ()))
+
+    assert swing(times=2) == []
+    assert swing("bottom") == []
+    assert swing(gap=_surgery._TOUCH*h) == []
+    (at, reach, target), = swing()
+    assert reach == pytest.approx(_surgery._SWING_REACH*h) and target == pytest.approx(h/2)
+    (at, reach, target), = swing()
+    assert reach == pytest.approx(_surgery._SWING_REACH*h) and target == pytest.approx(h/4)
+    after = _surgery._sizes(ev, h)
+    x = np.asarray(ev.vertices)
+    near = np.linalg.norm(x - at, axis=1) < reach
+    assert near.any() and (after[near] <= h/4 + 1e-12).all() and (before[near] > h/4).any()
+    assert (after[~near] <= before[~near] + 1e-12).all()
+
+
 def test_a_heightfield_wants_a_numeric_angle_and_known_names():
     with pytest.raises(ValueError):
         C.heightfield("1 + 0*x", (0, 1), (0, 1), "theta")
