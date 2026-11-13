@@ -171,9 +171,11 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                 os.makedirs(folder, exist_ok=True)
                 path = os.path.join(folder, f"{name}-{crossings[0]:03d}.fe")
                 live[0].dump(path)
-                last = os.path.join(folder, f"{name}-last.fe")
-                if os.path.exists(last):
-                    os.replace(last, os.path.join(folder, f"{name}-{crossings[0]:03d}-before.fe"))
+                for tag in ("", "-guarded", "-tidied"):
+                    last = os.path.join(folder, f"{name}-last{tag}.fe")
+                    if os.path.exists(last):
+                        os.replace(last, os.path.join(
+                            folder, f"{name}-{crossings[0]:03d}-before{tag}.fe"))
                 say(f"  dumped {path}")
                 crossings[0] += 1
             if trace and dumps and live and dumped[0] < dumps and text.startswith("change made"):
@@ -188,6 +190,22 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                     say(f"  dumped {path}")
                     dumped[0] += 1
 
+    if crossed:
+        # (and the surface after each guard() and _tidy(), the latest kept,
+        # beside the next crossed run's dumps: which call left it as it was)
+        from pysurfaceevolver import _surgery
+
+        def keeping(f, tag):
+            def kept(ev, *args, **kw):
+                out_ = f(ev, *args, **kw)
+                if live and crossings[0] < crossed:
+                    folder = os.path.join(out, "crossed")
+                    os.makedirs(folder, exist_ok=True)
+                    live[0].dump(os.path.join(folder, f"{name}-last-{tag}.fe"))
+                return out_
+            return kept
+        _surgery.guard = keeping(_surgery.guard, "guarded")
+        _surgery._tidy = keeping(_surgery._tidy, "tidied")
     logging.getLogger("pysurfaceevolver.topology").addHandler(Handler())
     logging.getLogger("pysurfaceevolver.topology").setLevel(logging.DEBUG)
     if resume:
