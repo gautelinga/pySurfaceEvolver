@@ -171,7 +171,8 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                 os.makedirs(folder, exist_ok=True)
                 path = os.path.join(folder, f"{name}-{crossings[0]:03d}.fe")
                 live[0].dump(path)
-                for tag in ("", "-guarded", "-tidied"):
+                for tag in ("", "-guarded", "-tidied", "-after-run", "-after-newton",
+                            "-after-split", "-after-refine"):
                     last = os.path.join(folder, f"{name}-last{tag}.fe")
                     if os.path.exists(last):
                         os.replace(last, os.path.join(
@@ -206,6 +207,47 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
             return kept
         _surgery.guard = keeping(_surgery.guard, "guarded")
         _surgery._tidy = keeping(_surgery._tidy, "tidied")
+        # (inside a descent's runs: which of relax()'s stages adds vertices, each
+        # logged with the counts and the smallest facet angle after it, the
+        # surface after each kept)
+        import pysurfaceevolver as _pyse
+
+        def smallest(ev):
+            m = ev.mesh()
+            x, f = np.asarray(m.vertices), np.asarray(m.facets)
+            a, b, c = x[f[:, 0]], x[f[:, 1]], x[f[:, 2]]
+            out_ = 180.0
+            for u, v, w in ((a, b, c), (b, c, a), (c, a, b)):
+                p1, p2 = v - u, w - u
+                cos = (p1*p2).sum(1)/np.maximum(
+                    np.linalg.norm(p1, axis=1)*np.linalg.norm(p2, axis=1), 1e-300)
+                out_ = min(out_, float(np.degrees(np.arccos(np.clip(cos, -1, 1))).min()))
+            return out_
+
+        inside = [0]
+
+        def watched(f, tag):
+            def run_(self_or_ev, *args, **kw):
+                ev = self_or_ev
+                if not (live and crossings[0] < crossed) or (tag != "run" and not inside[0]):
+                    return f(self_or_ev, *args, **kw)
+                n0 = ev.counts["vertices"]
+                inside[0] += tag == "run"
+                try:
+                    out_ = f(self_or_ev, *args, **kw)
+                finally:
+                    inside[0] -= tag == "run"
+                say(f"  [{tag}] vertices {n0} -> {ev.counts['vertices']}, smallest angle "
+                    f"{smallest(ev):.2f}" + (f", {out_}" if tag in ("run", "newton") else ""))
+                folder = os.path.join(out, "crossed")
+                os.makedirs(folder, exist_ok=True)
+                ev.dump(os.path.join(folder, f"{name}-last-after-{tag}.fe"))
+                return out_
+            return run_
+        _surgery._run = watched(_surgery._run, "run")
+        _pyse.Evolver.newton = watched(_pyse.Evolver.newton, "newton")
+        _pyse.Evolver._split_marked = watched(_pyse.Evolver._split_marked, "split")
+        _pyse.Evolver.refine = watched(_pyse.Evolver.refine, "refine")
     logging.getLogger("pysurfaceevolver.topology").addHandler(Handler())
     logging.getLogger("pysurfaceevolver.topology").setLevel(logging.DEBUG)
     if resume:
