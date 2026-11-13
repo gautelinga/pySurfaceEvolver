@@ -93,7 +93,8 @@ python tools/hele_shaw_figure.py draw
 
 The top row follows the paper's figures: the bulge of the meniscus over the defect, η<sub>m</sub>
 (the meniscus at the middle of the defect less the meniscus far from it), against
-where the far meniscus is, h<sub>f</sub>. The bottom row shows the oil's pressure
+where the far meniscus is, h<sub>f</sub>, both where the meniscus meets the printed
+plate (the experiment sees it otherwise: below). The bottom row shows the oil's pressure
 against its volume, less the pressure of the meniscus undisturbed: a line in the
 volume fitted while the defects are still far (the first 100 mm³), which takes out
 gravity's steady rise. Under volume control the path is continuous. The experiment
@@ -131,35 +132,54 @@ path a run happens to take: the pair 11 mm apart stands clear of one defect, the
 whole plateau in all three cells (0.12 mm on the default mesh), where the
 experiment's curves lie on each other; that offset is likely the mesh's too.
 
-### Against the paper's theory
+### Against the experiment and the paper's theory
+
+The experiment films the cell through its plates, and the far meniscus doesn't
+stand straight across the gap. Gravity across the 3.6 mm gap (ρg cos 38° · 3.6 mm
+≈ 26 Pa) outweighs the meniscus's own capillary pressure (2γ cos θ/b ≈ 10 Pa), and
+the meniscus leans: where it meets the printed plate, the lower one, it runs 1.9 mm
+ahead of where it crosses half the gap. In a defect, where the gap is 0.6 mm, it
+hardly leans. Measured where the meniscus crosses half the gap, h<sub>f</sub> comes
+out 1.9 mm smaller and the bulge 1.7 mm larger than in the figure above.
+
+Measured so, one defect's bulge sits at 7.9–8.1 mm over the plateau against the
+experiment's 8.5–9 mm (read off the paper's Fig. 9b), climbs about 0.5 mm of
+h<sub>f</sub> later, and falls off the defect's end along the experiment's line. It
+even rises a little before the meniscus reaches the defect (h<sub>f</sub> −2.5 to 0),
+which the paper marks as an effect of the meniscus spanning the gap. The pairs' bulges
+sit at 7.4 and 7.7 mm against about 9.2 mm in the experiment (Fig. 7).
 
 The model of Holtzman et al. treats the meniscus as a line with a capillary length
 ℓ<sub>c</sub> = √(γ/ρg<sub>e</sub>), here 1.9 mm (ρ = 930 kg/m³, γ = 20 mN/m,
-g<sub>e</sub> = g sin 38°). A defect 10 mm wide is wide on that scale
-(w/ℓ<sub>c</sub> ≈ 5), and a wide defect turns strong when its slope Π of capillary
-pressure passes about ρg<sub>e</sub> = 5620 Pa/m. The defects were designed for
-Π = 6000 Pa/m with oil that wets perfectly; at the 20° contact angle used here the
-slope is 6000 cos 20° ≈ 5640 Pa/m. One defect sits on the threshold, then
-(Π/ρg<sub>e</sub> ≈ 1.00, with the threshold a little higher for a finite width), and
-the pair's threshold is only a little lower for defects this wide. Two things follow.
-The bulge's climb on the ramp is as steep as it is because the response to the
-ramp grows without bound at the threshold. And whether one defect alone jumps turns
-on small things: the experiment's was reversible, and here it keeps a small loop
-where the bulge climbs.
+g<sub>e</sub> = g sin 38°). Solved for these defects (their edges rounded as here),
+following the cycle from one equilibrium to the next as h<sub>f</sub> rises and
+falls:
+
+* **In these cells.** At the slope of capillary pressure used here, the bulge over
+  the plateau is 8.6, 6.9 and 8.0 mm for one defect and the pairs 13 and 11 mm apart:
+  within 0.6 mm of the runs, measured where the meniscus crosses half the gap. The
+  slope is Π = 6000 Pa/m as designed for oil that wets perfectly, times cos 20° for
+  the contact angle used here: 5640 Pa/m.
+* **In a wide cell.** The same defects in a cell 40 mm wide give 9.3, 9.4 and 9.5 mm,
+  and at the experiment's 6000 Pa/m 9.9, 10.0 and 10.1 mm. In the model, the narrow
+  cells here cost the pairs most (2.5 and 1.5 mm), where the "far" meniscus is only
+  2.5 and 3.5 mm beyond the defects' edges. That would put the pairs' shortfall
+  against the experiment down to the cells' width, but the runs don't bear the model
+  out for one defect: in a cell 20 mm wide its bulge grew by 0.2 mm, where the model
+  gives 0.7. A wider cell for the pairs would tell.
+* **No hysteresis.** In the model one defect 10 mm wide turns strong (jumps, and a
+  loop) above Π ≈ 1.20 ρg<sub>e</sub> (6710 Pa/m), the pair 13 mm apart above 1.18 and
+  the pair 11 mm apart above 1.13; the narrow cells' mirror planes don't move these.
+  The order is the paper's: a pair turns strong before one defect does, and the closer
+  pair first. The experiment's slope is 1.07 ρg<sub>e</sub> and the slope here 1.00,
+  below all three, and the line model gives no loop in any of the cells. The loops of
+  the experiment's pairs, and the smaller ones here, come from what the line model
+  leaves out; here some may still come from the mesh.
 
 The pair's interaction falls off as exp(−gap/ℓ<sub>c</sub>) with the gap between the
 defects' edges: 0.20 for the pair 13 mm apart (a gap of 3 mm) and 0.59 for the pair
 11 mm apart (1 mm). The mirror images are far by comparison: one defect's next image
 is 10 mm away edge to edge (0.005), the pairs' 5 and 7 mm (0.07 and 0.02).
-
-Two things differ from the experiment. The bulge over the plateau is 5.5–6.5 mm here,
-against 8.5–9 mm in the experiment and about 9–10 mm from the line model
-(Πℓ<sub>s</sub>/ρg<sub>e</sub> · (1 − e<sup>−w/2ℓ<sub>c</sub></sup>)), and the bulge
-climbs at h<sub>f</sub> 3.5–4.5 mm here against 1–1.8 mm in the experiment. The paper
-notes that 3D effects of the meniscus spanning the gap rule out a quantitative
-comparison with its line model, and those effects are in this model; this page
-leaves the difference open. Where the cells here put the "far" meniscus, only 2.5 to
-5 mm beyond the defects' edges, may be part of it.
 
 Run times on 4 threads of a cluster node: 1 h 43 min for one defect, 1 h 36 min for
 the pair 13 mm apart and 3 h 0 min for the pair 11 mm apart. On the default mesh they
@@ -181,8 +201,10 @@ were 39 minutes, 88 minutes and 3 h 50 min on 3 threads.
   rounded groove whose roof is 3.5 mm, not 3.6.
 * **Narrow cells.** Mirror planes 10 and 14 mm from the middle leave the "far"
   meniscus only 2.5 to 5 mm beyond the defects. One defect in a cell 20 mm wide (on
-  the default mesh) took 2 h 25 min, and its plateau's offset between drainage and
-  imbibition halved.
+  the default mesh) took 2 h 25 min; its bulge over the plateau grew by 0.2 mm, and
+  the offset there between drainage and imbibition halved.
+* **Contact angle.** The defects were designed for oil that wets perfectly; at the 20°
+  used here the capillary pressure, and its slope along the ramp, are 6% lower.
 * **No contact-angle hysteresis.** The contact angle is 20° on both plates,
   advancing or receding. All the dissipation here comes from the meniscus's jumps.
 * **The groove's end.** Where the 1 mm channel opens past the defects' rounded
