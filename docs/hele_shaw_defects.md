@@ -142,6 +142,13 @@ ahead of where it crosses half the gap. In a defect, where the gap is 0.6 mm, it
 hardly leans. Measured where the meniscus crosses half the gap, h<sub>f</sub> comes
 out 1.9 mm smaller and the bulge 1.7 mm larger than in the figure above.
 
+![The three cells against the experiment and the line model](_static/hele_shaw_compare.png)
+
+Here every curve is measured that way (`hele_shaw_helpers.half_gap` for the runs).
+The dots are the experiment, read off the paper's Figs. 9b and 7
+(`_static/hele_shaw_experiment.csv`); the dotted and dashed lines are the paper's
+line model, below (`hele_shaw_helpers.line_model`). `draw` makes this figure too.
+
 Measured so, one defect's bulge sits at 7.9–8.1 mm over the plateau against the
 experiment's 8.5–9 mm (read off the paper's Fig. 9b), climbs about 0.5 mm of
 h<sub>f</sub> later, and falls off the defect's end along the experiment's line. It

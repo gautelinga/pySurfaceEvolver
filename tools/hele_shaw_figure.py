@@ -16,8 +16,11 @@ Parts:
   draw   from the runs single, pair13 and pair11 in OUT (or hele_shaw.npz, the
          steps kept from them): hele_shaw.png (the pressure and where the
          contact line is against the volume, and the jumps under pressure
-         control) and hele_shaw_shapes.png; with --film NAME also
-         hele_shaw.mp4.
+         control), hele_shaw_compare.png (the runs measured where the meniscus
+         crosses half the gap, against the experiment in
+         hele_shaw_experiment.csv and the line model, which takes a few
+         minutes the first time) and hele_shaw_shapes.png; with --film NAME
+         also hele_shaw.mp4.
 
 Everything but OUT goes into docs/_static.
 """
@@ -328,8 +331,104 @@ def _data(out):
         z = np.load(path)
         return {name: z[name] for name, _, _ in RUNS}
     data = {name: np.load(f)["rows"] for name, f in found.items()}
-    np.savez(path, **data)
+    _keep(**data)
     return data
+
+
+def _keep(**arrays):
+    """Put arrays into hele_shaw.npz beside what it holds."""
+    path = os.path.join(STATIC, "hele_shaw.npz")
+    held = dict(np.load(path)) if os.path.exists(path) else {}
+    held.update(arrays)
+    np.savez_compressed(path, **held)
+
+
+def _compared(out):
+    """For each cell: its run seen through the plates, rows (imbibition, V, h_f,
+    eta_m) where the meniscus crosses half the gap; the line model in the run's
+    cell at the slope here, and in a wide cell at the design's 6 kPa/m. Kept in
+    hele_shaw.npz."""
+    path = os.path.join(STATIC, "hele_shaw.npz")
+    held = dict(np.load(path)) if os.path.exists(path) else {}
+    new = {}
+    for name, centres, _ in RUNS:
+        run_file = os.path.join(out, f"{name}.npz")
+        if f"{name}_seen" not in held or os.path.exists(run_file):
+            z = np.load(run_file)
+            rows, width, rounding = z["rows"], float(z["width"]), float(z["rounding"])
+            seen = []
+            for k in range(len(rows)):
+                v = z[f"x{k}"]
+                far = H.half_gap(v, width - 0.15, centres, rounding, band=0.15)
+                seen.append((rows[k, 0], rows[k, 1], far,
+                             H.half_gap(v, centres[0], centres, rounding) - far))
+            new[f"{name}_seen"] = np.array(seen)
+            if f"{name}_cell" not in held or float(held.get(f"{name}_width", 0)) != width:
+                new[f"{name}_cell"] = H.line_model(centres, width, rounding=rounding)
+                new[f"{name}_width"] = np.array(width)
+        if f"{name}_wide" not in held:
+            new[f"{name}_wide"] = H.line_model(centres, 40.0, slope=H.PI)
+    if new:
+        new = {k: np.asarray(v, np.float32) for k, v in new.items()}
+        _keep(**new)
+        held.update(new)
+    return held
+
+
+def _experiment():
+    """{(cell, leg): (h_f, eta_m)} from hele_shaw_experiment.csv."""
+    got = {}
+    with open(os.path.join(STATIC, "hele_shaw_experiment.csv")) as f:
+        for line in f:
+            if line.startswith("#") or line.startswith("cell,"):
+                continue
+            cell, leg, hf, eta = line.strip().split(",")
+            got.setdefault((cell, leg), []).append((float(hf), float(eta)))
+    return {k: np.array(v) for k, v in got.items()}
+
+
+def draw_compare(out):
+    """hele_shaw_compare.png: each cell's bulge against the far meniscus, all
+    measured where the meniscus crosses half the gap: the run, the experiment
+    and the line model."""
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    held, seen_exp = _compared(out), _experiment()
+    fig, axs = plt.subplots(1, 3, figsize=(11, 4.1), sharey=True)
+    for ax, (name, centres, title) in zip(axs, RUNS):
+        for up, leg, colour in ((True, "imbibition", COLOURS[0]), (False, "drainage", COLOURS[1])):
+            r = held[f"{name}_seen"]
+            r = r[(r[:, 0] > 0) == up]
+            r = r[_kept(r[:, 1] if up else -r[:, 1])]
+            ax.plot(r[:, 2], r[:, 3], color=colour, linewidth=1.6, zorder=3)
+            for key, style, width in (("wide", "--", 1.0), ("cell", ":", 1.3)):
+                m = held[f"{name}_{key}"]
+                m = m[(m[:, 0] > 0) == up]
+                ax.plot(m[:, 1], m[:, 2], style, color=colour, linewidth=width, zorder=2)
+            e = seen_exp[(name, leg)]
+            ax.plot(e[:, 0], e[:, 1], "o", color=colour, markersize=2.2, alpha=0.6,
+                    markeredgewidth=0, zorder=4)
+        ax.set_title(title, color=INK)
+        ax.set_xlabel("far meniscus $h_f$ (mm)", color=INK)
+        ax.set_xlim(-3.5, 16)
+        ax.set_ylim(-0.5, 10.8)
+        _axes(ax)
+    axs[0].set_ylabel("bulge over the defect $\\eta_m$ (mm)", color=INK)
+    grey = MUTED
+    handles = [Line2D([], [], color=COLOURS[0], linewidth=2, label="imbibition"),
+               Line2D([], [], color=COLOURS[1], linewidth=2, label="drainage"),
+               Line2D([], [], color=grey, linewidth=1.6, label="pySE"),
+               Line2D([], [], color=grey, linestyle="none", marker="o", markersize=4,
+                      label="experiment"),
+               Line2D([], [], color=grey, linestyle=":", linewidth=1.3,
+                      label="line model, these cells"),
+               Line2D([], [], color=grey, linestyle="--", linewidth=1.0,
+                      label="line model, wide cell, 6 kPa/m")]
+    fig.legend(handles=handles, loc="upper center", ncol=6, frameon=False, fontsize=8.5)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    fig.savefig(os.path.join(STATIC, "hele_shaw_compare.png"), dpi=150)
+    plt.close(fig)
+    print("wrote hele_shaw_compare.png")
 
 
 def _kept(V):
@@ -468,6 +567,7 @@ def draw(out, film=None):
     fig.savefig(os.path.join(STATIC, "hele_shaw.png"), dpi=150)
     plt.close(fig)
     print("wrote hele_shaw.npz and hele_shaw.png")
+    draw_compare(out)
     for name, centres, _ in RUNS:
         for up, leg in ((True, "imbibition"), (False, "drainage")):
             for a, b, p, va, vb, e in controlled(data[name])[0 if up else 1][5]:
