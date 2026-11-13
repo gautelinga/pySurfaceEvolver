@@ -131,7 +131,8 @@ def _trace_solid(box, say):
 
 
 def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H.S,
-        halvings=6, width=H.X, states=0, resume=None, trace=None, dumps=0, fine=1.0):
+        halvings=6, width=H.X, states=0, resume=None, trace=None, dumps=0, fine=1.0,
+        crossed=0):
     """Imbibition from a flat meniscus at y = -4 until the meniscus far from
     the defects is at y = hmax, then drainage back to the start; rows
     (imbibing, volume added, pressure, contact line far from the defects,
@@ -143,7 +144,9 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     solid events there logged (_trace_solid), and the surface just after
     each of the first ``dumps`` changes made there dumped to
     OUT/changes/NAME-NNN.fe. ``fine``: the start's vertices that many times as
-    close, across the cell and the gap (the run's edges follow the start's)."""
+    close, across the cell and the gap (the run's edges follow the start's).
+    ``crossed``: the surface of the first so many runs judged to have passed
+    it through itself dumped as it was then, OUT/crossed/NAME-NNN.fe."""
     os.makedirs(out, exist_ok=True)
     log = open(os.path.join(out, f"{name}.log"), "a" if resume else "w")
     t0 = time.time()
@@ -152,12 +155,19 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
         log.write(f"{time.time() - t0:8.1f}s {s}\n")
         log.flush()
 
-    live, dumped = [], [0]
+    live, dumped, crossings = [], [0], [0]
 
     class Handler(logging.Handler):
         def emit(self, record):
             text = record.getMessage()
             say("  . " + text)
+            if live and crossings[0] < crossed and text.startswith("implausible run: crossings"):
+                folder = os.path.join(out, "crossed")
+                os.makedirs(folder, exist_ok=True)
+                path = os.path.join(folder, f"{name}-{crossings[0]:03d}.fe")
+                live[0].dump(path)
+                say(f"  dumped {path}")
+                crossings[0] += 1
             if trace and dumps and live and dumped[0] < dumps and text.startswith("change made"):
                 import re
                 at = re.search(r" at \(([-\d.e]+), ([-\d.e]+), ([-\d.e]+)\)", text)
@@ -412,6 +422,9 @@ if __name__ == "__main__":
     ap.add_argument("--ds", type=float, default=6.0, help="the arclength step (run)")
     ap.add_argument("--width", type=float, default=H.X,
                     help="the cell's half-width modelled, mirror planes x = 0 and x = width (run)")
+    ap.add_argument("--crossed", type=int, default=0,
+                    help="dump the surface of the first so many runs judged crossed, "
+                         "OUT/crossed (run)")
     ap.add_argument("--fine", type=float, default=1.0,
                     help="the start's vertices this many times as close (run)")
     ap.add_argument("--halvings", type=int, default=6,
@@ -430,7 +443,7 @@ if __name__ == "__main__":
             rounding=a.rounding, levels=a.levels, ds=a.ds, halvings=a.halvings,
             width=a.width, states=a.states, resume=a.resume,
             trace=tuple(float(v) for v in a.trace.split(",")) if a.trace else None,
-            dumps=a.dumps, fine=a.fine)
+            dumps=a.dumps, fine=a.fine, crossed=a.crossed)
     elif a.part == "film":
         for name in a.args:
             film(a.out, name)

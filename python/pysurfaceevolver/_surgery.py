@@ -3821,12 +3821,17 @@ def _implausible(ev, before: tuple, trace=None) -> str:
            "energy" if jumped else
            "crossings" if _more_crossings(ev, crossed, before[4] if len(before) > 4 else None) else
            "through a wall" if _outside(ev) > out else "")
-    if why:
-        _log.debug("implausible run: %s", why)
-        _LAST_WRONG[:] = [why]
     if why == "crossings":
         _note_crossed(ev)
+        # (where, in the log: the first three places)
+        places = "; ".join("(" + ", ".join(f"{v:.4g}" for v in w) + ")"
+                           for w in _CROSSED_AT[0][:3])
+        _log.debug("implausible run: crossings at %s", places)
+        _LAST_WRONG[:] = [why]
         _PUSH_AT.extend(_off_walls(ev, _CROSSED_AT[0]))
+    elif why:
+        _log.debug("implausible run: %s", why)
+        _LAST_WRONG[:] = [why]
     return why
 
 
