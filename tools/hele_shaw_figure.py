@@ -2,7 +2,7 @@
 matplotlib, PyVista (off-screen rendering) and imageio-ffmpeg (the movie).
 
     OMP_NUM_THREADS=2 python tools/hele_shaw_figure.py run NAME CENTRE ... [--out OUT]
-    python tools/hele_shaw_figure.py draw [--out OUT] [--film NAME]
+    python tools/hele_shaw_figure.py draw [--out OUT] [--wider WIDER] [--film NAME]
 
 Parts:
 
@@ -19,7 +19,8 @@ Parts:
          control), hele_shaw_compare.png (the runs measured where the meniscus
          crosses half the gap, against the experiment in
          hele_shaw_experiment.csv and the line model, which takes a few
-         minutes the first time) and hele_shaw_shapes.png; with --film NAME
+         minutes the first time; the pairs' runs in cells 20 mm wide from
+         WIDER, where given or kept) and hele_shaw_shapes.png; with --film NAME
          also hele_shaw.mp4.
 
 Everything but OUT goes into docs/_static.
@@ -343,29 +344,40 @@ def _keep(**arrays):
     np.savez_compressed(path, **held)
 
 
-def _compared(out):
-    """For each cell: its run seen through the plates, rows (imbibition, V, h_f,
-    eta_m) where the meniscus crosses half the gap; the line model in the run's
-    cell at the slope here, and in a wide cell at the design's 6 kPa/m. Kept in
-    hele_shaw.npz."""
+def _seen(z, centres):
+    """A run seen through the plates: rows (imbibition, V, h_f, eta_m) where the
+    meniscus crosses half the gap."""
+    rows, width, rounding = z["rows"], float(z["width"]), float(z["rounding"])
+    seen = []
+    for k in range(len(rows)):
+        v = z[f"x{k}"]
+        far = H.half_gap(v, width - 0.15, centres, rounding, band=0.15)
+        seen.append((rows[k, 0], rows[k, 1], far,
+                     H.half_gap(v, centres[0], centres, rounding) - far))
+    return np.array(seen)
+
+
+def _compared(out, wider=None):
+    """For each cell: its run seen through the plates (``{name}_seen``), and the
+    line model in the run's cell at the slope here (``_cell``) and in a wide
+    cell at the design's 6 kPa/m (``_wide``); for the pairs also the runs in
+    cells 20 mm wide in ``wider`` and the line model there (``_seen20``,
+    ``_cell20``). Kept in hele_shaw.npz."""
     path = os.path.join(STATIC, "hele_shaw.npz")
     held = dict(np.load(path)) if os.path.exists(path) else {}
     new = {}
     for name, centres, _ in RUNS:
-        run_file = os.path.join(out, f"{name}.npz")
-        if f"{name}_seen" not in held or os.path.exists(run_file):
+        for tag, where in (("", out), ("20", wider)):
+            run_file = os.path.join(where, f"{name}.npz") if where else ""
+            if not os.path.exists(run_file):
+                if tag or f"{name}_seen" in held:
+                    continue
             z = np.load(run_file)
-            rows, width, rounding = z["rows"], float(z["width"]), float(z["rounding"])
-            seen = []
-            for k in range(len(rows)):
-                v = z[f"x{k}"]
-                far = H.half_gap(v, width - 0.15, centres, rounding, band=0.15)
-                seen.append((rows[k, 0], rows[k, 1], far,
-                             H.half_gap(v, centres[0], centres, rounding) - far))
-            new[f"{name}_seen"] = np.array(seen)
-            if f"{name}_cell" not in held or float(held.get(f"{name}_width", 0)) != width:
-                new[f"{name}_cell"] = H.line_model(centres, width, rounding=rounding)
-                new[f"{name}_width"] = np.array(width)
+            width, rounding = float(z["width"]), float(z["rounding"])
+            new[f"{name}_seen{tag}"] = _seen(z, centres)
+            if f"{name}_cell{tag}" not in held or float(held.get(f"{name}_width{tag}", 0)) != width:
+                new[f"{name}_cell{tag}"] = H.line_model(centres, width, rounding=rounding)
+                new[f"{name}_width{tag}"] = np.array(width)
         if f"{name}_wide" not in held:
             new[f"{name}_wide"] = H.line_model(centres, 40.0, slope=H.PI)
     if new:
@@ -387,28 +399,34 @@ def _experiment():
     return {k: np.array(v) for k, v in got.items()}
 
 
-def draw_compare(out):
+def draw_compare(out, wider=None):
     """hele_shaw_compare.png: each cell's bulge against the far meniscus, all
     measured where the meniscus crosses half the gap: the run, the experiment
-    and the line model."""
+    and the line model. For the pairs, the runs in cells 20 mm wide where they
+    are kept, those in cells 14 mm wide faint behind them."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
-    held, seen_exp = _compared(out), _experiment()
+    held, seen_exp = _compared(out, wider), _experiment()
     fig, axs = plt.subplots(1, 3, figsize=(11, 4.1), sharey=True)
     for ax, (name, centres, title) in zip(axs, RUNS):
+        tag = "20" if f"{name}_seen20" in held else ""
         for up, leg, colour in ((True, "imbibition", COLOURS[0]), (False, "drainage", COLOURS[1])):
-            r = held[f"{name}_seen"]
-            r = r[(r[:, 0] > 0) == up]
-            r = r[_kept(r[:, 1] if up else -r[:, 1])]
-            ax.plot(r[:, 2], r[:, 3], color=colour, linewidth=1.6, zorder=3)
-            for key, style, width in (("wide", "--", 1.0), ("cell", ":", 1.3)):
+            for key, width, alpha in (("_seen" + tag, 1.6, 1.0), ("_seen", 1.0, 0.35)):
+                if tag == "" and alpha < 1:
+                    continue
+                r = held[name + key]
+                r = r[(r[:, 0] > 0) == up]
+                r = r[_kept(r[:, 1] if up else -r[:, 1])]
+                ax.plot(r[:, 2], r[:, 3], color=colour, linewidth=width, alpha=alpha, zorder=3)
+            for key, style, width in (("wide", "--", 1.0), ("cell" + tag, ":", 1.3)):
                 m = held[f"{name}_{key}"]
                 m = m[(m[:, 0] > 0) == up]
                 ax.plot(m[:, 1], m[:, 2], style, color=colour, linewidth=width, zorder=2)
             e = seen_exp[(name, leg)]
             ax.plot(e[:, 0], e[:, 1], "o", color=colour, markersize=2.2, alpha=0.6,
                     markeredgewidth=0, zorder=4)
-        ax.set_title(title, color=INK)
+        cell = float(held[f"{name}_width{tag}"])
+        ax.set_title(f"{title}, cell {cell:g} mm", color=INK)
         ax.set_xlabel("far meniscus $h_f$ (mm)", color=INK)
         ax.set_xlim(-3.5, 16)
         ax.set_ylim(-0.5, 10.8)
@@ -418,13 +436,15 @@ def draw_compare(out):
     handles = [Line2D([], [], color=COLOURS[0], linewidth=2, label="imbibition"),
                Line2D([], [], color=COLOURS[1], linewidth=2, label="drainage"),
                Line2D([], [], color=grey, linewidth=1.6, label="pySE"),
+               Line2D([], [], color=grey, linewidth=1.0, alpha=0.35,
+                      label="pySE, pairs, cell 14 mm"),
                Line2D([], [], color=grey, linestyle="none", marker="o", markersize=4,
                       label="experiment"),
                Line2D([], [], color=grey, linestyle=":", linewidth=1.3,
-                      label="line model, these cells"),
+                      label="line model, same cell"),
                Line2D([], [], color=grey, linestyle="--", linewidth=1.0,
                       label="line model, wide cell, 6 kPa/m")]
-    fig.legend(handles=handles, loc="upper center", ncol=6, frameon=False, fontsize=8.5)
+    fig.legend(handles=handles, loc="upper center", ncol=7, frameon=False, fontsize=8)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(os.path.join(STATIC, "hele_shaw_compare.png"), dpi=150)
     plt.close(fig)
@@ -530,7 +550,7 @@ def film(out, name, path=None, frames=240):
             fps=24, hold=24, window=(960, 640), quality=5)
 
 
-def draw(out, film=None):
+def draw(out, film=None, wider=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -567,7 +587,7 @@ def draw(out, film=None):
     fig.savefig(os.path.join(STATIC, "hele_shaw.png"), dpi=150)
     plt.close(fig)
     print("wrote hele_shaw.npz and hele_shaw.png")
-    draw_compare(out)
+    draw_compare(out, wider)
     for name, centres, _ in RUNS:
         for up, leg in ((True, "imbibition"), (False, "drainage")):
             for a, b, p, va, vb, e in controlled(data[name])[0 if up else 1][5]:
@@ -581,6 +601,7 @@ if __name__ == "__main__":
     ap.add_argument("args", nargs="*")
     ap.add_argument("--out", default="hele_shaw_runs")
     ap.add_argument("--film")
+    ap.add_argument("--wider", help="the pairs' runs in cells 20 mm wide (draw)")
     ap.add_argument("--rounding", type=float, default=H.S,
                     help="the defects' edges rounded over this (mm; run)")
     ap.add_argument("--sharp", action="store_true",
@@ -616,4 +637,4 @@ if __name__ == "__main__":
         for name in a.args:
             film(a.out, name)
     else:
-        draw(a.out, a.film)
+        draw(a.out, a.film, a.wider)
