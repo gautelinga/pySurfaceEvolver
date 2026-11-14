@@ -170,10 +170,13 @@ falls:
 * **In a wide cell.** The same defects in a cell 40 mm wide give 9.3, 9.4 and 9.5 mm,
   and at the experiment's 6000 Pa/m 9.9, 10.0 and 10.1 mm. In the model, the narrow
   cells here cost the pairs most (2.5 and 1.5 mm), where the "far" meniscus is only
-  2.5 and 3.5 mm beyond the defects' edges. That would put the pairs' shortfall
-  against the experiment down to the cells' width, but the runs don't bear the model
-  out for one defect: in a cell 20 mm wide its bulge grew by 0.2 mm, where the model
-  gives 0.7. A wider cell for the pairs would tell.
+  2.5 and 3.5 mm beyond the defects' edges. The runs bear this out only in part. In
+  cells 20 mm wide (the far meniscus 8.5 and 9.5 mm beyond the defects), the pairs'
+  bulges grew by 0.7 and 0.4 mm, to 8.1 mm each, where the model gives 2.4 and
+  1.4 mm, to 9.3 and 9.5. One defect, in a cell 20 mm wide on the default mesh, grew
+  by 0.2 mm where the model gives 0.7. So the runs feel the cell's width about a third
+  as much as the model does. The narrow cells explain why the pairs fell short of one
+  defect, but not why all three fall about 1 mm short of the experiment.
 * **No hysteresis.** In the model one defect 10 mm wide turns strong (jumps, and a
   loop) above Π ≈ 1.20 ρg<sub>e</sub> (6710 Pa/m), the pair 13 mm apart above 1.18 and
   the pair 11 mm apart above 1.13; the narrow cells' mirror planes don't move these.
@@ -209,7 +212,10 @@ were 39 minutes, 88 minutes and 3 h 50 min on 3 threads.
 * **Narrow cells.** Mirror planes 10 and 14 mm from the middle leave the "far"
   meniscus only 2.5 to 5 mm beyond the defects. One defect in a cell 20 mm wide (on
   the default mesh) took 2 h 25 min; its bulge over the plateau grew by 0.2 mm, and
-  the offset there between drainage and imbibition halved.
+  the offset there between drainage and imbibition halved. The pairs in cells 20 mm
+  wide (on the finer mesh) took 2 h 57 min and 5 h 46 min. Their bulges grew by 0.7
+  and 0.4 mm, and their dissipation over the cycle fell from 0.35 and 0.42 to 0.28 and
+  0.27 γ mm², with 21 + 28 and 23 + 35 jumps.
 * **Contact angle.** The defects were designed for oil that wets perfectly; at the 20°
   used here the capillary pressure, and its slope along the ramp, are 6% lower.
 * **No contact-angle hysteresis.** The contact angle is 20° on both plates,
