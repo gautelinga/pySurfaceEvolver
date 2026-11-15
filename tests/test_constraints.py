@@ -9,6 +9,7 @@ import pytest
 import pysurfaceevolver as pyse
 from pysurfaceevolver import constraints as C
 
+_trapz = getattr(np, "trapezoid", None) or np.trapz  # NumPy 2 renamed it (and 2.5 dropped trapz)
 THETA = 50.0
 K = float(np.cos(np.radians(THETA)))
 
@@ -720,7 +721,7 @@ def _curved_integrals(f):
     b = C._height_values(CURVED, X, Y)
     bx = (C._height_values(CURVED, X + d, Y) - C._height_values(CURVED, X - d, Y))/(2*d)
     by = (C._height_values(CURVED, X, Y + d) - C._height_values(CURVED, X, Y - d))/(2*d)
-    return np.trapz(np.trapz(f(b, bx, by, Y), ys, axis=1), xs)
+    return _trapz(_trapz(f(b, bx, by, Y), ys, axis=1), xs)
 
 
 @pytest.mark.filterwarnings("ignore::pysurfaceevolver.EvolverWarning")
@@ -878,22 +879,22 @@ def _plate_integrals(block_x, y0, s, gy, gz, n=2001):
                 for k, y in enumerate(parts):
                     g = C._height_values(STEP, 0.0, y) if k == 1 else 1.0 + 0*y
                     sl = np.gradient(g, y)
-                    v += np.trapz(g, y)
-                    ar += np.trapz(np.sqrt(1 + sl*sl), y)
-                    w += np.trapz(gy*y*g + gz*g*g/2, y)
+                    v += _trapz(g, y)
+                    ar += _trapz(np.sqrt(1 + sl*sl), y)
+                    w += _trapz(gy*y*g + gz*g*g/2, y)
                 if Y > 2:
                     ar += 1 - C._height_values(STEP, 0.0, 2.0)
             else:
-                v, ar, w = Y + 1, Y + 1, np.trapz(gy*y + gz/2 + 0*y, y)
+                v, ar, w = Y + 1, Y + 1, _trapz(gy*y + gz/2 + 0*y, y)
             rows.append((v, ar, w))
         rows = np.array(rows)
-        vol += np.trapz(rows[:, 0], xs)
-        area += np.trapz(rows[:, 1], xs)
-        weight += np.trapz(rows[:, 2], xs)
+        vol += _trapz(rows[:, 0], xs)
+        area += _trapz(rows[:, 1], xs)
+        weight += _trapz(rows[:, 2], xs)
     for xe in block_x:                  # (the sides, as far as the line reaches)
         if 0 < xe < 2:
             y = np.linspace(0, min(max(y0 + s*xe, 0), 2), n)
-            area += np.trapz(1 - C._height_values(STEP, 0.0, y), y)
+            area += _trapz(1 - C._height_values(STEP, 0.0, y), y)
     return vol, area, weight
 
 
@@ -976,7 +977,7 @@ def _arc(phi1, H, theta=20.0, n=4001):
     ph = np.linspace(p0, p1, n)
     y = (np.sin(ph) - np.sin(p1))/k
     z = -(np.cos(ph) - np.cos(p0))/k
-    return k, np.trapz(y, z)
+    return k, _trapz(y, z)
 
 
 def _step_cell():
