@@ -103,10 +103,7 @@ ev.load_arrays(film.vertices, film.faces,
                constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
                vertex_constraints={1: bottom + top, 2: top, 3: bottom}, parameters={"hh": 0.3})
 ev.relax(levels=1)
-# (events=False: past the fold, the run goes on whatever the event checks make of
-# the two discs)
-for step in recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025),
-                                 events=False):
+for step in recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025)):
     ref = catenoid_area(step.value)
     if ref is not None:
         print(f"H = {step.value:.3f}: area {ev.total_energy:.6f}, catenoid {ref:.6f}, "
