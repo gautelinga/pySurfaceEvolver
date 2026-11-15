@@ -263,17 +263,18 @@ to edge (0.005); the pairs' are 5 and 7 mm away (0.07 and 0.02).
   | two, 11 mm apart | 3 h 0 min | 3 h 50 min |
   | two, 13 mm apart, cell 20 mm wide | 2 h 57 min | |
   | two, 11 mm apart, cell 20 mm wide | 5 h 46 min | |
-* **Stalls on the finer mesh.** Some descents on the finer mesh run away: the surface
-  passes through itself beside a defect's rounded side edge. The run then backs up
-  and tries again, and once in a while it runs out of tries:
-  * One defect without `--states` stopped at V ≈ 256 mm³.
-  * The pair 13 mm apart with `--states` ended its imbibition short at V ≈ 370 mm³
-    and went on from a broken surface. It does so the same way each time: a run
-    resumed from its states goes on bit for bit as it would have.
-  * The pair 11 mm apart in a cell 20 mm wide ended one drainage step short at
-    V ≈ 685 mm³, relaxed there, and went on.
+* **Stalls on the finer mesh.** Where a branch stalls, the descent that follows
+  starts a step off its volume target. On the finer mesh its first gradient step used
+  to take all of that at once and could pass the surface through itself beside a
+  defect's rounded side edge. One defect without `--states` stopped at V ≈ 256 mm³,
+  and the pair 13 mm apart with `--states` ended its imbibition short at V ≈ 370 mm³
+  every time. Such a descent now first takes the target there in small
+  steps, and all of these cells run to their end. Their dissipation is within
+  0.06 γ mm² of the runs shown here. The pair 11 mm apart in a cell 20 mm wide still
+  ended one drainage step short at V ≈ 685 mm³, relaxed there, and went on.
 
-  Keeping states changes a run's path; the runs above are the ones that went through.
+  Keeping states changes a run's path, and so does resuming from them; the runs
+  shown are the ones that went through.
 * **Rounded edges.** The printed edges are rounded over 0.25 mm, since a printed part
   has no sharp edges. With edges rounded over only 0.1 mm, the runs churned for
   20 minutes and more at each defect's side edges, where the oil wicks along the

@@ -2289,3 +2289,28 @@ def test_a_body_gone_and_another_made_since_a_snapshot_restore_whole(tmp_path):
     again = pyse.Evolver()
     again.load(path)
     assert list(again.bodies().volume) == pytest.approx(volumes, rel=1e-12)
+
+
+def _ball(volume):
+    t = np.linspace(0, np.pi, 9)
+    ball = shapes.revolve(np.sin(t), -np.cos(t), 16)
+    ev = pyse.Evolver()
+    ev.load_arrays(ball.vertices, ball.faces,
+                   bodies=[pyse.Body(faces=range(len(ball.faces)), volume=volume)])
+    return ev
+
+
+def test_a_descent_approaches_a_target_some_edges_off_in_steps_and_leaves_one_far_off():
+    from pysurfaceevolver import _surgery
+    ev = _ball(None)
+    v0 = float(ev.bodies().volume[0])
+    ev = _ball(v0)
+    i = int(ev.bodies().ids[0])
+    ev.body(i).target = v0 + 3      # a few quarter edges over the ball's area
+    _surgery._approach(ev, 1e-6)
+    assert abs(float(ev.bodies().volume[0]) - (v0 + 3)) < 1e-3
+    ev = _ball(v0)
+    before = ev.mesh().vertices.copy()
+    ev.body(i).target = v0 + 60     # past _APPROACH_MOST steps: left to the descent
+    _surgery._approach(ev, 1e-6)
+    assert np.array_equal(ev.mesh().vertices, before)

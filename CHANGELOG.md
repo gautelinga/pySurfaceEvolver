@@ -150,6 +150,17 @@
 
 ### Fixes
 
+- A topology run's descent from a branch that stopped began a step off its volume
+  targets (arclength sets them a step on), and its first gradient step took the whole
+  of that at once. In a Hele-Shaw cell on a finer mesh (edges 0.08) it moved all of the
+  meniscus 0.35-0.55 mm, and 2.1 mm at a defect's rounded edge, where it crossed
+  itself: the run ended its imbibition short every time. Such a descent now first
+  takes the targets there in steps that move the surface a quarter of a median edge,
+  each followed by five gradient steps. A target more than 24 such steps off is left to
+  the descent as before, which fails and backs the branch up: approached, one 24 mm^3
+  off swept a meniscus over the cell's side walls. Every fine-mesh cell of the
+  Hele-Shaw page now runs to its end, with the same dissipation within the runs'
+  spread.
 - A topology run's check that a gradient run put liquid through a wall counted mirror
   planes as walls, the liquid on the side their formula calls outside. A mirror at
   x = X with the liquid at x < X had every vertex through it, and every run that
