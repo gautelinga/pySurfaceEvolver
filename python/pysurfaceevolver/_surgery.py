@@ -2812,7 +2812,10 @@ _ON_THE_WAY = 4/3       # ... and between a run's points, edges split past this 
                         # edges of 0.39 for 0.2, angles of 8 degrees)
 _APPROACH = 0.25        # a descent's start: a body's target approached in steps moving it this many edges (_approach)
 _APPROACH_STEPS = 5     # ... with this many gradient steps after each
-_APPROACH_MOST = 40     # ... in this many steps at most
+_APPROACH_MOST = 24     # ... unless it takes more steps than this: then the descent as it was
+                        # (an 11 mm pair's target 24 mm^3 off, 34 steps: the meniscus swept
+                        # over the side walls and the descent ran 3.4 h; runs that went on
+                        # took 19 at most)
 _CHUNK = 50             # after a change: relax() runs of this many gradient steps at most
 _LINE_CHOP = 4/3        # in a descent: contact-line edges split past this many h0 each step
 _SHORTER = (12, 3, 1)   # a run that crossed twice: again in runs of these many steps
@@ -3733,7 +3736,10 @@ def _approach(ev, tol: float) -> None:
     sets it there); the first step moved all of the meniscus 0.36 at once,
     on edges of 0.08, and shattered it along its lines on both plates: run
     after run crossed, the same to the last digit whatever its length, and
-    the descent ran away."""
+    the descent ran away. A target further off than _APPROACH_MOST steps is
+    left to the descent, which fails and backs the branch up, as before:
+    approached, one 24 mm^3 off took an 11 mm pair's meniscus 2 mm on in
+    one go, over the side walls."""
     b = ev.bodies()
     if not len(b.ids) or not b.fixed.any():
         return
@@ -3751,7 +3757,10 @@ def _approach(ev, tol: float) -> None:
             n = max(n, int(np.ceil(abs(v1 - v0)/(area*_APPROACH*h))))
     if n <= 1:
         return
-    n = min(n, _APPROACH_MOST)
+    if n > _APPROACH_MOST:
+        _log.debug("volumes not approached: %d steps (%s off)", n,
+                   ", ".join(f"{v1 - v0:.3g}" for v0, v1 in zip(start, end)))
+        return
     _log.debug("volumes approached in %d steps (%s off)", n,
                ", ".join(f"{v1 - v0:.3g}" for v0, v1 in zip(start, end)))
     for k in range(1, n + 1):
