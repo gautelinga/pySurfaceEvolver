@@ -645,6 +645,27 @@ def test_a_run_leaves_nothing_of_its_own_on_the_evolver():
     assert ev._liquid is None and not ev._topology_held
 
 
+def test_a_run_log_has_the_steps_and_the_descents_and_warnings_say_no_index(tmp_path):
+    # (pyse.run_log: arclength's steps and, at debug, its descents, timed;
+    # a Hessian's index left out of WARNING 1825, so Python shows it once a
+    # place: a Hele-Shaw run printed it 800 times in 6 h)
+    ev = _sphere_bridge(0.09)
+    path = tmp_path / "run.log"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pyse.run_log(path):
+            steps = list(recipes.arclength(ev, ev.body(1), -0.003, 9, topology=True))
+    lines = path.read_text().splitlines()
+    told = [l for l in lines if " step " in l]
+    assert len(told) == len(steps) and told[0].split("s ", 1)[1].startswith("step 0: value")
+    assert any("fell (neck)" in l for l in told)
+    assert len(lines) > len(told)                   # (the descents' own lines)
+    import logging
+    assert not logging.getLogger("pysurfaceevolver").handlers
+    hessian = [str(w.message) for w in caught if "WARNING 1825" in str(w.message)]
+    assert hessian and all(m.endswith("positive definite.") for m in hessian)
+
+
 def test_constraint_names_are_the_gap_tables_without_the_gaps():
     from pysurfaceevolver import _surgery
     ev = _sphere_bridge(0.09)

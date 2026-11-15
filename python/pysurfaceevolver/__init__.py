@@ -11,6 +11,9 @@
 """
 
 import contextlib
+import logging
+import os
+import time
 from typing import Generator, Optional
 
 from ._build import Body, make_datafile
@@ -122,6 +125,57 @@ def solver() -> str:
     return _core.solver()
 
 
+class _RunLog(logging.FileHandler):
+    """run_log's handler: a file, each line the seconds since it opened."""
+
+    def __init__(self, path, level: int, mode: str) -> None:
+        super().__init__(os.fspath(path), mode=mode)
+        start = time.perf_counter()
+
+        class Elapsed(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                tag = "" if record.levelno < logging.WARNING else f"{record.levelname}: "
+                return f"{time.perf_counter() - start:9.1f}s {tag}{record.getMessage()}"
+
+        self.setFormatter(Elapsed())
+        self.setLevel(level)
+        self._logger = logging.getLogger("pysurfaceevolver")
+        self._was = self._logger.level
+        if self._was == logging.NOTSET or self._was > level:
+            self._logger.setLevel(level)
+        self._logger.addHandler(self)
+
+    def close(self) -> None:
+        if self in self._logger.handlers:
+            self._logger.removeHandler(self)
+            self._logger.setLevel(self._was)
+        super().close()
+
+    def __enter__(self) -> "_RunLog":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
+def run_log(path, level: str = "debug", append: bool = False) -> logging.Handler:
+    """Log what pySE's runs do to a file, each line the seconds since it
+    opened: ``arclength``'s steps (``pysurfaceevolver.steps``: index, value,
+    pressures, energy, facets, the changes a fall made) and, at ``"debug"``,
+    what its descents do (``pysurfaceevolver.topology``: coarsenings,
+    remeshings, approaches, changes made or refused, back-ups). Returns the
+    handler; ``close()`` it, or use it as a context manager::
+
+        with pyse.run_log("runs/drain.log"):
+            for step in recipes.arclength(ev, ev.body(1), -0.01, 400, topology=True):
+                ...
+    """
+    levels = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING}
+    if level not in levels:
+        raise ValueError(f"level must be one of {sorted(levels)}")
+    return _RunLog(path, levels[level], "a" if append else "w")
+
+
 examples._add_to_evolverpath()
 
 __all__ = [
@@ -159,6 +213,7 @@ __all__ = [
     "constraints",
     "examples",
     "recipes",
+    "run_log",
     "shapes",
     "make_datafile",
     "set_solver",

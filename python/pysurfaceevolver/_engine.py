@@ -101,6 +101,9 @@ def _guards_only_changed(before: int) -> None:
 GUARD_PREFIX = "pyse_guard_"
 
 
+_HESSIAN_INDEX = re.compile(r"(?<=WARNING 1825: Hessian not positive definite\.)\s*Index: -?\d+")
+
+
 class _SurfaceMemory:
     """What pySE remembers about the loaded surface: reset when a surface is
     loaded, kept by restore() (the same surface)."""
@@ -231,7 +234,12 @@ class _Engine:
         output = "".join(out)
 
         for message in result.warnings:
-            warnings.warn(message.strip(), EvolverWarning, stacklevel=3)
+            # (a Hessian's index, a number that changes call by call, left out:
+            # Python shows a warning once per place by its text, and a topology
+            # run on an unstable branch printed this one 800 times in 6 h; the
+            # index is IterationResult.negative_modes)
+            message = _HESSIAN_INDEX.sub("", message.strip())
+            warnings.warn(message, EvolverWarning, stacklevel=3)
 
         status = result.status
         if status == _core.OK:

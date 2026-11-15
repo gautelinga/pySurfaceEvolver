@@ -332,12 +332,15 @@ one file with the surface, everything the run holds and the step's `extra` (your
 fill in the loop). Another process, on another day, puts a checkpoint's surface back
 into an Evolver with `recipes.load_checkpoint` (a file, or the prefix for its latest)
 and goes on from it with `resume=`, given the arguments the run had: the same steps, to
-the bit.
+the bit. `pyse.run_log(path)` keeps a log of it: each step (value, pressures, energy,
+facets, the changes a fall made) and what the descents did between, timed.
 
 ```python
+log = pyse.run_log("runs/pack.log")
 for s in recipes.arclength(ev, ev.body(1), -0.01, 400, topology=True,
                            checkpoint="runs/pack"):
     s.extra["note"] = ...                    # kept in this step's checkpoint
+log.close()
 
 ev = pyse.Evolver()
 ck = recipes.load_checkpoint(ev, "runs/pack")           # the latest

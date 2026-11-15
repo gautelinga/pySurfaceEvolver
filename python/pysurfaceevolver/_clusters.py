@@ -27,6 +27,7 @@ from . import _periodic
 from ._engine import GUARD_PREFIX, surface
 
 _log = logging.getLogger("pysurfaceevolver.topology")
+_TOLD: set = set()     # (the loads warned that their clusters are their pieces)
 
 _SPACING = 0.5      # the grid's spacing, in the descents' edge scale
 _NODES = 4_000_000  # the grid's nodes at most (its spacing grown to fit)
@@ -322,11 +323,14 @@ def clusters(ev, outlet: Optional[Sequence] = None, spacing: Optional[float] = N
         hit = on[f].any(axis=1)
         for j in (0, 1):
             by_vertex[piece[hit & (piece[:, j] >= 0), j]] = True
-    if other:
+    if other and surface.generation not in _TOLD:
+        # (once a surface: a Hele-Shaw run's descents asked at every step)
+        _TOLD.add(surface.generation)
         warnings.warn(f"the surface touches constraints that aren't plane, sphere or "
                       f"cylinder walls, or has a border off them "
                       f"({', '.join(map(str, other[:5]))}): its liquid's clusters are its "
                       "surface pieces", UserWarning, stacklevel=3)
+    if other:
         alone = np.zeros(0, np.intp)
         return _gather(piece, body_of, components(npieces, alone, alone), by_vertex,
                        np.zeros(npieces, np.intp), {}, 0.0, 0)

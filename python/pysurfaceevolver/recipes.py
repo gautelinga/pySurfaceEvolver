@@ -36,6 +36,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import glob
+import logging
 import os
 import pickle
 import re
@@ -48,6 +49,8 @@ import numpy as np
 
 from . import _core
 from ._relax import _MERGE_UNDER, _SPLIT_ABOVE
+
+_steps_log = logging.getLogger("pysurfaceevolver.steps")
 
 __all__ = ["Checkpoint", "Step", "arclength", "checkpoints", "continuation",
            "load_checkpoint", "load_steps"]
@@ -1194,6 +1197,14 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
                                   halvings=halvings, along=along, remesh=remesh,
                                   events=events, budget=budget, resumable=resumable,
                                   resume=resume):
+            pressures = np.atleast_1d(step.pressures)
+            _steps_log.info("step %d: value %.6g, %s %s, energy %.10g, facets %d%s",
+                            step.index, float(step.value),
+                            "pressure" if len(pressures) == 1 else "pressures",
+                            " ".join(f"{p:.6g}" for p in pressures),
+                            float(step.energy), ev.counts["facets"],
+                            (" fell (" + ", ".join(c.kind for c in step.changes) + ")")
+                            if step.fell else "")
             yield step
             if checkpoint is not None and step.state is not None:
                 # (the run still waiting at the step: its state as at the yield)

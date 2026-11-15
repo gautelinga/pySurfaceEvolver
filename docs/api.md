@@ -102,6 +102,7 @@ handle to it.
 .. autofunction:: threads_limit
 .. autofunction:: set_solver
 .. autofunction:: solver
+.. autofunction:: run_log
 .. autodata:: tessellation_limit
 .. autodata:: flux_degree
 .. autodata:: busy_timeout

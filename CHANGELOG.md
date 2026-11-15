@@ -13,6 +13,19 @@
   `recipes.checkpoints(prefix)` lists them. Before, a caller dumped the surface,
   pickled the step's state and pySE's memory of the walls, edge scale and targets, and
   put them back by hand.
+- `pyse.run_log(path)`: a run's log in a file, each line timed: `arclength`'s steps
+  with `topology=True` (index, value, pressures, energy, facets, the changes a fall
+  made; logger `pysurfaceevolver.steps`) and what its descents do (coarsenings,
+  remeshings, changes made or refused, back-ups; `pysurfaceevolver.topology`). A
+  handler, or a context manager.
+
+### Changed
+
+- Evolver's WARNING 1825 ("Hessian not positive definite") leaves out the index, which
+  changed call by call, so Python shows it once a place: a Hele-Shaw run printed it
+  about 800 times in 6 hours. The index is `IterationResult.negative_modes`. The
+  warning that a surface's liquid clusters are its pieces (walls other than planes,
+  spheres and cylinders) comes once a surface.
 
 ### Fixes
 
