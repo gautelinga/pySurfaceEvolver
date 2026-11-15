@@ -1,6 +1,7 @@
 """Topology changes done with Evolver's own commands (see docs/PLAN.md,
 "Future: topology changes")."""
 
+import os
 import warnings
 
 import numpy as np
@@ -568,19 +569,80 @@ def test_a_resumable_run_resumed_from_a_step_goes_on_exactly(monkeypatch):
 
 
 def test_a_run_s_state_carries_where_its_lines_swung():
-    # (Evolver._swung, the targets finer where a heightfield's line swung, for
-    # the rest of the run, held by the Evolver: a Hele-Shaw pair resumed in a
-    # fresh process without them remeshed otherwise at its second step)
+    # (surface.swung, the targets finer where a heightfield's line swung, for
+    # the rest of the run: once held by the Evolver, a Hele-Shaw pair resumed
+    # in a fresh process without them remeshed otherwise at its second step)
     import pickle
+    from pysurfaceevolver._engine import surface
     ev = _sphere_bridge(0.09)
-    swung = [(np.array([0.0, 0.0, 0.0]), 0.1, 0.02)]
-    ev._swung = list(swung)
+    surface.swung = [(np.array([0.0, 0.0, 0.0]), 0.1, 0.02)]
     state = next(pickle.dumps(s.state()) for s in recipes.arclength(
         ev, ev.body(1), -0.003, 8, topology=True, resumable=True) if s.state is not None)
-    del ev._swung
+    surface.swung = []
     next(recipes.arclength(ev, ev.body(1), -0.003, 8, topology=True,
                            resume=pickle.loads(state)))
-    assert [(w.tolist(), r, t) for w, r, t in ev._swung] == [([0.0, 0.0, 0.0], 0.1, 0.02)]
+    assert [(w.tolist(), r, t) for w, r, t in surface.swung] == [([0.0, 0.0, 0.0], 0.1, 0.02)]
+
+
+_FRESH = """
+import json, sys, warnings
+warnings.simplefilter("ignore")
+import pysurfaceevolver as pyse
+from pysurfaceevolver import recipes
+ev = pyse.Evolver()
+ck = recipes.load_checkpoint(ev, sys.argv[1])
+rows = [(s.index, s.value, s.energy, s.fell, len(s.changes), ev.counts["facets"])
+        for s in recipes.arclength(ev, ev.body(1), -0.003, 14, topology=True, resume=ck,
+                                   checkpoint=sys.argv[2])]
+print(json.dumps(dict(index=ck.index, extra=ck.extra, rows=rows)))
+"""
+
+
+def test_a_checkpointed_run_resumed_in_a_fresh_process_goes_on_exactly(tmp_path):
+    # (arclength(checkpoint=) and load_checkpoint in a new process, as a run
+    # resumed on a cluster: the same steps to the bit. A line's swing set at
+    # the neck (surface.swung, the targets finer there) changes the run from
+    # its fall at step 7 on: left behind on the Evolver, as it once was, the
+    # resumed run parted there)
+    import json, subprocess, sys
+    from pysurfaceevolver._engine import surface
+    ev = _sphere_bridge(0.09)
+    h = float(np.median(ev.mesh().edge_lengths()))
+    surface.swung = [(np.zeros(3), 3*h, 0.3*h)]
+    prefix = str(tmp_path / "run")
+    run = []
+    for s in recipes.arclength(ev, ev.body(1), -0.003, 14, topology=True,
+                               checkpoint=prefix, checkpoints_kept=2):
+        run.append([s.index, s.value, s.energy, s.fell, len(s.changes), ev.counts["facets"]])
+        s.extra["seen"] = len(run)
+    assert [p[-10:] for p in recipes.checkpoints(prefix)] == ["00005.ckpt", "00010.ckpt"]
+    out = subprocess.run([sys.executable, "-c", _FRESH, prefix + "-00005.ckpt",
+                          str(tmp_path / "again")], capture_output=True, text=True,
+                         env=dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path)),
+                         check=True)
+    again = json.loads(out.stdout.strip().splitlines()[-1])
+    assert again["index"] == 5 and again["extra"] == {"seen": 6}
+    assert again["rows"] == run[6:]
+    assert run[7][3] and run[7][4] == 1             # (the neck cut, where the swing tells)
+    ev2 = pyse.Evolver()
+    assert recipes.load_checkpoint(ev2, prefix).index == 10     # (a prefix: its latest)
+    with pytest.raises(FileNotFoundError):
+        recipes.load_checkpoint(ev2, str(tmp_path / "none"))
+
+
+def test_a_run_leaves_nothing_of_its_own_on_the_evolver():
+    # (what a run holds for the rest of it goes in surface memory, which its
+    # state carries and a load resets: an Evolver attribute isn't carried,
+    # and a run resumed in a fresh process goes another way (surface.swung,
+    # once Evolver._swung). Attributes a run may leave: caches and its own
+    # settings, which it puts back)
+    ev = _sphere_bridge(0.09)
+    before = set(vars(ev))
+    for _ in recipes.arclength(ev, ev.body(1), -0.003, 9, topology=True, resumable=True):
+        pass
+    left = set(vars(ev)) - before
+    assert left <= {"_known_constraints", "_liquid", "_topology_held"}, left
+    assert ev._liquid is None and not ev._topology_held
 
 
 def test_constraint_names_are_the_gap_tables_without_the_gaps():

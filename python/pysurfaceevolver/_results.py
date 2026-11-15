@@ -183,6 +183,12 @@ class Snapshot:
     # the constraints move_poles() moved off (_SurfaceMemory.retired)
     retired: frozenset = field(default=frozenset(), compare=False, repr=False)
 
+    def __getstate__(self) -> dict:
+        # (pickled, it leaves the load it came from: generation counts the
+        # loads of one process, and another's could match it, a restore there
+        # then taken for one into the same load, its memory kept)
+        return dict(self.__dict__, generation=-1)
+
     def write(self, path: Union[str, os.PathLike]) -> None:
         """Write the snapshot as a ``.fe`` datafile."""
         with open(path, "w") as f:

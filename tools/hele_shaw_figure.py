@@ -56,38 +56,6 @@ def _axes(ax):
 
 # ---- a run ----------------------------------------------------------------------
 
-def _save_state(ev, path, saved):
-    """The surface (path.fe) and what pySE and the run remember of it
-    (path.pkl), to go on from with run(resume=path)."""
-    import pickle
-    from pysurfaceevolver._engine import surface
-    ev.dump(path + ".fe")
-    with open(path + ".pkl", "wb") as f:
-        pickle.dump(dict(saved, walls=dict(surface.walls), retired=set(surface.retired),
-                         energy_shift=list(surface.energy_shift),
-                         edge_scale=surface.edge_scale, sizes=dict(surface.sizes)), f)
-
-
-def _restore_state(path):
-    """A state _save_state wrote: the surface loaded, pySE's memory of it put
-    back; and the run's own part."""
-    import pickle
-    import pysurfaceevolver as pyse
-    from pysurfaceevolver._engine import surface
-    ev = pyse.Evolver()
-    ev.load(path + ".fe")
-    with open(path + ".pkl", "rb") as f:
-        saved = pickle.load(f)
-    surface.walls.clear()
-    surface.walls.update(saved.pop("walls"))
-    surface.retired |= saved.pop("retired")
-    surface.energy_shift[:] = saved.pop("energy_shift")
-    surface.edge_scale = saved.pop("edge_scale")
-    surface.sizes = dict(saved.pop("sizes"))
-    ev._register_native()
-    return ev, saved
-
-
 def _trace_solid(box, say):
     """Log each solid event found with its middle in box (x0, x1, y0, y1):
     its gap, the edge length h there, the distance s from its closest vertex
@@ -141,10 +109,11 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     the defects is at y = hmax, then drainage back to the start; rows
     (imbibing, volume added, pressure, contact line far from the defects,
     along the first defect's middle, fell, changes, facets). ``states``: keep
-    the last so many states (every fifth step has one) in
-    OUT/states/NAME/stepNNNN.{fe,pkl}; ``resume``: such a state (without the
-    extension), the run going on from it exactly (its rows up to there kept;
-    ds, halvings and width as it had them). ``trace``: (x0, x1, y0, y1), the
+    the last so many checkpoints of each leg (every fifth step has one) in
+    OUT/states/NAME-LEG-ATTEMPT-NNNNN.ckpt (recipes.arclength's checkpoint=);
+    ``resume``: such a checkpoint, or a prefix for its latest, the run going on
+    from it exactly (its rows up to there kept; ds, halvings and width as it
+    had them). ``trace``: (x0, x1, y0, y1), the
     solid events there logged (_trace_solid), and the surface just after
     each of the first ``dumps`` changes made there dumped to
     OUT/changes/NAME-NNN.fe. ``fine``: the start's vertices that many times as
@@ -255,8 +224,11 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     logging.getLogger("pysurfaceevolver.topology").addHandler(Handler())
     logging.getLogger("pysurfaceevolver.topology").setLevel(logging.DEBUG)
     if resume:
-        ev, saved = _restore_state(resume)
-        V0, legs, carry = saved["V0"], saved["legs"], saved["run"]
+        import pysurfaceevolver as pyse
+        ev = pyse.Evolver()
+        carry = recipes.load_checkpoint(ev, resume)
+        saved, resume = carry.extra, carry.path
+        V0, legs = saved["V0"], saved["legs"]
         ds, halvings, width = saved["ds"], saved["halvings"], saved["width"]
         rows = saved["rows"]
         say(f"resumed from {resume}: step {len(rows) - 1}, {legs[0][0]}")
@@ -272,9 +244,7 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     if trace:
         _trace_solid(trace, say)
     frames = {}
-    kept, held = os.path.join(out, "states", name), []
-    if states:
-        os.makedirs(kept, exist_ok=True)
+    kept = os.path.join(out, "states")
 
     def save():
         np.savez(os.path.join(out, f"{name}.npz"), rows=np.array(rows, float),
@@ -287,8 +257,10 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
         for attempt in range(4):
             finished = False
             for s in recipes.arclength(ev, ev.body(1), sign*ds, 100000, topology=True,
-                                       trap=False, halvings=halvings, resumable=bool(states),
-                                       resume=carry):
+                                       trap=False, halvings=halvings, resume=carry,
+                                       checkpoint=(os.path.join(kept, f"{name}-{leg}-{attempt}")
+                                                   if states else None),
+                                       checkpoints_kept=max(states, 1)):
                 rows.append((sign > 0, s.value - V0, s.pressures[0],
                              H.contact_line(ev, width), H.contact_line(ev, centres[0]),
                              bool(s.fell), len(s.changes or ()), ev.counts["facets"]))
@@ -299,17 +271,10 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                 frames[len(rows) - 1] = (np.asarray(m.vertices, np.float32), np.asarray(m.facets))
                 if len(rows) % 10 == 0:
                     save()
-                own = s.state() if states and s.state else None
-                if own is not None:
-                    # (every fifth step carries the run's state)
-                    path = os.path.join(kept, f"step{len(rows) - 1:04d}")
-                    _save_state(ev, path, dict(V0=V0, rows=list(rows), legs=legs[k:], run=own,
-                                                    ds=ds, halvings=halvings, width=width))
-                    held.append(path)
-                    while len(held) > states:
-                        stale = held.pop(0)
-                        for ext in (".fe", ".pkl"):
-                            os.remove(stale + ext)
+                if states and s.state:
+                    # (every fifth step's checkpoint carries the run's own rows)
+                    s.extra.update(V0=V0, rows=list(rows), legs=legs[k:], ds=ds,
+                                   halvings=halvings, width=width)
                 finished = (rows[-1][3] > hmax) if sign > 0 else (s.value - V0 < 0)
                 if finished:
                     break
@@ -619,9 +584,10 @@ if __name__ == "__main__":
     ap.add_argument("--halvings", type=int, default=6,
                     help="the arclength step's halvings at the most (run)")
     ap.add_argument("--states", type=int, default=0,
-                    help="keep the last so many states (every fifth step's), OUT/states/NAME (run)")
+                    help="keep the last so many checkpoints of each leg (every fifth step's), "
+                         "OUT/states/NAME-LEG-ATTEMPT-NNNNN.ckpt (run)")
     ap.add_argument("--resume",
-                    help="go on from such a state, its path without .fe/.pkl (run)")
+                    help="go on from such a checkpoint, or a prefix's latest (run)")
     ap.add_argument("--trace", help="x0,x1,y0,y1: the solid events there logged (run)")
     ap.add_argument("--dumps", type=int, default=0,
                     help="with --trace: the surface after the first so many changes "

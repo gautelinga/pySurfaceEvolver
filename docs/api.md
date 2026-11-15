@@ -80,7 +80,7 @@ handle to it.
 
 ```{eval-rst}
 .. automodule:: pysurfaceevolver.recipes
-   :members: continuation, arclength, Step, load_steps
+   :members: continuation, arclength, Step, load_steps, Checkpoint, load_checkpoint, checkpoints
 .. currentmodule:: pysurfaceevolver
 ```
 

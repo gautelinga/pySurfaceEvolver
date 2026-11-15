@@ -324,6 +324,28 @@ three packings an angle, the spread between the runs is larger than any trend wi
 the contact angle from 15 to 25 degrees. Up to 1.2% of the liquid was trapped by then
 (31 clusters, in the two runs that drained furthest).
 
+## Long runs: checkpoints
+
+A run of hours checkpoints every fifth step with `checkpoint=`, a path prefix: each goes
+to `<prefix>-NNNNN.ckpt` (the step's index; the last three kept, `checkpoints_kept=`),
+one file with the surface, everything the run holds and the step's `extra` (yours to
+fill in the loop). Another process, on another day, puts a checkpoint's surface back
+into an Evolver with `recipes.load_checkpoint` (a file, or the prefix for its latest)
+and goes on from it with `resume=`, given the arguments the run had: the same steps, to
+the bit.
+
+```python
+for s in recipes.arclength(ev, ev.body(1), -0.01, 400, topology=True,
+                           checkpoint="runs/pack"):
+    s.extra["note"] = ...                    # kept in this step's checkpoint
+
+ev = pyse.Evolver()
+ck = recipes.load_checkpoint(ev, "runs/pack")           # the latest
+for s in recipes.arclength(ev, ev.body(1), -0.01, 400, topology=True,
+                           checkpoint="runs/pack", resume=ck):
+    ...
+```
+
 ## What it means, and where it stops
 
 - The liquid goes through the changes as a sequence of equilibria, each at the volume

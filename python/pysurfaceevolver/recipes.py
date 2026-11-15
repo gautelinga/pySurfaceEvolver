@@ -16,17 +16,31 @@ A run stopped for any reason resumes from its last finished step with
 ``resume="runs/drain"``.
 
 :func:`arclength` follows a branch of equilibria through a fold (where
-:func:`continuation` stops) and on along the unstable branch past it.
+:func:`continuation` stops) and on along the unstable branch past it. With
+``topology=True`` it makes the changes of topology on the way; such a run
+checkpoints every fifth step and goes on from one exactly::
+
+    for step in recipes.arclength(ev, ev.body(1), -0.01, 500, topology=True,
+                                  checkpoint="runs/drain"):
+        ...
+
+    ev = pyse.Evolver()                                   # (another process, later)
+    ck = recipes.load_checkpoint(ev, "runs/drain")        # the surface back
+    for step in recipes.arclength(ev, ev.body(1), -0.01, 500, topology=True,
+                                  checkpoint="runs/drain", resume=ck):
+        ...
 """
 
 from __future__ import annotations
 
 import dataclasses
 import functools
+import glob
 import os
 import pickle
 import re
 import warnings
+import zlib
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence, Union
 
@@ -35,7 +49,8 @@ import numpy as np
 from . import _core
 from ._relax import _MERGE_UNDER, _SPLIT_ABOVE
 
-__all__ = ["Step", "arclength", "continuation", "load_steps"]
+__all__ = ["Checkpoint", "Step", "arclength", "checkpoints", "continuation",
+           "load_checkpoint", "load_steps"]
 
 
 @dataclass
@@ -59,7 +74,7 @@ class Step:
       every fifth step, a function giving the run's state there (call it
       before the next step is asked for): picklable, for
       ``arclength(resume=...)`` from the surface as it is here. None otherwise
-      (and in a pickled Step).
+      (and in a pickled Step). ``checkpoint=`` writes it for you.
     """
 
     index: int                 # position in ``values``
@@ -242,6 +257,67 @@ def _failed(result: Any, stop_on: Optional[str]) -> bool:
     if getattr(result, "collapsed", 0):
         return True
     return stop_on == "unstable" and getattr(result, "stable", None) is False
+
+
+@dataclass
+class Checkpoint:
+    """A topology run's checkpoint (``arclength(..., checkpoint=...)``), as
+    :func:`load_checkpoint` reads it: the step's ``index``, the run's
+    ``state`` there (for ``arclength(resume=...)``) and the step's ``extra``
+    (the caller's, as it was when the loop body ended)."""
+
+    path: str
+    index: int
+    state: dict = field(repr=False)
+    extra: dict = field(default_factory=dict, repr=False)
+
+
+_CHECKPOINT_VERSION = 1
+
+
+def _checkpoint_path(prefix: str, index: int) -> str:
+    return f"{prefix}-{index:05d}.ckpt"
+
+
+def checkpoints(prefix: str) -> List[str]:
+    """The checkpoints ``arclength(..., checkpoint=prefix)`` wrote, by step."""
+    found = glob.glob(glob.escape(prefix) + "-[0-9][0-9][0-9][0-9][0-9].ckpt")
+    return sorted(found, key=lambda p: int(p[-10:-5]))
+
+
+def _write_checkpoint(path: str, ev, step: "Step") -> None:
+    """The surface, the run's state at ``step`` and its extra, in one file
+    (a pickle, zlib-compressed: the back-ups' dumps are most of it, and
+    shrink 2.5-fold), written atomically."""
+    assert step.state is not None
+    data = dict(version=_CHECKPOINT_VERSION, index=step.index, snapshot=ev.save(),
+                state=step.state(), extra=dict(step.extra))
+    blob = zlib.compress(pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL), 1)
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(blob)
+    os.replace(tmp, path)
+
+
+def load_checkpoint(ev, path: str) -> Checkpoint:
+    """Put the surface of a checkpoint back into ``ev`` (any Evolver, in any
+    process) and return the checkpoint, for ``arclength(..., resume=...)``
+    with the same arguments as the run had. ``path``: a checkpoint file, or
+    the run's ``checkpoint=`` prefix for its latest."""
+    if not os.path.isfile(path):
+        found = checkpoints(path)
+        if not found:
+            raise FileNotFoundError(f"no checkpoint {path!r} (nor {path}-NNNNN.ckpt)")
+        path = found[-1]
+    with open(path, "rb") as f:
+        data = pickle.loads(zlib.decompress(f.read()))
+    if data.get("version") != _CHECKPOINT_VERSION:
+        raise ValueError(f"{path}: a checkpoint of another version ({data.get('version')})")
+    ev.restore(data["snapshot"])
+    return Checkpoint(path, int(data["index"]), data["state"], dict(data["extra"]))
 
 
 def continuation(ev, what: Any, values: Iterable[Any], *,
@@ -905,7 +981,9 @@ class _Backups:
             ev.restore(kept.portable)
         if rng is not None:
             _core.set_rng_state(rng)
+        swung = surface.swung       # (for the rest of the run: not undone by backing up)
         vars(surface).update(_copied(kept.memory))
+        surface.swung = swung
         if self.scale is None:
             self.scale = _edge_scale(ev)
         surface.edge_scale = self.scale*(edges or 1.0)
@@ -927,7 +1005,9 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
               events: Union[bool, float] = True, topology: bool = False,
               budget: Optional[float] = _RUN_BUDGET,
               outlet: Union[None, str, Sequence[str]] = None, trap: bool = True,
-              resumable: bool = False, resume: Optional[dict] = None) -> Iterator[Step]:
+              resumable: bool = False, resume: Union[None, dict, Checkpoint] = None,
+              checkpoint: Optional[str] = None,
+              checkpoints_kept: int = 3) -> Iterator[Step]:
     """Follow a branch of equilibria through folds: pseudo-arclength
     continuation in ``what`` (a parameter or variable name, ``ev.body(i)``'s
     target volume or ``ev.quantity(name)``'s target).
@@ -1068,19 +1148,28 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     not time: a run comes back the same on a slower or busier machine.
     None: no bound.
 
-    ``resumable`` (``topology=True``): every fifth step's :attr:`Step.state`
-    gives the run's state there, picklable; ``resume``: such a state, with the
-    surface restored as it was at that step (saved there, as a checkpoint
-    does, by :meth:`Evolver.dump` or :meth:`Evolver.save`), and the run goes
-    on exactly as it did from there (the same steps, to the bit). ``ds``,
-    ``steps`` and the other settings as the run had them. For that, such a
-    run reloads its surface at those steps (in a process that deleted
-    elements, the order they are visited in isn't a reload's: dumps keep
-    the element numbers) and keeps the states it may back up to as
+    ``checkpoint`` (``topology=True``): a path prefix; every fifth step
+    goes to ``<prefix>-NNNNN.ckpt`` (its index; written after the loop's
+    body, so the step's ``extra`` as you left it), the last
+    ``checkpoints_kept`` of this run kept. :func:`load_checkpoint` puts
+    one's surface back into an Evolver, in any process, and ``resume=`` it
+    goes on exactly as the run did from there (the same steps, to the bit),
+    with ``ds``, ``steps`` and the other settings as the run had them.
+
+    ``resumable``: the same states without the files: every fifth step's
+    :attr:`Step.state` gives the run's state there, picklable; ``resume``
+    takes such a state too, the surface restored by you as it was at that
+    step (:meth:`Evolver.save`). For exactness such a run reloads its surface
+    at those steps (in a process that deleted elements, the order they are
+    visited in isn't a reload's) and keeps the states it may back up to as
     snapshots (a dump each step): about 3% slower.
     """
-    if resume is not None and not topology:
-        raise ValueError("arclength(resume=...) resumes a topology=True run")
+    if (resume is not None or checkpoint is not None) and not topology:
+        raise ValueError("arclength(resume=..., checkpoint=...) are for topology=True runs")
+    if checkpoints_kept < 1:
+        raise ValueError("checkpoints_kept must be at least 1")
+    if isinstance(resume, Checkpoint):
+        resume = resume.state
     if not topology:
         yield from _branch(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
                            halvings=halvings, along=along, remesh=remesh, events=events)
@@ -1096,13 +1185,25 @@ def arclength(ev, what: Any, ds: float, steps: int, *,
     ev._liquid = (dict(resume["liquid"]) if resume is not None else
                   dict(keep=keep, outlet=outlets, dry=False, trap=bool(trap),
                        original=frozenset(int(i) for i in ev.bodies().ids)))
-    resumable = resumable or resume is not None
+    resumable = resumable or resume is not None or checkpoint is not None
     from ._analysis import EVENT_FACTOR
     capped = _core.set_step_cap(STEP_CAP, 0.8*EVENT_FACTOR)
+    written: List[str] = []
     try:
-        yield from _topology_run(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
-                                 halvings=halvings, along=along, remesh=remesh, events=events,
-                                 budget=budget, resumable=resumable, resume=resume)
+        for step in _topology_run(ev, what, ds, steps, bounds=bounds, tol=tol, tidy=tidy,
+                                  halvings=halvings, along=along, remesh=remesh,
+                                  events=events, budget=budget, resumable=resumable,
+                                  resume=resume):
+            yield step
+            if checkpoint is not None and step.state is not None:
+                # (the run still waiting at the step: its state as at the yield)
+                path = _checkpoint_path(checkpoint, step.index)
+                _write_checkpoint(path, ev, step)
+                written = [p for p in written if p != path] + [path]
+                for stale in written[:-checkpoints_kept]:
+                    if os.path.exists(stale):
+                        os.remove(stale)
+                written = written[-checkpoints_kept:]
     finally:
         ev._liquid = previous
         _core.set_step_cap(capped, 0.8*EVENT_FACTOR if capped else 0.0)
@@ -1270,13 +1371,7 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                      backups=backups.export(), failed_falls=sorted(failed_falls),
                      liquid=dict(ev._liquid),
                      surface=_copied(memory), rng=_core.rng_state(),
-                     vertex_ids=np.asarray(ev.mesh().vertex_ids).copy(),
-                     # (where lines swung, the targets finer there for the run:
-                     # held by the Evolver, not the surface memory; an 11 mm
-                     # Hele-Shaw pair resumed without them remeshed otherwise at
-                     # its second step and parted)
-                     swung=[(np.array(w, float), float(r), float(t))
-                            for w, r, t in getattr(ev, "_swung", ())])
+                     vertex_ids=np.asarray(ev.mesh().vertex_ids).copy())
         state.update(extra)
         return state
 
@@ -1349,8 +1444,6 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         backups = _Backups.from_export(resume["backups"])
         failed_falls.update((k[0], k[1], tuple(k[2])) for k in resume.get("failed_falls", []))
         vars(memory_).update(_copied(resume["surface"]))
-        if "swung" in resume:
-            ev._swung = [(np.array(w, float), r, t) for w, r, t in resume["swung"]]
         _core.set_rng_state(resume["rng"])
         pending = resume
         # (the rows it holds are of the surface as it was then: a load lists

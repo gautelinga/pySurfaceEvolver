@@ -779,7 +779,8 @@ def test_a_line_swinging_on_a_heightfield_gets_finer_edges_there():
                             constraint=wall, where=where + [0.1*h, 0, 0])
         made_at = [("solid", wall, where + [0.1*h*k, 0, 0]) for k in range(times)]
         _surgery._note_swing(ev, e, made_at)
-        return list(getattr(ev, "_swung", ()))
+        from pysurfaceevolver._engine import surface
+        return list(surface.swung)
 
     assert swing(times=2) == []
     assert swing("bottom") == []

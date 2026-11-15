@@ -3552,7 +3552,7 @@ def _note_swing(ev, e, made_at: list) -> None:
     change, the liquid between) the _AGAIN-th time within one of its edges
     in this descent: the line swinging there, each change an edge's worth.
     Its place's targets (_sizes) halved, within _SWING_REACH of those edges,
-    for the rest of the run (Evolver._swung), again at each swing there
+    for the rest of the run (surface.swung), again at each swing there
     after. At the end of a Hele-Shaw pair's 1 mm groove, the defect's
     rounded corner, a spot was dried, wetted back by the line sliding,
     pressed onto the wall and dried again, 52 times on edges of 0.03, and
@@ -3578,12 +3578,12 @@ def _note_swing(ev, e, made_at: list) -> None:
     if not on.any() or float(np.linalg.norm(
             _delta(where, ev.vertices[on], _slab(ev)), axis=1).min()) >= 1.5*r:
         return
-    swung = list(getattr(ev, "_swung", ()))
+    swung = list(surface.swung)
     here = [s for s in swung if float(np.linalg.norm(_delta(s[0], where, _slab(ev)))) < s[1]]
     target = 0.5*min([r] + [s[2] for s in here])
     swung = [s for s in swung if not any(s is t for t in here)]
     swung.append((where, max([_SWING_REACH*r] + [s[1] for s in here]), target))
-    ev._swung = swung
+    surface.swung = swung
     _log.debug("line swinging at (%s): edges there toward %.3g",
                ", ".join(f"{v:.4g}" for v in where), target)
 
@@ -5133,7 +5133,7 @@ def _sizes(ev, h0: float) -> np.ndarray:
         size[rows] = np.minimum(size[rows], np.maximum(
             _CURVED/np.maximum(k, 1e-300), _FILAMENT*h0))
     # where a line swung (_note_swing), its targets there, for the run
-    for where, reach, target in getattr(ev, "_swung", ()):
+    for where, reach, target in surface.swung:
         near = np.linalg.norm(_delta(where, x, _slab(ev)), axis=1) < reach
         size[near] = np.minimum(size[near], max(target, _FILAMENT*h0))
     # (each vertex's neighbours' targets plus _GRADE of the edge, the least

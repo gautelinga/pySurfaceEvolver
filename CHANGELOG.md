@@ -2,12 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- Checkpoints for topology runs: `recipes.arclength(..., topology=True,
+  checkpoint="runs/x")` writes every fifth step to `runs/x-NNNNN.ckpt` (the last
+  `checkpoints_kept=3`), one file holding the surface, the run's state and the step's
+  `extra`, zlib-compressed (a Hele-Shaw state 15 MB as a pickle, 6 MB so).
+  `recipes.load_checkpoint(ev, path_or_prefix)` puts its surface back into any Evolver,
+  in any process, and `arclength(..., resume=checkpoint)` goes on exactly;
+  `recipes.checkpoints(prefix)` lists them. Before, a caller dumped the surface,
+  pickled the step's state and pySE's memory of the walls, edge scale and targets, and
+  put them back by hand.
+
 ### Fixes
 
-- A resumable topology run's state (`Step.state()`) carries where a heightfield's
-  contact line swung (the finer remeshing targets there, kept by the Evolver for the
-  rest of the run): a Hele-Shaw pair resumed in a fresh process without them remeshed
-  otherwise at its second step and parted from the original.
+- A topology run resumed in a fresh process goes on exactly where a heightfield's
+  contact line had swung: where it swung (the finer remeshing targets there for the
+  rest of the run) is now in pySE's memory of the surface (`surface.swung`), which a
+  run's state carries; held by the Evolver, a Hele-Shaw pair resumed without it
+  remeshed otherwise at its second step and parted from the original. A test resumes
+  a run in a new process, and another fails on anything a run leaves on the Evolver.
+- A pickled `Snapshot` no longer carries the load it came from: restored in another
+  process whose load count matched, it was taken for the same load and that load's
+  memory kept.
 
 ## 0.8.2 (2026-11-15)
 

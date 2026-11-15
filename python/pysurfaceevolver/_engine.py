@@ -130,6 +130,12 @@ class _SurfaceMemory:
         # _edits.walls(): each two-sided wall's solid side, by (number, name),
         # voted by the vertices when first asked
         self.wall_sides: Dict[Tuple[int, str], int] = {}
+        # _surgery._note_swing: where a heightfield's line swung, as (place,
+        # reach, target edge), the targets finer there for the rest of the run
+        # (kept through a run's back-ups; part of its state, so a resumed run
+        # remeshes as the original: held by the Evolver, a Hele-Shaw pair
+        # resumed in a fresh process remeshed otherwise at its second step)
+        self.swung: List[Tuple[np.ndarray, float, float]] = []
 
 
 surface = _SurfaceMemory()
