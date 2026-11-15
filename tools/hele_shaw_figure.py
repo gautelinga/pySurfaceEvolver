@@ -104,7 +104,7 @@ def _trace_solid(box, say):
 
 def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H.S,
         halvings=6, width=H.X, states=0, resume=None, trace=None, dumps=0, fine=1.0,
-        crossed=0):
+        crossed=0, steps=None):
     """Imbibition from a flat meniscus at y = -4 until the meniscus far from
     the defects is at y = hmax, then drainage back to the start; rows
     (imbibing, volume added, pressure, contact line far from the defects,
@@ -118,6 +118,7 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
     each of the first ``dumps`` changes made there dumped to
     OUT/changes/NAME-NNN.fe. ``fine``: the start's vertices that many times as
     close, across the cell and the gap (the run's edges follow the start's).
+    ``steps``: at most so many steps here (a replay from a checkpoint).
     ``crossed``: the surface of the first so many runs judged to have passed
     it through itself dumped as it was then, OUT/crossed/NAME-NNN.fe, and as
     the last remeshing or coarsening before left it, NAME-NNN-before.fe."""
@@ -253,7 +254,10 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                  **{f"x{k}": v[0] for k, v in frames.items()},
                  **{f"f{k}": v[1] for k, v in frames.items()})
 
+    first = len(rows)
     for k, (leg, sign) in enumerate(legs):
+        if steps is not None and len(rows) - first >= steps:
+            break
         for attempt in range(4):
             finished = False
             for s in recipes.arclength(ev, ev.body(1), sign*ds, 100000, topology=True,
@@ -276,9 +280,11 @@ def run(name, centres, out, ds=6.0, hmax=13.5, levels=2, sharp=False, rounding=H
                     s.extra.update(V0=V0, rows=list(rows), legs=legs[k:], ds=ds,
                                    halvings=halvings, width=width)
                 finished = (rows[-1][3] > hmax) if sign > 0 else (s.value - V0 < 0)
-                if finished:
+                if finished or (steps is not None and len(rows) - first >= steps):
                     break
             carry = None
+            if steps is not None and len(rows) - first >= steps:
+                break
             if finished:
                 break
             # (the branch ended short: relax where it is and go on)
@@ -588,6 +594,8 @@ if __name__ == "__main__":
                          "OUT/states/NAME-LEG-ATTEMPT-NNNNN.ckpt (run)")
     ap.add_argument("--resume",
                     help="go on from such a checkpoint, or a prefix's latest (run)")
+    ap.add_argument("--steps", type=int,
+                    help="at most so many steps (a replay from --resume) (run)")
     ap.add_argument("--trace", help="x0,x1,y0,y1: the solid events there logged (run)")
     ap.add_argument("--dumps", type=int, default=0,
                     help="with --trace: the surface after the first so many changes "
@@ -598,7 +606,7 @@ if __name__ == "__main__":
             rounding=a.rounding, levels=a.levels, ds=a.ds, halvings=a.halvings,
             width=a.width, states=a.states, resume=a.resume,
             trace=tuple(float(v) for v in a.trace.split(",")) if a.trace else None,
-            dumps=a.dumps, fine=a.fine, crossed=a.crossed)
+            dumps=a.dumps, fine=a.fine, crossed=a.crossed, steps=a.steps)
     elif a.part == "film":
         for name in a.args:
             film(a.out, name)
