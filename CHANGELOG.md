@@ -39,6 +39,11 @@
   run's state carries; held by the Evolver, a Hele-Shaw pair resumed without it
   remeshed otherwise at its second step and parted from the original. A test resumes
   a run in a new process, and another fails on anything a run leaves on the Evolver.
+- A vertex within round-off of a wall it isn't on (1e-9 of an edge) lies on it: not
+  through it, and not voting on the wall's solid side where no side was declared.
+  Past docs/stress_cases.md's catenoid fold, a disc lies in its ring's plane 1e-12
+  off it; on GitHub's runners those vertices on the far side outvoted the other disc,
+  which was then 1.5 through the plane, and `continuation` stopped a step early.
 - A pickled `Snapshot` no longer carries the load it came from: restored in another
   process whose load count matched, it was taken for the same load and that load's
   memory kept.

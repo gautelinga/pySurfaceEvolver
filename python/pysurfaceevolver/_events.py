@@ -18,6 +18,7 @@ SHEET = 0.25    # a neck whose waist normals' second moment is under this of the
 COARSE = 0.1    # a gap under this many edges is an event even where its group is most of its piece
 WEDGE = 0.7     # next to a contact line: closer than this share of its wedge's height
 PLATE_NEAR = 8.0  # a plate: within this many edges of its own contact line, no approach is one
+_ROUNDOFF = 1e-9  # a vertex this many edges from a wall, either side, lies on it (round-off)
 
 
 @dataclass(frozen=True)
@@ -348,10 +349,17 @@ def _solid(ev, m, x, e, h, normal, behind, ahead, with_bodies, moving, factor,
     attrs = np.asarray(attrs, dtype=np.int64).reshape(-1)
     # the side allowed: NONNEGATIVE, NONPOSITIVE, else the side most of the
     # surface is on
-    most = np.where((off_all & (dist > 0)).sum(axis=0) >= (off_all & (dist < 0)).sum(axis=0),
-                    1.0, -1.0)
+    # (the vertices within round-off of it not voting: past a catenoid's fold
+    # one disc lies in its ring's plane, 1e-12 off it, and those on its far
+    # side outvoted the other disc, which was then 1.5 through the plane: on
+    # GitHub's runners the run stopped there)
+    clear = np.abs(np.nan_to_num(dist, nan=0.0)) >= _ROUNDOFF*h[:, None]
+    most = np.where((off_all & clear & (dist > 0)).sum(axis=0)
+                    >= (off_all & clear & (dist < 0)).sum(axis=0), 1.0, -1.0)
     sides = np.where(attrs & 2, 1.0, np.where(attrs & 1, -1.0, most))
     g_all = np.where(off_all, sides*dist, np.inf)
+    # (a vertex within round-off of a wall lies on it, not through it)
+    g_all = np.where(np.abs(g_all) < _ROUNDOFF*h[:, None], 0.0, g_all)
     band_all = off_all & (g_all < (factor*h)[:, None])
     # constraints only fixed vertices are on just place them (a pad's rim)
     placing = ((attrs & 3) == 0) & (nan & ~moving[:, None]).any(axis=0) & ~on_all.any(axis=0)

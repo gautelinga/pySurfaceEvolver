@@ -347,9 +347,10 @@ def test_continuation_checkpoint_and_resume(cube, tmp_path):
 
 def test_a_catenoid_past_its_fold_runs_on_as_two_discs_without_an_event():
     # (docs/stress_cases.md's catenoid, events on: past the fold the film is
-    # two flat discs 1.35 to 1.5 apart, nothing near anything. On GitHub's
-    # runners only, the run ended a step early there on some event; the
-    # message lists each step's events, to say which)
+    # two flat discs, each in its ring's plane, 1e-12 off it either way. On
+    # GitHub's runners one lay 1e-12 on the far side, and the run ended a
+    # step early as gone through constraint 3; a vertex within round-off of
+    # a wall lies on it. The same pushed through here, on any machine)
     import warnings
     from pysurfaceevolver import recipes, shapes
     film = shapes.tube(1.0, -0.3, 0.3, nz=8, nt=32)
@@ -369,6 +370,13 @@ def test_a_catenoid_past_its_fold_runs_on_as_two_discs_without_an_event():
             for s in steps]
     assert len(steps) == 18 and not told, (told, seen)
     assert steps[-1].energy == pytest.approx(6.273097, abs=1e-5)
+    x = ev.vertices.copy()
+    disc = np.flatnonzero(np.abs(x[:, 2] + 0.75) < 1e-9)
+    disc = disc[~np.isin(disc, np.flatnonzero(np.asarray(ev.on_constraint(3), bool)))]
+    assert len(disc)
+    x[disc, 2] = -0.75 - 1e-12
+    ev.vertices = x
+    assert not [e for e in ev.events() if e.kind == "solid" and e.gap < 0]
 
 
 def test_continuation_parameter_and_relax_callable(cube):
