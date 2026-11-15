@@ -273,7 +273,8 @@ to edge (0.005); the pairs' are 5 and 7 mm away (0.07 and 0.02).
   0.06 γ mm² of the runs shown here. The pair 11 mm apart in a cell 20 mm wide still
   ended one drainage step short at V ≈ 685 mm³, relaxed there, and went on.
 
-  Keeping states changes a run's path, and so does resuming from them; the runs
+  Keeping states (checkpoints) changes a run's path, since such a run reloads its
+  surface every fifth step; resuming from one goes on exactly as the run did. The runs
   shown are the ones that went through.
 * **Rounded edges.** The printed edges are rounded over 0.25 mm, since a printed part
   has no sharp edges. With edges rounded over only 0.1 mm, the runs churned for
