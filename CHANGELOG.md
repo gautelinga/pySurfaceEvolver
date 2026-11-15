@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.8.2 (2026-11-15)
+
+Curved and stepped walls: `constraints.heightfield` (a wall z = b(x, y) from a
+formula) and `constraints.plate` (a plate with sharp-edged blocks, contact lines
+pinning at convex edges), with the Hele-Shaw defects page that reproduces Holtzman et
+al. (2024) with them. `Evolver.wall_force`; topology runs without trapping
+(`trap=False`) and resumable from every fifth step. Topology runs in periodic
+64-bead slabs reach breakthrough, about 40% faster than two days before; Newton
+steps on packs converge with chord steps (30-40% less CPU); the lines gauge is the
+default for `pyse.wet_area`. Many fixes to topology descents. No API removed.
 
 ### Changed
 
@@ -372,9 +381,11 @@
   and merging, liquid exchanged as through films or the vapour). No `outlet` with it.
 - `arclength(..., topology=True, resumable=True)`: every fifth step's `Step.state()`
   gives the run's state there, picklable; `arclength(..., resume=state)`, with the
-  surface restored as it was at that step, goes on exactly as the run did (the same
-  steps, to the bit: a 32-bead run resumed at step 60 matched the original over 88
-  steps). The state is the continuation's own (its last steps and their events, the
+  surface restored as it was at that step, goes on as the run did (on a 32-bead
+  pack, to the bit: a run resumed at step 60 matched the original over 88 steps; a
+  Hele-Shaw cell's run on its heightfields and plate resumed at round-off from the
+  original, 2e-4 in pressure at the first step, and went its own way from a stall
+  on). The state is the continuation's own (its last steps and their events, the
   branch's last points and step, the states it may back up to, the changes put off,
   Evolver's random numbers); such a run keeps element ids through dumps and reloads,
   reloads its surface at those steps (a long-lived process reuses deleted elements'
