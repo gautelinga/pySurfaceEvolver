@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- A resumable topology run's state (`Step.state()`) carries where a heightfield's
+  contact line swung (the finer remeshing targets there, kept by the Evolver for the
+  rest of the run): a Hele-Shaw pair resumed in a fresh process without them remeshed
+  otherwise at its second step and parted from the original.
+
 ## 0.8.2 (2026-11-15)
 
 Curved and stepped walls: `constraints.heightfield` (a wall z = b(x, y) from a

@@ -567,6 +567,22 @@ def test_a_resumable_run_resumed_from_a_step_goes_on_exactly(monkeypatch):
         assert again == run[at + 1:]
 
 
+def test_a_run_s_state_carries_where_its_lines_swung():
+    # (Evolver._swung, the targets finer where a heightfield's line swung, for
+    # the rest of the run, held by the Evolver: a Hele-Shaw pair resumed in a
+    # fresh process without them remeshed otherwise at its second step)
+    import pickle
+    ev = _sphere_bridge(0.09)
+    swung = [(np.array([0.0, 0.0, 0.0]), 0.1, 0.02)]
+    ev._swung = list(swung)
+    state = next(pickle.dumps(s.state()) for s in recipes.arclength(
+        ev, ev.body(1), -0.003, 8, topology=True, resumable=True) if s.state is not None)
+    del ev._swung
+    next(recipes.arclength(ev, ev.body(1), -0.003, 8, topology=True,
+                           resume=pickle.loads(state)))
+    assert [(w.tolist(), r, t) for w, r, t in ev._swung] == [([0.0, 0.0, 0.0], 0.1, 0.02)]
+
+
 def test_constraint_names_are_the_gap_tables_without_the_gaps():
     from pysurfaceevolver import _surgery
     ev = _sphere_bridge(0.09)

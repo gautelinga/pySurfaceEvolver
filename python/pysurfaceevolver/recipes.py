@@ -1270,7 +1270,13 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
                      backups=backups.export(), failed_falls=sorted(failed_falls),
                      liquid=dict(ev._liquid),
                      surface=_copied(memory), rng=_core.rng_state(),
-                     vertex_ids=np.asarray(ev.mesh().vertex_ids).copy())
+                     vertex_ids=np.asarray(ev.mesh().vertex_ids).copy(),
+                     # (where lines swung, the targets finer there for the run:
+                     # held by the Evolver, not the surface memory; an 11 mm
+                     # Hele-Shaw pair resumed without them remeshed otherwise at
+                     # its second step and parted)
+                     swung=[(np.array(w, float), float(r), float(t))
+                            for w, r, t in getattr(ev, "_swung", ())])
         state.update(extra)
         return state
 
@@ -1343,6 +1349,8 @@ def _topology_run(ev, what: Any, ds: float, steps: int, *, bounds, tol: float, t
         backups = _Backups.from_export(resume["backups"])
         failed_falls.update((k[0], k[1], tuple(k[2])) for k in resume.get("failed_falls", []))
         vars(memory_).update(_copied(resume["surface"]))
+        if "swung" in resume:
+            ev._swung = [(np.array(w, float), r, t) for w, r, t in resume["swung"]]
         _core.set_rng_state(resume["rng"])
         pending = resume
         # (the rows it holds are of the surface as it was then: a load lists
