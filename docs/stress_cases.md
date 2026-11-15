@@ -103,7 +103,10 @@ ev.load_arrays(film.vertices, film.faces,
                constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
                vertex_constraints={1: bottom + top, 2: top, 3: bottom}, parameters={"hh": 0.3})
 ev.relax(levels=1)
-for step in recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025)):
+# (events=False: past the fold, the run goes on whatever the event checks make of
+# the two discs)
+for step in recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025),
+                                 events=False):
     ref = catenoid_area(step.value)
     if ref is not None:
         print(f"H = {step.value:.3f}: area {ev.total_energy:.6f}, catenoid {ref:.6f}, "
@@ -115,19 +118,19 @@ for step in recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025)):
 
 ```text
 H = 0.325: area 4.008181, catenoid 4.009254, error 0.03%
-H = 0.350: area 4.303094, catenoid 4.304133, error 0.02%
-H = 0.375: area 4.594750, catenoid 4.595759, error 0.02%
-H = 0.400: area 4.882871, catenoid 4.883793, error 0.02%
-H = 0.425: area 5.166914, catenoid 5.167861, error 0.02%
-H = 0.450: area 5.446549, catenoid 5.447546, error 0.02%
-H = 0.475: area 5.721403, catenoid 5.722374, error 0.02%
-H = 0.500: area 5.990525, catenoid 5.991797, error 0.02%
-H = 0.525: area 6.253760, catenoid 6.255163, error 0.02%
-H = 0.550: area 6.510162, catenoid 6.511674, error 0.02%
-H = 0.575: area 6.758706, catenoid 6.760303, error 0.02%
-H = 0.600: area 6.997992, catenoid 6.999643, error 0.02%
-H = 0.625: area 7.225880, catenoid 7.227532, error 0.02%
-H = 0.650: area 7.438262, catenoid 7.439781, error 0.02%
+H = 0.350: area 4.303096, catenoid 4.304133, error 0.02%
+H = 0.375: area 4.594739, catenoid 4.595759, error 0.02%
+H = 0.400: area 4.882865, catenoid 4.883793, error 0.02%
+H = 0.425: area 5.166938, catenoid 5.167861, error 0.02%
+H = 0.450: area 5.446598, catenoid 5.447546, error 0.02%
+H = 0.475: area 5.721247, catenoid 5.722374, error 0.02%
+H = 0.500: area 5.990519, catenoid 5.991797, error 0.02%
+H = 0.525: area 6.253761, catenoid 6.255163, error 0.02%
+H = 0.550: area 6.510182, catenoid 6.511674, error 0.02%
+H = 0.575: area 6.758762, catenoid 6.760303, error 0.02%
+H = 0.600: area 6.998097, catenoid 6.999643, error 0.02%
+H = 0.625: area 7.226039, catenoid 7.227532, error 0.02%
+H = 0.650: area 7.438465, catenoid 7.439781, error 0.02%
 H = 0.675: past the fold, area 6.273097 (two discs 6.283185), converged True
 H = 0.700: past the fold, area 6.273097 (two discs 6.283185), converged True
 H = 0.725: past the fold, area 6.273097 (two discs 6.283185), converged True
