@@ -21,6 +21,10 @@
 
 ### Changed
 
+- CI tests NumPy 1.26 too (Python 3.12) besides the newest: the clusters and dev
+  machines run 1.26, and a NumPy 2 removal broke the tests only on CI.
+  `tools/check_doc_snippets.py` shows a differing block's warnings (they went
+  unseen: a run that ended early on GitHub's runners only said nothing of why).
 - Evolver's WARNING 1825 ("Hessian not positive definite") leaves out the index, which
   changed call by call, so Python shows it once a place: a Hele-Shaw run printed it
   about 800 times in 6 hours. The index is `IterationResult.negative_modes`. The

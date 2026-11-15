@@ -345,6 +345,32 @@ def test_continuation_checkpoint_and_resume(cube, tmp_path):
     assert [s.energy for s in steps] == pytest.approx(full, rel=1e-7)
 
 
+def test_a_catenoid_past_its_fold_runs_on_as_two_discs_without_an_event():
+    # (docs/stress_cases.md's catenoid, events on: past the fold the film is
+    # two flat discs 1.35 to 1.5 apart, nothing near anything. On GitHub's
+    # runners only, the run ended a step early there on some event; the
+    # message lists each step's events, to say which)
+    import warnings
+    from pysurfaceevolver import recipes, shapes
+    film = shapes.tube(1.0, -0.3, 0.3, nz=8, nt=32)
+    bottom, top = film.rims["bottom"], film.rims["top"]
+    ev = pyse.Evolver()
+    ev.load_arrays(film.vertices, film.faces,
+                   constraints={1: "x^2 + y^2 = 1", 2: "z = hh", 3: "z = -hh"},
+                   vertex_constraints={1: bottom + top, 2: top, 3: bottom},
+                   parameters={"hh": 0.3})
+    ev.relax(levels=1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        steps = list(recipes.continuation(ev, "hh", np.arange(0.325, 0.76, 0.025)))
+    told = [str(w.message) for w in caught if "continuation()" in str(w.message)]
+    seen = [(round(s.value, 3), [(e.kind, float(e.gap), float(e.scale), len(e.vertices),
+                                  getattr(e, "constraint", None)) for e in s.events])
+            for s in steps]
+    assert len(steps) == 18 and not told, (told, seen)
+    assert steps[-1].energy == pytest.approx(6.273097, abs=1e-5)
+
+
 def test_continuation_parameter_and_relax_callable(cube):
     from pysurfaceevolver import recipes
     calls = []

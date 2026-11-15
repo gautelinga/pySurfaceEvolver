@@ -54,7 +54,7 @@ def _decimals(text: str) -> int:
 def run(code: str) -> "tuple[str, float, str]":
     t = time.perf_counter()
     p = subprocess.run([sys.executable, "-c", code], cwd=DOCS, capture_output=True, text=True)
-    return p.stdout, time.perf_counter() - t, (p.stderr if p.returncode else "")
+    return p.stdout, time.perf_counter() - t, p.stderr, p.returncode
 
 
 def main() -> int:
@@ -81,13 +81,16 @@ def main() -> int:
                 code = ("import contextlib, io\nwith contextlib.redirect_stdout(io.StringIO()):\n"
                         + "".join(f"    exec({c!r})\n" for c in before) + code)
             before.append(m.group(1))
-            runs.append(pool.submit(run, "import warnings; warnings.simplefilter('ignore')\n"
+            # (warnings to stderr, each once: shown for a block that differs,
+            # as the one that ended a run early on GitHub's runners only)
+            runs.append(pool.submit(run, "import warnings; warnings.simplefilter('default')\n"
                                     + code))
         queued.append((page, text, runs))
     for page, text, runs in queued:
         out, pos = [], 0
         for k, (m, done) in enumerate(zip(BLOCK.finditer(text), runs), 1):
-            got, seconds, error = done.result()
+            got, seconds, stderr, code = done.result()
+            error = stderr if code else ""
             ok = not error and same(m.group(2), got, args.rel)
             print(f"{os.path.basename(page)} block {k}: {'ok' if ok else 'DIFFERS'} "
                   f"({seconds:.0f} s)", flush=True)
@@ -96,6 +99,9 @@ def main() -> int:
             elif not ok:
                 print("  shown:\n    " + m.group(2).rstrip().replace("\n", "\n    "))
                 print("  now:\n    " + got.rstrip().replace("\n", "\n    "))
+                if stderr.strip():
+                    print("  its warnings (the last 3000 characters):\n    "
+                          + stderr.strip()[-3000:].replace("\n", "\n    "))
             status |= not ok
             # (only blocks that differ are rewritten: a block within the
             # tolerance keeps its digits)

@@ -14,6 +14,12 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
+        numpy: ["latest"]
+        # (and the oldest NumPy in use, as on the clusters and dev machines:
+        # 2.x removed np.trapz, and the tests broke only here)
+        include:
+          - python-version: "3.12"
+            numpy: "1.26.*"
     steps:
       - uses: actions/checkout@v4
 
@@ -33,9 +39,11 @@ jobs:
           sudo apt-get install -y gfortran libopenblas-openmp-dev \
             libglu1-mesa libxcursor1 libxft2 libxinerama1
           python -m pip install --upgrade pip
-          python -m pip install -v ".[test]"
+          pin=; [ "${{ matrix.numpy }}" = latest ] || pin="numpy==${{ matrix.numpy }}"
+          python -m pip install -v ".[test]" $pin
           # optional: Gmsh checks in test_export.py, pyse.map with closures
           python -m pip install gmsh cloudpickle || echo "gmsh/cloudpickle not available; those tests will skip"
+          python -c "import numpy; print('numpy', numpy.__version__)"
 
       - name: Run tests
         run: python -m pytest -v
