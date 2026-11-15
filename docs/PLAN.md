@@ -5,6 +5,46 @@ Living document: decisions, status, how we work, and what is open. Condensed at 
 dropped experiments, is in git (`git show e8f7434:docs/PLAN.md`, or
 `git log -p docs/PLAN.md`). What changed for users is in CHANGELOG.md.
 
+## Resume here (2026-11-15): 0.8.2 released
+
+**Released: 0.8.2 (2026-11-15, tag v0.8.2 at f527a68).** Since 0.8.1: the wet granular
+page (trimer, pore, a 32-bead pack drained to S 0.35); chord Newton steps (67da1f4);
+curved and stepped walls, `constraints.heightfield` and `constraints.plate` (f71e421);
+the Hele-Shaw defects page (`docs/hele_shaw_defects.md`), which reproduces Holtzman et
+al., Phys. Rev. Fluids 9, 064001 (2024) in 3D. Branch `hele-shaw` is merged and level with
+main (4fef53b).
+
+**Hele-Shaw findings** (the page has them in full): dissipation grows from one defect to
+the pair 13 mm apart to the pair 11 mm apart, as in the experiment (fine mesh: 0.16, 0.35,
+0.42 gamma mm^2, path noise about +-0.05); bulges about 1 mm lower than the experiment's;
+the runs feel the cell's width about a third as much as the line model; the line model
+gives no hysteresis at the experiment's slope. Runs on herbie, 1.5-6 h each on 4 threads.
+
+**Robustness from it.** A descent from a stalled branch began a step off its volume
+targets, and its first gradient step took the whole of that at once; on the fine mesh it
+crossed the meniscus through itself at a defect's rounded edge, run after run.
+`_surgery._approach` (5043791) takes the targets there in quarter-edge steps first,
+unless that takes more than 24 steps (b11fec1): approached, a target 24 mm^3 off swept an
+11 mm pair's meniscus over the side walls for 3.4 h. All five fine-mesh cells now run to
+their end.
+
+**Lessons.**
+- Check `gh run list` on the branch being merged before a release, not only the local CI
+  replica: the docs job had been red on `hele-shaw` since 2026-11-12 on a snippet that
+  differs only on GitHub's runners (stress_cases.md's catenoid stopped a step early past
+  the fold on an event between the two discs; 1a5b31e runs it with `events=False`).
+- A run resumed from its states on heightfields and a plate parted from the original at
+  round-off at the first step (an 11 mm pair at V 366: p -0.43469 against -0.43449), so a
+  replay can miss the failure it was meant to show. On the bead packs resuming is exact.
+
+**Open, in this order (user, 2026-11-15):**
+1. Make resuming exact on heightfields and plates (find what the state leaves out).
+2. The event GitHub's runners see between the catenoid's two discs past its fold.
+3. The bulges about 1 mm low: what the width leaves unexplained (contact angle 20 degrees
+   against the experiment's wetting oil; the defects' concave corners stop smaller angles).
+Then: 128-bead periodic packs (not started; the user said "not now" on 2026-11-03). Wall
+facets stay parked.
+
 ## Resume here (2026-11-02): 64-bead periodic runs toward an hour each
 
 Branch `periodic-packs`, local commits only (none pushed). Goal unchanged: every 64-bead
